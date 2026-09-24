@@ -251,8 +251,8 @@ fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
             .is_some_and(|value| value > 0.0)
     );
     assert_eq!(
-        result["scrollingElementScroll"], 0,
-        "element metrics retain the published scroll position"
+        result["scrollingElementScroll"], result["standardScroll"],
+        "element and Window expose the same live scroll position"
     );
     publish_layout_for_test(&mut vm);
     assert_eq!(

@@ -176,25 +176,149 @@ fn mouse_wheel_updates_scroll_without_refreshing_the_rendered_world() {
         "https://mouse-snapshot.test/",
         r#"<!doctype html>
         <div id=target style='position:absolute;left:20px;top:20px;width:100px;height:100px;overflow:auto'>
-            <div style='height:1000px'>content</div>
+            <div id=content style='width:1000px;height:1000px'>
+                <div id=marker style='width:80px;height:80px'></div>
+            </div>
         </div>"#,
     );
+    vm.eval("window.hits=[];document.onmousemove=e=>hits.push(e.target.id)")
+        .unwrap();
     refresh_layout_for_test(&mut vm);
     let before = vm.layout_pass_observability_for_test().1;
-    for _ in 0..3 {
-        vm.dispatch_mouse_event_at_point(60.0, 60.0, "wheel", -1, Some(0), 0.0, 50.0)
+    for step in 1..=3 {
+        vm.dispatch_mouse_event_at_point(60.0, 60.0, "wheel", -1, Some(0), 30.0, 50.0)
             .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([target.scrollLeft,target.scrollTop])")
+                .unwrap(),
+            format!("[{},{}]", step * 30, step * 50)
+        );
         assert_eq!(vm.layout_pass_observability_for_test().1, before);
     }
-    // Scroll metrics and bounds still come from the published snapshot.
-    assert_eq!(vm.eval("String(target.scrollTop)").unwrap(), "0");
-    vm.eval("target.getBoundingClientRect()").unwrap();
+    // Live scroll readback must not move the published geometry or hit targets.
+    let marker_position =
+        "JSON.stringify([marker.getBoundingClientRect().left,marker.getBoundingClientRect().top])";
+    assert_eq!(vm.eval(marker_position).unwrap(), "[20,20]");
+    mouse(&mut vm, "mousemove").unwrap();
+    assert_eq!(vm.eval("JSON.stringify(hits)").unwrap(), r#"["marker"]"#);
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(1920, 1080, 1.0))
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
         .unwrap()
         .unwrap();
-    assert_eq!(vm.eval("String(target.scrollTop)").unwrap(), "150");
+    assert_eq!(
+        vm.eval("JSON.stringify([target.scrollLeft,target.scrollTop])")
+            .unwrap(),
+        "[90,150]"
+    );
+    assert_eq!(vm.eval(marker_position).unwrap(), "[-70,-130]");
+    mouse(&mut vm, "mousemove").unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(hits)").unwrap(),
+        r#"["marker","content"]"#
+    );
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
-    vm.eval("target.getBoundingClientRect()").unwrap();
-    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+}
+
+#[test]
+fn element_scroll_readback_accumulates_live_offsets_with_frozen_bounds() {
+    for in_frame in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://scroll-readback.test/",
+            r#"<!doctype html>
+            <div id=scroller style='width:100px;height:100px;overflow:auto'>
+                <div style='width:400px;height:500px'></div>
+            </div><iframe id=frame></iframe>"#,
+        );
+        vm.eval(if in_frame {
+            "frame.contentDocument.body.innerHTML=scroller.outerHTML;window.subject=frame.contentDocument.getElementById('scroller')"
+        } else {
+            "window.subject=scroller"
+        })
+        .unwrap();
+        let offsets = "JSON.stringify([subject.scrollLeft,subject.scrollTop])";
+        let cold = vm.layout_pass_observability_for_test().1;
+        assert_eq!(vm.eval(offsets).unwrap(), "[0,0]");
+        assert_eq!(vm.layout_pass_observability_for_test().1, cold);
+        // A screenshot publishes the iframe projection as well as the root.
+        publish_layout_for_test(&mut vm);
+        let before = vm.layout_pass_observability_for_test().1;
+        let geometry = "JSON.stringify([subject.firstElementChild.getBoundingClientRect().left,subject.firstElementChild.getBoundingClientRect().top,subject.clientWidth,subject.clientHeight,subject.scrollWidth,subject.scrollHeight])";
+        let frozen = vm.eval(geometry).unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([subject.scrollWidth,subject.scrollHeight])")
+                .unwrap(),
+            "[400,500]"
+        );
+        assert_eq!(
+            vm.eval(
+                r#"subject.scrollLeft += 10; subject.scrollTop += 10;
+                subject.scrollLeft += 10; subject.scrollTop += 10;
+                JSON.stringify([subject.scrollLeft,subject.scrollTop])"#,
+            )
+            .unwrap(),
+            "[20,20]",
+            "in_frame={in_frame}, frozen={frozen}"
+        );
+        vm.eval("subject.scrollBy({left:5,top:7});subject.scrollTo({top:40})")
+            .unwrap();
+        assert_eq!(vm.eval(offsets).unwrap(), "[25,40]");
+        vm.eval("subject.scrollLeft=10.25;subject.scrollTop=20.5")
+            .unwrap();
+        assert_eq!(vm.eval(offsets).unwrap(), "[10.25,20.5]");
+        // New content size cannot enlarge the range until a new publication.
+        assert_eq!(
+            vm.eval(
+                r#"subject.firstElementChild.style.cssText='width:1000px;height:1000px';
+                subject.scrollLeft=1e6;subject.scrollTop=1e6;
+                JSON.stringify([subject.scrollLeft===subject.scrollWidth-subject.clientWidth,
+                    subject.scrollTop===subject.scrollHeight-subject.clientHeight])"#,
+            )
+            .unwrap(),
+            "[true,true]"
+        );
+        assert_eq!(vm.eval(geometry).unwrap(), frozen);
+        vm.eval("subject.remove()").unwrap();
+        assert_eq!(vm.eval(offsets).unwrap(), "[0,0]");
+        assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    }
+}
+
+#[test]
+fn document_scroll_readback_matches_live_window_offsets() {
+    let mut vm = new_parsed_test_vm(
+        "https://scroll-readback.test/",
+        r#"<!doctype html><body style='width:2000px;height:2000px'>
+        <iframe id=frame></iframe>"#,
+    );
+    vm.eval("frame.contentDocument.body.style.cssText='width:1000px;height:1000px'")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
+    let before = vm.layout_pass_observability_for_test().1;
+    let geometry = "JSON.stringify([frame.getBoundingClientRect().top,frame.contentDocument.body.getBoundingClientRect().top])";
+    let frozen = vm.eval(geometry).unwrap();
+    vm.eval("scrollTo(30,50);frame.contentWindow.scrollTo(7,9)")
+        .unwrap();
+    let offsets = r#"JSON.stringify([window,frame.contentWindow].map(w=>[
+        w.scrollX,w.scrollY,w.pageXOffset,w.pageYOffset,
+        w.document.scrollingElement.scrollLeft,w.document.scrollingElement.scrollTop]))"#;
+    assert_eq!(
+        vm.eval(offsets).unwrap(),
+        "[[30,50,30,50,30,50],[7,9,7,9,7,9]]"
+    );
+    vm.eval(
+        "for(const w of [window,frame.contentWindow]){w.document.scrollingElement.scrollLeft+=10;w.document.scrollingElement.scrollTop+=20}",
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval(offsets).unwrap(),
+        "[[40,70,40,70,40,70],[17,29,17,29,17,29]]"
+    );
+    vm.eval("frame.contentDocument.scrollingElement.scrollBy(3,4);frame.contentDocument.scrollingElement.scrollTo({top:35})")
+        .unwrap();
+    assert_eq!(
+        vm.eval(offsets).unwrap(),
+        "[[40,70,40,70,40,70],[20,35,20,35,20,35]]"
+    );
+    assert_eq!(vm.eval(geometry).unwrap(), frozen);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
 }

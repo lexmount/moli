@@ -137,16 +137,16 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     await mouse("mouseMoved", 90, 90, pressed=True)
     await mouse("mouseReleased", 90, 90, pressed=False)
 
-    # Scroll input changes live offsets; ordinary geometry keeps the frozen
-    # values until an explicit visual publication.
+    # Scroll offsets are live; the content rectangle stays frozen until output.
     if is_moli:
         assert_equal(
-            await page.evaluate("() => [scroller.scrollLeft, scroller.scrollTop]"),
+            await page.evaluate("""() => {
+              const rect = scroller.firstElementChild.getBoundingClientRect();
+              return [rect.left, rect.top];
+            }"""),
             [0, 0],
-            "scroll input retains the published geometry",
+            "scroll input retains the published content rectangle",
         )
-    _checkpoint("initial/publish-drag-state")
-    await capture_layout(page)
     _checkpoint("initial/read-drag-state")
     state_after_drag = await page.evaluate(
         """() => ({
@@ -154,6 +154,13 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
           top: scroller.scrollTop,
           events: __scrollbarDomEvents,
         })"""
+    )
+    _checkpoint("initial/publish-drag-state")
+    await capture_layout(page)
+    assert_equal(
+        await page.evaluate("() => [scroller.scrollLeft, scroller.scrollTop]"),
+        [state_after_drag["left"], state_after_drag["top"]],
+        "scroll positions are visible before visual publication",
     )
     control_scroll = None
     if is_moli:
