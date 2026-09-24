@@ -8,7 +8,8 @@ establish independent scheduling or acceptable overload isolation.
 The deliverables are asynchronous native admission with fewer owner round
 trips, scheduler fairness under sustained production, explicit output capacity
 and overload behavior, and a final frozen comparison. The three code changes
-are complete; final public-client and retention acceptance is recorded below.
+and frozen public-client, performance and retention acceptance are complete
+under the explicit overload limits recorded below.
 
 ## Scheduler fairness
 
@@ -170,3 +171,111 @@ The first Log-disabled 32 x 4 MiB probe passes with 32 starts, 32 terminals and
 134,217,728 bytes. This is a functional baseline run, not a latency comparison
 or evidence of equal failure probabilities. The earlier 4/10 parent versus
 4/10 candidate report compared two branch revisions, not main.
+
+## Frozen release comparison
+
+Final production source is `7e89d6d8f9211c6ef9c595ee6804670c77f1ee8e`.
+Its ordinary release SHA256 is
+`20019a49c19b47aa70947a0e83c2f4db8e5a6d48d0366f4e05750b5b8f257063`.
+The intermediate parent is the fairness commit `8e669017a`, before asynchronous
+admission and progress batching; its binary SHA256 is
+`216386058ef71f03cb76cce67d5b88093042369d7ebcfaf56d1ac7a1b56cfcdb`.
+All three builds use the same compiler and V8 archive. Compilation and tests
+were terminal before the comparisons; tracing was disabled for timed runs.
+The existing probe scripts, fixture bodies, timeouts and assertions are
+unchanged. `network-index.json`, `owner-index.json` and `retention-index.json`
+retain every planned attempt, with raw wire, server, resource and result files.
+
+The network probe performs 32 concurrent 4 MiB requests, checks every binary
+body and exact accumulated byte count, and requires one ordered start/head/
+terminal chain per request. Ten alternating main/head pairs pass, followed by
+one Log-enabled run on each revision; neither side closes a frontend.
+
+| Ordinary release, Log disabled | Fixed main | Final head |
+| --- | ---: | ---: |
+| Passing runs | 10/10 | 10/10 |
+| Median elapsed time | 497.463 ms | 340.714 ms |
+| Min–max elapsed time | 478.592–504.871 ms | 327.176–358.998 ms |
+| Data events per run | 32 | 1,028–1,038 |
+| Verified body bytes per run | 134,217,728 | 134,217,728 |
+
+Main publishes completed-response progress; head publishes incremental progress.
+Both are judged by the same byte/order assertions, not equal event counts.
+The prior fairness-parent probes include a closed frontend and a successful
+8,263-progress-event run. They are retained diagnostics, not part of this
+fixed ten-run denominator. The final runs have no capacity rejection or panic
+in their server logs.
+
+The navigation probe rotates main/parent/head order across three rounds. Each
+round uses four pages, two warm-up navigations per page, then 100 measured
+navigations and 256 history queries. All frame-before-console, script-marker
+and cleanup assertions pass. Values below are client-observed command medians.
+
+| Round | Main | Fairness parent | Final head | Head minus main |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1.838 ms | 2.143 ms | 2.209 ms | +0.371 ms |
+| 2 | 1.717 ms | 1.994 ms | 2.281 ms | +0.564 ms |
+| 3 | 1.767 ms | 2.159 ms | 1.903 ms | +0.136 ms |
+
+Head's frame notification medians are 9.030–9.319 ms versus main's
+9.501–10.758 ms; console-output medians are 11.291–11.444 ms versus
+12.299–13.802 ms. History-query medians are 1.984–2.107 ms versus
+2.006–2.119 ms. The admission change does not establish a consistent navigation
+latency reduction over the fairness parent, nor parity with main. Its causal
+owner-gate tests establish scheduling independence. These wire timings do not
+separate native queue residence, execution and projection costs; retained
+Worker memory savings are not an explanation for the command latency.
+
+Both retention modes emit 12,288 records without a Worker observer: either
+24 batches of 512, or batches of 512/1,536/2,048/4,096/4,096. Both revisions
+then attach, collect garbage, replay a contiguous tail, deliver all 256 live
+records, detach, close the owning page and dispose its Context. All four runs
+pass; head's retained history remains 312 records / 10,484,448 estimated bytes.
+
+| Retention mode | Main PSS after GC | Head PSS after GC | Head PSS after owner close |
+| --- | ---: | ---: | ---: |
+| Steady | 1,131.25 MiB | 112.34 MiB | 67.99 MiB |
+| Burst | 1,061.51 MiB | 120.30 MiB | 70.35 MiB |
+
+Head replays 312 records; main replays all 12,288. Head's retained count and
+bytes are zero after owner close. These are process PSS snapshots and retained
+history counters, not bounds on the live native mailbox or total process RSS.
+`frozen-summary.json` records the per-round values and every retention snapshot.
+
+## Public-client acceptance and delivery
+
+The same frozen release passes the formal CDP suite: 48 groups / 536 scenarios,
+including raw CDP (61 records), Playwright (454) and Puppeteer (21). WebDriver
+passes all 165 scenarios in its seven Moli groups. The final full Rust suite
+also includes the shared-page creation/retirement and CDP/BiDi/Classic lifecycle
+regressions; these are not inferred from separate single-protocol runs.
+
+The first formal wrapper attempt is retained as a failure in `cdp-final`.
+Its supervisor passed 47 groups / 512 scenarios but wrote per-worker files
+instead of the stdout JSON expected by the old benchmark adapter. The adapter
+now reads a fresh supervisor artifact directory and fails when selected groups
+or their successful results are missing, failed or malformed. The formal
+selector also includes the default process-phase target-lifecycle group
+(24 scenarios). Explicit custom commands keep their stdout-JSON interface.
+The artifact/selection regression fails the old adapter; all 602 benchmark
+tests pass after the correction. `cdp-final-2` is the successful complete rerun
+(94.462s), with no changed Rust source, deadlines or smoke assertions.
+
+The three production commits are:
+
+- `8e669017a`: bounded event consumption and fair independent dispatch, retaining
+  the pre-command event prefix and Classic lifecycle wakes.
+- `1d6746edb`: asynchronous navigation/reload, input and policy admission, with
+  native receipts replacing synchronous forwarding and repeated reads.
+- `7e89d6d8f`: bounded native progress publication, preserved consumer ordering,
+  explicit socket/aggregate output failure contracts and retained dispatch origin.
+
+The review scenarios are closed for the tested workload: owner-gated native
+commands leave unrelated inspection dispatchable; continuous production leaves
+commands and completions runnable; a stalled socket leaves independent
+CDP/BiDi/Classic clients alive; the repeated normal network burst no longer
+closes the shared observer. The shared aggregate transport still fails fast
+beyond its documented limits, and the native command mailbox remains unbounded.
+Cold synchronous APIs also remain. This delivery does not claim universal
+owner independence, an end-to-end memory ceiling, unchanged event granularity,
+or navigation latency parity with main.

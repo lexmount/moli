@@ -35,6 +35,33 @@ def _default_command() -> list[str]:
     return ["python3", "-m", "moli_cdp_smoke"]
 
 
+def _supervisor_payload(output_dir: Path, groups: tuple[str, ...]) -> dict[str, Any]:
+    records: list[Any] = []
+    errors: list[str] = []
+    try:
+        summary = json.loads((output_dir / "summary.json").read_text())
+        outcomes = summary["groups"]
+        if (summary.get("ok") is not True or len(outcomes) != len(groups)
+                or {row["group"] for row in outcomes} != set(groups)
+                or any(row["status"] != "passed" for row in outcomes)):
+            errors.append("supervisor did not pass every selected group")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        errors.append(f"invalid supervisor summary: {error}")
+    for group in groups:
+        try:
+            payload = json.loads((output_dir / f"{group}.json").read_text())
+            if not isinstance(payload, dict):
+                raise ValueError("worker result must be an object")
+            if payload.get("group") != group or payload.get("ok") is not True:
+                errors.append(f"{group}: unsuccessful worker result")
+            if not isinstance(payload["results"], list):
+                raise ValueError("worker results must be a list")
+            records.extend(payload["results"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            errors.append(f"{group}: invalid worker result: {error}")
+    return {"ok": not errors, "results": records, "error": "; ".join(errors) or None}
+
+
 def _discover_group_listing(smoke_command: list[str], timeout_seconds: float, env: dict[str, str]) -> list[dict[str, Any]]:
     result = run_process(
         [*smoke_command, "--list-groups"],
@@ -56,7 +83,7 @@ def _discover_group_listing(smoke_command: list[str], timeout_seconds: float, en
 def _group_client(group: dict[str, Any]) -> str | None:
     name = str(group.get("name", ""))
     phase = str(group.get("phase", ""))
-    if phase == "raw":
+    if phase in {"raw", "process"}:
         return "raw_cdp"
     if phase in {"page", "browser"}:
         return "playwright"
@@ -287,6 +314,12 @@ def run_cdp_smoke_suite(
     group_listing = _discover_group_listing(smoke_command, timeout_seconds, env)
     preflight = _collect_preflight(timeout_seconds, env)
     effective_groups = _effective_cdp_smoke_groups(profile, groups, group_listing)
+    supervisor_dir = None
+    if not command:
+        supervisor_dir = (suite_dir / "workers").resolve()
+        # A fresh directory prevents a crashed runner from reusing stale passes.
+        supervisor_dir.mkdir(parents=True, exist_ok=False)
+        smoke_command.extend(["--output-dir", str(supervisor_dir)])
     for group in effective_groups:
         smoke_command.extend(["--group", group])
 
@@ -296,9 +329,12 @@ def run_cdp_smoke_suite(
         timeout_seconds=timeout_seconds,
         env=env,
     )
-    payload = _extract_json_payload(result.stdout)
-    if payload is None and result.stderr:
-        payload = _extract_json_payload(result.stderr)
+    if supervisor_dir is not None:
+        payload = _supervisor_payload(supervisor_dir, effective_groups)
+    else:
+        payload = _extract_json_payload(result.stdout)
+        if payload is None and result.stderr:
+            payload = _extract_json_payload(result.stderr)
 
     records = payload.get("results", []) if isinstance(payload, dict) else []
     ok = result.returncode == 0 and not result.timed_out and isinstance(payload, dict) and payload.get("ok") is True

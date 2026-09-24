@@ -16,6 +16,7 @@ from moli_benchmark.process import ProcessResult
 
 GROUP_LISTING = [
     {"name": "protocol", "phase": "raw", "default": True},
+    {"name": "target-lifecycle", "phase": "process", "default": True},
     {"name": "core", "phase": "page", "default": True},
     {"name": "network", "phase": "page", "default": True},
     {"name": "emulation-storage", "phase": "browser", "default": True},
@@ -51,9 +52,52 @@ class CdpSmokeTests(unittest.TestCase):
         self.assertEqual(commands[0], ["uv", "run", "moli-cdp-smoke", "--list-groups"])
 
     def test_formal_profile_selects_ecosystem_groups(self) -> None:
-        self.assertEqual(_effective_cdp_smoke_groups("smoke", (), GROUP_LISTING), ("protocol", "core", "network", "emulation-storage"))
-        self.assertEqual(_effective_cdp_smoke_groups("formal", (), GROUP_LISTING), ("protocol", "core", "network", "emulation-storage", "puppeteer"))
+        self.assertEqual(_effective_cdp_smoke_groups("smoke", (), GROUP_LISTING), ("protocol", "target-lifecycle", "core", "network", "emulation-storage"))
+        self.assertEqual(_effective_cdp_smoke_groups("formal", (), GROUP_LISTING), ("protocol", "target-lifecycle", "core", "network", "emulation-storage", "puppeteer"))
         self.assertEqual(_effective_cdp_smoke_groups("formal", ("puppeteer",), GROUP_LISTING), ("puppeteer",))
+
+    def test_supervisor_requires_successful_complete_artifacts(self) -> None:
+        groups = ("protocol", "core", "puppeteer")
+        names = ("raw_cdp_runtime_evaluate_awaitpromise_fetch_without_followup", "connect_over_cdp", "puppeteer_goto_plain")
+        for failure in (None, "failed-group", "missing-group", "missing-result", "invalid-result", "invalid-schema", "failed-result"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp_dir:
+                def run_process(command: list[str], **_: object) -> ProcessResult:
+                    self.assertIn("--output-dir", command)
+                    artifacts = Path(command[command.index("--output-dir") + 1])
+                    outcomes = []
+                    for group, name in zip(groups, names):
+                        outcomes.append({"group": group, "status": "passed"})
+                        payload = {"ok": True, "group": group, "results": [{"name": name, "ok": True}]}
+                        (artifacts / f"{group}.json").write_text(json.dumps(payload))
+                    if failure == "failed-group":
+                        outcomes[0]["status"] = "failed"
+                    elif failure == "missing-group":
+                        outcomes.pop()
+                    elif failure == "missing-result":
+                        (artifacts / "puppeteer.json").unlink()
+                    elif failure == "invalid-result":
+                        (artifacts / "puppeteer.json").write_text("incomplete")
+                    elif failure == "invalid-schema":
+                        (artifacts / "puppeteer.json").write_text("[]")
+                    elif failure == "failed-result":
+                        (artifacts / "puppeteer.json").write_text(json.dumps({"ok": False, "group": "puppeteer", "results": []}))
+                    (artifacts / "summary.json").write_text(json.dumps({"ok": True, "groups": outcomes}))
+                    return ProcessResult(command, 0, 123.0, b"", b"", False, {})
+
+                with (
+                    patch("moli_benchmark.cdp_smoke.run_process", run_process),
+                    patch("moli_benchmark.cdp_smoke._discover_group_listing", return_value=GROUP_LISTING),
+                    patch("moli_benchmark.cdp_smoke._collect_preflight", return_value=PREFLIGHT_OK),
+                ):
+                    summary = run_cdp_smoke_suite(
+                        output_dir=Path(temp_dir), moli_bin=Path("/tmp/moli"),
+                        timeout_seconds=30, groups=groups, profile="formal",
+                    )
+                self.assertEqual(summary["ok"], failure is None)
+                self.assertEqual(summary["gate_failures"] == 0, failure is None)
+                if failure is None:
+                    self.assertEqual(summary["total_records"], 3)
+                    self.assertTrue(all(summary["client_coverage"].values()))
 
     def test_formal_summary_records_client_coverage(self) -> None:
         payload = {
