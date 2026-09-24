@@ -17,7 +17,7 @@
     if (config.sandbox) frame.sandbox = 'allow-scripts';
     if (config.inherit === 'srcdoc') frame.srcdoc = '<!doctype html><body>inherited</body>';
     else if (!config.inherit) {
-      const childURL = new URL('/domain-fixture.html', location.href);
+      const childURL = new URL('/domain-fixture.html?child', location.href);
       if (config.childHost) childURL.hostname = config.childHost;
       if (config.childPort) childURL.port = config.childPort;
       if (config.childDomain) childURL.searchParams.set('domain', config.childDomain);
