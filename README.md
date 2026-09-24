@@ -163,6 +163,10 @@ console.log(await page.locator("body").innerText());
 await browser.close();
 ```
 
+CDP clients can retain response bodies across navigation. See
+[response body retention](docs/network-durable-messages.md) for configuration
+and resource limits.
+
 ## Why Moli
 
 Three qualities matter most for agent workloads, and Moli brings them together:

@@ -258,6 +258,9 @@ pub(crate) fn start_network_domain_command_dispatch(
         NetworkAction::Disable => NetworkDomainCommandTaskStep::Network(
             start_set_network_domain_enabled_command(conn, cmd, false),
         ),
+        NetworkAction::ConfigureDurableMessages => NetworkDomainCommandTaskStep::Complete(
+            settings::configure_durable_messages_command_output_plan(conn, cmd),
+        ),
         NetworkAction::SetCacheDisabled => {
             NetworkDomainCommandTaskStep::Network(start_set_cache_disabled_command(conn, cmd))
         }
@@ -515,13 +518,13 @@ fn start_set_network_domain_enabled_command(
     cmd: &Cmd<'_>,
     enabled: bool,
 ) -> NetworkCommandTaskStep {
-    let durable_limits = if enabled {
-        match settings::durable_body_limits(cmd) {
+    let durable_configuration = if enabled {
+        match settings::durable_body_configuration_for_enable(cmd) {
             Ok(limits) => limits,
             Err(plan) => return NetworkCommandTaskStep::Complete(plan),
         }
     } else {
-        None
+        settings::DurableBodyConfiguration::Unchanged
     };
     let updated = if enabled {
         conn.enable_network_listener_for_session_owner(cmd.session_id)
@@ -535,8 +538,8 @@ fn start_set_network_domain_enabled_command(
         ));
     }
 
-    if enabled {
-        conn.configure_durable_response_bodies_for_session_owner(cmd.session_id, durable_limits);
+    if let settings::DurableBodyConfiguration::Set(limits) = durable_configuration {
+        conn.configure_durable_response_bodies_for_session_owner(cmd.session_id, limits);
     }
 
     let kind = if enabled {

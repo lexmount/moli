@@ -287,6 +287,7 @@ pub(crate) enum LogAction {
 pub(crate) enum NetworkAction {
     Enable,
     Disable,
+    ConfigureDurableMessages,
     SetCacheDisabled,
     SetBypassServiceWorker,
     #[strum(serialize = "setExtraHTTPHeaders")]

@@ -16,6 +16,213 @@ use crate::domains::network::{
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_preserves_body_across_real_navigation_and_disables() {
+    async fn navigate(ctx: &mut TestContext, id: u64, url: &str) -> String {
+        ctx.sent.clear();
+        ctx.process_async(json!({"id":id,"method":"Page.navigate","params":{"url":url}}))
+            .await;
+        wait_until_messages(
+            ctx,
+            Some("SID-primary"),
+            "durable document response finished",
+            |messages| {
+                messages
+                    .iter()
+                    .find_map(|message| {
+                        (message["method"] == "Network.requestWillBeSent"
+                            && message["params"]["request"]["url"] == url)
+                            .then(|| message["params"]["requestId"].as_str())
+                            .flatten()
+                    })
+                    .is_some_and(|request_id| {
+                        messages.iter().any(|message| {
+                            message["method"] == "Network.loadingFinished"
+                                && message["params"]["requestId"] == request_id
+                        })
+                    })
+            },
+        )
+        .await;
+        ctx.sent
+            .iter()
+            .find(|message| {
+                message["method"] == "Network.requestWillBeSent"
+                    && message["params"]["request"]["url"] == url
+            })
+            .unwrap()["params"]["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/{page}",
+                get(|| async { axum::response::Html("<!doctype html><p>retained document</p>") }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    for disable in [json!({}), json!({"maxTotalBufferSize":0})] {
+        let mut ctx = TestContext::new();
+        let mut bc = BrowserContext::new("BID-configure".into());
+        bc.set_active_target_id("TID-configure");
+        bc.attach_active_session("SID-primary");
+        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.process_async(json!({"id":79_500,"method":"Network.enable"}))
+            .await;
+        ctx.expect_result(79_500, json!({}), None);
+        ctx.process_async(json!({"id":79_501,"method":"Network.configureDurableMessages","params":{"maxTotalBufferSize":4096}})).await;
+        ctx.expect_result(79_501, json!({}), None);
+        let old_id = navigate(&mut ctx, 79_502, &format!("http://{addr}/first")).await;
+        navigate(&mut ctx, 79_503, &format!("http://{addr}/second")).await;
+        ctx.process_async(
+            json!({"id":79_504,"method":"Network.getResponseBody","params":{"requestId":old_id}}),
+        )
+        .await;
+        ctx.expect_result(
+            79_504,
+            json!({"body":"<!doctype html><p>retained document</p>","base64Encoded":false}),
+            None,
+        );
+        ctx.process_async(json!({"id":79_505,"method":"Network.configureDurableMessages","sessionId":"SID-primary","params":disable})).await;
+        ctx.expect_result(79_505, json!({}), Some("SID-primary"));
+        ctx.process_async(
+            json!({"id":79_506,"method":"Network.getResponseBody","params":{"requestId":old_id}}),
+        )
+        .await;
+        ctx.expect_error(79_506, -32000, "No resource with given identifier found");
+        let ordinary_id = navigate(&mut ctx, 79_507, &format!("http://{addr}/third")).await;
+        navigate(&mut ctx, 79_508, &format!("http://{addr}/fourth")).await;
+        ctx.process_async(json!({"id":79_509,"method":"Network.getResponseBody","params":{"requestId":ordinary_id}})).await;
+        ctx.expect_error(79_509, -32000, "No resource with given identifier found");
+        assert!(
+            ctx.conn
+                .runtime_session_owner_slot(None)
+                .unwrap()
+                .primary_network_events_enabled()
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_is_independent_of_network_listener() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-configure".into());
+    bc.set_active_target_id("TID-configure");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.process_async(json!({"id":79_520,"method":"Network.configureDurableMessages","params":{"maxTotalBufferSize":128}})).await;
+    ctx.expect_result(79_520, json!({}), None);
+    // A root collector can exist before the primary wire identity is bound.
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .attach_active_session("SID-primary");
+    assert!(
+        !ctx.conn
+            .runtime_session_owner_slot(None)
+            .unwrap()
+            .has_network_event_listeners()
+    );
+    ctx.process_async(json!({"id":79_521,"method":"Network.enable"}))
+        .await;
+    ctx.expect_result(79_521, json!({}), None);
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.record_captured_response_body(
+        "REQ-configured".into(),
+        "retained".into(),
+        [Some("SID-primary".into())],
+    );
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_522,"method":"Network.getResponseBody","params":{"requestId":"REQ-configured"}})).await;
+    ctx.expect_result(
+        79_522,
+        json!({"body":"retained","base64Encoded":false}),
+        None,
+    );
+    ctx.process_async(json!({"id":79_523,"method":"Network.configureDurableMessages","params":{}}))
+        .await;
+    ctx.expect_result(79_523, json!({}), None);
+    assert!(
+        ctx.conn
+            .runtime_session_owner_slot(None)
+            .unwrap()
+            .primary_network_events_enabled()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_validates_sizes_and_accepts_zero_resource_budget() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-configure".into());
+    bc.set_active_target_id("TID-configure");
+    bc.attach_active_session("SID-primary");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    for (index, params) in [
+        json!({"maxTotalBufferSize":-1}),
+        json!({"maxTotalBufferSize":"128"}),
+        json!({"maxTotalBufferSize":128,"maxResourceBufferSize":-1}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 79_530 + index as u64;
+        ctx.process_async(
+            json!({"id":id,"method":"Network.configureDurableMessages","params":params}),
+        )
+        .await;
+        ctx.expect_error(id, -32602, "InvalidParams");
+    }
+    for (id, method, params) in [
+        (
+            79_540,
+            "Network.enable",
+            json!({"enableDurableMessages":true,"maxTotalBufferSize":128,"maxResourceBufferSize":0}),
+        ),
+        (
+            79_541,
+            "Network.configureDurableMessages",
+            json!({"maxTotalBufferSize":128,"maxResourceBufferSize":0}),
+        ),
+    ] {
+        ctx.process_async(json!({"id":id,"method":method,"params":params}))
+            .await;
+        ctx.expect_result(id, json!({}), None);
+    }
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.record_captured_response_body(
+        "REQ-no-capacity".into(),
+        "body".into(),
+        [Some("SID-primary".into())],
+    );
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_542,"method":"Network.getResponseBody","params":{"requestId":"REQ-no-capacity"}})).await;
+    ctx.expect_error(
+        79_542,
+        -32000,
+        "Request content was evicted from inspector cache",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn durable_response_body_primary_aliases_share_configuration_access_and_revocation() {
     for configure_session in [None, Some("SID-primary")] {
         for recorded_session in [None, Some("SID-primary")] {
@@ -130,7 +337,6 @@ async fn durable_response_body_requires_explicit_positive_total_budget() {
         json!({"enableDurableMessages":true}),
         json!({"enableDurableMessages":true,"maxTotalBufferSize":0}),
         json!({"enableDurableMessages":true,"maxTotalBufferSize":-1}),
-        json!({"enableDurableMessages":true,"maxTotalBufferSize":100,"maxResourceBufferSize":0}),
         json!({"enableDurableMessages":"true","maxTotalBufferSize":100}),
     ]
     .into_iter()
