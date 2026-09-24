@@ -21,9 +21,11 @@ pub(crate) struct CdpFrontendRouter {
 }
 
 impl CdpFrontendRouter {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(
+        shutdown_coordinator: crate::protocol_server::cdp_shutdown::ShutdownCoordinator,
+    ) -> Self {
         Self {
-            routing: Mutex::new(CdpFrontendRoutingState::default()),
+            routing: Mutex::new(CdpFrontendRoutingState::new(shutdown_coordinator)),
         }
     }
 
@@ -40,6 +42,12 @@ impl CdpFrontendRouter {
         if let Some(frontend) = frontend {
             frontend.enqueue_message(message);
         }
+    }
+
+    /// Requests graceful server shutdown after the browser-level
+    /// `Browser.close` response has been enqueued for flushing.
+    pub(crate) fn request_shutdown(&self) {
+        self.routing.lock().request_shutdown();
     }
 
     pub(crate) fn register_browser_frontend(

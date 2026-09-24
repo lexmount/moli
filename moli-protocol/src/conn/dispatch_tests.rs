@@ -6910,6 +6910,27 @@ fn command_dispatch_completes_browser_sync_commands() {
 }
 
 #[test]
+fn command_dispatch_completes_browser_close_with_empty_success() {
+    let mut conn = CdpConnection::new();
+    for id in [201_u64, 202] {
+        // Chromium's Browser.close takes no parameters and returns no result
+        // fields; extra params are silently ignored.
+        let raw = serde_json::to_string(&json!({
+            "id": id,
+            "method": "Browser.close",
+            "params": { "ignored": true },
+        }))
+        .unwrap();
+        let step = conn.start_command_dispatch(&raw);
+        assert_eq!(
+            complete_messages(step),
+            vec![json!({ "id": id, "result": {} })],
+            "Browser.close should complete with an empty success result"
+        );
+    }
+}
+
+#[test]
 fn command_dispatch_completes_browser_owner_commands_without_legacy_fallback() {
     let mut conn = CdpConnection::new();
     for (id, method, params, expects_result) in [

@@ -1514,6 +1514,13 @@ async fn start_ready_command_dispatch(
                 output,
             )
             .await;
+            if command.method() == "Browser.close" {
+                // The empty success response is now enqueued for flushing on
+                // the browser frontend sink. Requesting shutdown here (rather
+                // than at command receipt) guarantees the reply precedes the
+                // graceful drain and socket close.
+                frontend_router.request_shutdown();
+            }
             trace_in_flight_command(
                 &metadata,
                 "command_done",
