@@ -153,6 +153,11 @@ pub(super) fn execute<'s>(
                 && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
             {
                 unsafe { &mut *host_ptr }.dispatch_child_document_tree_beforeunload_for_traversal(scope, handle);
+            } else if let Some(popup_id) =
+                crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
+                && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            {
+                unsafe { &mut *host_ptr }.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
             } else {
                 dispatch_beforeunload_for_runtime_owner(scope, target.owner);
             }
