@@ -27,6 +27,8 @@ mod crypto_subtle_other;
 mod crypto_subtle_x25519;
 mod date_locale;
 mod details;
+mod document_domain_lifetime;
+mod document_domain_setter;
 mod document_open_navigation_abort;
 mod document_open_origin;
 mod event_handlers;
@@ -111,8 +113,6 @@ mod window_open_empty_url;
 mod worker_listener_invocation;
 mod worker_options;
 
-mod document_domain_lifetime;
-mod document_domain_setter;
 
 mod error_event_init;
 mod keyboard_event_init;
