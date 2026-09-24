@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, TargetEmulationStateUpdate};
+use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, TargetEmulationStateUpdate};
 
 pub(super) fn update_page_emulation_state(
     conn: &mut CdpConnection,
@@ -18,31 +18,39 @@ pub(super) fn update_page_emulation_state(
 pub(super) fn update_style_environment_state(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    update: impl FnOnce(TargetEmulationStateUpdate<'_>),
+    mut update: impl for<'a> FnMut(TargetEmulationStateUpdate<'a>),
 ) -> Result<(), String> {
-    update_page_emulation_state(conn, session_id, update)
-}
-
-pub(super) fn set_context_emulated_media(
-    conn: &mut CdpConnection,
-    media: crate::conn::EmulatedMediaOverrides,
-) -> Result<(), String> {
-    let context = conn
-        .browser_context
-        .as_mut()
-        .ok_or_else(|| "BrowserContextNotLoaded".to_owned())?;
-    context.set_default_emulated_media(media);
-    Ok(())
-}
-
-pub(super) fn set_context_preferred_text_scale(
-    conn: &mut CdpConnection,
-    scale: Option<f32>,
-) -> Result<(), String> {
-    let context = conn
-        .browser_context
-        .as_mut()
-        .ok_or_else(|| "BrowserContextNotLoaded".to_owned())?;
-    context.set_default_preferred_text_scale(scale);
+    let owners = if super::emulation_command_is_context_wide(conn, session_id) {
+        conn.browser_context
+            .as_ref()
+            .map(|context| {
+                context
+                    .page_targets
+                    .iter()
+                    .map(|target| {
+                        CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                            browser_context_id: context.id.clone(),
+                            target_id: target.target_id().to_owned(),
+                            session_key: moli_page_types::DevToolsSessionKey::Primary,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        vec![CommandOwnerScope::capture(conn, session_id)]
+    };
+    if owners.is_empty() {
+        return Err("BrowserContextNotLoaded".to_owned());
+    }
+    for owner in owners {
+        if !conn.update_emulation_state_for_owner(&owner, |state| {
+            if let Some(state) = state {
+                update(state);
+            }
+        }) {
+            return Err("BrowserContextNotLoaded".to_owned());
+        }
+    }
     Ok(())
 }
