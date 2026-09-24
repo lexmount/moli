@@ -4580,6 +4580,117 @@ async fn traversal_navigate_destination_index_tracks_entry_identity() {
     );
 }
 #[tokio::test]
+async fn traverse_to_preserves_intervening_history_back() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+
+    let setup = vm
+        .eval(
+            r##"
+            (() => {
+              history.replaceState(null, "", "#0");
+              const keys = [navigation.currentEntry.key];
+              for (let i = 1; i <= 3; i++) {
+                history.pushState(null, "", `#${i}`);
+                keys.push(navigation.currentEntry.key);
+              }
+              const probe = globalThis.__lmMixedTraversals = {
+                popstate: [], committed: [], finished: []
+              };
+              onpopstate = () => probe.popstate.push(location.hash);
+              const observe = (label, result) => {
+                result.committed.then(
+                  entry => probe.committed.push(`${label}:${new URL(entry.url).hash}:${location.hash}`),
+                  error => probe.committed.push(`${label}:rejected:${error.name}`)
+                );
+                result.finished.then(
+                  entry => probe.finished.push(`${label}:${new URL(entry.url).hash}`),
+                  error => probe.finished.push(`${label}:rejected:${error.name}`)
+                );
+              };
+              const first = navigation.traverseTo(keys[2]);
+              observe("first", first);
+              history.back();
+              const last = navigation.traverseTo(keys[0]);
+              observe("last", last);
+              return [location.hash, first.committed !== last.committed,
+                first.finished !== last.finished].join("|");
+            })()
+            "##,
+        )
+        .expect("mixed traversal requests should queue in one script turn");
+    assert_eq!(setup, "#3|true|true");
+
+    let mut executed = Vec::new();
+    for _ in 0..4 {
+        executed.push(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .expect("mixed history traversal should execute"),
+        );
+    }
+    let settled = vm
+        .eval("JSON.stringify({hash: location.hash, ...__lmMixedTraversals})")
+        .expect("mixed traversal results should be inspectable");
+    assert_eq!(
+        settled,
+        r##"{"hash":"#0","popstate":["#2","#1","#0"],"committed":["first:#2:#2","last:#0:#0"],"finished":["first:#2","last:#0"]}"##
+    );
+    assert_eq!(executed, [true, true, true, false]);
+}
+
+#[tokio::test]
+async fn repeated_traverse_to_reuses_promises_after_history_request() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+
+    let setup = vm
+        .eval(
+            r##"
+            (() => {
+              history.pushState(null, "", "#1");
+              const key = navigation.currentEntry.key;
+              history.pushState(null, "", "#2");
+              history.back();
+              const first = navigation.traverseTo(key);
+              const second = navigation.traverseTo(key);
+              globalThis.__lmRepeatedAfterHistory = [];
+              for (const [label, result] of [["first", first], ["second", second]]) {
+                result.finished.then(
+                  entry => __lmRepeatedAfterHistory.push(`${label}:${new URL(entry.url).hash}`),
+                  error => __lmRepeatedAfterHistory.push(`${label}:rejected:${error.name}`)
+                );
+              }
+              return [first !== second, first.committed === second.committed,
+                first.finished === second.finished].join("|");
+            })()
+            "##,
+        )
+        .expect("a History request should not hide a matching Navigation request");
+    assert_eq!(setup, "true|true|true");
+
+    for _ in 0..2 {
+        assert!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .expect("History and Navigation requests should execute separately")
+        );
+    }
+    assert_eq!(
+        vm.eval("[location.hash, ...__lmRepeatedAfterHistory].join('|')")
+            .expect("both callers should finish at their shared destination"),
+        "#1|first:#1|second:#1"
+    );
+    assert!(
+        !vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("the repeated Navigation request should not add another task")
+    );
+}
+
+#[tokio::test]
 async fn repeated_traverse_to_reuses_pending_navigation_promises() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
@@ -4591,9 +4702,12 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
             (() => {
               const key = navigation.currentEntry.key;
               navigation.navigate("#one");
-              const first = navigation.traverseTo(key);
-              const second = navigation.traverseTo(key);
+              const first = navigation.traverseTo(key, { info: "first" });
+              const second = navigation.traverseTo(key, { info: "second" });
               globalThis.__lmRepeatedTraverseTo = { first, second, log: [] };
+              navigation.addEventListener("navigate", event => {
+                __lmRepeatedTraverseTo.log.push(`info:${event.info}`);
+              }, { once: true });
               first.finished.then(
                 entry => globalThis.__lmRepeatedTraverseTo.log.push(`finished:${entry.url}:${location.hash}`),
                 error => globalThis.__lmRepeatedTraverseTo.log.push(`rejected:${error.name}`)
@@ -4617,5 +4731,10 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
     let settled = vm
         .eval("globalThis.__lmRepeatedTraverseTo.log.join('|')")
         .expect("repeated traverseTo settlement should evaluate");
-    assert_eq!(settled, "finished:https://example.com/base:");
+    assert_eq!(settled, "info:first|finished:https://example.com/base:");
+    assert!(
+        !vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("repeated traverseTo should share one traversal task")
+    );
 }

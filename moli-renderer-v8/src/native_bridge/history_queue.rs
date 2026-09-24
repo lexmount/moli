@@ -143,14 +143,18 @@ impl HistoryQueueState {
     ) -> Option<RendererPageHistoryTraversalTaskId> {
         // History API requests are ordered steps, including a same-document
         // traversal followed by a cross-document traversal. Only Navigation
-        // API requests with result promises can share a pending task.
+        // API requests for the same destination key can share a pending task;
+        // a different destination must retain its own position in the queue.
         if result.is_some()
+            && target_key.is_some()
             && let Some(pending) =
                 self.pending_history_traversal_tasks
                     .iter_mut()
                     .find_map(|queued| match &mut queued.action {
                         PendingHistoryTraversalAction::SameDocument(pending)
-                            if pending.target == target && !pending.results.is_empty() =>
+                            if pending.target == target
+                                && pending.target_key == target_key
+                                && !pending.results.is_empty() =>
                         {
                             Some(pending)
                         }
@@ -158,10 +162,6 @@ impl HistoryQueueState {
                         | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
                     })
         {
-            pending.target_index = target_index;
-            pending.joint_step = joint_step;
-            pending.target_key = target_key;
-            pending.info = info;
             if let Some(result) = result {
                 pending.results.push(result);
             }
@@ -538,26 +538,23 @@ impl JsContextHost {
         Option<RendererPageHistoryTraversalProducer>,
     )> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
-        if let Some(existing_index) = self
-            .history_queue
-            .pending_history_traversal_tasks
-            .iter()
-            .position(|queued| {
-                matches!(
-                    &queued.action,
+        if target_key.is_some()
+            && let Some(result) = self
+                .history_queue
+                .pending_history_traversal_tasks
+                .iter()
+                .find_map(|queued| match &queued.action {
                     PendingHistoryTraversalAction::SameDocument(pending)
-                        if pending.target == target
-                            && pending.target_index == target_index
-                )
-            })
-            && let PendingHistoryTraversalAction::SameDocument(pending) =
-                &mut self.history_queue.pending_history_traversal_tasks[existing_index].action
-            && !pending.results.is_empty()
+                        if pending.target == target && pending.target_key == target_key =>
+                    {
+                        pending.results.first()
+                    }
+                    PendingHistoryTraversalAction::SameDocument(_)
+                    | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
+                })
         {
-            pending.joint_step = joint_step;
-            pending.target_key = target_key;
-            pending.info = info.map(|info| v8::Global::new(scope, info));
-            let result = &pending.results[0];
+            // Repeated requests share the original tracker, including its
+            // destination and info, even if a History task also targets it.
             let committed_resolver = v8::Local::new(scope, &result.committed_resolver);
             let finished_resolver = v8::Local::new(scope, &result.finished_resolver);
             return Some((
