@@ -26,6 +26,7 @@ pub struct HistoryEntry {
     pub url: String,
     /// Origin inherited by an about:blank or about:srcdoc Document.
     pub inherited_origin: Option<String>,
+    pub document_origin: String,
     pub id: String,
     pub key: NavigationHistoryEntryKey,
     pub document: NavigationHistoryDocumentId,

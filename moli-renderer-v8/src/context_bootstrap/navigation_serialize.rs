@@ -139,6 +139,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
         return NavigationHistorySerializedEntry {
             url: "about:blank".to_owned(),
             inherited_origin: None,
+            document_origin: "null".to_owned(),
             history_state: None,
             navigation_state: None,
             scroll_restoration: Default::default(),
@@ -167,6 +168,7 @@ fn snapshot_native_entry(
     NavigationHistorySerializedEntry {
         url: entry.url.clone(),
         inherited_origin: entry.inherited_origin.clone(),
+        document_origin: entry.document_origin.clone(),
         history_state: entry.history_state.clone(),
         navigation_state: entry.navigation_state.clone(),
         scroll_restoration: entry.scroll_restoration,
@@ -232,6 +234,9 @@ pub(super) fn serialize_history_entries<'s>(
             let mut snapshot = snapshot_native_entry(&entry.borrow(), index as u32);
             if inherited_document.as_ref() == Some(&snapshot.document_id) && origin.is_some() {
                 snapshot.inherited_origin = origin.clone();
+                if let Some(origin) = &origin {
+                    snapshot.document_origin = origin.clone();
+                }
             }
             snapshot
         })

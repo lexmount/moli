@@ -191,6 +191,7 @@ mod tests {
             let entry = HistoryEntry {
                 url: "https://example.test/".to_owned(),
                 inherited_origin: None,
+                document_origin: "https://example.test".to_owned(),
                 id: "entry".to_owned(),
                 key: NavigationHistoryEntryKey::allocate(),
                 document: NavigationHistoryDocumentId::allocate(),
