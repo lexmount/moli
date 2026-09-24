@@ -1145,7 +1145,7 @@ impl DocumentLifecycleRecord {
         true
     }
 
-    fn child_load_event_has_started(&self) -> bool {
+    pub(super) fn child_load_event_has_started(&self) -> bool {
         matches!(
             self.load,
             DocumentLoadEventProgress::DispatchingWindowLoad
