@@ -5975,6 +5975,44 @@ globalThis.__outerDocumentWriteScriptContinued = true;
     }
 
     #[test]
+    fn csp_rejected_document_write_stylesheet_does_not_strand_parser_owner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let env = default_test_page_vm_env_config_with(|env| {
+                env.document_policy_container
+                    .response_content_security_policies =
+                    vec!["style-src 'none'; script-src 'unsafe-inline'".to_owned()];
+            });
+            let mut page_vm = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                parse_phase_one_html_into_page_vm_for_test_with_env(
+                    r#"<!doctype html><html><head><script>
+document.write('<link rel="stylesheet" href="https://example.test/blocked.css">');
+globalThis.__outerContinued = true;
+</script></head><body><p id="parser-tail">tail</p></body></html>"#,
+                    env,
+                ),
+            )
+            .await
+            .expect("a synchronously rejected stylesheet must not strand its document.write owner");
+
+            let result = page_vm
+                .evaluate_expression(
+                    "JSON.stringify({outerContinued: __outerContinued, tail: !!document.getElementById('parser-tail')})",
+                )
+                .expect("completed parser state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"{"outerContinued":true,"tail":true}"#),
+            );
+        }));
+    }
+
+    #[test]
     fn buffered_script_preload_cache_reuses_ready_late_parser_blocking_preload() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

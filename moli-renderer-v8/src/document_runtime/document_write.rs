@@ -2428,6 +2428,9 @@ impl DocumentRuntime {
                         .map(|input| input.signature().clone())
                         .collect::<HashSet<_>>();
                     if !blocking_signatures.is_empty()
+                        && self.has_pending_parser_script_blocking_stylesheet_signatures(
+                            blocking_signatures.iter(),
+                        )
                         && self.suspend_document_write_stylesheet_parser_pause(
                             host_ptr,
                             document_handle,
