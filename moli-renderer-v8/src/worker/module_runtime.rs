@@ -2355,14 +2355,12 @@ fn resolve_worker_module_dependency(
     request: &WorkerModuleRequest,
     pending_keys: &mut HashSet<WorkerModuleKey>,
 ) -> WorkerModuleBootstrapResult<WorkerModuleGraphBuild> {
-    let dependency_url = resolve_worker_module_specifier(&request.specifier, url).map_err(|error| {
+    let dependency_url =
+        resolve_worker_module_specifier(&request.specifier, url).map_err(|message| {
             Box::new(worker_bootstrap_error(
                 scope,
                 url.as_str(),
-                &format!(
-                    "Failed to resolve module worker dependency `{}`: {error}",
-                    request.specifier
-                ),
+                &message,
                 WorkerParentErrorEventKind::Event,
             ))
         })?;
@@ -2378,18 +2376,18 @@ fn resolve_worker_module_dependency(
     if let Some(error) = graph.borrow().compile_error(&dependency_key) {
         return Err(error);
     }
-    let (dependency_key, dependency_source) = match load_worker_static_module_dependency(
-        dependency_url,
-        dependency_key.module_type,
-    )
-    .map_err(|message| {
-        Box::new(worker_bootstrap_error(
-            scope,
-            url.as_str(),
-            &message,
-            WorkerParentErrorEventKind::Event,
-        ))
-    })? {
+    let loaded_dependency =
+        load_worker_static_module_dependency(dependency_url, dependency_key.module_type).map_err(
+            |message| {
+                Box::new(worker_bootstrap_error(
+                    scope,
+                    url.as_str(),
+                    &message,
+                    WorkerParentErrorEventKind::Event,
+                ))
+            },
+        )?;
+    let (dependency_key, dependency_source) = match loaded_dependency {
         WorkerModuleDependencyLoad::Source { url, source } => {
             let dependency_key = worker_module_key_for_attributes(&url, &request.attributes)
                 .map_err(|message| {
