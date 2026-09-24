@@ -539,8 +539,12 @@ fn existing_named_child_window_for_window_open<'s>(
     }
     let host = unsafe { &mut *host_ptr };
     let handle = host.child_browsing_context_handle_by_name(target_name)?;
-    host.child_browsing_context_window_wrapper(scope, handle)
-        .map(|window| (handle, window))
+    // Selecting a navigable does not authorize reading or rebinding its
+    // WindowProxy from the caller's realm.
+    let context = host
+        .ensure_prebootstrapped_child_default_context(scope, handle)
+        .ok()?;
+    Some((handle, context.global(scope)))
 }
 
 fn open_dialog(

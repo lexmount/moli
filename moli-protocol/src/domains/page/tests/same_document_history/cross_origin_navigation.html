@@ -1,0 +1,26 @@
+<!doctype html><title>Cross-window navigation</title>
+<script>
+const documentToken = Math.random();
+let action = 'cancel';
+const send = data => parent.postMessage(data, '*');
+addEventListener('message', event => {
+  if (event.data?.kind === 'configure') {
+    action = event.data.action;
+    send({kind: 'configured', token: documentToken, entries: navigation.entries().length});
+  } else if (event.data?.kind === 'report') {
+    send({kind: 'report', token: documentToken, entries: navigation.entries().length,
+      href: location.href, currentEntryMatches: navigation.currentEntry.url === location.href});
+  }
+});
+navigation.addEventListener('navigate', event => {
+  send({kind: 'navigate', type: event.navigationType, cancelable: event.cancelable,
+    canIntercept: event.canIntercept, sameDocument: event.destination.sameDocument,
+    hashChange: event.hashChange, sourceNull: event.sourceElement === null,
+    formData: event.formData === null ? null : [...event.formData],
+    key: event.destination.key, id: event.destination.id, index: event.destination.index});
+  if (action === 'cancel') event.preventDefault();
+  if (action === 'intercept') event.intercept({handler: () => Promise.resolve()});
+});
+navigation.addEventListener('navigatesuccess', () => send({kind: 'success'}));
+addEventListener('load', () => send({kind: 'load'}));
+</script>
