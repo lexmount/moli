@@ -47,7 +47,7 @@ async function runNavigationViewportFocusProbe() {
   const results = [];
   for (const mode of ["child-viewport", "parent-viewport"]) {
     const frame = document.createElement("iframe");
-    frame.src = "/history.html";
+    frame.src = "/history.html?focus-child";
     const loaded = new Promise(resolve => frame.onload = resolve);
     document.body.append(frame);
     await loaded;
