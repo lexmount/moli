@@ -1103,6 +1103,7 @@ globalThis.__migratedFrame = frame;
 globalThis.__migratedWindow = frame.contentWindow;
 globalThis.__migratedWindow.localStorage.setItem("before", "same-origin");
 frame.src = "data:text/html,<body>cross-origin</body>";
+frame.removeAttribute("srcdoc");
 "#,
         None,
     )
@@ -1251,6 +1252,7 @@ globalThis.__roundTripWindow = frame.contentWindow;
     vm.exec(
         r#"
 __roundTripFrame.src = "data:text/html,<body>cross-origin</body>";
+__roundTripFrame.removeAttribute("srcdoc");
 "#,
         None,
     )

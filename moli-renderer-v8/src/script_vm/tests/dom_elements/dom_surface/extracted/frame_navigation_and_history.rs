@@ -3219,6 +3219,7 @@ globalThis.__nonInitialBlankReloadFrame = frame;
     vm.exec(
         r#"
 __nonInitialBlankReloadFrame.src = 'about:blank';
+__nonInitialBlankReloadFrame.removeAttribute('srcdoc');
 "#,
         None,
     )

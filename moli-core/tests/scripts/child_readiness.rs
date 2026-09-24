@@ -93,7 +93,7 @@ async fn child_stream_readiness_probe(operation: &str) -> Result<serde_json::Val
       const frame = await new Promise(resolve => {
         const frame = document.createElement('iframe');
         frame.onload = () => resolve(frame);
-        frame.src = '/static';
+        frame.src = '/static?child-stream';
         document.body.append(frame);
       });
       frame.onload = null;
