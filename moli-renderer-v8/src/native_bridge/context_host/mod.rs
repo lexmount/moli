@@ -1091,6 +1091,10 @@ pub(crate) struct JsContextHost {
     lightweight_popup_browsing_contexts:
         HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
     lightweight_popup_document_handles: HashMap<DomHandle, u64>,
+    // Popup Documents share a concrete realm with the opener. Keep their own
+    // origins for as long as their native Document handles can be retained.
+    lightweight_popup_document_origins:
+        HashMap<DomHandle, window_security_tokens::WindowAccessOrigin>,
     pending_lightweight_popup_document_loads:
         HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,
     pending_lightweight_popup_classic_script_loads:
