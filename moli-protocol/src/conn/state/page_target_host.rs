@@ -30,6 +30,7 @@ pub struct PageTargetHost {
     pub(crate) tls_verify_host_override: Option<bool>,
     pub(crate) environment_owner: moli_core::ProcessEnvironmentOwner,
     pub(crate) effective_emulation_state: EffectiveTargetEmulationState,
+    pub(crate) emulated_media_override: super::emulation::EmulatedMediaOverrides,
     pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) input_drag_intercepted: bool,
     pub(crate) css_enabled: bool,
@@ -54,6 +55,7 @@ impl PageTargetHost {
             tls_verify_host_override: None,
             environment_owner: Default::default(),
             effective_emulation_state: EffectiveTargetEmulationState::default(),
+            emulated_media_override: Default::default(),
             input_intercept_drags_enabled: false,
             input_drag_intercepted: false,
             css_enabled: false,
@@ -110,6 +112,14 @@ impl PageTargetHost {
 
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
+    }
+
+    pub(crate) fn refresh_emulated_media(
+        &mut self,
+        defaults: &super::emulation::EmulatedMediaOverrides,
+    ) {
+        self.effective_emulation_state.emulated_media =
+            self.emulated_media_override.overlaid_on(defaults);
     }
 
     fn replace_target_id(&mut self, target_id: String) {

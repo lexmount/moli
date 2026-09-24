@@ -370,6 +370,7 @@ impl TargetNavigationLoadInputs {
             .default_emulated_device_metrics
             .as_ref()
             .map(|metrics| metrics.viewport_surface());
+        inputs.emulated_media = (&browser_context.default_emulated_media).into();
         inputs.document_activity = browser_context.active_document_activity();
         inputs.network_offline = browser_context.effective_active_network_offline();
         inputs

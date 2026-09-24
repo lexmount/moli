@@ -2856,6 +2856,117 @@ async fn websocket_cdp_browser_reconnect_clears_detached_session_emulated_media(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_browser_style_environment_survives_target_creation_and_session_detach() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+
+    let media = send_cdp_command(
+        &mut browser,
+        1,
+        "Emulation.setEmulatedMedia",
+        None,
+        json!({
+            "features": [
+                { "name": "prefers-color-scheme", "value": "dark" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(response_by_id(&media, 1)["result"], json!({}));
+    let text_scale = send_cdp_command(
+        &mut browser,
+        2,
+        "Emulation.setEmulatedOSTextScale",
+        None,
+        json!({ "scale": 1.5 }),
+    )
+    .await;
+    assert_eq!(response_by_id(&text_scale, 2)["result"], json!({}));
+
+    let target_id = create_dynamic_target(&mut browser, 3).await;
+    let attach = send_cdp_command(
+        &mut browser,
+        4,
+        "Target.attachToTarget",
+        None,
+        json!({ "targetId": target_id, "flatten": true }),
+    )
+    .await;
+    let session_id = response_by_id(&attach, 4)["result"]["sessionId"]
+        .as_str()
+        .expect("new target session")
+        .to_owned();
+    let url = "data:text/html,<style>body{font-size:calc(16px * env(preferred-text-scale,1))}</style><body>text</body>";
+    let navigation = send_cdp_command(
+        &mut browser,
+        5,
+        "Page.navigate",
+        Some(&session_id),
+        json!({ "url": url }),
+    )
+    .await;
+    assert!(response_by_id(&navigation, 5).get("result").is_some());
+
+    let inherited = send_cdp_command(
+        &mut browser,
+        6,
+        "Runtime.evaluate",
+        Some(&session_id),
+        json!({
+            "expression": "[matchMedia('(prefers-color-scheme: dark)').matches,getComputedStyle(document.body).fontSize]",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&inherited, 6)["result"]["result"]["value"],
+        json!([true, "24px"])
+    );
+
+    let detach = send_cdp_command(
+        &mut browser,
+        7,
+        "Target.detachFromTarget",
+        None,
+        json!({ "sessionId": session_id }),
+    )
+    .await;
+    assert_eq!(response_by_id(&detach, 7)["result"], json!({}));
+    let reattach = send_cdp_command(
+        &mut browser,
+        8,
+        "Target.attachToTarget",
+        None,
+        json!({ "targetId": target_id, "flatten": true }),
+    )
+    .await;
+    let replacement_session_id = response_by_id(&reattach, 8)["result"]["sessionId"]
+        .as_str()
+        .expect("replacement target session")
+        .to_owned();
+    let retained = send_cdp_command(
+        &mut browser,
+        9,
+        "Runtime.evaluate",
+        Some(&replacement_session_id),
+        json!({
+            "expression": "[matchMedia('(prefers-color-scheme: dark)').matches,getComputedStyle(document.body).fontSize]",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&retained, 9)["result"]["result"]["value"],
+        json!([true, "24px"])
+    );
+
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_owner_registry_shutdown_joins_shared_default_page_owner() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
     let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))

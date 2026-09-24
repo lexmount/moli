@@ -9,6 +9,8 @@ use crate::conn::{
 pub(crate) struct TargetEmulationStateUpdate<'a> {
     raw: &'a mut DevToolsEmulationSessionState,
     effective: &'a mut EffectiveTargetEmulationState,
+    emulated_media_override: &'a mut EmulatedMediaOverrides,
+    default_emulated_media: EmulatedMediaOverrides,
 }
 
 impl TargetEmulationStateUpdate<'_> {
@@ -43,14 +45,20 @@ impl TargetEmulationStateUpdate<'_> {
 
     pub(crate) fn set_preferred_text_scale(&mut self, scale: Option<f32>) {
         self.raw.emulated_media.preferred_text_scale = scale;
-        self.effective.emulated_media.preferred_text_scale = scale;
+        self.emulated_media_override.preferred_text_scale = scale;
+        self.effective.emulated_media = self
+            .emulated_media_override
+            .overlaid_on(&self.default_emulated_media);
     }
 
     pub(crate) fn set_emulated_media(&mut self, mut emulated_media: EmulatedMediaOverrides) {
         emulated_media.preferred_text_scale = self.raw.emulated_media.preferred_text_scale;
         self.raw.emulated_media = emulated_media.clone();
-        emulated_media.preferred_text_scale = self.effective.emulated_media.preferred_text_scale;
-        self.effective.emulated_media = emulated_media;
+        emulated_media.preferred_text_scale = self.emulated_media_override.preferred_text_scale;
+        *self.emulated_media_override = emulated_media;
+        self.effective.emulated_media = self
+            .emulated_media_override
+            .overlaid_on(&self.default_emulated_media);
     }
 
     pub(crate) fn set_emulated_device_metrics(
@@ -87,6 +95,7 @@ impl TargetSessionOwnerMut<'_> {
         self,
         f: impl FnOnce(Option<TargetEmulationStateUpdate<'_>>),
     ) -> bool {
+        let default_emulated_media = self.browser_context.default_emulated_media.clone();
         let Some(state) = self.browser_context.page_target_mut(&self.target_id) else {
             f(None);
             return false;
@@ -96,7 +105,13 @@ impl TargetSessionOwnerMut<'_> {
             .ensure_session(&self.session_key)
             .emulation_session_state;
         let effective = &mut state.effective_emulation_state;
-        f(Some(TargetEmulationStateUpdate { raw, effective }));
+        let emulated_media_override = &mut state.emulated_media_override;
+        f(Some(TargetEmulationStateUpdate {
+            raw,
+            effective,
+            emulated_media_override,
+            default_emulated_media,
+        }));
         true
     }
 
@@ -287,6 +302,11 @@ impl CdpConnection {
         &mut self,
         session_id: &str,
     ) -> Option<EffectiveTargetEmulationStateDelta> {
+        let default_emulated_media = self
+            .browser_context
+            .as_ref()?
+            .default_emulated_media
+            .clone();
         let mut owner = self.target_session_owner_mut(Some(session_id))?;
         Some(owner.mutate_page_state(|target, session_key| {
             let raw = std::mem::take(
@@ -300,9 +320,14 @@ impl CdpConnection {
                 .devtools_sessions
                 .navigator_emulation
                 .remove(session_key);
+            let previous_emulated_media = target.effective_emulation_state.emulated_media.clone();
             let mut delta = target
                 .effective_emulation_state
                 .disable_session_handler(&raw);
+            target.emulated_media_override = Default::default();
+            target.refresh_emulated_media(&default_emulated_media);
+            delta.emulated_media =
+                previous_emulated_media != target.effective_emulation_state.emulated_media;
             delta.navigator_queries =
                 previous_queries != target.devtools_sessions.navigator_emulation.effective();
             delta
@@ -311,6 +336,21 @@ impl CdpConnection {
 }
 
 impl BrowserContext {
+    pub(crate) fn set_default_emulated_media(&mut self, mut media: EmulatedMediaOverrides) {
+        media.preferred_text_scale = self.default_emulated_media.preferred_text_scale;
+        self.default_emulated_media = media;
+        for target in self.page_targets.iter_mut() {
+            target.refresh_emulated_media(&self.default_emulated_media);
+        }
+    }
+
+    pub(crate) fn set_default_preferred_text_scale(&mut self, scale: Option<f32>) {
+        self.default_emulated_media.preferred_text_scale = scale;
+        for target in self.page_targets.iter_mut() {
+            target.refresh_emulated_media(&self.default_emulated_media);
+        }
+    }
+
     pub(crate) fn effective_active_emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
         self.active_page_target()
             .effective_emulation_state
