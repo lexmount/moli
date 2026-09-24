@@ -1135,11 +1135,15 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn configure_durable_response_bodies(
         &mut self,
-        session_id: Option<&str>,
+        session_key: moli_page_types::DevToolsSessionKey,
+        primary_session_id: Option<&str>,
         limits: Option<moli_bounded_buffer::ByteLimits>,
     ) {
-        self.network_agent
-            .configure_durable_response_bodies(session_id, limits);
+        self.network_agent.configure_durable_response_bodies(
+            session_key,
+            primary_session_id,
+            limits,
+        );
     }
 
     pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
@@ -1152,10 +1156,11 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn remove_captured_response_body_visibility_for_session(
         &mut self,
-        session_id: Option<&str>,
+        session_key: &moli_page_types::DevToolsSessionKey,
+        primary_session_id: Option<&str>,
     ) {
         self.network_agent
-            .remove_captured_response_body_visibility_for_session(session_id);
+            .remove_captured_response_body_visibility_for_session(session_key, primary_session_id);
     }
 
     pub(crate) fn allocate_io_stream_handle(&mut self) -> String {

@@ -16,6 +16,65 @@ use crate::domains::network::{
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_primary_aliases_share_configuration_access_and_revocation() {
+    for configure_session in [None, Some("SID-primary")] {
+        for recorded_session in [None, Some("SID-primary")] {
+            let mut ctx = TestContext::new();
+            let mut bc = BrowserContext::new("BID-alias".into());
+            bc.set_active_target_id("TID-alias");
+            bc.attach_active_session("SID-primary");
+            assert!(bc.assign_attached_session_to_target("TID-alias", "SID-peer".into()));
+            ctx.conn.install_browser_context_fixture_for_test(bc);
+            let params = json!({"enableDurableMessages":true,"maxTotalBufferSize":1024});
+            for (id, session) in [(79_400, configure_session), (79_401, Some("SID-peer"))] {
+                ctx.process_async(
+                    json!({"id":id,"method":"Network.enable","sessionId":session,"params":params}),
+                )
+                .await;
+                ctx.expect_result(id, json!({}), session);
+            }
+            let bc = ctx.conn.browser_context.as_mut().unwrap();
+            bc.record_captured_response_body(
+                "REQ-primary".into(),
+                "retained".into(),
+                [recorded_session.map(str::to_owned), Some("SID-peer".into())],
+            );
+            bc.active_page_target_mut()
+                .prepare_document_navigation_request_ids(
+                    &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+                    true,
+                    true,
+                    false,
+                );
+            for (id, session) in [(79_402, None), (79_403, Some("SID-primary"))] {
+                ctx.process_async(json!({"id":id,"method":"Network.getResponseBody","sessionId":session,"params":{"requestId":"REQ-primary"}})).await;
+                ctx.expect_result(
+                    id,
+                    json!({"body":"retained","base64Encoded":false}),
+                    session,
+                );
+            }
+            let disable_session = configure_session.is_none().then_some("SID-primary");
+            ctx.process_async(
+                json!({"id":79_404,"method":"Network.disable","sessionId":disable_session}),
+            )
+            .await;
+            ctx.expect_result(79_404, json!({}), disable_session);
+            ctx.process_async(json!({"id":79_405,"method":"Network.enable","sessionId":configure_session,"params":params})).await;
+            ctx.expect_result(79_405, json!({}), configure_session);
+            ctx.process_async(json!({"id":79_406,"method":"Network.getResponseBody","sessionId":configure_session,"params":{"requestId":"REQ-primary"}})).await;
+            ctx.expect_error(79_406, -32000, "No resource with given identifier found");
+            ctx.process_async(json!({"id":79_407,"method":"Network.getResponseBody","sessionId":"SID-peer","params":{"requestId":"REQ-primary"}})).await;
+            ctx.expect_result(
+                79_407,
+                json!({"body":"retained","base64Encoded":false}),
+                Some("SID-peer"),
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn durable_response_body_survives_navigation_only_for_opted_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-durable".into());

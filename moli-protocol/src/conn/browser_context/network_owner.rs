@@ -82,10 +82,14 @@ impl TargetNetworkListenerOwnerMut<'_> {
             .remove_network_session_observation_cursor(session_id);
     }
 
-    fn remove_captured_response_body_visibility_for_session(&mut self, session_id: Option<&str>) {
+    fn remove_captured_response_body_visibility(&mut self) {
+        let primary_session_id = self.target.session_id().map(str::to_owned);
         self.target
             .runtime_slot
-            .remove_captured_response_body_visibility_for_session(session_id);
+            .remove_captured_response_body_visibility_for_session(
+                &self.session_key,
+                primary_session_id.as_deref(),
+            );
     }
 
     fn clear_network_observation_artifacts_if_unobserved(&mut self) {
@@ -133,15 +137,7 @@ impl TargetNetworkListenerOwnerMut<'_> {
             self.set_primary_network_enabled(false);
         }
         self.remove_network_observation_cursor(listener_session_id.as_deref());
-        self.remove_captured_response_body_visibility_for_session(listener_session_id.as_deref());
-        if !self.is_attached_session()
-            && let Some(primary_session_id) = self.target.session_id().map(str::to_owned)
-        {
-            // Primary commands share one listener whether routed on the root
-            // channel or its flattened session. Captured events can carry the
-            // explicit primary ID, so revoke both wire identities on disable.
-            self.remove_captured_response_body_visibility_for_session(Some(&primary_session_id));
-        }
+        self.remove_captured_response_body_visibility();
         self.clear_network_observation_artifacts_if_unobserved();
         true
     }
@@ -301,6 +297,25 @@ impl TargetSessionOwnerMut<'_> {
 }
 
 impl CdpConnection {
+    pub(crate) fn configure_durable_response_bodies_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        limits: Option<moli_bounded_buffer::ByteLimits>,
+    ) -> bool {
+        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+            return false;
+        };
+        owner.mutate_page_state(|target, session_key| {
+            let primary_session_id = target.session_id().map(str::to_owned);
+            target.runtime_slot.configure_durable_response_bodies(
+                session_key.clone(),
+                primary_session_id.as_deref(),
+                limits,
+            );
+        });
+        true
+    }
+
     pub(crate) fn captured_response_body_for_bidi_network_data(
         &self,
         request_id: &str,

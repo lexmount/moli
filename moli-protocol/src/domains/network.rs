@@ -20,6 +20,16 @@ pub fn http_status_text(status: u16) -> &'static str {
         .unwrap_or("")
 }
 
+/// Root commands and the target's primary wire session share one owner.
+pub(crate) fn network_session_key(
+    session_id: Option<&str>,
+    primary_session_id: Option<&str>,
+) -> moli_page_types::DevToolsSessionKey {
+    moli_page_types::DevToolsSessionKey::from_wire_session_id(
+        session_id.filter(|id| Some(*id) != primary_session_id),
+    )
+}
+
 pub fn cdp_cookie_query_report(
     report: &moli_cookie_jar::StoredCookieQueryReport,
 ) -> serde_json::Value {
@@ -525,8 +535,8 @@ fn start_set_network_domain_enabled_command(
         ));
     }
 
-    if enabled && let Ok(slot) = conn.runtime_session_owner_slot_mut(cmd.session_id) {
-        slot.configure_durable_response_bodies(cmd.session_id, durable_limits);
+    if enabled {
+        conn.configure_durable_response_bodies_for_session_owner(cmd.session_id, durable_limits);
     }
 
     let kind = if enabled {

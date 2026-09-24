@@ -15,9 +15,12 @@ fn network_events_enabled_for_session(
     session_id: Option<&str>,
     primary_session_id: Option<&str>,
 ) -> bool {
-    slot.network_event_session_ids(session_id, primary_session_id)
-        .iter()
-        .any(|event_session_id| event_session_id.as_deref() == session_id)
+    match super::network_session_key(session_id, primary_session_id) {
+        moli_page_types::DevToolsSessionKey::Primary => slot.primary_network_events_enabled(),
+        moli_page_types::DevToolsSessionKey::Attached(id) => {
+            slot.attached_network_events_enabled_for_session(&id)
+        }
+    }
 }
 
 pub(super) fn get_response_body_command_output_plan(
@@ -48,7 +51,7 @@ pub(super) fn get_response_body_command_output_plan(
     let Some(body) = slot.captured_response_body(request_id) else {
         return CommandOutputPlan::error(-32000, "No resource with given identifier found");
     };
-    if !body.is_visible_to_session(cmd.session_id) {
+    if !body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref()) {
         return CommandOutputPlan::error(-32000, "No resource with given identifier found");
     };
     let body = match body.body_bytes_limited(response_body_materialize_limit) {
@@ -87,9 +90,9 @@ pub(super) fn get_request_post_data_command_output_plan(
         return CommandOutputPlan::error(-32000, "No resource with given id was found");
     }
     let Some(body) = slot.captured_request_body(request_id) else {
-        let request_is_known = slot
-            .captured_response_body(request_id)
-            .is_some_and(|body| body.is_visible_to_session(cmd.session_id));
+        let request_is_known = slot.captured_response_body(request_id).is_some_and(|body| {
+            body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref())
+        });
         let message = if request_is_known {
             "No post data available for the request"
         } else {
@@ -97,7 +100,7 @@ pub(super) fn get_request_post_data_command_output_plan(
         };
         return CommandOutputPlan::error(-32000, message);
     };
-    if !body.is_visible_to_session(cmd.session_id) {
+    if !body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref()) {
         return CommandOutputPlan::error(-32000, "No resource with given id was found");
     }
     let body = match body.body_bytes_limited(body_materialize_limit) {
