@@ -337,6 +337,15 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             return Some(OwnerDispatchScope::Child(handle));
         }
     }
+    if let Some(popup_id) = runtime.named_lightweight_popup_id(target_name)
+        && runtime.blocks_ancestor_navigation(
+            source,
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            destination,
+        )
+    {
+        return None;
+    }
     let relations = element_popup_relations(unsafe { &*runtime_ptr }, form, target_name);
     let mut creator = element_popup_creator(scope, runtime_ptr, form)?;
     creator.policy_container.document_referrer = if relations.suppress_referrer {
@@ -482,6 +491,7 @@ fn navigate_special_target_from_window<'s>(
 pub(crate) fn navigate_existing_browsing_context_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
+    navigation_source: crate::native_bridge::OwnerDispatchScope,
     target: SpecialBrowsingContextTarget,
     resolved_url: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -490,7 +500,29 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
         SpecialBrowsingContextTarget::Blank,
         "a new-context target cannot use existing-context navigation"
     );
-    let dispatch_scope = unsafe { &*runtime_ptr }.entered_owner_dispatch_scope(scope);
+    let runtime = unsafe { &*runtime_ptr };
+    let dispatch_scope = runtime
+        .window_execution_context_identity_for_access_check(scope.get_current_context())
+        .map(|identity| identity.dispatch_scope())
+        .filter(|owner| matches!(owner, crate::native_bridge::OwnerDispatchScope::Child(_)))
+        .unwrap_or_else(|| runtime.entered_owner_dispatch_scope(scope));
+    let mut destination_scope = dispatch_scope;
+    while target != SpecialBrowsingContextTarget::Current
+        && let crate::native_bridge::OwnerDispatchScope::Child(handle) = destination_scope
+    {
+        destination_scope = runtime.owner_dispatch_scope_for_node(handle)?;
+        if target == SpecialBrowsingContextTarget::Parent {
+            break;
+        }
+    }
+    if resolved_url
+        .and_then(|url| url::Url::parse(url).ok())
+        .is_some_and(|url| {
+            runtime.blocks_ancestor_navigation(navigation_source, destination_scope, &url)
+        })
+    {
+        return None;
+    }
     let source_window =
         browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)?;
     navigate_special_target_from_window(
@@ -574,7 +606,9 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         });
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.sandbox_blocks_ancestor_navigation(source, target) {
+    if url::Url::parse(resolved_url)
+        .is_ok_and(|destination| runtime.blocks_ancestor_navigation(source, target, &destination))
+    {
         return true;
     }
     let Some(document) = runtime.dom_host().owner_document_handle(source_handle) else {

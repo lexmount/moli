@@ -35,8 +35,7 @@ use super::navigation_serialize::serialize_history_entries;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_disabled_entries,
     navigation_document_is_active, navigation_unload_event_active, runtime_window_is_global,
-    runtime_window_owner, runtime_window_uses_top_level_history_model, window_history_for_holder,
-    window_location_for_holder,
+    runtime_window_owner, window_history_for_holder, window_location_for_holder,
 };
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
@@ -374,14 +373,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
     };
     let exact_same_href = current_href == resolved.as_str();
-    if !matches!(kind, LocationNavigationKind::Reload)
-        && exact_same_href
-        && source_element.is_none()
-        && raw_target_is_fragment_only
-        && !force_exact_same_document_navigation
-    {
-        return;
-    }
     let owner = runtime_window_owner(scope, location);
     let source_can_access_target = source_can_access_target.unwrap_or_else(|| {
         let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
@@ -403,12 +394,20 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     {
         return;
     }
-    if sandbox_blocks_ancestor_or_top_location_navigation(scope, owner) {
+    if blocks_ancestor_location_navigation(scope, owner, &resolved) {
         crate::context_bootstrap::throw_dom_exception_value(
             scope,
-            "Blocked a sandboxed frame from navigating an ancestor browsing context.",
+            "The source frame is not allowed to navigate this ancestor browsing context.",
             "SecurityError",
         );
+        return;
+    }
+    if !matches!(kind, LocationNavigationKind::Reload)
+        && exact_same_href
+        && source_element.is_none()
+        && raw_target_is_fragment_only
+        && !force_exact_same_document_navigation
+    {
         return;
     }
     if matches!(kind, LocationNavigationKind::Reload)
@@ -945,22 +944,10 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     );
 }
 
-fn sandbox_blocks_ancestor_or_top_location_navigation<'s>(
+fn blocks_ancestor_location_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(source_handle) =
-        crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
-    else {
-        return false;
-    };
-    sandbox_blocks_ancestor_or_top_navigation_from_source(scope, source_handle, owner)
-}
-
-pub(super) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source_handle: crate::document_runtime::DomHandle,
-    owner: v8::Local<'s, v8::Object>,
+    destination: &url::Url,
 ) -> bool {
     let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner)
         .or_else(|| context_host_ptr_from_global_bridge(scope))
@@ -968,35 +955,14 @@ pub(super) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
         return false;
     };
     let host = unsafe { &*host_ptr };
-    if host.child_browsing_context_allows_top_navigation(source_handle) {
+    let Some(target) = super::navigation_window::runtime_window_dispatch_scope(scope, owner) else {
         return false;
-    }
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
-        && host.lightweight_popup_id_for_node_owner_document(source_handle) != Some(popup_id)
-    {
-        return false;
-    }
-    match child_browsing_context_handle_for_runtime_owner(scope, owner) {
-        Some(target_handle) => {
-            child_browsing_context_is_ancestor(host, target_handle, source_handle)
-        }
-        None => runtime_window_uses_top_level_history_model(scope, owner),
-    }
-}
-
-fn child_browsing_context_is_ancestor(
-    host: &JsContextHost,
-    ancestor: crate::document_runtime::DomHandle,
-    child: crate::document_runtime::DomHandle,
-) -> bool {
-    let mut current = host.child_browsing_context_parent_handle(child);
-    while let Some(handle) = current {
-        if handle == ancestor {
-            return true;
-        }
-        current = host.child_browsing_context_parent_handle(handle);
-    }
-    false
+    };
+    host.blocks_ancestor_navigation(
+        location_navigation_initiator_scope(scope, host),
+        target,
+        destination,
+    )
 }
 
 fn window_for_child_cross_document_location_navigation<'s>(
@@ -1118,13 +1084,19 @@ fn location_navigation_initiator_scope(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
 ) -> crate::native_bridge::OwnerDispatchScope {
+    let incumbent = scope
+        .get_incumbent_context()
+        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
+        .map(|identity| identity.dispatch_scope());
+    // Popup callbacks share the main realm, but a real child realm keeps its
+    // own source identity when it calls a popup ancestor's Location binding.
+    if let Some(source @ crate::native_bridge::OwnerDispatchScope::Child(_)) = incumbent {
+        return source;
+    }
     if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
         return crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
     }
-    scope
-        .get_incumbent_context()
-        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
-        .map(|identity| identity.dispatch_scope())
+    incumbent
         .or_else(|| {
             crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
                 .map(crate::native_bridge::OwnerDispatchScope::Child)
