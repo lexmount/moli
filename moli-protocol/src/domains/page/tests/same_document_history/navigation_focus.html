@@ -1,0 +1,45 @@
+<!doctype html>
+<style>
+  html, body { margin: 0; }
+  a { position: absolute; inset: 0; }
+</style>
+<body id="child-body">
+<a id="link" href="#trusted">Navigate</a>
+<input id="autofocus-input" autofocus style="position: absolute; top: 150px">
+<input id="decoy" style="position: absolute; top: 180px">
+<script>
+let mode = "trusted";
+navigation.onnavigate = event => {
+  const userInitiated = event.userInitiated;
+  // Native policy decisions must not read an author-replaced JS property.
+  Object.defineProperty(event, "userInitiated", { get() { throw new Error("spoofed getter"); } });
+  event.intercept({
+    focusReset: mode === "manual" ? "manual" : "after-transition",
+    async handler() {
+      parent.postMessage({ phase: "started", userInitiated }, "*");
+      if (mode === "trusted") {
+        while (navigator.userActivation.isActive) {
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+      } else if (mode === "change-focus") {
+        document.getElementById("decoy").focus();
+      }
+    }
+  });
+};
+navigation.addEventListener("navigatesuccess", () => {
+  parent.postMessage({
+    phase: "done",
+    active: document.activeElement.id,
+    activation: navigator.userActivation.isActive,
+  }, "*");
+});
+addEventListener("message", event => {
+  if (event.data?.action !== "navigate") return;
+  mode = event.data.mode;
+  navigation.navigate("#script").finished.catch(error => {
+    parent.postMessage({ phase: "error", name: error.name, message: error.message }, "*");
+  });
+});
+addEventListener("load", () => parent.postMessage({ phase: "ready" }, "*"));
+</script>

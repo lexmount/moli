@@ -305,14 +305,6 @@ impl PageScriptHost {
             .remove(&popover)
             .flatten()
     }
-
-    pub(crate) fn focus_change_epoch(&self) -> u64 {
-        self.focus_change_epoch
-    }
-
-    pub(crate) fn mark_focus_changed(&mut self) {
-        self.focus_change_epoch = self.focus_change_epoch.wrapping_add(1);
-    }
 }
 
 impl PageScriptHost {
@@ -627,7 +619,7 @@ impl PageScriptHost {
             javascript_dialog_runtime,
             next_javascript_dialog_id: 1,
             pending_network_output: Vec::new(),
-            focus_change_epoch: 0,
+            document_focus_changes: HashMap::new(),
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),
             page_network_policy,
