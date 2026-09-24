@@ -27,7 +27,7 @@ use super::live_target::{
     ParserDomMutationConsumer, ParserDomReadConsumer, ParserElementCreationConsumer,
     ParserMutationEffectConsumer, ParserMutationEffectDelivery, ParserRuntimeDomSinks,
     ParserStreamHtmlTreeSinkTarget, new_live_document_root_html_tree_sink_stream,
-    new_parser_stream_html_tree_sink_stream,
+    new_parser_stream_html_tree_sink_stream, new_parser_stream_html_tree_sink_target,
 };
 use super::{
     ParserSourcePosition, html_chunks,
@@ -438,6 +438,47 @@ impl HtmlParser {
         DocumentStream::new_parser_stream(final_url, self.scripting_enabled)
     }
 
+    /// Start a text document using the HTML tokenizer's plaintext state.
+    /// Subsequent chunks remain literal text inside the browser-owned `pre`.
+    pub fn start_text_document(&self, final_url: Url, content_type: &str) -> DocumentStream {
+        let stream =
+            DocumentStream::new_text_document(new_parser_stream_html_tree_sink_target(final_url));
+        stream.inner.initialize_text_document();
+        let mut host = stream.inner.take_parser_stream_dom_host();
+        let document_handle = host.document_handle();
+        host.set_document_content_type_for_handle(document_handle, content_type);
+        stream.inner.restore_parser_stream_dom_host(host);
+        stream
+    }
+
+    /// Initialize the same literal-text shell in an existing document. The
+    /// embedder owns that document's MIME metadata and live DOM callbacks.
+    pub fn start_live_text_document_root<T>(
+        &self,
+        final_url: Url,
+        document_handle: NativeNodeId,
+        consumer: &mut T,
+    ) -> DocumentStream
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        let stream = DocumentStream::new_text_document(
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle),
+        );
+        // SAFETY: the consumer is exclusively borrowed until the step guard
+        // removes the erased callbacks, including when initialization unwinds.
+        let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
+        stream.inner.enter_runtime_dom_sinks_parse_step(sinks);
+        {
+            let step = RuntimeDomSinksParserStep { stream: &stream };
+            step.stream.inner.initialize_text_document();
+        }
+        stream
+    }
+
     pub fn start_live_document_root(
         &self,
         final_url: Url,
@@ -551,6 +592,17 @@ impl Default for ParserInputQueue {
 }
 
 impl DocumentStream {
+    fn new_text_document(target: ParserStreamHtmlTreeSinkTarget) -> Self {
+        let mut options = html_parse_opts_with_scripting(false);
+        // The byte decoder has already consumed the transport BOM. In plaintext
+        // every remaining U+FEFF is content, including at a chunk boundary.
+        options.tokenizer.discard_bom = false;
+        Self {
+            inner: HtmlTreeSinkStream::from_target_with_options(target, options),
+            input: RefCell::default(),
+        }
+    }
+
     fn new_parser_stream(final_url: Url, scripting_enabled: bool) -> Self {
         Self {
             inner: new_parser_stream_html_tree_sink_stream(final_url, scripting_enabled),
@@ -1842,6 +1894,83 @@ mod tests {
 
     const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
     const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
+
+    #[test]
+    fn text_document_stream_preserves_literal_markup_and_leading_newline() {
+        let payload =
+            "\u{feff}\n<b>Gülçek</b>&amp;<script>window.executed=1</script></pre>\u{feff}";
+        for content_type in ["text/plain", "application/json", "application/problem+json"] {
+            let stream = HtmlParser::SCRIPTING_ENABLED.start_text_document(
+                Url::parse("https://example.test/data").unwrap(),
+                content_type,
+            );
+            for character in payload.chars() {
+                stream.feed(&character.to_string());
+            }
+            let document = stream.finish();
+            let pre = first_element_by_ns(&document, HTML_NS, "pre");
+            assert_eq!(document.text_content(pre).as_deref(), Some(payload));
+            assert_eq!(document.document().unwrap().content_type(), content_type);
+            for tag in ["b", "script"] {
+                assert!(
+                    document
+                        .elements_by_tag_name_ns(
+                            document.document_node_id(),
+                            Some(HTML_NS),
+                            tag,
+                            true
+                        )
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn text_document_shell_has_no_doctype_and_preserves_normalized_literal_text() {
+        for mime in [
+            "text/plain",
+            "application/json",
+            "application/problem+json",
+            "text/javascript",
+        ] {
+            let stream = HtmlParser::SCRIPTING_ENABLED
+                .start_text_document(Url::parse("https://example.test/data").unwrap(), mime);
+            for chunk in [
+                "\n<&amp;",
+                "\r",
+                "\nbeta\rgamma\0",
+                "</pre><script>bad()</script>",
+            ] {
+                stream.feed(chunk);
+            }
+            let document = stream.finish_dom_host();
+            let root = document.document_handle();
+            let children = document.child_handles(root).collect::<Vec<_>>();
+            assert_eq!(children.len(), 1, "no synthetic doctype: {mime}");
+            assert!(document.is_html_element_named(children[0], "html"));
+            let expected_mode = HtmlParser::SCRIPTING_ENABLED.parse_dom_host(
+                Url::parse("https://example.test/control").unwrap(),
+                "<!doctype html><p>control".to_owned(),
+            );
+            assert_eq!(
+                document.document_quirks_mode_for_handle(root),
+                expected_mode.document_quirks_mode_for_handle(expected_mode.document_handle())
+            );
+            assert_eq!(
+                document.text_content(root).as_deref(),
+                Some("\n<&amp;\nbeta\ngamma\u{fffd}</pre><script>bad()</script>")
+            );
+        }
+    }
+
+    #[test]
+    fn html_document_still_parses_markup_and_entities() {
+        let document = parse_test_document("<b>Gülçek&amp;</b>");
+        let bold = first_element_by_ns(&document, HTML_NS, "b");
+        assert_eq!(document.text_content(bold).as_deref(), Some("Gülçek&"));
+        assert_eq!(document.document().unwrap().content_type(), "text/html");
+    }
 
     fn parse_test_document(html: &str) -> NativeDom {
         HtmlParser::SCRIPTING_ENABLED.parse(

@@ -175,6 +175,19 @@ impl TokenSink for EmbedderPausingTreeBuilder {
 }
 
 impl HtmlParserSession {
+    pub(super) fn initialize_text_document(&self) {
+        // Parse only the browser-owned shell. Response bytes enter the tokenizer
+        // after it has switched to plaintext, so tags and entities stay literal.
+        self.process(StrTendril::from(concat!(
+            "<html><head></head><body>",
+            "<pre style=\"word-wrap: break-word; white-space: pre-wrap;\">\n"
+        )));
+        // Text documents have no doctype but always use no-quirks mode.
+        self.sink()
+            .set_quirks_mode(html5ever::tree_builder::QuirksMode::NoQuirks);
+        self.tokenizer.set_plaintext_state();
+    }
+
     fn new(sink: DocumentSink, opts: ParseOpts) -> Self {
         let tree_builder = EmbedderPausingTreeBuilder::new(sink, opts.tree_builder);
         Self {
@@ -360,10 +373,10 @@ fn feed_with_definitive_encoding(
 
 pub(super) fn new_html_tree_sink_session(
     target: ParserStreamHtmlTreeSinkTarget,
-    scripting_enabled: bool,
+    options: ParseOpts,
 ) -> HtmlTreeSinkSession {
     let sink = DocumentSink::new(target);
-    let parser = HtmlParserSession::new(sink, html_parse_opts_with_scripting(scripting_enabled));
+    let parser = HtmlParserSession::new(sink, options);
     let script_input = ParserInputQueue::default();
 
     HtmlTreeSinkSession {

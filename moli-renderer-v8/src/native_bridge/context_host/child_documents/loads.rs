@@ -21,7 +21,8 @@ use crate::{
         LoadedChildDocument, SubresourceResponseBody,
     },
 };
-use moli_encoding::decode_html_document_with_fallback;
+use moli_encoding::{HtmlDocumentStreamingDecoder, decode_html_document_with_fallback};
+use moli_encoding_detector::detect_legacy_html_encoding;
 
 pub(crate) struct AppliedChildDocumentLoadCompletion {
     /// Initial parser-classic work produced by the committed child document.
@@ -791,8 +792,24 @@ fn child_document_load_outcome_from_response(
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
-        let (markup, character_set) =
-            decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback));
+        let (markup, character_set) = if let Some(mime) = content_type
+            .as_deref()
+            .filter(|mime| moli_web_mime::is_text_document_mime(mime))
+        {
+            let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+                &head.headers,
+                head.final_url.as_str(),
+                detect_legacy_html_encoding,
+                moli_web_mime::is_json_module_mime(mime) || mime == "text/json",
+            );
+            let mut markup = decoder.push(&body_bytes).concat();
+            if let Some(tail) = decoder.finish() {
+                markup.push_str(&tail);
+            }
+            (markup, decoder.document_encoding_name())
+        } else {
+            decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback))
+        };
         (markup, character_set.to_owned())
     };
     let policy_container =
