@@ -110,7 +110,7 @@ async fn preload_integrity_checks_bytes_and_cors_in_top_and_child_documents() ->
         &format!(
             r#"(async () => {{
                 const frame = document.createElement('iframe');
-                frame.src = '/preload-parser.html';
+                frame.src = '/preload-parser.html?child';
                 await new Promise(resolve => {{ frame.onload = resolve; document.body.append(frame); }});
                 const result = await frame.contentWindow.eval({probe});
                 frame.remove();

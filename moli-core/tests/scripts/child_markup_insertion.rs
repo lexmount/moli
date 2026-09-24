@@ -189,7 +189,7 @@ async fn child_xml_document_stream_methods_reject_during_unload() -> Result<()> 
             }
           });
         }
-        await new Promise(resolve => { frame.onload = resolve; frame.src = '/static'; });
+        await new Promise(resolve => { frame.onload = resolve; frame.src = '/static?after-xml'; });
         return errors;"#,
     )
     .await?;

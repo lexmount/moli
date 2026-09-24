@@ -644,6 +644,7 @@ raceFrame.contentWindow.addEventListener("unload", () => {{
   raceFrame.srcdoc = "<p id='unload-winner'>unload winner</p>";
 }});
 raceFrame.src = {target_url:?};
+raceFrame.removeAttribute("srcdoc");
 "#
         ))?;
         run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
