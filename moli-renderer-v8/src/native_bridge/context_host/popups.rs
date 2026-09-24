@@ -7,15 +7,15 @@ use crate::{
     context_bootstrap::{
         SharedWebStorageStore, WINDOW_NAME_SLOT, apply_local_window_location_navigation,
         construct_original_event, construct_original_page_transition_event,
-        deep_clone_shared_web_storage_store, dispatch_beforeunload_for_runtime_owner,
-        dispatch_pagehide_for_runtime_owner,
-        dispatch_simple_event_target_event_with_original_target, dispatch_unload_for_runtime_owner,
+        deep_clone_shared_web_storage_store,
+        dispatch_simple_event_target_event_with_original_target,
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_cross_document_location,
         install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
         install_storage_aliases_for_window,
-        install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
-        scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
+        install_window_location_history_navigation_runtime_state, navigation_unload_event_active,
+        new_shared_web_storage_store, scoped_indexed_db_factory,
+        sync_document_location_runtime_state_from_window,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
@@ -64,6 +64,7 @@ use url::Url;
 
 mod document_stream;
 mod event_handlers;
+mod lifecycle;
 use document_stream::{PopupDocumentStream, PopupStreamScriptMode};
 use event_handlers::{
     PopupWindowContentEventHandlers, clear_lightweight_popup_window_document_event_state,
@@ -522,6 +523,19 @@ pub(crate) struct OpenedLightweightPopup<'scope> {
     pub(crate) window: v8::Local<'scope, v8::Object>,
     pub(crate) popup_id: u64,
     pub(crate) created_new_browsing_context: bool,
+}
+
+impl<'scope> OpenedLightweightPopup<'scope> {
+    pub(crate) fn allows_navigation_activation(
+        &self,
+        scope: &mut v8::PinScope<'scope, '_>,
+        host: &JsContextHost,
+    ) -> bool {
+        // An ignored native navigation must not escape through the separate
+        // browser/CDP target activation route with its rejected URL.
+        host.lightweight_popup_is_open(self.popup_id)
+            && !navigation_unload_event_active(scope, self.window)
+    }
 }
 
 fn inherit_lightweight_popup_opener_sandbox(
@@ -1183,6 +1197,9 @@ impl JsContextHost {
         let parsed_url = Url::parse(href).ok()?;
         let initial_base_url = lightweight_popup_initial_base_url(&parsed_url, creator_base_url);
         let window = self.lightweight_popup_window(scope, popup_id)?;
+        if navigation_unload_event_active(scope, window) {
+            return Some(window);
+        }
         let mut navigation_state =
             LightweightPopupDocumentState::new(initial_base_url, creator_policy_container);
         let opener_sandbox_policy = self
@@ -1212,6 +1229,9 @@ impl JsContextHost {
             self.queue_lightweight_popup_javascript_url_task(scope, navigation_task, source);
             return Some(window);
         }
+        if !self.check_lightweight_popup_navigation_beforeunload(scope, navigation_task) {
+            return Some(window);
+        }
         let document_owner = navigation_task.document_owner();
         let history = history_entry_seed_for_cross_document_location(
             scope,
@@ -1222,6 +1242,10 @@ impl JsContextHost {
         .map(PendingLightweightPopupHistory::Navigation)
         .unwrap_or(PendingLightweightPopupHistory::Initial);
         let queue_synthetic_load = if moli_url::is_about_blank(&target_url) {
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+            if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
+                return Some(window);
+            }
             let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
                 scope,
                 opener,
@@ -1792,6 +1816,9 @@ impl JsContextHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return false;
         };
+        if navigation_unload_event_active(scope, window) {
+            return true;
+        }
         let kind = lightweight_popup_effective_navigation_kind(
             self.lightweight_popup_current_document_is_initial_empty(popup_id),
             kind,
@@ -1860,8 +1887,15 @@ impl JsContextHost {
         ) else {
             return false;
         };
+        if !self.check_lightweight_popup_navigation_beforeunload(scope, navigation_task) {
+            return false;
+        }
         let document_owner = navigation_task.document_owner();
         if moli_url::is_about_blank(&target_url) {
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+            if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
+                return false;
+            }
             navigation_state.reset_for_empty_document(target_url.clone());
             let inherited_origin = self
                 .window_access_origin_for_dispatch_scope(self.entered_owner_dispatch_scope(scope));
@@ -1978,15 +2012,20 @@ impl JsContextHost {
         ) else {
             return false;
         };
+        if !matches!(history, PendingLightweightPopupHistory::Traversal(_))
+            && !self.check_lightweight_popup_navigation_beforeunload(scope, navigation_task)
+        {
+            return false;
+        }
         let document_owner = navigation_task.document_owner();
         let document_referrer = navigation_state.policy_container.document_referrer.clone();
         if moli_url::is_about_blank(&target_url) {
             if matches!(history, PendingLightweightPopupHistory::Traversal(_)) {
                 finish_cross_document_navigation_for_window(scope, window, target_url.as_str());
-                self.dispatch_lightweight_popup_document_unload(scope, popup_id);
-                if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
-                    return false;
-                }
+            }
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+            if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
+                return false;
             }
             navigation_state.reset_for_empty_document(target_url.clone());
             if !self.commit_lightweight_popup_document(
@@ -2824,10 +2863,15 @@ impl JsContextHost {
                         window,
                         pending.target_url.as_str(),
                     );
-                    self.dispatch_lightweight_popup_document_unload(scope, popup_id);
-                    if !self.lightweight_popup_navigation_attempt_is_current(task) {
-                        return PopupDocumentLoadApplication::NotApplied;
-                    }
+                }
+                if self.dispatch_lightweight_popup_document_unload(scope, popup_id) {
+                    body_activity = PopupDocumentLoadBodyActivity::PageCodeOrEventDispatchAttempted;
+                }
+                if !self.lightweight_popup_navigation_attempt_is_current(task) {
+                    return PopupDocumentLoadApplication::Applied {
+                        body_activity,
+                        parser_completion: None,
+                    };
                 }
                 let mut loaded = *loaded;
                 let opener_sandbox = self
@@ -3379,30 +3423,6 @@ impl JsContextHost {
                     "lightweight popup securitypolicyviolation dispatch failed"
                 );
             }
-        }
-    }
-
-    pub(crate) fn dispatch_lightweight_popup_document_unload(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        popup_id: u64,
-    ) {
-        let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {
-            return;
-        };
-        if document.unload_events_dispatched {
-            return;
-        }
-        // Mark before entering author callbacks: pagehide can call close(),
-        // whose queued destruction must not unload this Document a second time.
-        document.unload_events_dispatched = true;
-        let owner = document.owner;
-        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-            return;
-        };
-        dispatch_pagehide_for_runtime_owner(scope, window);
-        if self.lightweight_popup_document_owner_is_current(owner) {
-            dispatch_unload_for_runtime_owner(scope, window);
         }
     }
 
@@ -5375,7 +5395,7 @@ fn lightweight_popup_close_callback<'s>(
     if !host.begin_lightweight_popup_close(popup_id) {
         return;
     }
-    dispatch_beforeunload_for_runtime_owner(scope, window);
+    host.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
     set_object_slot(
         scope,
         window,

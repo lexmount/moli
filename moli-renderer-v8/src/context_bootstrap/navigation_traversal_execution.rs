@@ -279,6 +279,10 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     };
     if let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope {
         host.dispatch_child_document_tree_beforeunload_for_traversal(scope, child_handle);
+    } else if let crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) =
+        dispatch_scope
+    {
+        host.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
     } else {
         dispatch_beforeunload_for_runtime_owner(scope, owner);
     }

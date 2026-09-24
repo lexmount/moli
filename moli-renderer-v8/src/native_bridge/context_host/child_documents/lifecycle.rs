@@ -894,6 +894,15 @@ impl JsContextHost {
             })
         };
         let documents = self.child_document_unload_tree_snapshot(handle);
+        self.dispatch_child_documents_beforeunload(scope, documents, is_current)
+    }
+
+    pub(in crate::native_bridge::context_host) fn dispatch_child_documents_beforeunload(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        documents: Vec<(DomHandle, DomHandle, Option<DomHandle>)>,
+        is_current: impl Fn(&Self) -> bool,
+    ) -> bool {
         let mut navigation_guards: Vec<(DomHandle, v8::Global<v8::Object>, bool)> = Vec::new();
         for (handle, document, parent_document) in documents {
             while navigation_guards
@@ -1004,7 +1013,20 @@ impl JsContextHost {
         let Some(document) = self.child_browsing_context_document_handle(handle) else {
             return Vec::new();
         };
-        let mut handles = vec![handle];
+        let mut documents = vec![(
+            handle,
+            document,
+            self.dom_host().owner_document_handle(handle),
+        )];
+        documents.extend(self.child_document_descendants_unload_snapshot(document));
+        documents
+    }
+
+    pub(in crate::native_bridge::context_host) fn child_document_descendants_unload_snapshot(
+        &self,
+        document: DomHandle,
+    ) -> Vec<(DomHandle, DomHandle, Option<DomHandle>)> {
+        let mut handles = Vec::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document(
             document,
             &mut handles,
@@ -1032,7 +1054,21 @@ impl JsContextHost {
         handle: DomHandle,
         cancel_navigation: bool,
     ) {
-        let documents = unsafe { &mut *host_ptr }.child_document_unload_tree_snapshot(handle);
+        let documents = unsafe { &*host_ptr }.child_document_unload_tree_snapshot(handle);
+        Self::dispatch_child_documents_unload_without_beforeunload(
+            scope,
+            host_ptr,
+            documents,
+            cancel_navigation,
+        );
+    }
+
+    pub(in crate::native_bridge::context_host) fn dispatch_child_documents_unload_without_beforeunload(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+        documents: Vec<(DomHandle, DomHandle, Option<DomHandle>)>,
+        cancel_navigation: bool,
+    ) {
         // Keep an ancestor's counter active while its descendants unload,
         // and release a completed sibling before entering the next subtree.
         let mut unload_guards = Vec::new();
