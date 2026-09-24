@@ -67,6 +67,9 @@ pub(super) struct ChildBrowsingContextEntry {
     srcdoc_history:
         HashMap<NavigationHistoryDocumentId, Arc<srcdoc_history::SrcdocHistoryResource>>,
     document_policy_container: ChildDocumentPolicyContainer,
+    // Captured at Document commit; changing sandbox or document.domain must
+    // not grant a descendant permission to navigate the top without activation.
+    pub(super) can_navigate_top_without_user_gesture: bool,
     document_internal_ancestor_origins: Vec<WindowAccessOrigin>,
     ancestor_origins_referrer_policy_snapshot: ChildAncestorOriginsReferrerPolicy,
     completed_document_network: Option<CompletedChildDocumentNetwork>,
