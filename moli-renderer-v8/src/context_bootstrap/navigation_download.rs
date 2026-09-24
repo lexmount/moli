@@ -1,8 +1,6 @@
 use super::history_mutation::document_can_have_url_rewritten;
 use super::history_runtime::cancel_pending_precommit_history_traversal;
-use super::location_navigation::{
-    LocationNavigationKind, cancel_active_location_intercepted_same_document_navigation,
-};
+use super::location_navigation::LocationNavigationKind;
 use super::location_runtime::location_href_slot;
 use super::navigation_activation::{
     install_navigation_transition, navigation_transition_matches_resolver,
@@ -57,7 +55,6 @@ pub(super) fn dispatch_download_navigation_event<'s>(
     cancel_pending_precommit_same_document_navigation(scope, navigation);
     cancel_pending_precommit_history_traversal(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
-    cancel_active_location_intercepted_same_document_navigation(scope, navigation);
     cancel_active_cross_document_navigation(scope, navigation, None);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     if !navigation_document_is_active(scope, owner) {

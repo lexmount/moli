@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource};
 
 use crate::{
@@ -18,6 +23,10 @@ use super::{
     file_entry_file_callback::{
         RendererPageFileEntryFileCallbackOwner, RendererPageFileEntryFileCallbackSender,
         RendererPageFileEntryFileCallbackTask,
+    },
+    form_navigation::{
+        RendererPageFormNavigationOwner, RendererPageFormNavigationSender,
+        RendererPageFormNavigationTask,
     },
     hash_change_delivery::{
         RendererPageHashChangeDeliveryOwner, RendererPageHashChangeDeliverySender,
@@ -63,6 +72,28 @@ use super::{
 
 use crate::runtime::RendererDocumentToken;
 
+/// Cancellation shared by a producer and its queued DOM-manipulation task.
+///
+/// Algorithms cancel the old task and post the replacement at the tail. The
+/// shared DOM source drops a cancelled head before exposing a ready descriptor,
+/// so cancellation does not manufacture a browser task turn or checkpoint.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererPageDomManipulationCancellation(Arc<AtomicBool>);
+
+impl RendererPageDomManipulationCancellation {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 /// Exact owner of the head of the HTML DOM-manipulation task source.
 ///
 /// Variants remain typed for source-local authorization, while the outer enum
@@ -84,6 +115,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     PopupDocumentLifecycle(RendererPagePopupDocumentLifecycleOwner),
     PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
+    FormNavigation(RendererPageFormNavigationOwner),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeOwner),
     TextTrackLoad(RendererPageTextTrackLoadOwner),
     ViewTransitionUpdate(RendererPageViewTransitionUpdateOwner),
@@ -106,6 +138,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     PopupDocumentLifecycle(RendererPagePopupDocumentLifecycleTask),
     PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
+    FormNavigation(RendererPageFormNavigationTask),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeTask),
     TextTrackLoad(RendererPageTextTrackLoadTask),
     ViewTransitionUpdate(RendererPageViewTransitionUpdateTask),
@@ -152,6 +185,9 @@ impl RendererPageDomManipulationTask {
             Self::ConnectedStyleEvent(task) => {
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(task.owner())
             }
+            Self::FormNavigation(task) => {
+                RendererPageDomManipulationOwner::FormNavigation(task.owner())
+            }
             Self::TextTrackDefaultMode(task) => {
                 RendererPageDomManipulationOwner::TextTrackDefaultMode(task.owner())
             }
@@ -165,7 +201,11 @@ impl RendererPageDomManipulationTask {
     }
 
     fn is_cancelled(&self) -> bool {
-        matches!(self, Self::ElementToggle(task) if task.is_cancelled())
+        match self {
+            Self::ElementToggle(task) => task.is_cancelled(),
+            Self::FormNavigation(task) => task.is_cancelled(),
+            _ => false,
+        }
     }
 }
 
@@ -190,6 +230,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     PopupDocumentLifecycle(super::PagePopupDocumentLifecycleTurnAction),
     PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
+    FormNavigation(super::PageFormNavigationTurnAction),
     TextTrackDefaultMode(super::PageTextTrackDefaultModeTurnAction),
     TextTrackLoad(super::PageTextTrackLoadTurnAction),
     ViewTransitionUpdate(super::PageViewTransitionUpdateTurnAction),
@@ -300,6 +341,9 @@ impl RendererPageDomManipulationSender {
         RendererPagePopupCloseSender::new(self.route.clone(), self.root_document)
     }
 
+    pub(crate) fn form_navigation(&self) -> RendererPageFormNavigationSender {
+        RendererPageFormNavigationSender::new(self.route.clone(), self.root_document)
+    }
     pub(crate) fn text_track_default_mode(&self) -> RendererPageTextTrackDefaultModeSender {
         RendererPageTextTrackDefaultModeSender::new(self.route.clone(), self.root_document)
     }

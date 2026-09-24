@@ -76,9 +76,16 @@ fn same_document_navigation_fires_navigate_event_before_mutation() {
     );
 }
 
-#[test]
-fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
-    let mut vm = new_storage_test_vm("https://example.com/form-page");
+#[tokio::test]
+async fn canceled_post_form_navigation_aborts_signal_in_dom_task_without_synthetic_timer() {
+    let loader = static_http_loader([]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://example.com/form-page",
+        &loader,
+    );
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+        .await
+        .unwrap();
 
     let setup = vm
         .eval(
@@ -123,6 +130,7 @@ fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
                 ].join(":"));
               };
               form.requestSubmit();
+              form.requestSubmit();
               return __lmCanceledFormNavigationLog.join("|");
             })()
             "##,
@@ -130,7 +138,19 @@ fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
         .expect("canceled form navigation setup should evaluate");
 
     assert_eq!(
-        setup,
+        setup, "",
+        "form navigation waits for its DOM-manipulation task"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        vm.eval("__lmCanceledFormNavigationLog.join('|')").unwrap(),
         "navigate:replace:true:false:https://example.com/form-page|abort:AbortError:https://example.com/form-page|error:AbortError:https://example.com/form-page"
     );
     assert!(

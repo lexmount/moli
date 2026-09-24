@@ -277,6 +277,28 @@ mod navigation_dispatch_tests {
     }
 
     #[test]
+    fn page_creation_follows_supersession_only_with_the_observed_documents_request() {
+        let termination = RendererLifecycleTerminationStamp {
+            sequence: 7,
+            timestamp_micros: 11,
+            reason: RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        };
+        for has_exact_request in [false, true] {
+            assert_eq!(
+                reconcile_page_creation_lifecycle_observation(
+                    DocumentLifecycleObserverOutcome::Interrupted(termination),
+                    has_exact_request,
+                ),
+                if has_exact_request {
+                    DocumentLifecycleObserverOutcome::NavigationPending
+                } else {
+                    DocumentLifecycleObserverOutcome::Interrupted(termination)
+                }
+            );
+        }
+    }
+
+    #[test]
     fn published_page_creation_discards_reply_policy_when_observer_detaches() {
         let completion = LivePagePendingNavigationCompletion::PublishedPageCreation {
             navigation_reply_policy: NavigationReplyPolicy::ReturnWithPendingNavigation,
