@@ -72,4 +72,5 @@ mod webrtc_events;
 mod window_event_target;
 mod window_onerror;
 mod window_open_empty_url;
+mod window_open_referrer;
 mod worker_listener_invocation;
