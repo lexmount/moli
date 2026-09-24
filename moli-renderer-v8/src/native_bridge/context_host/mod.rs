@@ -135,6 +135,7 @@ mod module_owner_tasks;
 mod mouse_click;
 pub(crate) use mouse_click::MouseReleaseFollowUp;
 mod navigation;
+mod navigation_permissions;
 mod navigator_overrides;
 mod opfs_tasks;
 mod permissions;
