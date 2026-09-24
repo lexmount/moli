@@ -72,9 +72,46 @@ pub(crate) fn resolve_cross_window_location_target(
 
 #[derive(Default)]
 struct LocationNavigationOptions {
+    download_source_document: Option<crate::document_runtime::DomHandle>,
     dispatch_child_navigate_event_for_all_kinds: bool,
     force_exact_same_document_navigation: bool,
     explicit_initiator_url: Option<url::Url>,
+    user_initiated: bool,
+    hyperlink_source_can_access_target: Option<bool>,
+    named_hyperlink_popup: Option<crate::native_bridge::element::NamedHyperlinkPopup>,
+}
+
+pub(crate) struct HyperlinkNavigationOptions {
+    pub(crate) source_document: crate::document_runtime::DomHandle,
+    pub(crate) user_initiated: bool,
+    pub(crate) source_can_access_target: bool,
+    pub(crate) initiator_url: url::Url,
+    pub(crate) named_popup: Option<crate::native_bridge::element::NamedHyperlinkPopup>,
+}
+
+pub(crate) fn navigate_location_object_for_hyperlink<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    href: &str,
+    source_element: v8::Local<'s, v8::Object>,
+    options: HyperlinkNavigationOptions,
+) {
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        LocationNavigationKind::Assign,
+        Some(href.to_owned()),
+        Some(source_element),
+        LocationNavigationOptions {
+            download_source_document: Some(options.source_document),
+            user_initiated: options.user_initiated,
+            hyperlink_source_can_access_target: Some(options.source_can_access_target),
+            force_exact_same_document_navigation: true,
+            explicit_initiator_url: Some(options.initiator_url),
+            named_hyperlink_popup: options.named_popup,
+            ..LocationNavigationOptions::default()
+        },
+    );
 }
 
 pub(crate) fn navigate_location_object<'s>(
@@ -314,10 +351,16 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     }
     let location = window_location_for_holder(scope, owner).unwrap_or(location);
     let LocationNavigationOptions {
+        download_source_document,
         dispatch_child_navigate_event_for_all_kinds,
         force_exact_same_document_navigation,
         explicit_initiator_url,
+        user_initiated,
+        hyperlink_source_can_access_target,
+        named_hyperlink_popup,
     } = options;
+    let event_source_element =
+        source_element.filter(|_| hyperlink_source_can_access_target != Some(false));
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
     let raw_target_is_fragment_only = raw_target
@@ -483,11 +526,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 ),
                 true,
                 true,
-                false,
+                user_initiated,
                 None,
                 None,
                 None,
-                source_element,
+                event_source_element,
             )
         });
         if navigate_outcome
@@ -518,9 +561,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
-        // Hyperlink fragment activation runs after navigate accepts it.
-        // Intercepted navigation controls its own scroll timing.
-        if source_element.is_some()
+        // Preserve synchronous fragment activation only after the navigate event
+        // accepts it. Intercepted navigation owns its scroll timing separately.
+        if hyperlink_source_can_access_target.is_some()
             && runtime_window_is_global(scope, owner)
             && !navigate_outcome
                 .as_ref()
@@ -678,8 +721,12 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         && resolved.scheme() == "javascript"
     {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let _ = unsafe { &mut *host_ptr }
-                .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+            if let Some(popup) = named_hyperlink_popup {
+                popup.navigate(scope, host_ptr, resolved.as_str());
+            } else {
+                let _ = unsafe { &mut *host_ptr }
+                    .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+            }
         }
         return;
     }
@@ -690,6 +737,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         child_browsing_context_handle_for_runtime_owner(scope, owner)
     };
     if child_handle.is_none()
+        && hyperlink_source_can_access_target != Some(false)
         && let Some(navigation) =
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
@@ -724,12 +772,14 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             navigation_type,
             false,
             false,
-            true,
-            false,
+            current_url.as_ref().is_some_and(|current| {
+                super::history_mutation::document_can_have_url_rewritten(current, &resolved)
+            }),
+            user_initiated,
             None,
             destination_state,
             None,
-            source_element,
+            event_source_element,
         );
         if outcome.abort_error.is_some() {
             return;
@@ -762,8 +812,12 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
 
     if let Some(popup_id) = popup_id {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let _ = unsafe { &mut *host_ptr }
-                .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+            if let Some(popup) = named_hyperlink_popup {
+                popup.navigate(scope, host_ptr, resolved.as_str());
+            } else {
+                let _ = unsafe { &mut *host_ptr }
+                    .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+            }
         }
         return;
     }
@@ -783,6 +837,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         };
         if (matches!(kind, LocationNavigationKind::Assign)
             || dispatch_child_navigate_event_for_all_kinds)
+            && hyperlink_source_can_access_target != Some(false)
             && !is_javascript_url
             && let Some(window) = window_for_child_cross_document_location_navigation(scope, owner)
             && !dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
@@ -794,8 +849,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     LocationNavigationKind::Replace => "replace",
                     LocationNavigationKind::Reload => "reload",
                 },
-                source_element,
-                false,
+                event_source_element,
+                user_initiated,
                 None,
                 None,
             )
@@ -806,13 +861,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             let host = unsafe { &mut *host_ptr };
             let initiator_url =
                 explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
-            if is_javascript_url {
+            let queued = if is_javascript_url {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     scope,
                     handle,
                     resolved.as_str(),
                     initiator_url,
-                );
+                )
             } else {
                 // A cross-document navigation only prepares the next history
                 // entry. The old Document's Location, history state and entry
@@ -829,21 +884,31 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                         resolved.as_str(),
                         entry_seed,
                         initiator_url,
-                    );
+                    )
+                } else {
+                    false
                 }
+            };
+            if queued && let Some(document) = download_source_document {
+                host.set_pending_child_navigation_download_source(handle, document);
             }
         }
         return;
     }
 
-    if resolved.scheme() != "javascript" {
+    // A new top-level hyperlink leaves the source Location and history intact
+    // until the browser commits the response, just as the activation path did.
+    let browser_owned_hyperlink = hyperlink_source_can_access_target.is_some() && !exact_same_href;
+    if !browser_owned_hyperlink && resolved.scheme() != "javascript" {
         sync_location_object(scope, location, resolved.as_str());
     }
 
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let entry_seed = if matches!(kind, LocationNavigationKind::Reload) {
+    let entry_seed = if browser_owned_hyperlink {
+        None
+    } else if matches!(kind, LocationNavigationKind::Reload) {
         history_entry_seed_for_reload(scope, owner)
     } else {
         history_entry_seed_for_cross_document_location(scope, owner, &resolved, kind)
@@ -1042,6 +1107,7 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
     can_intercept: bool,
     user_initiated: bool,
     download_request: Option<&str>,
+    form_data: Option<v8::Local<'s, v8::Value>>,
 ) -> bool {
     let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, owner)
     else {
@@ -1055,7 +1121,7 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
     cancel_pending_precommit_history_traversal(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
-    let outcome = dispatch_navigation_navigate_event_with_outcome(
+    let outcome = dispatch_navigation_navigate_event_with_form_data_and_outcome(
         scope,
         navigation,
         href,
@@ -1067,6 +1133,7 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
         download_request,
         None,
         None,
+        form_data,
         source_element,
     );
     if outcome.abort_error.is_some() {

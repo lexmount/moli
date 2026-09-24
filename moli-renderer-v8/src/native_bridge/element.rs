@@ -215,7 +215,7 @@ pub(crate) use activation::perform_clipboard_key_default_action;
 #[cfg(feature = "devtools")]
 pub(crate) use activation::perform_text_input;
 pub(crate) use activation::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
+    NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
 };
 #[cfg(feature = "devtools")]
