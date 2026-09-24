@@ -1148,7 +1148,7 @@ pub(crate) struct PageScriptHost {
     javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
     next_javascript_dialog_id: u64,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
-    focus_change_epoch: u64,
+    document_focus_changes: HashMap<DomHandle, focus::DocumentFocusChangeState>,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
     /// The target policy remains available even when the current Document

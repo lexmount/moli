@@ -141,7 +141,7 @@ impl NativeDom {
                 (element.namespace(), element.local_name()),
                 (
                     HTML_NS,
-                    "body" | "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog"
+                    "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog"
                 )
             )
             || (element.is_html_element("summary")
