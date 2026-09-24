@@ -302,7 +302,7 @@ impl PageTargetHost {
         needs_fetch_navigation_request_id: bool,
     ) -> (String, Option<String>, Option<String>) {
         if clear_captured_response_bodies {
-            self.runtime_slot.clear_captured_response_bodies();
+            self.runtime_slot.prepare_response_bodies_for_navigation();
         }
         let mut allocator = self.runtime_slot.request_id_allocator();
         let document_loader_id =
