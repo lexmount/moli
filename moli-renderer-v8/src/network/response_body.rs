@@ -131,32 +131,48 @@ impl ResourceResponseBody {
         let BodyInputState::Streaming(response) = &mut input.state else {
             return Poll::Ready(());
         };
-        match response.poll_next_chunk(cx) {
-            Poll::Ready(Some(bytes)) => {
-                self.append(&mut input, bytes);
-                // Resource tasks share their Context executor with native
-                // admission and cancellation. A ready body must yield after
-                // publication so those owners can consume its receipts.
-                input.transport = Some(cx.waker().clone());
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            Poll::Ready(None) => {
-                let result = match response.poll_finish(cx) {
-                    Poll::Ready(result) => result.map_err(|error| format!("{error:#}")),
-                    Poll::Pending => {
-                        input.transport = Some(cx.waker().clone());
-                        return Poll::Pending;
+        // Record each physical chunk immediately. Publish their combined byte
+        // progress before delivering any of those chunks to script consumers.
+        // The bounded turn ends before waiting for I/O; no timer delays progress.
+        let progress = self.resource.network.batch_progress();
+        let mut received = 0usize;
+        let mut chunks = Vec::new();
+        let completed = loop {
+            match response.poll_next_chunk(cx) {
+                Poll::Ready(Some(bytes)) => {
+                    received += bytes.len();
+                    self.resource.data_received(&bytes);
+                    chunks.push(bytes);
+                    if received >= 128 * 1024 || chunks.len() >= 32 {
+                        cx.waker().wake_by_ref();
+                        break None;
                     }
-                };
-                drop(input);
-                self.complete(result, None);
-                Poll::Ready(())
+                }
+                Poll::Ready(None) => {
+                    break match response.poll_finish(cx) {
+                        Poll::Ready(result) => Some(result.map_err(|error| format!("{error:#}"))),
+                        Poll::Pending => None,
+                    };
+                }
+                Poll::Pending => break None,
             }
-            Poll::Pending => {
-                input.transport = Some(cx.waker().clone());
-                Poll::Pending
+        };
+        drop(progress);
+        if !chunks.is_empty() {
+            if let Some(consumer) = &mut input.consumer {
+                for bytes in chunks {
+                    consumer.data_received(bytes);
+                }
             }
+            self.changed.notify_waiters();
+        }
+        if let Some(result) = completed {
+            drop(input);
+            self.complete(result, None);
+            Poll::Ready(())
+        } else {
+            input.transport = Some(cx.waker().clone());
+            Poll::Pending
         }
     }
 
@@ -425,6 +441,145 @@ impl Drop for PausedResourceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_batches_only_ready_chunks_and_flushes_before_waiting_or_cancellation() {
+        use crate::runtime::{RendererNetworkOutputItem, RendererNetworkRequest};
+        use moli_page_types::{
+            ScriptNetworkOutputItem, SubresourceBodyFinishedResult, SubresourceRequestStarted,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Consumer {
+            published: Arc<AtomicUsize>,
+            delivered: usize,
+        }
+        impl ResourceResponseConsumer for Consumer {
+            fn task_runner(&self) -> RendererResourceTaskRunner {
+                RendererResourceTaskRunner::for_test()
+            }
+            fn detach(&mut self) {}
+            fn response_started(&mut self, _: ResponseHead) {}
+            fn data_received(&mut self, bytes: Vec<u8>) {
+                self.delivered += bytes.len();
+                assert!(
+                    self.published.load(Ordering::SeqCst) >= self.delivered,
+                    "native progress must precede the corresponding script chunk"
+                );
+            }
+            fn complete(
+                self: Box<Self>,
+                _: Result<ResourceBodyResponse, ResourceResponseFailure>,
+                _: Option<String>,
+            ) {
+            }
+            fn discard(self: Box<Self>) {}
+        }
+
+        let url = url::Url::parse("data:,progress").unwrap();
+        let head = crate::network_host::local_url_response(&url)
+            .unwrap()
+            .head();
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let published = Arc::new(AtomicUsize::new(0));
+        let observed = published.clone();
+        let (network, _) = super::super::ResourceTransfer::start(
+            RendererNetworkRequest::unobserved_for_test(),
+            move |event| {
+                if let RendererNetworkOutputItem::Resource(item) = event.item()
+                    && let ScriptNetworkOutputItem::SubresourceDataReceived(data) = item.as_ref()
+                {
+                    observed.fetch_add(data.data_length(), Ordering::SeqCst);
+                }
+                events.send(event).unwrap();
+            },
+            |network| {
+                SubresourceRequestStarted::new(
+                    network.handle(),
+                    None,
+                    url.clone(),
+                    url,
+                    "GET".into(),
+                    Default::default(),
+                    None,
+                    moli_page_types::SubresourceResourceType::Fetch,
+                    moli_page_types::SubresourceRequestInitiatorType::Script,
+                    None,
+                )
+            },
+        );
+        let resource = ResourceResponseStream::new(network.clone());
+        let (chunks, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (_finished, completion) = tokio::sync::oneshot::channel();
+        let cancel = moli_fetch::FetchCancelHandle::new();
+        let response =
+            StreamingRawResponse::new_with_head(head, receiver, cancel.clone(), completion);
+        let body = ResourceResponseBody::streaming(resource, response, None);
+        body.input.lock().consumer = Some(Box::new(Consumer {
+            published,
+            delivered: 0,
+        }));
+        let head = received.try_recv().unwrap();
+        assert!(
+            matches!(head.item(), RendererNetworkOutputItem::Resource(item)
+            if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceResponseStarted(_)))
+        );
+
+        for _ in 0..40 {
+            chunks.send(vec![128; 16 * 1024]).unwrap();
+        }
+        for _ in 0..5 {
+            assert!(
+                body.poll_transport(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            let event = received.try_recv().unwrap();
+            let RendererNetworkOutputItem::Resource(item) = event.item() else {
+                panic!("resource progress")
+            };
+            let ScriptNetworkOutputItem::SubresourceDataReceived(data) = item.as_ref() else {
+                panic!("data before terminal")
+            };
+            assert_eq!(data.handle(), network.handle());
+            assert_eq!(data.data_length(), 128 * 1024);
+            assert_eq!(data.encoded_data_length(), 128 * 1024);
+            assert!(
+                received.try_recv().is_err(),
+                "one byte-count observation per bounded turn"
+            );
+        }
+        chunks.send(vec![255]).unwrap();
+        assert!(
+            body.poll_transport(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        let event = received
+            .try_recv()
+            .expect("publish a small prefix before waiting for more I/O");
+        assert!(
+            matches!(event.item(), RendererNetworkOutputItem::Resource(item)
+            if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceDataReceived(data) if data.data_length() == 1))
+        );
+        body.discard();
+        network.failed(&body.resource.failure("cancelled".into()));
+        let terminal = received.try_recv().unwrap();
+        let RendererNetworkOutputItem::Resource(item) = terminal.item() else {
+            panic!("resource terminal")
+        };
+        let ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) = item.as_ref() else {
+            panic!("terminal after all progress")
+        };
+        let SubresourceBodyFinishedResult::FailedWithPartialBody { partial_body, .. } =
+            terminal.result()
+        else {
+            panic!("retain the physical prefix")
+        };
+        let mut expected = vec![128; 40 * 16 * 1024];
+        expected.push(255);
+        assert_eq!(partial_body.clone_body_bytes(), expected);
+        assert!(cancel.is_cancelled());
+        assert!(received.try_recv().is_err());
+    }
 
     fn response() -> (
         Arc<ResourceResponseBody>,

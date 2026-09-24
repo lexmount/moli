@@ -83,9 +83,11 @@ impl CdpFrontendRouter {
         self.routing.lock().register_private_session(session_id)
     }
 
-    pub(crate) fn enqueue_protocol_output_sequence(&self, output: ProtocolOutputSequence) -> bool {
+    /// A rejected delivery closes its socket. Its writer completion detaches
+    /// that frontend; it is not a failure of the shared protocol actor.
+    pub(crate) fn enqueue_protocol_output_sequence(&self, output: ProtocolOutputSequence) {
         if output.is_empty() {
-            return true;
+            return;
         }
         let message_count = output.len();
         let mut all_enqueued = true;
@@ -133,6 +135,5 @@ impl CdpFrontendRouter {
                 elapsed_us = %started.elapsed().as_micros(),
             );
         }
-        all_enqueued
     }
 }

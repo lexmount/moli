@@ -1002,20 +1002,18 @@ fn stalled_browser_writer_does_not_block_page_frontend_enqueue() {
         .register_target_frontend(10, "TID-page".to_owned(), "SID-page".to_owned(), page_sink)
         .expect("register target frontend");
 
-    assert!(
-        router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
-            json!({
-                "method": "Target.targetCreated",
-                "sessionId": "SID-browser",
-                "params": { "targetInfo": { "targetId": "TID-root" } },
-            }),
-            json!({
-                "method": "Runtime.consoleAPICalled",
-                "params": { "type": "log" },
-                "sessionId": "SID-page",
-            }),
-        ]))
-    );
+    router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+        json!({
+            "method": "Target.targetCreated",
+            "sessionId": "SID-browser",
+            "params": { "targetInfo": { "targetId": "TID-root" } },
+        }),
+        json!({
+            "method": "Runtime.consoleAPICalled",
+            "params": { "type": "log" },
+            "sessionId": "SID-page",
+        }),
+    ]));
 
     assert_eq!(
         root_writer.take_message()["method"],
@@ -1026,6 +1024,24 @@ fn stalled_browser_writer_does_not_block_page_frontend_enqueue() {
     assert!(page_message.get("sessionId").is_none());
     assert!(root_writer.is_open());
     assert!(page_writer.is_open());
+    router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+        json!({"method":"Target.targetCreated","sessionId":"SID-browser","params":{}}),
+        json!({"method":"Target.targetCreated","sessionId":"SID-browser","params":{}}),
+        json!({"method":"Target.targetCreated","sessionId":"SID-browser","params":{}}),
+        json!({"method":"Runtime.consoleAPICalled","sessionId":"SID-page","params":{"type":"log","args":[{"value":42}]}}),
+    ]));
+    assert!(!root_writer.is_open(), "only the overflowing socket closes");
+    assert!(page_writer.is_open());
+    assert_eq!(page_writer.take_message()["params"]["args"][0]["value"], 42);
+    router.unregister_browser_frontend(5);
+    router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+        json!({"method":"Runtime.consoleAPICalled","sessionId":"SID-page","params":{"type":"log","args":[{"value":43}]}}),
+    ]));
+    assert_eq!(page_writer.take_message()["params"]["args"][0]["value"], 43);
+    assert!(
+        page_writer.is_open(),
+        "an unrelated frontend survives detach cleanup"
+    );
 }
 
 #[test]

@@ -902,13 +902,8 @@ impl CdpScheduler {
         let output_release_permit =
             CommandOutputReleasePermit::new(response_flush_permit, renderer_response_permit);
         let step = match dispatch_step {
-            AgentHostDispatchResult::PendingService(mut pending) => {
-                let scheduler_events = pending.take_scheduler_events();
-                self.apply_scheduler_events(scheduler_events);
-                CommandTaskStep::Pending(pending)
-            }
-            AgentHostDispatchResult::FallThrough(dispatch) => {
-                let mut pending = dispatch.into_pending();
+            AgentHostDispatchResult::PendingService(mut pending)
+            | AgentHostDispatchResult::PendingRenderer(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)
@@ -950,13 +945,8 @@ impl CdpScheduler {
             .complete_pending_command_dispatch_with_context(completed, command_context)
             .await
         {
-            AgentHostDispatchResult::PendingService(mut pending) => {
-                let scheduler_events = pending.take_scheduler_events();
-                self.apply_scheduler_events(scheduler_events);
-                CommandTaskStep::Pending(pending)
-            }
-            AgentHostDispatchResult::FallThrough(dispatch) => {
-                let mut pending = dispatch.into_pending();
+            AgentHostDispatchResult::PendingService(mut pending)
+            | AgentHostDispatchResult::PendingRenderer(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)

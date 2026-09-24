@@ -152,6 +152,9 @@ fn spawn_socket_sink_with_limits(
 
 impl CdpSocketSink {
     pub(crate) fn enqueue_owned_message(&self, message: Value) -> bool {
+        if *self.close_tx.borrow() != SocketCloseSignal::Open || self.output_tx.is_closed() {
+            return false;
+        }
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);
         let message = match serialize_owned_message_with_limit(message, serialization_limit) {

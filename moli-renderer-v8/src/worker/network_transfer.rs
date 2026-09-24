@@ -34,112 +34,139 @@ mod tests {
         use crate::worker::WorkerToParentMessage;
         use moli_page_types::SubresourceBodyFinishedResult;
 
-        for streamed in [false, true] {
-            for failed in [false, true] {
-                let source = RendererWorkerNetworkReporter::unobserved_for_test();
-                let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
-                let url = url::Url::parse("data:text/javascript,//ok").unwrap();
-                let response = crate::network_host::local_url_response(&url).unwrap();
-                let head = Arc::new(ResourceResponseHead {
-                    status_text: None,
-                    head: response.head(),
-                    network_request_headers: None,
-                });
-                let transfer = ResourceTransfer::for_worker(
-                    &source,
-                    WorkerNetworkObserver::Channel(send.downgrade()),
-                    |network| {
-                        worker_request_started(
-                            network,
-                            &url,
-                            &url,
-                            "GET",
-                            &moli_fetch::RequestHeaders::default(),
-                            &None,
-                            moli_page_types::SubresourceResourceType::Script,
-                        )
-                    },
-                )
-                .unwrap();
-                let handle = transfer.handle();
-                if streamed {
-                    transfer.response_started(head.clone());
-                    transfer.data_received(2);
-                    if !failed {
-                        transfer.data_received(2);
-                    }
-                }
-                if failed {
-                    transfer.failed(&ResourceResponseFailure::PartialBody {
-                        message: "truncated".into(),
-                        response: head.clone(),
-                        body: SubresourceResponseBody::from_bytes(b"//".to_vec()),
+        for batched in [false, true] {
+            for streamed in [false, true] {
+                for failed in [false, true] {
+                    let source = RendererWorkerNetworkReporter::unobserved_for_test();
+                    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+                    let url = url::Url::parse("data:text/javascript,//ok").unwrap();
+                    let response = crate::network_host::local_url_response(&url).unwrap();
+                    let head = Arc::new(ResourceResponseHead {
+                        status_text: None,
+                        head: response.head(),
+                        network_request_headers: None,
                     });
-                } else {
-                    transfer.response_completed(&response);
-                }
-                assert_eq!(
-                    transfer.handle(),
-                    handle,
-                    "completion preserves request identity"
-                );
-                assert!(
-                    transfer.request().is_none(),
-                    "completion releases continuation permission"
-                );
-                // Late callbacks and the final lease drop cannot duplicate or
-                // change the committed terminal result.
-                transfer.failed(&ResourceResponseFailure::Request("late".into()));
-                transfer.response_completed(&response);
-                transfer.response_started(head);
-                transfer.data_received(2);
-                drop(transfer);
-                let mut items = Vec::new();
-                while let Ok(WorkerToParentMessage::Network(observation)) = receive.try_recv() {
-                    let RendererNetworkOutputItem::Resource(item) = observation.item() else {
-                        panic!("script producer must publish resource facts")
-                    };
-                    items.push(item.clone());
-                }
-                assert_eq!(
-                    items.len(),
-                    if streamed {
-                        if failed { 4 } else { 5 }
-                    } else {
-                        3
-                    }
-                );
-                let ScriptNetworkOutputItem::SubresourceRequestStarted(start) = items[0].as_ref()
-                else {
-                    panic!("start first")
-                };
-                let ScriptNetworkOutputItem::SubresourceResponseStarted(head) = items[1].as_ref()
-                else {
-                    panic!("one real response head before terminal")
-                };
-                assert_eq!(head.handle(), start.handle());
-                let ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) =
-                    items.last().unwrap().as_ref()
-                else {
-                    panic!("terminal last")
-                };
-                assert_eq!(terminal.handle(), start.handle());
-                match (failed, terminal.result()) {
-                    (false, SubresourceBodyFinishedResult::Ready(body)) => {
-                        assert_eq!(body.clone_body_bytes(), b"//ok");
-                        assert_eq!(terminal.data_was_streamed(), streamed);
-                    }
-                    (
-                        true,
-                        SubresourceBodyFinishedResult::FailedWithPartialBody {
-                            error_text,
-                            partial_body,
+                    let transfer = ResourceTransfer::for_worker(
+                        &source,
+                        WorkerNetworkObserver::Channel(send.downgrade()),
+                        |network| {
+                            worker_request_started(
+                                network,
+                                &url,
+                                &url,
+                                "GET",
+                                &moli_fetch::RequestHeaders::default(),
+                                &None,
+                                moli_page_types::SubresourceResourceType::Script,
+                            )
                         },
-                    ) => {
-                        assert_eq!(error_text, "truncated");
-                        assert_eq!(partial_body.clone_body_bytes(), b"//");
+                    )
+                    .unwrap();
+                    let handle = transfer.handle();
+                    if streamed {
+                        transfer.response_started(head.clone());
                     }
-                    result => panic!("the first terminal outcome must win: {result:?}"),
+                    let batch = batched.then(|| transfer.batch_progress()).flatten();
+                    if streamed {
+                        transfer.data_received(2);
+                        if !failed {
+                            transfer.data_received(2);
+                        }
+                    }
+                    if failed {
+                        transfer.failed(&ResourceResponseFailure::PartialBody {
+                            message: "truncated".into(),
+                            response: head.clone(),
+                            body: SubresourceResponseBody::from_bytes(b"//".to_vec()),
+                        });
+                    } else {
+                        transfer.response_completed(&response);
+                    }
+                    assert_eq!(
+                        transfer.handle(),
+                        handle,
+                        "completion preserves request identity"
+                    );
+                    assert!(
+                        transfer.request().is_none(),
+                        "completion releases continuation permission"
+                    );
+                    // Late callbacks and the final lease drop cannot duplicate or
+                    // change the committed terminal result.
+                    transfer.failed(&ResourceResponseFailure::Request("late".into()));
+                    transfer.response_completed(&response);
+                    transfer.response_started(head);
+                    transfer.data_received(2);
+                    drop(batch);
+                    drop(transfer);
+                    let mut items = Vec::new();
+                    while let Ok(WorkerToParentMessage::Network(observation)) = receive.try_recv() {
+                        let RendererNetworkOutputItem::Resource(item) = observation.item() else {
+                            panic!("script producer must publish resource facts")
+                        };
+                        items.push(item.clone());
+                    }
+                    assert_eq!(
+                        items.len(),
+                        if streamed {
+                            if failed || batched { 4 } else { 5 }
+                        } else {
+                            3
+                        }
+                    );
+                    let ScriptNetworkOutputItem::SubresourceRequestStarted(start) =
+                        items[0].as_ref()
+                    else {
+                        panic!("start first")
+                    };
+                    let ScriptNetworkOutputItem::SubresourceResponseStarted(head) =
+                        items[1].as_ref()
+                    else {
+                        panic!("one real response head before terminal")
+                    };
+                    assert_eq!(head.handle(), start.handle());
+                    let progress = items
+                        .iter()
+                        .filter_map(|item| match item.as_ref() {
+                            ScriptNetworkOutputItem::SubresourceDataReceived(data) => {
+                                assert_eq!(data.handle(), start.handle());
+                                assert_eq!(data.data_length(), data.encoded_data_length());
+                                Some(data.data_length())
+                            }
+                            _ => None,
+                        })
+                        .sum::<usize>();
+                    assert_eq!(
+                        progress,
+                        if streamed {
+                            if failed { 2 } else { 4 }
+                        } else {
+                            0
+                        }
+                    );
+                    let ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) =
+                        items.last().unwrap().as_ref()
+                    else {
+                        panic!("terminal last")
+                    };
+                    assert_eq!(terminal.handle(), start.handle());
+                    match (failed, terminal.result()) {
+                        (false, SubresourceBodyFinishedResult::Ready(body)) => {
+                            assert_eq!(body.clone_body_bytes(), b"//ok");
+                            assert_eq!(terminal.data_was_streamed(), streamed);
+                        }
+                        (
+                            true,
+                            SubresourceBodyFinishedResult::FailedWithPartialBody {
+                                error_text,
+                                partial_body,
+                            },
+                        ) => {
+                            assert_eq!(error_text, "truncated");
+                            assert_eq!(partial_body.clone_body_bytes(), b"//");
+                        }
+                        result => panic!("the first terminal outcome must win: {result:?}"),
+                    }
                 }
             }
         }

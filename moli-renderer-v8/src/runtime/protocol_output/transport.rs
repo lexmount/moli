@@ -380,6 +380,16 @@ impl RendererOutputTransportSender {
         let bytes = message.transport_charge_bytes();
         let admitted = self.shared.budget.lock().reserve(class, residence, bytes);
         if !admitted {
+            let diagnostics = self.diagnostics();
+            if !diagnostics.terminal {
+                tracing::warn!(
+                    ?class,
+                    ?residence,
+                    bytes,
+                    ?diagnostics,
+                    "renderer output capacity exhausted; closing the shared protocol observer"
+                );
+            }
             self.terminate();
             return Err(RendererOutputTransportSendError { message });
         }

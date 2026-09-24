@@ -138,7 +138,8 @@ pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
 pub(crate) use dispatch::CdpCommandTaskStep;
 pub use dispatch::{
     AgentHostDispatchResult, CompletedCdpCommandDispatch, PendingCdpCommandDispatch,
-    RendererDispatch, RendererDispatchBinding, RendererDispatchLane, RendererPageDispatchBinding,
+    RendererDispatchBinding, RendererDispatchLane, RendererDispatchOrigin,
+    RendererPageDispatchBinding,
 };
 pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,

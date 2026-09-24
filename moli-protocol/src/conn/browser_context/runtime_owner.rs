@@ -307,7 +307,7 @@ impl CdpConnection {
         ) {
             crate::conn::AgentHostDispatchResult::Complete(outcome) => outcome,
             crate::conn::AgentHostDispatchResult::PendingService(_)
-            | crate::conn::AgentHostDispatchResult::FallThrough(_) => {
+            | crate::conn::AgentHostDispatchResult::PendingRenderer(_) => {
                 unreachable!("a completed Runtime listener plan cannot become pending")
             }
         }

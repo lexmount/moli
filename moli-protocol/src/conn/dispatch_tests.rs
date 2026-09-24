@@ -9267,7 +9267,7 @@ fn parsed_agent_host_command(id: u64, method: &str, params: Value) -> ParsedCdpC
 }
 
 #[tokio::test]
-async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() {
+async fn agent_host_dispatch_retains_the_admitted_renderer_origin_through_completion() {
     let mut conn = loaded_agent_host_dispatch_connection_for_test().await;
     let owner = CommandOwnerScope::capture(&conn, None);
     let expected_document = conn
@@ -9284,9 +9284,10 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
         parsed_agent_host_command(20_001, "Runtime.evaluate", json!({"expression": "1 + 1"}));
     let mut command_context = CommandDispatchContext::default();
     let dispatch = conn.start_parsed_command_dispatch_with_context(&evaluate, &mut command_context);
-    let AgentHostDispatchResult::FallThrough(dispatch) = dispatch else {
+    let AgentHostDispatchResult::PendingRenderer(pending) = dispatch else {
         panic!("Runtime.evaluate should fall through to the renderer");
     };
+    let dispatch = pending.renderer_origin().unwrap().clone();
     assert_eq!(dispatch.lane(), RendererDispatchLane::Main);
     assert_eq!(
         dispatch.binding(),
@@ -9296,7 +9297,8 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
             attachment: expected_attachment,
         })
     );
-    let completed = dispatch.into_pending().wait().await;
+    let completed = pending.wait().await;
+    assert_eq!(completed.renderer_origin(), Some(&dispatch));
     assert!(matches!(
         conn.complete_pending_command_dispatch_with_context(completed, &mut command_context)
             .await,
@@ -9307,9 +9309,10 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
     let mut command_context = CommandDispatchContext::default();
     let dispatch =
         conn.start_parsed_command_dispatch_with_context(&terminate, &mut command_context);
-    let AgentHostDispatchResult::FallThrough(dispatch) = dispatch else {
+    let AgentHostDispatchResult::PendingRenderer(pending) = dispatch else {
         panic!("Runtime.terminateExecution should fall through to renderer IO");
     };
+    let dispatch = pending.renderer_origin().unwrap().clone();
     assert_eq!(dispatch.lane(), RendererDispatchLane::Io);
     assert_eq!(
         dispatch.binding(),
@@ -9319,7 +9322,8 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
             attachment: expected_attachment,
         })
     );
-    let completed = dispatch.into_pending().wait().await;
+    let completed = pending.wait().await;
+    assert_eq!(completed.renderer_origin(), Some(&dispatch));
     assert!(matches!(
         conn.complete_pending_command_dispatch_with_context(completed, &mut command_context)
             .await,
@@ -9343,7 +9347,7 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
             ));
         }
         AgentHostDispatchResult::Complete(_) => {}
-        AgentHostDispatchResult::FallThrough(_) => {
+        AgentHostDispatchResult::PendingRenderer(_) => {
             panic!("native Page.captureScreenshot must not become renderer fallthrough")
         }
     }

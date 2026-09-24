@@ -26,8 +26,8 @@ pub use conn::{
     DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID, DevToolsCommandDispatchOutcome,
     DevToolsDocumentLifecycleWaitKey, DevToolsDocumentLifecycleWaitState,
     DevToolsDocumentNavigationState, DevToolsPageResidenceIdentity, ParsedCdpCommand,
-    PendingCdpCommandDispatch, PendingRuntimeProtocolMessageDispatch, RendererDispatch,
-    RendererDispatchBinding, RendererDispatchLane, RendererPageDispatchBinding,
+    PendingCdpCommandDispatch, PendingRuntimeProtocolMessageDispatch, RendererDispatchBinding,
+    RendererDispatchLane, RendererDispatchOrigin, RendererPageDispatchBinding,
 };
 pub use domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,

@@ -5,10 +5,10 @@ The ownership tree, exact Document identities, renderer inspection endpoints
 and projection fences remain. Completion of the ownership migration did not
 establish independent scheduling or acceptable overload isolation.
 
-The remaining deliverables are asynchronous native admission with fewer owner
-round trips, scheduler fairness under sustained production, explicit bounded
-output/overload behavior, and a final frozen comparison. Fairness is delivered
-first, followed by native admission; transport capacity acceptance remains open.
+The deliverables are asynchronous native admission with fewer owner round
+trips, scheduler fairness under sustained production, explicit output capacity
+and overload behavior, and a final frozen comparison. The three code changes
+are complete; final public-client and retention acceptance is recorded below.
 
 ## Scheduler fairness
 
@@ -88,6 +88,73 @@ passes twenty zero-retry iterations after the correction. This changes no
 production ServiceWorker semantics; separate live registration-slot reads are
 not claimed to be atomic. All failed compiler, lint, fixture and full-suite
 attempts remain in the artifact evidence index.
+
+## Output capacity contract
+
+The physical streaming-body pump ends a turn after 128 KiB / 32 ready
+chunks, checking the byte budget at physical chunk boundaries.
+`ResourceTransfer` combines only their byte counts before creating native
+observations. It flushes before waiting for I/O, before yielding, and
+before completion or cancellation. Native progress is published before those
+original chunks are delivered to script consumers; response heads, partial
+bodies, request identities, native receipts and terminal order are unchanged.
+There is no timer or new asynchronous publisher.
+Already-published occurrences and their cursors are never merged or dropped.
+
+A CDP socket remains bounded independently at 1,024 messages / 64 MiB. Queue or
+serialization admission failure closes that socket, and writer completion
+removes its sessions. Inspection of the original call chain confirms the actor
+already ignored the router's aggregate bool; removing it makes the local failure
+contract explicit. An overflowing socket is not an aggregate transport failure.
+The regression uses a deliberately stalled two-slot sink while real CDP, BiDi
+and Classic connections continue through the same actor and survive its detach.
+
+The shared renderer transport still admits at most 2,048 messages / 64 MiB,
+with 1,536 messages / 48 MiB available to observations and reserved essential
+capacity. Exceeding this internal budget is an explicit fail-fast limit: an
+ordered terminal follows the admitted prefix, the shared protocol observer
+closes (including its CDP/BiDi/Classic frontends), and Browser state survives for
+reconnection. This is not per-observer isolation at that internal boundary.
+The limits are unchanged; a new warning records the failing class, residence,
+charge and queue diagnostics. On the frozen ordinary release, all ten
+alternating main/head 32 x 4 MiB pairs and both Log-enabled controls pass.
+The earlier failing release probes remain evidence of a product failure, not
+successful acceptance. This establishes that tested load, not an arbitrary
+load guarantee or a statistical failure-rate bound.
+
+The queue audit also finds that BrowserOwner's command/native-callback mailbox
+and its local completion queue are unbounded. Native network callbacks contain
+actual receipts awaiting owner commit; replacing them with `try_send` and losing
+a callback would break receipt/fence completion. Progress batching reduces this
+mailbox's traffic but does not impose an end-to-end memory ceiling. Browser's
+outgoing broadcast is bounded at 256 events with atomic snapshot recovery;
+frontend command intake is bounded at 256, while control/BiDi/Classic intake and
+in-flight command counts have no aggregate fixed cap. Retained Worker history
+bounds must not be cited as bounds on these live queues. Arbitrarily stalled
+native owners and unlimited concurrent admissions remain outside the measured
+supported-load envelope; this audit does not claim otherwise.
+
+`PendingRenderer` now explicitly means the endpoint has already admitted the
+command. Its captured lane/binding remains on the pending and completed objects
+and appears in wait/completion tracing. Scheduler branches share the same wait
+handling without redispatching or creating a global Main queue. Origin identity
+assertions cover the complete wait, including the original Main and IO cases.
+
+The first capacity implementation failed the existing EventSource ordering
+assertion: its consumer received chunks before their native progress was
+published. A deterministic consumer callback gate reproduces the error before
+the fix. The pump now records physical bytes, publishes the bounded progress
+batch, and only then hands the original chunks to the consumer. The existing
+wire-order assertion and exact partial-body checks remain. That failed full
+run (19,695 passes / one failure) and the causal red test are retained.
+
+The corrected source passes root fmt, strict workspace Clippy and all 19,696
+nextest tests (16 configured skips, 98.429s). Eight relevant regressions,
+including EventSource and the shared-actor overflow case, pass twenty zero-retry
+iterations. The preceding 229-case adjacent run covers native response stages,
+cache behavior, shared-page lifetimes and retained dispatch origins. Frozen
+source hashes and the successful 4m47s release build are recorded in
+`capacity-source-2.json` and `capacity-release-2.log` in the artifact directory.
 
 ## Frozen main
 

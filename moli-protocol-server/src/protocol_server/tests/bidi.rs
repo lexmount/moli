@@ -4,6 +4,88 @@ mod shared_page_creation;
 mod shared_page_retirement;
 
 #[tokio::test]
+async fn overflowing_one_cdp_writer_preserves_cdp_bidi_and_classic_frontends() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = protocol_server_test_state(
+        addr,
+        FetchConfig::default(),
+        OptionalResourceFetchMask::NONE,
+    );
+    let owner = state.cdp_owner_registry.shared_owner().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, build_router(state)).await.unwrap();
+    });
+    let session = classic_new_session_on_server(addr).await;
+    let target = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session}/window"),
+        json!({}),
+    )
+    .await["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let (mut bidi, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut bidi, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let (sink, stalled) = crate::cdp_writer::CdpSocketSink::with_stalled_writer_for_test(2);
+    let slow = owner.attach_browser(sink).await.unwrap();
+    for id in 1..=4 {
+        assert!(
+            owner
+                .command(
+                    slow,
+                    json!({"id":id,"method":"Browser.getVersion"}).to_string()
+                )
+                .await
+        );
+    }
+    // These commands enter the same FIFO after the overflowing frontend's
+    // replies. The other clients remain real HTTP/WebSocket connections.
+    let version = send_cdp_command(&mut cdp, 10, "Browser.getVersion", None, json!({})).await;
+    assert!(bidi_message_by_id(&version, 10)["result"]["product"].is_string());
+    assert!(
+        !stalled.is_open(),
+        "the stalled writer must actually exceed its capacity"
+    );
+    owner.detach_browser(slow);
+    let observed = send_bidi_command_response(
+        &mut bidi,
+        2,
+        "script.evaluate",
+        json!({"expression":"6 * 7","target":{"context":target},"awaitPromise":false}),
+    )
+    .await;
+    assert_eq!(observed["result"]["result"]["value"], 42);
+    let observed = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"return 6 * 7","args":[]}),
+    )
+    .await;
+    assert_eq!(observed["value"], 42);
+    let targets = send_cdp_command(&mut cdp, 11, "Target.getTargets", None, json!({})).await;
+    assert!(
+        bidi_message_by_id(&targets, 11)["result"]["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|info| info["targetId"] == target)
+    );
+    cdp.close(None).await.unwrap();
+    bidi.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn native_browser_page_is_discovered_shared_and_retained_across_frontends() {
     use moli_core::browser::{
         BrowserContextStoragePartitionHandles, StoragePartitionKind, WebContentsCreation,

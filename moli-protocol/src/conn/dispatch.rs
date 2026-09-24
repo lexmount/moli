@@ -10,11 +10,13 @@ pub struct PendingCdpCommandDispatch {
     inner: PendingCdpCommandDispatchKind,
     scheduler_events: Vec<CdpSchedulerEvent>,
     owner_scope: CommandOwnerScope,
+    renderer_origin: Option<RendererDispatchOrigin>,
 }
 
 pub struct CompletedCdpCommandDispatch {
     inner: CompletedCdpCommandDispatchKind,
     owner_scope: CommandOwnerScope,
+    renderer_origin: Option<RendererDispatchOrigin>,
 }
 
 /// Renderer receiver selected only after a DevTools domain handler falls
@@ -58,14 +60,15 @@ pub enum RendererDispatchBinding {
     Worker { target_id: String },
 }
 
-/// One concrete renderer fallthrough plus the DevTools-owned pending reply.
-pub struct RendererDispatch {
+/// The exact endpoint and lane that already admitted a renderer command.
+/// Retained through the pending reply and completion for tracing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererDispatchOrigin {
     lane: RendererDispatchLane,
     binding: RendererDispatchBinding,
-    pending: Box<PendingCdpCommandDispatch>,
 }
 
-impl RendererDispatch {
+impl RendererDispatchOrigin {
     pub const fn lane(&self) -> RendererDispatchLane {
         self.lane
     }
@@ -73,20 +76,17 @@ impl RendererDispatch {
     pub const fn binding(&self) -> &RendererDispatchBinding {
         &self.binding
     }
-
-    pub fn into_pending(self) -> Box<PendingCdpCommandDispatch> {
-        self.pending
-    }
 }
 
 /// Result of the DevToolsSession/AgentHost browser-content dispatch phase.
 ///
-/// Completion ownership and renderer routing deliberately remain separate:
-/// only `FallThrough` has a renderer binding and Main/IO lane.
+/// Renderer commands have already entered their exact endpoint and lane.
+/// Both pending variants only require waiting; the outer scheduler does not
+/// select another renderer or redispatch the command.
 pub enum AgentHostDispatchResult {
     Complete(CdpRendererOwnerTurnOutcome),
     PendingService(Box<PendingCdpCommandDispatch>),
-    FallThrough(RendererDispatch),
+    PendingRenderer(Box<PendingCdpCommandDispatch>),
 }
 
 /// Test shorthand for completing a command without an outer scheduler.
@@ -101,10 +101,8 @@ impl From<AgentHostDispatchResult> for CdpCommandTaskStep {
     fn from(result: AgentHostDispatchResult) -> Self {
         match result {
             AgentHostDispatchResult::Complete(outcome) => Self::Complete(outcome),
-            AgentHostDispatchResult::PendingService(pending) => Self::Pending(pending),
-            AgentHostDispatchResult::FallThrough(dispatch) => {
-                Self::Pending(dispatch.into_pending())
-            }
+            AgentHostDispatchResult::PendingService(pending)
+            | AgentHostDispatchResult::PendingRenderer(pending) => Self::Pending(pending),
         }
     }
 }
@@ -251,12 +249,18 @@ impl PendingCdpCommandDispatch {
         inner: PendingCdpCommandDispatchKind,
         scheduler_events: Vec<CdpSchedulerEvent>,
         owner_scope: CommandOwnerScope,
+        renderer_origin: Option<RendererDispatchOrigin>,
     ) -> Self {
         Self {
             inner,
             scheduler_events,
             owner_scope,
+            renderer_origin,
         }
+    }
+
+    pub fn renderer_origin(&self) -> Option<&RendererDispatchOrigin> {
+        self.renderer_origin.as_ref()
     }
 
     pub fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
@@ -360,6 +364,7 @@ impl PendingCdpCommandDispatch {
             inner,
             owner_scope,
             scheduler_events: _,
+            renderer_origin,
         } = self;
         match inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => CompletedCdpCommandDispatch {
@@ -367,6 +372,7 @@ impl PendingCdpCommandDispatch {
                     pending.complete_scheduler_deferred_inspector_reply(conn),
                 )),
                 owner_scope,
+                renderer_origin,
             },
             _ => {
                 unreachable!(
@@ -387,6 +393,7 @@ impl PendingCdpCommandDispatch {
             inner,
             scheduler_events: _,
             owner_scope,
+            renderer_origin,
         } = self;
         let kind = inner.name();
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(std::time::Instant::now);
@@ -395,6 +402,7 @@ impl PendingCdpCommandDispatch {
                 target: "moli_cdp_runtime",
                 stage = "command_pending_domain_wait_start",
                 pending_kind = kind,
+                ?renderer_origin,
             );
         }
         let inner = match inner {
@@ -466,14 +474,23 @@ impl PendingCdpCommandDispatch {
                 target: "moli_cdp_runtime",
                 stage = "command_pending_domain_wait_done",
                 pending_kind = kind,
+                ?renderer_origin,
                 elapsed_us = %started.elapsed().as_micros(),
             );
         }
-        CompletedCdpCommandDispatch { inner, owner_scope }
+        CompletedCdpCommandDispatch {
+            inner,
+            owner_scope,
+            renderer_origin,
+        }
     }
 }
 
 impl CompletedCdpCommandDispatch {
+    pub fn renderer_origin(&self) -> Option<&RendererDispatchOrigin> {
+        self.renderer_origin.as_ref()
+    }
+
     pub fn kind_name(&self) -> &'static str {
         self.inner.name()
     }
@@ -507,7 +524,7 @@ impl CdpConnection {
     /// Document binding before its browser/content handler may run.
     ///
     /// This is deliberately not a renderer-lane classifier. A lane exists
-    /// only after a handler returns `FallThrough`; this admission check merely
+    /// before returning `PendingRenderer`; this admission check merely
     /// prevents a known Main-thread fallthrough from binding to the outgoing
     /// Document while a replacement is being projected.
     pub fn command_waits_for_document_projection(&self, command: &ParsedCdpCommand) -> bool {
@@ -600,24 +617,27 @@ impl CdpConnection {
         owner_scope: CommandOwnerScope,
         inner: PendingCdpCommandDispatchKind,
     ) -> AgentHostDispatchResult {
-        let renderer_lane = inner.renderer_dispatch_lane();
+        let renderer_origin = inner
+            .renderer_dispatch_lane()
+            .map(|lane| RendererDispatchOrigin {
+                lane,
+                binding: self
+                    .renderer_dispatch_binding_for_owner(&owner_scope)
+                    .expect("a renderer command must retain its exact AgentHost binding"),
+            });
+        let renderer = renderer_origin.is_some();
         let scheduler_events = self.take_scheduler_events();
         let pending = Box::new(PendingCdpCommandDispatch::new(
             inner,
             scheduler_events,
-            owner_scope.clone(),
+            owner_scope,
+            renderer_origin,
         ));
-        let Some(lane) = renderer_lane else {
-            return AgentHostDispatchResult::PendingService(pending);
-        };
-        let binding = self
-            .renderer_dispatch_binding_for_owner(&owner_scope)
-            .expect("a renderer fallthrough must retain its exact AgentHost binding");
-        AgentHostDispatchResult::FallThrough(RendererDispatch {
-            lane,
-            binding,
-            pending,
-        })
+        if renderer {
+            AgentHostDispatchResult::PendingRenderer(pending)
+        } else {
+            AgentHostDispatchResult::PendingService(pending)
+        }
     }
 
     fn renderer_dispatch_binding_for_owner(
@@ -1186,7 +1206,14 @@ impl CdpConnection {
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> AgentHostDispatchResult {
-        let CompletedCdpCommandDispatch { inner, owner_scope } = completed;
+        let CompletedCdpCommandDispatch {
+            inner,
+            owner_scope,
+            renderer_origin,
+        } = completed;
+        if moli_trace::cdp_runtime_trace_enabled() {
+            tracing::info!(target: "moli_cdp_runtime", stage = "command_domain_completion", ?renderer_origin);
+        }
         let mut out = Vec::new();
         match inner {
             CompletedCdpCommandDispatchKind::Runtime(completed) => {
@@ -1691,7 +1718,7 @@ impl CdpConnection {
                     break;
                 }
                 AgentHostDispatchResult::PendingService(pending) => pending,
-                AgentHostDispatchResult::FallThrough(dispatch) => dispatch.into_pending(),
+                AgentHostDispatchResult::PendingRenderer(pending) => pending,
             };
             let completed = Box::pin(pending.wait()).await;
             step =

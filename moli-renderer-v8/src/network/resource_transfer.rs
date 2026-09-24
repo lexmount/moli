@@ -23,15 +23,42 @@ pub(crate) struct ResourceTransfer {
 
 enum ResourceTransferState {
     Requested(RendererNetworkRequest),
-    Responding(RendererNetworkRequest),
+    Responding {
+        network: RendererNetworkRequest,
+        progress: usize,
+        batches: usize,
+    },
     Finished(SubresourceNetworkRequestHandle),
 }
 
 impl ResourceTransferState {
     fn handle(&self) -> SubresourceNetworkRequestHandle {
         match self {
-            Self::Requested(network) | Self::Responding(network) => network.handle(),
+            Self::Requested(network) | Self::Responding { network, .. } => network.handle(),
             Self::Finished(handle) => *handle,
+        }
+    }
+}
+
+/// Combine byte-only progress within one bounded, synchronous producer turn.
+/// Dropping the guard publishes before the producer yields or waits for I/O.
+pub(crate) struct ResourceProgressBatch<'a>(&'a ResourceTransfer);
+
+impl Drop for ResourceProgressBatch<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock();
+        if let ResourceTransferState::Responding {
+            network,
+            progress,
+            batches,
+        } = &mut *state
+        {
+            *batches -= 1;
+            if *batches == 0 {
+                ResourceTransfer::flush_progress(network, progress, &mut |item| {
+                    self.0.observe(item)
+                });
+            }
         }
     }
 }
@@ -102,26 +129,54 @@ impl ResourceTransfer {
     pub(crate) fn request(&self) -> Option<RendererNetworkRequest> {
         match &*self.state.lock() {
             ResourceTransferState::Requested(network)
-            | ResourceTransferState::Responding(network) => Some(network.clone()),
+            | ResourceTransferState::Responding { network, .. } => Some(network.clone()),
             ResourceTransferState::Finished(_) => None,
         }
     }
 
     pub(crate) fn data_received(&self, bytes: usize) {
-        let state = self.state.lock();
-        match &*state {
-            ResourceTransferState::Responding(network) => self.publish(
+        let mut state = self.state.lock();
+        match &mut *state {
+            ResourceTransferState::Responding {
                 network,
-                ScriptNetworkOutputItem::SubresourceDataReceived(SubresourceDataReceived::new(
-                    network.handle(),
-                    bytes,
-                    bytes,
-                )),
-            ),
+                progress,
+                batches,
+            } => {
+                *progress = progress
+                    .checked_add(bytes)
+                    .expect("resource progress overflow");
+                if *batches == 0 {
+                    Self::flush_progress(network, progress, &mut |item| self.observe(item));
+                }
+            }
             ResourceTransferState::Requested(_) => {
                 panic!("resource data must follow its response head")
             }
             ResourceTransferState::Finished(_) => {}
+        }
+    }
+
+    pub(crate) fn batch_progress(&self) -> Option<ResourceProgressBatch<'_>> {
+        let mut state = self.state.lock();
+        let ResourceTransferState::Responding { batches, .. } = &mut *state else {
+            return None;
+        };
+        *batches += 1;
+        Some(ResourceProgressBatch(self))
+    }
+
+    fn flush_progress(
+        network: &RendererNetworkRequest,
+        progress: &mut usize,
+        observer: &mut impl FnMut(RendererNetworkObservation),
+    ) {
+        let bytes = std::mem::take(progress);
+        if bytes != 0 {
+            observer(
+                network.report(ScriptNetworkOutputItem::SubresourceDataReceived(
+                    SubresourceDataReceived::new(network.handle(), bytes, bytes),
+                )),
+            );
         }
     }
 
@@ -198,27 +253,31 @@ impl ResourceTransfer {
         >,
         mut observer: impl FnMut(RendererNetworkObservation),
     ) {
-        let previous = {
+        let mut previous = {
             let mut state = self.state.lock();
             let finished = ResourceTransferState::Finished(state.handle());
             std::mem::replace(&mut *state, finished)
         };
-        let network = match &previous {
-            ResourceTransferState::Requested(network)
-            | ResourceTransferState::Responding(network) => network,
+        let streamed = matches!(previous, ResourceTransferState::Responding { .. });
+        let network = match &mut previous {
+            ResourceTransferState::Requested(network) => network,
+            ResourceTransferState::Responding {
+                network, progress, ..
+            } => {
+                Self::flush_progress(network, progress, &mut observer);
+                network
+            }
             ResourceTransferState::Finished(_) => return,
         };
         let body = match result(network) {
-            Ok((head, body)) => match previous {
-                ResourceTransferState::Requested(_) => {
+            Ok((head, body)) => {
+                if !streamed {
                     Self::record_response(network, head, &mut observer);
                     SubresourceBodyFinished::ready(network.handle(), body)
-                }
-                ResourceTransferState::Responding(_) => {
+                } else {
                     SubresourceBodyFinished::ready_after_streaming(network.handle(), body)
                 }
-                ResourceTransferState::Finished(_) => unreachable!(),
-            },
+            }
             Err(ResourceResponseFailure::Request(message)) => {
                 SubresourceBodyFinished::failed(network.handle(), message)
             }
@@ -234,7 +293,7 @@ impl ResourceTransfer {
                 response,
                 body,
             }) => {
-                if matches!(previous, ResourceTransferState::Requested(_)) {
+                if !streamed {
                     Self::record_response(network, response.as_ref().clone(), &mut observer);
                 }
                 SubresourceBodyFinished::failed_with_partial_body(network.handle(), message, body)
@@ -257,9 +316,13 @@ impl ResourceResponseObserver for ResourceTransfer {
                 Self::record_response(&network, response.as_ref().clone(), &mut |observation| {
                     self.observe(observation);
                 });
-                *state = ResourceTransferState::Responding(network);
+                *state = ResourceTransferState::Responding {
+                    network,
+                    progress: 0,
+                    batches: 0,
+                };
             }
-            ResourceTransferState::Responding(_) => {
+            ResourceTransferState::Responding { .. } => {
                 panic!("one resource response head per consumer")
             }
             ResourceTransferState::Finished(_) => {}

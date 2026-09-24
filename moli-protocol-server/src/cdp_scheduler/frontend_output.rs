@@ -198,7 +198,7 @@ impl CdpScheduler {
         &self,
         router: &CdpFrontendRouter,
         output: ProtocolOutputSequence,
-    ) -> bool {
+    ) {
         let Some(tx) = &self.frontend_output_tx else {
             return router.enqueue_protocol_output_sequence(output);
         };
