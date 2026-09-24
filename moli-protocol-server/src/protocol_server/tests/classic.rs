@@ -739,7 +739,10 @@ async fn webdriver_classic_get_title_waits_for_script_triggered_form_navigation(
         Method::POST,
         &format!("/session/{session_id}/execute/sync"),
         json!({
-            "script": "document.querySelector('form').submit(); return 'submitted';",
+            // Form submission plans a later DOM task. Wait for that task to
+            // start navigation, while the slow HTTP response remains pending,
+            // so the title command exercises the in-flight navigation wait.
+            "script": "return new Promise(resolve => { navigation.addEventListener('navigate', () => resolve('submitted'), { once: true }); document.querySelector('form').submit(); });",
             "args": []
         }),
     )

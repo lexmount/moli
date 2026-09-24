@@ -252,7 +252,7 @@ fn dispatch_form_data_event<'s>(
     form_data: v8::Local<'s, v8::Object>,
 ) {
     let Ok((runtime_ptr, form_handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, form)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, form)
     else {
         return;
     };

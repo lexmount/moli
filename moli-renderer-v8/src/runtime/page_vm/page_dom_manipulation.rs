@@ -63,6 +63,9 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::ConnectedStyleEvent)
                 }),
+            RendererPageDomManipulationTask::FormNavigation(task) => self
+                .apply_selected_page_form_navigation_turn(task)
+                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::FormNavigation)),
             RendererPageDomManipulationTask::TextTrackDefaultMode(task) => self
                 .apply_selected_page_text_track_default_mode_turn(task)
                 .map(|outcome| {

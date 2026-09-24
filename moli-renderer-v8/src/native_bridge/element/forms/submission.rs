@@ -1,9 +1,6 @@
 use super::*;
 use crate::blob;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
-use crate::native_bridge::element::activation::{
-    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-};
 use crate::native_bridge::element::{
     NodePublicEventDispatchOutcome, TextEditInputType, activate_default_submit_button_via_keyboard,
     dispatch_beforeinput,
@@ -189,10 +186,8 @@ fn wrap_handle_object<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
+    wrap_handle_value(scope, runtime_ptr, Some(handle))
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 pub(crate) fn submit_form_with_submit_event(
@@ -475,7 +470,9 @@ pub(in crate::native_bridge) fn form_submit_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, form_handle)) =
+        node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         crate::native_bridge::document::detached_form_submit_callback(scope, args, rv);
         return;
     };
@@ -618,143 +615,46 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         return false;
     }
 
-    let special_target = target_name
-        .as_deref()
-        .and_then(SpecialBrowsingContextTarget::parse);
-    match target_name.as_deref() {
-        Some(target_name) if special_target.is_none() => {
-            let target_handle = named_iframe_target_handle_for_navigation(
-                scope,
-                runtime_ptr,
-                target_name,
-                source_document,
-            );
-            if let Some(target_handle) = target_handle {
-                let runtime = unsafe { &mut *runtime_ptr };
-                if submitter.is_some() {
-                    runtime.cancel_pending_form_submission_child_navigations_for_form(form_handle);
-                } else {
-                    runtime.cancel_previous_pending_form_submission_child_navigation(
-                        form_handle,
-                        target_handle,
-                    );
-                }
-            }
-            match request {
-                FormSubmissionMethod::Get { resolved_url } => {
-                    let navigated = queue_deferred_named_iframe_target_navigation_from_document(
-                        scope,
-                        runtime_ptr,
-                        target_name,
-                        &resolved_url,
-                        source_document,
-                        None,
-                    );
-                    if let Some(target_handle) = navigated {
-                        unsafe { &mut *runtime_ptr }.mark_pending_form_submission_child_navigation(
-                            form_handle,
-                            target_handle,
-                        );
-                    }
-                    navigated.is_some()
-                }
-                FormSubmissionMethod::Post {
-                    resolved_url,
-                    body,
-                    content_type,
-                    form_data_entries,
-                } => {
-                    let Some(target_handle) = target_handle else {
-                        return false;
-                    };
-                    let history = crate::context_bootstrap::FormNavigationHistory::capture(
-                        scope,
-                        unsafe { &mut *runtime_ptr },
-                        source_document,
-                        Some(target_handle),
-                        &resolved_url,
-                        None,
-                    );
-                    if !dispatch_named_iframe_form_navigation_event(
-                        scope,
-                        runtime_ptr,
-                        target_handle,
-                        form_handle,
-                        submitter,
-                        resolved_url.as_str(),
-                        &form_data_entries,
-                        history.mutation.navigation_type(),
-                    ) {
-                        return true;
-                    }
-                    let navigated = queue_deferred_named_iframe_target_request(
-                        runtime_ptr,
-                        target_handle,
-                        ChildBrowsingContextNavigationRequest {
-                            url: resolved_url,
-                            method: "POST".to_owned(),
-                            body: Some(body),
-                            request_headers: vec![(
-                                "Content-Type".to_owned(),
-                                content_type.to_owned(),
-                            )],
-                        },
-                        history,
-                    );
-                    if let Some(target_handle) = navigated {
-                        unsafe { &mut *runtime_ptr }.mark_pending_form_submission_child_navigation(
-                            form_handle,
-                            target_handle,
-                        );
-                    }
-                    navigated.is_some()
-                }
-            }
-        }
-        _ => match request {
-            FormSubmissionMethod::Get { resolved_url } => navigate_form_target_browsing_context(
-                scope,
-                runtime_ptr,
-                form_handle,
-                target_name.as_deref(),
-                &resolved_url,
-            ),
-            FormSubmissionMethod::Post {
-                resolved_url,
-                body,
-                content_type,
-                form_data_entries,
-            } => {
-                if (target_name.is_none()
-                    || special_target == Some(SpecialBrowsingContextTarget::Current))
-                    && submit_post_form_to_child_self_browsing_context(
-                        scope,
-                        runtime_ptr,
-                        form_handle,
-                        submitter,
-                        source_document,
-                        resolved_url.clone(),
-                        body.clone(),
-                        content_type.clone(),
-                        &form_data_entries,
-                    )
-                {
-                    return true;
-                }
-                submit_post_form_to_top_level_browsing_context(
-                    scope,
-                    runtime_ptr,
-                    form_handle,
-                    submitter,
-                    resolved_url,
-                    body,
-                    content_type,
-                    &form_data_entries,
-                    user_initiated,
-                )
-            }
-        },
+    let Some(destination) = super::super::activation::choose_form_navigation_target(
+        scope,
+        runtime_ptr,
+        form_handle,
+        target_name.as_deref(),
+        request.url(),
+    ) else {
+        return false;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let Some(source) =
+        source_document.and_then(|document| runtime.owner_dispatch_scope_for_node(document))
+    else {
+        return false;
+    };
+    if runtime.sandbox_blocks_ancestor_navigation(source, destination) {
+        return false;
     }
+    let mutation = runtime.form_navigation_history_mutation_for_scope(
+        source_document,
+        destination,
+        request.url(),
+        user_initiated,
+    );
+    let Some(source_element) =
+        wrap_handle_object(scope, runtime_ptr, submitter.unwrap_or(form_handle))
+    else {
+        return false;
+    };
+    let navigation = PlannedFormNavigation {
+        form: form_handle,
+        submitter,
+        source_document,
+        source_element: v8::Global::new(scope, source_element),
+        destination,
+        request,
+        mutation,
+        user_initiated,
+    };
+    unsafe { &mut *runtime_ptr }.queue_form_navigation_task(navigation)
 }
 
 fn submit_dialog_form(
@@ -802,9 +702,10 @@ fn dialog_submission_result(
     element.attribute("value").map(str::to_owned)
 }
 
-enum FormSubmissionMethod {
+#[derive(Debug)]
+pub(in crate::native_bridge) enum FormSubmissionMethod {
     Get {
-        resolved_url: String,
+        resolved_url: Url,
     },
     Post {
         resolved_url: Url,
@@ -814,151 +715,142 @@ enum FormSubmissionMethod {
     },
 }
 
-fn dispatch_named_iframe_form_navigation_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    target_iframe: DomHandle,
-    form_handle: DomHandle,
-    submitter: Option<DomHandle>,
-    resolved_url: &str,
-    form_data_entries: &[(String, v8::Global<v8::Value>)],
-    navigation_type: &str,
-) -> bool {
-    let runtime = unsafe { &mut *runtime_ptr };
-    let Some(window) = runtime.existing_child_browsing_context_window_wrapper(scope, target_iframe)
-    else {
-        return true;
-    };
-    let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
-        return true;
-    };
-    let source_handle = submitter.unwrap_or(form_handle);
-    let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
-        scope,
-        window,
-        resolved_url,
-        navigation_type,
-        source_element,
-        false,
-        None,
-        Some(form_data),
-    )
+impl FormSubmissionMethod {
+    fn url(&self) -> &Url {
+        match self {
+            Self::Get { resolved_url } | Self::Post { resolved_url, .. } => resolved_url,
+        }
+    }
 }
 
-fn submit_post_form_to_top_level_browsing_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    form_handle: DomHandle,
-    submitter: Option<DomHandle>,
-    resolved_url: Url,
-    body: Vec<u8>,
-    content_type: String,
-    form_data_entries: &[(String, v8::Global<v8::Value>)],
+/// Values fixed by submission, before author code can mutate the form again.
+#[derive(Debug)]
+pub(in crate::native_bridge) struct PlannedFormNavigation {
+    pub(in crate::native_bridge) form: DomHandle,
+    pub(in crate::native_bridge) submitter: Option<DomHandle>,
+    pub(in crate::native_bridge) destination: crate::native_bridge::OwnerDispatchScope,
+    pub(in crate::native_bridge) source_document: Option<DomHandle>,
+    source_element: v8::Global<v8::Object>,
+    request: FormSubmissionMethod,
+    mutation: moli_page_types::NavigationHistoryMutation,
     user_initiated: bool,
-) -> bool {
-    let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
-        return false;
-    };
-    let source_handle = submitter.unwrap_or(form_handle);
-    let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    let runtime = unsafe { &mut *runtime_ptr };
-    let source_document = runtime.dom_host().owner_document_handle(form_handle);
-    // Keep an input-initiated POST on its existing explicit push path.
-    // Ambient activation does not turn form.submit() into an input submission.
-    let history = crate::context_bootstrap::FormNavigationHistory::capture(
-        scope,
-        runtime,
-        source_document,
-        None,
-        &resolved_url,
-        user_initiated.then_some(moli_page_types::NavigationHistoryMutation::Push),
-    );
-    if !crate::context_bootstrap::dispatch_top_level_form_navigation_event(
-        scope,
-        resolved_url.as_str(),
-        history.mutation.navigation_type(),
-        source_element,
-        user_initiated,
-        form_data,
-    ) {
-        return true;
-    }
-    unsafe { &mut *runtime_ptr }.record_pending_location_navigation_request(
-        resolved_url,
-        "POST".to_owned(),
-        Some(body),
-        vec![("Content-Type".to_owned(), content_type)],
-        history.entry_seed,
-        moli_fetch::BrowserNavigationRequestKind::Navigate,
-    );
-    true
 }
 
-fn submit_post_form_to_child_self_browsing_context(
+impl PlannedFormNavigation {
+    pub(in crate::native_bridge) fn is_javascript_url(&self) -> bool {
+        self.request.url().scheme() == "javascript"
+    }
+}
+
+pub(in crate::native_bridge) fn apply_planned_form_navigation(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    form_handle: DomHandle,
-    submitter: Option<DomHandle>,
-    source_document: Option<DomHandle>,
-    resolved_url: Url,
-    body: Vec<u8>,
-    content_type: String,
-    form_data_entries: &[(String, v8::Global<v8::Value>)],
+    navigation: PlannedFormNavigation,
+    fire_navigate_event: bool,
 ) -> bool {
-    let Some(source_document) = source_document else {
-        return false;
-    };
-    let Some(child_handle) = ({
-        let runtime = unsafe { &mut *runtime_ptr };
-        if source_document == runtime.document_handle() {
-            None
-        } else {
-            runtime.child_browsing_context_host_for_document_handle(source_document)
+    use crate::native_bridge::OwnerDispatchScope;
+    let runtime = unsafe { &mut *runtime_ptr };
+    let window = match navigation.destination {
+        OwnerDispatchScope::Top => runtime
+            .page_default_context(scope)
+            .map(|context| context.global(scope)),
+        OwnerDispatchScope::Child(handle) => {
+            runtime.existing_child_browsing_context_window_wrapper(scope, handle)
         }
-    }) else {
-        return false;
+        OwnerDispatchScope::LightweightPopup(id) => runtime.lightweight_popup_window(scope, id),
     };
-    let history = crate::context_bootstrap::FormNavigationHistory::capture(
-        scope,
-        unsafe { &mut *runtime_ptr },
-        Some(source_document),
-        Some(child_handle),
-        &resolved_url,
-        None,
-    );
-    if let Some(window) = unsafe { &mut *runtime_ptr }
-        .existing_child_browsing_context_window_wrapper(scope, child_handle)
-    {
-        let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
-            return false;
-        };
-        let source_handle = submitter.unwrap_or(form_handle);
-        let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-        if !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
-            scope,
-            window,
-            resolved_url.as_str(),
-            history.mutation.navigation_type(),
-            source_element,
-            false,
-            None,
-            Some(form_data),
+    let form_data = match &navigation.request {
+        FormSubmissionMethod::Get { .. } => None,
+        FormSubmissionMethod::Post {
+            form_data_entries, ..
+        } => form_data_object_from_entries(scope, form_data_entries),
+    };
+    let source_element = v8::Local::new(scope, &navigation.source_element);
+    if fire_navigate_event && let Some(window) = window
+        && !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
+            scope, window, navigation.request.url().as_str(), navigation.mutation.navigation_type(),
+            Some(source_element), navigation.user_initiated, None, form_data,
         ) {
-            return true;
-        }
+        return true;
     }
-    unsafe { &mut *runtime_ptr }.queue_deferred_child_form_navigation_request(
-        child_handle,
-        ChildBrowsingContextNavigationRequest {
+    let request = match navigation.request {
+        FormSubmissionMethod::Get { resolved_url } => ChildBrowsingContextNavigationRequest {
+            url: resolved_url,
+            method: "GET".to_owned(),
+            body: None,
+            request_headers: Vec::new(),
+        },
+        FormSubmissionMethod::Post {
+            resolved_url,
+            body,
+            content_type,
+            ..
+        } => ChildBrowsingContextNavigationRequest {
             url: resolved_url,
             method: "POST".to_owned(),
             body: Some(body),
             request_headers: vec![("Content-Type".to_owned(), content_type)],
         },
-        history.entry_seed,
-        history.mutation,
-    )
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let target_child = match navigation.destination {
+        OwnerDispatchScope::Child(handle) => Some(handle),
+        _ => None,
+    };
+    match navigation.destination {
+        OwnerDispatchScope::LightweightPopup(id) => runtime
+            .navigate_lightweight_popup_window_with_request(
+                scope,
+                id,
+                request,
+                if navigation.mutation == moli_page_types::NavigationHistoryMutation::Replace {
+                    crate::context_bootstrap::LocationNavigationKind::Replace
+                } else {
+                    crate::context_bootstrap::LocationNavigationKind::Assign
+                },
+            ),
+        OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => {
+            // History handling is fixed at submission; the actual history is
+            // read when navigation begins, after the task's preceding work.
+            let context = if target_child.is_none() {
+                runtime.page_default_context(scope)
+            } else {
+                None
+            };
+            let context = context.unwrap_or_else(|| scope.get_current_context());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let history = crate::context_bootstrap::FormNavigationHistory::capture(
+                scope,
+                runtime,
+                navigation.source_document,
+                target_child,
+                &request.url,
+                Some(navigation.mutation),
+            );
+            if let Some(handle) = target_child {
+                let navigated = runtime.queue_deferred_child_form_navigation_request(
+                    handle,
+                    request,
+                    history.entry_seed,
+                    history.mutation,
+                );
+                if navigated {
+                    runtime.mark_pending_form_submission_child_navigation(navigation.form, handle);
+                }
+                navigated
+            } else {
+                runtime.record_pending_location_navigation_request(
+                    request.url,
+                    request.method,
+                    request.body,
+                    request.request_headers,
+                    history.entry_seed,
+                    moli_fetch::BrowserNavigationRequestKind::Navigate,
+                );
+                true
+            }
+        }
+    }
 }
 
 fn build_form_submission_request(
@@ -1017,9 +909,7 @@ fn build_form_submission_request(
         submission_encoding,
     );
     resolved_url.set_query(Some(&query));
-    Some(FormSubmissionMethod::Get {
-        resolved_url: resolved_url.to_string(),
-    })
+    Some(FormSubmissionMethod::Get { resolved_url })
 }
 
 fn serialize_form_submission_entries(

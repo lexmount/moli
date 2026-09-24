@@ -2031,11 +2031,13 @@ fn abort_signal_internal_id_is_not_page_visible_or_forgeable() {
     );
 }
 
-#[test]
-fn detached_form_post_submission_uses_request_body_not_query() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn detached_form_post_submission_uses_request_body_not_query() {
+    let loader = static_http_loader([]);
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://detached-form-post.test/page.html",
         r#"<iframe id="frame"></iframe>"#,
+        &loader,
     );
 
     vm.eval(
@@ -2057,6 +2059,14 @@ fn detached_form_post_submission_uses_request_body_not_query() {
 "#,
     )
     .expect("detached POST form submit should evaluate");
+
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
 
     let handle = vm
         ._context_host
@@ -2087,9 +2097,10 @@ fn detached_form_post_submission_uses_request_body_not_query() {
     );
 }
 
-#[test]
-fn top_level_form_post_submission_queues_navigation_request() {
-    let mut vm = new_storage_test_vm("https://top-level-form-post.test/page.html");
+#[tokio::test]
+async fn top_level_form_post_submission_queues_navigation_request() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://top-level-form-post.test/page.html");
 
     vm.eval(
         r#"
@@ -2107,6 +2118,14 @@ fn top_level_form_post_submission_queues_navigation_request() {
 "#,
     )
     .expect("top-level POST form submit should evaluate");
+
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
 
     let pending = vm
         .take_pending_location_navigation_with_seed()
@@ -2126,9 +2145,10 @@ fn top_level_form_post_submission_queues_navigation_request() {
     );
 }
 
-#[test]
-fn prevented_top_level_form_post_does_not_queue_navigation_request() {
-    let mut vm = new_storage_test_vm("https://prevented-form-post.test/page.html");
+#[tokio::test]
+async fn prevented_top_level_form_post_does_not_queue_navigation_request() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://prevented-form-post.test/page.html");
 
     let result = vm
         .eval(
@@ -2152,6 +2172,14 @@ fn prevented_top_level_form_post_does_not_queue_navigation_request() {
         )
         .expect("prevented top-level POST form submit should evaluate");
 
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+
     assert_eq!(result, "prevented");
     assert!(
         vm.take_pending_location_navigation_with_seed().is_none(),
@@ -2159,11 +2187,13 @@ fn prevented_top_level_form_post_does_not_queue_navigation_request() {
     );
 }
 
-#[test]
-fn detached_form_submission_uses_document_encoding_for_urlencoded_body() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn detached_form_submission_uses_document_encoding_for_urlencoded_body() {
+    let loader = static_http_loader([]);
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://detached-form-gbk-post.test/page.html",
         r#"<iframe id="frame"></iframe>"#,
+        &loader,
     );
     vm.document_runtime.set_document_character_set("GBK");
 
@@ -2198,6 +2228,14 @@ fn detached_form_submission_uses_document_encoding_for_urlencoded_body() {
     )
     .expect("detached GBK POST form submit should evaluate");
 
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+
     let handle = vm
         ._context_host
         .borrow()
@@ -2217,9 +2255,10 @@ fn detached_form_submission_uses_document_encoding_for_urlencoded_body() {
         Some(&b"_charset_=GBK&_CHARSET_=GBK&q=%BC%D2%BE%D3"[..])
     );
 }
-#[test]
-fn form_submission_rewrites_charset_control_from_accept_charset() {
-    let mut vm = new_storage_test_vm("https://form-charset-submit.test/page.html");
+#[tokio::test]
+async fn form_submission_rewrites_charset_control_from_accept_charset() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://form-charset-submit.test/page.html");
 
     vm.eval(
         r#"
@@ -2257,6 +2296,14 @@ fn form_submission_rewrites_charset_control_from_accept_charset() {
 "#,
     )
     .expect("charset form submission should evaluate");
+
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
 
     let handle = vm
         ._context_host
@@ -2301,9 +2348,9 @@ fn form_submission_rewrites_charset_control_from_accept_charset() {
         .expect("FormData uppercase charset value should evaluate");
     assert_eq!(upper_form_data_value, "UTF-8");
 }
-#[test]
-fn form_get_submission_uses_document_encoding_for_query() {
-    let mut vm = new_storage_test_vm("https://form-gbk-submit.test/page.html");
+#[tokio::test]
+async fn form_get_submission_uses_document_encoding_for_query() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://form-gbk-submit.test/page.html");
     vm.document_runtime.set_document_character_set("GBK");
 
     vm.eval(
@@ -2340,6 +2387,14 @@ fn form_get_submission_uses_document_encoding_for_query() {
     )
     .expect("GBK GET form submission should evaluate");
 
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+
     let handle = vm
         ._context_host
         .borrow()
@@ -2359,9 +2414,9 @@ fn form_get_submission_uses_document_encoding_for_query() {
         "https://form-gbk-submit.test/search?_charset_=GBK&q=%BC%D2%BE%D3"
     );
 }
-#[test]
-fn form_post_submission_uses_document_encoding_for_urlencoded_body() {
-    let mut vm = new_storage_test_vm("https://form-gbk-post.test/page.html");
+#[tokio::test]
+async fn form_post_submission_uses_document_encoding_for_urlencoded_body() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://form-gbk-post.test/page.html");
     vm.document_runtime.set_document_character_set("GBK");
 
     vm.eval(
@@ -2393,6 +2448,14 @@ fn form_post_submission_uses_document_encoding_for_urlencoded_body() {
 "#,
     )
     .expect("GBK POST form submission should evaluate");
+
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
 
     let handle = vm
         ._context_host
@@ -2459,6 +2522,13 @@ async fn iso_2022_jp_get_form_data_url_target_posts_stateful_values() {
 "#,
     )
     .expect("ISO-2022-JP data URL form submission should queue");
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
 
     let handle = vm
         ._context_host
@@ -2541,9 +2611,10 @@ fn url_like_href_resolution_does_not_legacy_encode_fragment_question_mark() {
     );
 }
 
-#[test]
-fn form_submission_returns_while_constructing_entry_list() {
-    let mut vm = new_storage_test_vm("https://form-entry-list-reentrant.test/page.html");
+#[tokio::test]
+async fn form_submission_returns_while_constructing_entry_list() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://form-entry-list-reentrant.test/page.html");
 
     let result = vm
         .eval(
@@ -2585,6 +2656,13 @@ fn form_submission_returns_while_constructing_entry_list() {
     assert_eq!(
         result,
         r#"{"outcomes":["returned","returned"],"submitEvents":0}"#
+    );
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
     );
     assert_eq!(
         vm.take_pending_location_navigation_with_seed()
@@ -3762,9 +3840,11 @@ fn nested_form_submit_and_reset_stop_before_ancestor_form_bubble_listeners() {
     );
 }
 
-#[test]
-fn child_button_activation_self_submit_dispatches_iframe_load() {
-    let mut vm = new_storage_test_vm("https://button-child-self-submit.test/path/page.html");
+#[tokio::test]
+async fn child_button_activation_self_submit_dispatches_iframe_load() {
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://button-child-self-submit.test/path/page.html",
+    );
 
     vm.eval(
         r#"
@@ -3781,7 +3861,9 @@ fn child_button_activation_self_submit_dispatches_iframe_load() {
 "#,
     )
     .expect("child button self-submit setup should evaluate");
-    vm.drain_pending_child_frame_work_for_test();
+    vm.drain_ready_page_task_executor_turns_for_setup(&static_http_loader([]), 100)
+        .await
+        .unwrap();
 
     vm.eval(
         r#"
@@ -3795,6 +3877,13 @@ fn child_button_activation_self_submit_dispatches_iframe_load() {
 "#,
     )
     .expect("child button self-submit click should evaluate");
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
     let handle = vm
         ._context_host
         .borrow()
@@ -3809,7 +3898,9 @@ fn child_button_activation_self_submit_dispatches_iframe_load() {
         panic!("child self-submit should use URL navigation, got {pending:?}");
     };
     assert_eq!(url.as_str(), "about:blank?");
-    vm.drain_pending_child_frame_work_for_test();
+    vm.drain_ready_page_task_executor_turns_for_setup(&static_http_loader([]), 100)
+        .await
+        .unwrap();
 
     assert_eq!(
         vm.eval("__childButtonSelfSubmitLoads.join('|')")
@@ -5067,11 +5158,13 @@ root.appendChild(label);
     assert_eq!(checked, "true");
 }
 
-#[test]
-fn submit_button_click_queues_pending_top_level_location_navigation() {
+#[tokio::test]
+async fn submit_button_click_queues_pending_top_level_location_navigation() {
     for target in ["", "_self", "_SeLf"] {
         for activated in [false, true] {
-            let mut vm = new_storage_test_vm("https://form-submit-navigation.test/path/index.html");
+            let mut vm = new_storage_page_task_executor_test_vm(
+                "https://form-submit-navigation.test/path/index.html",
+            );
 
             vm.eval(&format!("globalThis.targetKeyword = {target:?}"))
                 .expect("target keyword should be set");
@@ -5112,6 +5205,13 @@ fn submit_button_click_queues_pending_top_level_location_navigation() {
                     .borrow_mut()
                     .end_protocol_user_gesture_activation();
             }
+            assert!(
+                vm.run_one_dom_manipulation_body_for_test(
+                    crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                )
+                .await
+                .unwrap()
+            );
             let pending = vm
                 .take_pending_location_navigation_with_seed()
                 .expect("submit button click should queue a pending location navigation");
@@ -5139,9 +5239,10 @@ fn submit_button_click_queues_pending_top_level_location_navigation() {
     }
 }
 
-#[test]
-fn enter_implicitly_submits_single_search_input_without_a_submit_button() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn enter_implicitly_submits_single_search_input_without_a_submit_button() {
+    let loader = static_http_loader([]);
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://implicit-search-submit.test/",
         r#"<html><body>
             <form action="/search">
@@ -5149,6 +5250,7 @@ fn enter_implicitly_submits_single_search_input_without_a_submit_button() {
               <input id="query" name="q" type="search" value="Nvidia RTX 4090">
             </form>
         </body></html>"#,
+        &loader,
     );
     vm.eval(
         r#"
@@ -5166,11 +5268,18 @@ document.getElementById('query').focus();
         .expect("Enter keydown should dispatch");
 
     assert!(outcome.handled);
-    assert!(outcome.triggered_top_level_navigation);
+    assert!(!outcome.triggered_top_level_navigation);
     assert_eq!(
         vm.eval("String(window.__submitterWasNull)")
             .expect("submitter state should evaluate"),
         "true"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
     );
     let pending = vm
         .take_pending_location_navigation_with_seed()
@@ -5181,9 +5290,10 @@ document.getElementById('query').focus();
     );
 }
 
-#[test]
-fn enter_implicitly_clicks_the_default_submit_button() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn enter_implicitly_clicks_the_default_submit_button() {
+    let loader = static_http_loader([]);
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://implicit-default-button.test/",
         r#"<html><body>
             <form action="/search">
@@ -5191,6 +5301,7 @@ fn enter_implicitly_clicks_the_default_submit_button() {
               <button id="submitter" type="submit" name="source" value="header">Search</button>
             </form>
         </body></html>"#,
+        &loader,
     );
     vm.eval(
         r#"
@@ -5212,11 +5323,18 @@ document.getElementById('query').focus();
         .expect("Enter keydown should dispatch");
 
     assert!(outcome.handled);
-    assert!(outcome.triggered_top_level_navigation);
+    assert!(!outcome.triggered_top_level_navigation);
     assert_eq!(
         vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
             .expect("implicit activation events should evaluate"),
         "click:0|submit:true|focus:query"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
     );
     let pending = vm
         .take_pending_location_navigation_with_seed()
@@ -5370,15 +5488,17 @@ document.getElementById('query').focus();
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
 }
 
-#[test]
-fn image_input_is_the_default_submit_button_and_serializes_click_coordinates() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test]
+async fn image_input_is_the_default_submit_button_and_serializes_click_coordinates() {
+    let loader = static_http_loader([]);
+    let mut vm = new_parsed_page_task_executor_test_vm(
         "https://implicit-image-default.test/",
         r#"<html><body><form action="/search">
             <input id="query" name="q" type="search" value="moli">
             <input id="image" name="photo" type="image" style="width:20px;height:20px">
             <button id="second" name="wrong" value="yes" type="submit">Second</button>
         </form></body></html>"#,
+        &loader,
     );
     vm.eval(
         r#"
@@ -5398,11 +5518,18 @@ document.getElementById('query').focus();
         .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
         .expect("Enter keydown should dispatch");
 
-    assert!(outcome.triggered_top_level_navigation);
+    assert!(!outcome.triggered_top_level_navigation);
     assert_eq!(
         vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
             .expect("image default state should evaluate"),
         "click:image:0:true|submit:image|focus:query"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
     );
     let pending = vm
         .take_pending_location_navigation_with_seed()
@@ -5780,9 +5907,10 @@ document.getElementById('editor').focus();
     }
 }
 
-#[test]
-fn empty_get_form_submit_replaces_existing_action_query() {
-    let mut vm = new_storage_test_vm("https://form-empty-get.test/path/index.html");
+#[tokio::test]
+async fn empty_get_form_submit_replaces_existing_action_query() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://form-empty-get.test/path/index.html");
 
     vm.eval(
         r#"
@@ -5803,15 +5931,24 @@ fn empty_get_form_submit_replaces_existing_action_query() {
     )
     .expect("empty GET form submit should execute");
 
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+
     let pending = vm
         .take_pending_location_navigation_with_seed()
         .expect("empty GET form submit should queue a pending location navigation");
     assert_eq!(pending.url.as_str(), "https://form-empty-get.test/submit?");
 }
 
-#[test]
-fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
-    let mut vm = new_storage_test_vm("https://textarea-hard-wrap.test/path/index.html");
+#[tokio::test]
+async fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://textarea-hard-wrap.test/path/index.html");
 
     let form_data_values = vm
         .eval(
@@ -5854,6 +5991,14 @@ fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
         "false|hello w<LF>orld|hello w<LF>orld|hello world|hello world|ab<LF>cde<LF>f"
     );
 
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+
     let pending = vm
         .take_pending_location_navigation_with_seed()
         .expect("textarea GET submission should queue a pending navigation");
@@ -5881,9 +6026,10 @@ fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
     );
 }
 
-#[test]
-fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
-    let mut vm = new_storage_test_vm("https://form-get-navigate.test/path/index.html");
+#[tokio::test]
+async fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://form-get-navigate.test/path/index.html");
 
     let result = vm
         .eval(
@@ -5898,7 +6044,8 @@ fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
   const form = document.createElement('form');
   form.action = '';
   document.body.appendChild(form);
-  let seen = [];
+  globalThis.getFormNavigateEvents = [];
+  const seen = getFormNavigateEvents;
   navigation.onnavigate = event => {
     seen.push([
       event.navigationType,
@@ -5918,8 +6065,16 @@ fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
         )
         .expect("GET form submit navigate event probe should evaluate");
 
+    assert_eq!(result, "");
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(
-        result,
+        vm.eval("getFormNavigateEvents.join(',')").unwrap(),
         "replace|true|true|false|true|true|https://form-get-navigate.test/path/index.html?"
     );
     assert!(
@@ -5927,10 +6082,12 @@ fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
         "prevented GET form navigate event should not queue a location navigation"
     );
 }
-#[test]
-fn form_top_and_parent_targets_queue_plain_top_level_navigation() {
+#[tokio::test]
+async fn form_top_and_parent_targets_preserve_completed_document_history() {
     for target in ["_top", "_parent", "_ToP", "_PaReNt"] {
-        let mut vm = new_storage_test_vm("https://form-target-navigation.test/path/index.html");
+        let mut vm = new_storage_page_task_executor_test_vm(
+            "https://form-target-navigation.test/path/index.html",
+        );
 
         vm.eval(&format!(
             r#"
@@ -5958,6 +6115,13 @@ fn form_top_and_parent_targets_queue_plain_top_level_navigation() {
 "#
         ))
         .expect("submit button click should execute");
+        assert!(
+            vm.run_one_dom_manipulation_body_for_test(
+                crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+            )
+            .await
+            .unwrap()
+        );
 
         let pending = vm
             .take_pending_location_navigation_with_seed()
@@ -5966,9 +6130,13 @@ fn form_top_and_parent_targets_queue_plain_top_level_navigation() {
             pending.url.as_str(),
             format!("https://form-target-navigation.test/submit?target={target}")
         );
-        assert!(
-            pending.entry_seed.is_none(),
-            "{target} form submission should not synthesize a history seed"
+        let seed = pending
+            .entry_seed
+            .expect("form navigation captures history handling");
+        assert_eq!(
+            seed.entries.len(),
+            2,
+            "{target} submission preserves the completed source document"
         );
     }
 }

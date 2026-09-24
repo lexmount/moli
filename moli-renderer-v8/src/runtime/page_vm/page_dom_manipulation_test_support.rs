@@ -25,6 +25,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     ImageLoadEvent,
     PopupDocumentLifecycle,
     ConnectedStyleEvent,
+    FormNavigation,
     TextTrackDefaultMode,
     TextTrackLoad,
     ViewTransitionUpdate,
@@ -67,6 +68,9 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::ConnectedStyleEvent,
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(_)
+            ) | (
+                Self::FormNavigation,
+                RendererPageDomManipulationOwner::FormNavigation(_)
             ) | (
                 Self::TextTrackDefaultMode,
                 RendererPageDomManipulationOwner::TextTrackDefaultMode(_)

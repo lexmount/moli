@@ -1,6 +1,287 @@
 use super::*;
 
 #[tokio::test]
+async fn cross_origin_planned_form_navigation_does_not_expose_source_to_target() {
+    for method in ["get", "post"] {
+        let server = StaticHttpServer::spawn_with_bodies(vec![
+            r#"<!doctype html><script>
+                navigation.onnavigate = event => {
+                    parent.postMessage('unexpected-navigate', '*');
+                    event.preventDefault();
+                };
+                parent.postMessage('ready', '*');
+            </script>"#
+                .to_owned(),
+            "<!doctype html><script>parent.postMessage('submitted', '*')</script>".to_owned(),
+        ])
+        .await;
+        let base = server.base_url().origin().ascii_serialization();
+        let source = base.replace("127.0.0.1", "localhost");
+        let loader = static_http_loader([]);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("{source}/parent"),
+            &loader,
+        );
+        vm.eval(&format!(
+            r#"
+            globalThis.formMessages = [];
+            onmessage = event => formMessages.push(event.data);
+            const frame = document.createElement('iframe');
+            frame.name = 'form-target';
+            frame.src = {base:?} + '/initial';
+            document.body.appendChild(frame);
+        "#
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "formMessages.join(',')",
+            "ready",
+            "cross-origin form target",
+        )
+        .await;
+        vm.eval(&format!(
+            r#"
+            const form = document.createElement('form');
+            form.target = 'form-target';
+            form.method = {method:?};
+            form.action = {base:?} + '/submitted';
+            form.innerHTML = '<input name="secret" value="source-only">';
+            document.body.appendChild(form);
+            form.submit();
+        "#
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "formMessages.join(',')",
+            "ready,submitted",
+            "cross-origin form commit",
+        )
+        .await;
+        assert_eq!(server.finish().await[1].method, method.to_ascii_uppercase());
+    }
+}
+
+#[tokio::test]
+async fn planned_form_navigation_preserves_ancestor_sandbox_restrictions() {
+    for target in ["_self", "_parent", "_top"] {
+        for allow_top in [false, true] {
+            let loader = static_http_loader([]);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://form-sandbox.test/parent",
+                &loader,
+            );
+            let sandbox = if allow_top {
+                "allow-scripts allow-same-origin allow-forms allow-top-navigation"
+            } else {
+                "allow-scripts allow-same-origin allow-forms"
+            };
+            vm.eval(&format!(
+                r#"
+                globalThis.frame = document.createElement('iframe');
+                frame.sandbox = {sandbox:?};
+                frame.srcdoc = '<form action="https://form-sandbox.test/submitted"></form>';
+                document.body.appendChild(frame);
+            "#
+            ))
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(&mut vm, &loader,
+                "String(frame.contentDocument.readyState === 'complete' && !!frame.contentDocument.querySelector('form'))",
+                "true", "sandbox form source").await;
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                .await
+                .unwrap();
+            vm.eval(&format!(
+                r#"
+                globalThis.formNavigations = 0;
+                for (const owner of [window, frame.contentWindow]) {{
+                    owner.navigation.onnavigate = event => {{
+                        ++formNavigations;
+                        event.preventDefault();
+                    }};
+                }}
+                const form = frame.contentDocument.querySelector('form');
+                form.target = {target:?};
+                form.submit();
+            "#
+            ))
+            .unwrap();
+            let allowed = target == "_self" || allow_top;
+            assert_eq!(
+                vm.has_ready_dom_manipulation_family_for_test(
+                    crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                ),
+                allowed,
+                "{target}, allow_top={allow_top}"
+            );
+            if allowed {
+                assert!(
+                    vm.run_one_dom_manipulation_body_for_test(
+                        crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                    )
+                    .await
+                    .unwrap()
+                );
+            }
+            assert_eq!(
+                vm.eval("formNavigations").unwrap(),
+                if allowed { "1" } else { "0" }
+            );
+            assert!(vm.take_pending_location_navigation_with_seed().is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn window_stop_cancels_a_planned_form_navigation_before_its_event() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://form-stop.test/parent");
+    vm.eval(
+        r#"
+        const form = document.createElement('form');
+        form.action = '/submitted';
+        document.body.appendChild(form);
+        globalThis.formNavigations = 0;
+        navigation.onnavigate = () => ++formNavigations;
+        form.submit();
+        window.stop();
+    "#,
+    )
+    .unwrap();
+    assert!(!vm.has_ready_dom_manipulation_family_for_test(
+        crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+    ));
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    assert_eq!(vm.eval("formNavigations").unwrap(), "0");
+}
+
+#[tokio::test]
+async fn planned_top_level_form_navigation_replaces_earlier_location_request() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://form-order.test/parent");
+    vm.eval(
+        r#"
+        const form = document.createElement('form');
+        form.action = '/submitted';
+        document.body.appendChild(form);
+        location.href = '/superseded';
+        form.submit();
+    "#,
+    )
+    .unwrap();
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    assert!(
+        vm.run_one_dom_manipulation_body_for_test(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .unwrap()
+            .url
+            .as_str(),
+        "https://form-order.test/submitted?"
+    );
+}
+
+#[tokio::test]
+async fn planned_popup_form_navigation_sends_the_captured_post_request() {
+    let server = StaticHttpServer::spawn(2).await;
+    let base = server.base_url().origin().ascii_serialization();
+    let loader = static_http_loader([]);
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+    vm.eval(&format!(
+        "globalThis.popup = window.open({base:?} + '/initial', 'form-popup');"
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(&mut vm, &loader,
+        "String(popup.document.URL.endsWith('/initial') && popup.document.readyState === 'complete')",
+        "true", "initial form target").await;
+    vm.eval(
+        r#"
+      const form = document.createElement('form');
+      form.target = 'form-popup';
+      form.action = '/submitted?existing=1';
+      form.method = 'post';
+      form.innerHTML = '<input name="value" value="a b+c">';
+      document.body.appendChild(form);
+      form.submit();
+      form.method = 'get';
+      form.action = '/wrong';
+      form.querySelector('input').value = 'wrong';
+    "#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(&mut vm, &loader,
+        "String(popup.document.URL.endsWith('/submitted?existing=1') && popup.document.readyState === 'complete')",
+        "true", "planned POST popup target").await;
+    let requests = server.finish().await;
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].target, "/submitted?existing=1");
+    assert_eq!(requests[1].body, b"value=a+b%2Bc");
+    assert_eq!(
+        requests[1].header_value("Content-Type"),
+        Some("application/x-www-form-urlencoded")
+    );
+}
+
+#[tokio::test]
+async fn form_navigation_tasks_preserve_submission_values_and_event_order() {
+    let script = include_str!("../../../../tests/fixtures/form-planned-navigation.js");
+    for target in ["top", "child", "named", "popup"] {
+        for method in ["get", "post"] {
+            for scenario in [
+                "snapshot",
+                "same-url",
+                "double",
+                "different-forms",
+                "submit",
+                "reentrant",
+            ] {
+                let requests = usize::from(target != "top");
+                let server = StaticHttpServer::spawn(requests).await;
+                let base = server.base_url().origin().ascii_serialization();
+                let loader = static_http_loader([]);
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                    &format!("{base}/parent"),
+                    &loader,
+                );
+                vm.eval(&format!(
+                    "{script}\nglobalThis.formResult = 'pending';\n\
+                     formPlannedNavigation({base:?}, {target:?}, {method:?}, {scenario:?}).then(\n\
+                     value => formResult = value, error => formResult = String(error));"
+                ))
+                .unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(formResult !== 'pending')",
+                    "true",
+                    &format!("{target} {method} {scenario}"),
+                )
+                .await;
+                let result: serde_json::Value =
+                    serde_json::from_str(&vm.eval("JSON.stringify(formResult)").unwrap()).unwrap();
+                assert_eq!(
+                    result["failures"],
+                    serde_json::json!([]),
+                    "{target} {method} {scenario}: {result}"
+                );
+                assert!(
+                    result["checks"].as_u64().is_some_and(|n| n >= 13),
+                    "{result}"
+                );
+                assert_eq!(server.finish_targets().await.len(), requests);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn reentrant_navigation_traversals_keep_request_identity_and_event_order() {
     let script = include_str!("../../../../tests/fixtures/navigation-reentrant-traversal.js");
     for target in ["top", "child", "popup"] {
@@ -2841,9 +3122,16 @@ fn same_document_navigation_fires_navigate_event_before_mutation() {
         r##"{"seen":{"type":"navigate","navigationType":"push","cancelable":true,"canIntercept":true,"hashChange":false,"destinationHash":"#blocked","destinationState":7,"destinationStateCloned":true,"destinationOwnSlots":[],"destinationStateAfterSpoof":7,"syntheticIntercept":"SecurityError:true:18"},"hash":"","state":null,"lengthUnchanged":true,"noInitThrows":true,"missingSignalThrows":true}"##
     );
 }
-#[test]
-fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
-    let mut vm = new_storage_test_vm("https://example.com/form-page");
+#[tokio::test]
+async fn canceled_post_form_navigation_aborts_signal_in_dom_task_without_synthetic_timer() {
+    let loader = static_http_loader([]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://example.com/form-page",
+        &loader,
+    );
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+        .await
+        .unwrap();
 
     let setup = vm
         .eval(
@@ -2888,6 +3176,7 @@ fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
                 ].join(":"));
               };
               form.requestSubmit();
+              form.requestSubmit();
               return __lmCanceledFormNavigationLog.join("|");
             })()
             "##,
@@ -2895,7 +3184,19 @@ fn canceled_post_form_navigation_aborts_signal_without_synthetic_timer() {
         .expect("canceled form navigation setup should evaluate");
 
     assert_eq!(
-        setup,
+        setup, "",
+        "form navigation waits for its DOM-manipulation task"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        vm.eval("__lmCanceledFormNavigationLog.join('|')").unwrap(),
         "navigate:replace:true:false:https://example.com/form-page|abort:AbortError:https://example.com/form-page|error:AbortError:https://example.com/form-page"
     );
     assert!(

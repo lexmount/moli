@@ -347,6 +347,7 @@ impl JsContextHost {
                 super::view_transition_updates::ViewTransitionUpdateState::default(),
             media_element_events: super::media_element_events::MediaElementEventState::default(),
             element_toggle_events: super::element_toggle_events::ElementToggleEventState::default(),
+            form_navigations: super::form_navigations::FormNavigationState::default(),
             text_track_default_modes:
                 super::text_track_default_modes::TextTrackDefaultModeState::default(),
             child_document_script_ready_tasks:
@@ -858,6 +859,18 @@ impl JsContextHost {
             )
             .dom_manipulation()
             .image_load_event()
+    }
+
+    pub(crate) fn page_form_navigation_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageFormNavigationSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before queuing planned form navigation work",
+            )
+            .dom_manipulation()
+            .form_navigation()
     }
 
     pub(crate) fn page_text_track_default_mode_sender(

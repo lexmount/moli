@@ -12,6 +12,7 @@ pub(super) struct CapturedHttpRequest {
     pub(super) host: Option<String>,
     pub(super) target: String,
     pub(super) headers: Vec<(String, String)>,
+    pub(super) body: Vec<u8>,
 }
 
 impl CapturedHttpRequest {
@@ -144,6 +145,7 @@ impl StaticHttpServer {
                     host,
                     target,
                     headers,
+                    body: request[header_end..header_end + content_length].to_vec(),
                 };
                 let body = response_body(index, &captured);
                 requests.push(captured);

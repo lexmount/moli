@@ -450,15 +450,15 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> Option<OwnerDispatchScope> {
-        if let Some(popup_id) = self.lightweight_popup_id_for_node_owner_document(handle) {
-            return Some(OwnerDispatchScope::LightweightPopup(popup_id));
-        }
         let node = self.dom_host().node(handle)?;
         let owner_document = if node.is_document() {
             handle
         } else {
             node.owner_document()?
         };
+        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(owner_document) {
+            return Some(OwnerDispatchScope::LightweightPopup(popup_id));
+        }
         if owner_document == self.document_handle() {
             return Some(OwnerDispatchScope::Top);
         }

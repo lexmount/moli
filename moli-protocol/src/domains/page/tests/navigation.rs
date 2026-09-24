@@ -3540,17 +3540,6 @@ async fn renderer_top_level_form_post_preserves_request_through_document_commit(
     let evaluation = take_response_by_id(&mut ctx, 20_202);
     assert_eq!(evaluation["result"]["result"]["value"], json!("submitted"));
 
-    let (content_type, request_body) =
-        tokio::time::timeout(std::time::Duration::from_secs(5), request_rx.recv())
-            .await
-            .expect("top-level POST should reach the loopback server")
-            .expect("top-level POST request channel should remain open");
-    assert_eq!(
-        content_type.as_deref(),
-        Some("application/x-www-form-urlencoded")
-    );
-    assert_eq!(request_body, b"a+b=c%2Bd");
-
     wait_until_message(
         &mut ctx,
         "SID-POST",
@@ -3562,6 +3551,18 @@ async fn renderer_top_level_form_post_preserves_request_through_document_commit(
         },
     )
     .await;
+
+    let (content_type, request_body) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), request_rx.recv())
+            .await
+            .expect("top-level POST should reach the loopback server")
+            .expect("top-level POST request channel should remain open");
+    assert_eq!(
+        content_type.as_deref(),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(request_body, b"a+b=c%2Bd");
+
     let post_request = ctx
         .sent
         .iter()

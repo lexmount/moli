@@ -1155,6 +1155,12 @@ impl PageVm {
         if self.vm().has_pending_location_navigation() {
             return Ok(PageVmFollowNavigationTurnOutcome::TriggeredNavigation { stage });
         }
+        if self
+            .vm()
+            .has_planned_form_navigation_to(crate::native_bridge::OwnerDispatchScope::Top)
+        {
+            return Ok(PageVmFollowNavigationTurnOutcome::Completed);
+        }
         if let Some(replacement_html) = replacement_html {
             self.document_lifecycle.set_next_document_open_start_reason(
                 RendererLifecycleStartReason::JavascriptDocumentReplacement,

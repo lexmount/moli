@@ -321,6 +321,25 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
+    /// Domain-payload tests may inspect a produced navigation request before
+    /// task-end reconciliation hands it off to the browser owner. This is not
+    /// a complete task turn and must not be used as ordering evidence.
+    pub(crate) async fn run_one_dom_manipulation_body_for_test(
+        &mut self,
+        family: super::PageDomManipulationTestFamily,
+    ) -> anyhow::Result<bool> {
+        let Some(task) = self
+            .page_vm
+            .take_dom_manipulation_body_task_for_test(family)
+        else {
+            return Ok(false);
+        };
+        self.selected_task_local_set
+            .run_until(self.page_vm.apply_selected_page_dom_manipulation_turn(task))
+            .await?;
+        Ok(true)
+    }
+
     pub(crate) async fn run_one_media_element_event_executor_turn(
         &mut self,
         loader: &ResourceRequestClient,

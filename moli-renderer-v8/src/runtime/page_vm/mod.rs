@@ -174,6 +174,8 @@ pub(crate) use page_selected_task_test_harness::{
 };
 pub(crate) use page_task_completion::{IntoPageTaskCompletion, PageTaskCompletion};
 mod page_bitmap_task;
+mod page_form_navigation;
+mod page_form_navigation_task_completion;
 mod page_text_track_default_mode;
 mod page_text_track_default_mode_task_completion;
 mod page_text_track_load;
@@ -216,6 +218,7 @@ pub(crate) use page_dynamic_import_owner_action::AuthorizedCurrentChildDynamicIm
 pub(crate) use page_element_toggle_event::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use page_file_entry_file_callback::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use page_file_reading::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use page_form_navigation::AuthorizedCurrentPageFormNavigation;
 pub(crate) use page_hash_change_delivery::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use page_history_traversal::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use page_image_load_event::AuthorizedCurrentPageImageLoadEvent;

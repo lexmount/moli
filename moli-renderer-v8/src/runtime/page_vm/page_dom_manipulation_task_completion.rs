@@ -58,6 +58,9 @@ impl PageVm {
                     .finish_selected_page_connected_style_event_task(action, loader)
                     .await;
             }
+            PageDomManipulationTurnAction::FormNavigation(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::TextTrackDefaultMode(action) => {
                 action.into_page_task_completion()
             }
