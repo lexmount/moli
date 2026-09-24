@@ -44,22 +44,32 @@ async ({sameURL, crossURL, replacementURL}) => {
   const original = window.document;
   const originalRoot = original.documentElement;
   const Exception = window.DOMException;
+  const stop = window.stop;
   const listen = window.addEventListener;
   const snapshot = phase => {
     check(phase + ': contentDocument', () => frame.contentDocument === original);
     check(phase + ': Window.document', () => window.document === original);
     check(phase + ': original realm', () => window.DOMException === Exception);
     check(phase + ': relaxed domain', () => original.domain === document.domain);
-    check(phase + ': raw origins still differ', () => window.location.origin !== location.origin);
-    check(phase + ': active Document preserves content', () => original.documentElement === originalRoot);
+    check(phase + ': raw origins still differ', () => securityError(() => Document.prototype.open.call(original)));
+    check(phase + ': rejected open preserves content', () => original.documentElement === originalRoot);
   };
   snapshot('loaded');
+  frame.src = 'about:blank';
+  snapshot('pending cancelled navigation');
+  stop.call(window);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  snapshot('after stop');
 
   const events = [];
   for (const type of ['beforeunload', 'pagehide', 'unload']) {
     listen.call(window, type, () => {
       events.push(type);
       snapshot(type);
+      Promise.resolve().then(() => {
+        events.push(type + '/microtask');
+        snapshot(type + '/microtask');
+      });
     });
   }
   let loaded = new Promise(resolve => { frame.onload = resolve; });
@@ -68,6 +78,7 @@ async ({sameURL, crossURL, replacementURL}) => {
   await loaded;
   for (const type of ['beforeunload', 'pagehide', 'unload']) {
     check(type + ' ran', () => events.filter(event => event === type).length === 1);
+    check(type + ' microtask ran', () => events.filter(event => event === type + '/microtask').length === 1);
   }
   check('new network Document has no domain override', () => frame.contentDocument === null);
   check('new network Window denies domain access', () => securityError(() => window.document));
