@@ -2121,6 +2121,7 @@ async fn anchor_left_click_activates_blank_target_to_foreground() {
                 ),
             )
             .await;
+            ctx.capture_fixture_layout(None).await;
             ctx.process_async(json!({
                 "id": 16_090, "method": "Runtime.evaluate",
                 "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}
@@ -2169,6 +2170,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 ),
             )
             .await;
+            ctx.capture_fixture_layout(None).await;
             ctx.process_async(json!({
                 "id": 16_090, "method": "Runtime.evaluate",
                 "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}
@@ -2264,6 +2266,7 @@ async fn anchor_platform_new_tab_click_keeps_blank_target_in_background() {
                 ),
             )
             .await;
+            ctx.capture_fixture_layout(None).await;
             ctx.process_async(json!({
                 "id": 16_090, "method": "Runtime.evaluate",
                 "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}

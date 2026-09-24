@@ -531,13 +531,16 @@ fn element_at_point(
     // A single-point query intentionally keeps a foremost text hit and maps
     // it to its web-exposed parent element. This is observably different from
     // the penetrating-list filtering performed by `elements_at_point`.
-    let (metrics, hit) = observable_hit_test(
+    let (metrics, hit) = match observable_hit_test(
         runtime,
         document,
         moli_layout::LayoutPoint::new(x as f32, y as f32),
         false,
-        moli_layout::LayoutFlushReason::HitTest,
-    )?;
+    ) {
+        Ok(answer) => answer,
+        Err(moli_layout::LayoutError::NoLayoutSnapshot) => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if !point_is_inside_viewport(metrics, x, y) {
         return Ok(None);
     }
@@ -553,13 +556,16 @@ fn elements_at_point(
     x: f64,
     y: f64,
 ) -> Result<Vec<DomHandle>, moli_layout::LayoutError> {
-    let (metrics, hits) = observable_hit_test_all(
+    let (metrics, hits) = match observable_hit_test_all(
         runtime,
         document,
         moli_layout::LayoutPoint::new(x as f32, y as f32),
         false,
-        moli_layout::LayoutFlushReason::HitTest,
-    )?;
+    ) {
+        Ok(answer) => answer,
+        Err(moli_layout::LayoutError::NoLayoutSnapshot) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     if !point_is_inside_viewport(metrics, x, y) {
         return Ok(Vec::new());
     }
@@ -699,7 +705,6 @@ pub(in crate::native_bridge) fn node_document_caret_position_from_point_callback
         runtime,
         handle,
         moli_layout::LayoutPoint::new(parsed.x as f32, parsed.y as f32),
-        moli_layout::LayoutFlushReason::HitTest,
     ) {
         Ok(Some(position)) => {
             let (node, offset, rect) =
@@ -719,7 +724,7 @@ pub(in crate::native_bridge) fn node_document_caret_position_from_point_callback
                 rv.set_null();
             }
         }
-        Ok(None) => rv.set_null(),
+        Ok(None) | Err(moli_layout::LayoutError::NoLayoutSnapshot) => rv.set_null(),
         Err(error) => {
             throw_hit_test_layout_error(scope, error);
             rv.set_null();

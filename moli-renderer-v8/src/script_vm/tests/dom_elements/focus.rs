@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
     let mut vm = new_storage_test_vm("https://focus-prevent-scroll.test/");
-    vm.force_fresh_layout_reads_for_test();
 
     vm.eval(
         r#"
@@ -24,9 +23,8 @@ fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
     .expect("focus scroll fixture should initialize");
     refresh_layout_for_test(&mut vm);
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 (() => {
   const first = document.getElementById('first');
   const scroller = document.getElementById('scroller');
@@ -37,12 +35,16 @@ fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
   const focused = document.activeElement === target;
   first.focus();
   target.focus();
-  return [prevented, focused, scroller.scrollLeft > 0, scroller.scrollTop > 0].join('|');
+  window.beforeReveal = [prevented, focused];
 })()
 "#,
-        )
-        .expect("focus preventScroll probe should evaluate");
+    )
+    .expect("focus preventScroll probe should evaluate");
 
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval("beforeReveal.concat(scroller.scrollLeft > 0, scroller.scrollTop > 0).join('|')")
+        .unwrap();
     assert_eq!(result, "true|true|true|true");
 }
 
@@ -50,10 +52,8 @@ fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
 fn focusing_contenteditable_in_child_frame_reveals_authored_frame_position() {
     let mut vm = new_storage_test_vm("https://focus-scroll.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
   const root = document.documentElement ||
     document.appendChild(document.createElement('html'));
   const head = document.head || root.appendChild(document.createElement('head'));
@@ -77,7 +77,13 @@ fn focusing_contenteditable_in_child_frame_reveals_authored_frame_position() {
   childDocument.write('<div id="target" contenteditable="true">target</div>');
   childDocument.close();
   const target = childDocument.getElementById('target');
-
+"#,
+    )
+    .expect("prepare child focus fixture");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"(() => {
   first.focus();
   target.focus();
   const firstX = window.scrollX;
@@ -92,8 +98,7 @@ fn focusing_contenteditable_in_child_frame_reveals_authored_frame_position() {
     parentRetargeted: document.activeElement === frame,
     childFocused: childDocument.activeElement === target
   });
-})()
-"#,
+})()"#,
         )
         .expect("child contenteditable focus scroll probe should evaluate");
 

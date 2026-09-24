@@ -38,6 +38,7 @@ document.body.appendChild(dropTarget);
 "installed"
 "#,
     )?;
+    page_vm.vm_mut().publish_layout_for_test()?;
     let outcome = page_vm.dispatch_drag_event_at_point(
         10.0,
         10.0,

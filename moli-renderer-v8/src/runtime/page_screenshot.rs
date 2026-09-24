@@ -217,7 +217,10 @@ impl PageVm {
             request.quality,
             request.optimize_for_speed,
             paint_capture,
-            moli_layout::LayoutFlushReason::Screenshot,
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
+                RendererScreenshotPurpose::Print { .. } => moli_layout::LayoutFlushReason::Print,
+            },
         );
         if let Some(previous) = restore_media {
             self.set_emulated_media(&previous);

@@ -34,13 +34,9 @@ fn image_root_coordinate<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
 
-    let origin = read_element_metrics(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )?
-    .map(|metrics| metrics.border_origin_in_viewport_ignoring_css_transforms)
-    .unwrap_or(moli_layout::LayoutPoint::ZERO);
+    let origin = read_element_metrics(runtime, handle)?
+        .map(|metrics| metrics.border_origin_in_viewport_ignoring_css_transforms)
+        .unwrap_or(moli_layout::LayoutPoint::ZERO);
     // Blink returns LayoutUnit::ToInt(), whose integer division truncates
     // toward zero. Rust's float-to-integer cast has the same truncation and
     // saturates at the WebIDL `long` bounds.

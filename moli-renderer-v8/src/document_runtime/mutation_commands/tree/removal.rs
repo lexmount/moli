@@ -240,11 +240,7 @@ impl DocumentRuntime {
             return None;
         }
         let rect = match crate::native_bridge::element::observable_scroll_adjusted_client_rect(
-            runtime,
-            child,
-            scroll_x,
-            scroll_y,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
+            runtime, child, scroll_x, scroll_y,
         ) {
             Ok(rect) => rect,
             Err(error) => {
@@ -289,11 +285,7 @@ impl DocumentRuntime {
                 continue;
             }
             let rect = match crate::native_bridge::element::observable_scroll_adjusted_client_rect(
-                runtime,
-                root,
-                scroll_x,
-                scroll_y,
-                moli_layout::LayoutFlushReason::SynchronousGeometry,
+                runtime, root, scroll_x, scroll_y,
             ) {
                 Ok(rect) => rect,
                 Err(error) => {

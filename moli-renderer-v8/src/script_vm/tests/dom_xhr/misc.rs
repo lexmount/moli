@@ -830,12 +830,11 @@ fn node_move_before_dispatches_custom_element_move_reactions() {
 #[test]
 fn node_move_before_updates_shadow_flat_tree_geometry() {
     let mut vm = new_storage_test_vm("https://node-move-before-shadow-geometry.test/");
-    vm.force_fresh_layout_reads_for_test();
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -852,9 +851,11 @@ fn node_move_before_updates_shadow_flat_tree_geometry() {
   const span = document.createElement('span');
   span.textContent = 'Text in light DOM';
   document.body.append(host, span);
-  const beforeSlotWidth = span.getBoundingClientRect().width;
+  yield; // Publish this scene before reading its geometry.
+const beforeSlotWidth = span.getBoundingClientRect().width;
   host.moveBefore(span, null);
-  const afterSlotWidth = span.getBoundingClientRect().width;
+  yield; // Publish this scene before reading its geometry.
+const afterSlotWidth = span.getBoundingClientRect().width;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -878,7 +879,8 @@ fn node_move_before_updates_shadow_flat_tree_geometry() {
     <div></div>
   `;
   section2.moveBefore(item, null);
-  const innerWidth = itemShadow.querySelector('div').getBoundingClientRect().width;
+  yield; // Publish this scene before reading its geometry.
+const innerWidth = itemShadow.querySelector('div').getBoundingClientRect().width;
   return [
     beforeSlotWidth > 0,
     afterSlotWidth,
@@ -888,8 +890,8 @@ fn node_move_before_updates_shadow_flat_tree_geometry() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("moveBefore shadow flat-tree geometry should evaluate");
+    )
+    .expect("moveBefore shadow flat-tree geometry should evaluate");
 
     assert_eq!(result, "true|0|300|300|300");
 }
@@ -1159,16 +1161,14 @@ fn offscreen_canvas_webgl_surface_matches_html_canvas_surface() {
 }
 #[test]
 fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://shadow-offset-parent.test/",
         r#"<html><body><div id="container" style="position: relative"></div></body></html>"#,
     );
-    vm.force_fresh_layout_reads_for_test();
 
-    let result = vm
-        .eval(
+    let result = eval_with_layout_publications(&mut vm,
             r#"
-(() => {
+(function* () {
   const container = document.getElementById('container');
 
   const internalHost = document.createElement('div');
@@ -1180,7 +1180,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
     '</div>';
   const relativeParent = internalShadow.getElementById('relativeParent');
   const internalTarget = internalShadow.getElementById('target');
-  const internalResult = [
+  yield; // Publish this scene before reading its geometry.
+const internalResult = [
     internalTarget.offsetParent === relativeParent,
     internalTarget.offsetLeft,
     internalTarget.offsetTop
@@ -1196,7 +1197,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
       '<slot></slot>' +
     '</div>';
   const slottedTarget = slottedHost.querySelector('#target');
-  const slottedResult = [
+  yield; // Publish this scene before reading its geometry.
+const slottedResult = [
     slottedTarget.offsetParent === container,
     slottedTarget.offsetLeft,
     slottedTarget.offsetTop
@@ -1213,7 +1215,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
     '</div>';
   const fixedTarget = fixedHost.querySelector('#target');
   const fixed = fixedShadow.getElementById('fixed');
-  const fixedResult = [
+  yield; // Publish this scene before reading its geometry.
+const fixedResult = [
     fixedTarget.offsetParent === null,
     fixedTarget.offsetLeft,
     85 + fixed.offsetLeft,
@@ -1233,7 +1236,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
       '</div>' +
     '</div>';
   const transformedFixedTarget = transformedFixedHost.querySelector('#target');
-  const transformedFixedResult = [
+  yield; // Publish this scene before reading its geometry.
+const transformedFixedResult = [
     transformedFixedTarget.offsetParent === container,
     transformedFixedTarget.offsetLeft,
     transformedFixedTarget.offsetTop
@@ -1251,7 +1255,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
       '<div style="position: absolute; top: 10px; left: 10px;"><slot></slot></div>' +
     '</section>';
   const nestedTarget = nestedHost.querySelector('#target');
-  const nestedResult = [
+  yield; // Publish this scene before reading its geometry.
+const nestedResult = [
     nestedTarget.offsetParent === container,
     nestedTarget.offsetLeft,
     nestedTarget.offsetTop
@@ -1264,7 +1269,8 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
   unassignedHost.attachShadow({ mode: 'open' }).innerHTML =
     '<section style="position: absolute; top: 50px; left: 50px;">content</section>';
   const unassignedTarget = unassignedHost.querySelector('#target');
-  const unassignedResult = [
+  yield; // Publish this scene before reading its geometry.
+const unassignedResult = [
     unassignedTarget.offsetParent === null,
     unassignedTarget.offsetLeft,
     unassignedTarget.offsetTop
@@ -1293,10 +1299,10 @@ fn offset_parent_and_offsets_cross_shadow_scopes_like_chromium() {
 fn shadow_host_unassigned_children_are_empty_and_slotted_text_has_layout() {
     let mut vm = new_storage_test_vm("https://shadow-unassigned-geometry.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -1318,6 +1324,7 @@ fn shadow_host_unassigned_children_are_empty_and_slotted_text_has_layout() {
   slottedHost.appendChild(slotted);
   document.body.appendChild(slottedHost);
   slottedHost.attachShadow({mode: 'open'}).innerHTML = '<slot></slot>';
+yield; // Publish this scene before reading its geometry.
   const hiddenRect = hidden.getBoundingClientRect();
   const slottedRect = slotted.getBoundingClientRect();
 
@@ -1330,8 +1337,8 @@ fn shadow_host_unassigned_children_are_empty_and_slotted_text_has_layout() {
   });
 })()
 "#,
-        )
-        .expect("shadow unassigned light geometry should evaluate");
+    )
+    .expect("shadow unassigned light geometry should evaluate");
 
     let result: serde_json::Value =
         serde_json::from_str(&result).expect("shadow geometry should be JSON");
@@ -1354,9 +1361,10 @@ fn shadow_host_unassigned_children_are_empty_and_slotted_text_has_layout() {
 fn shadow_flat_tree_offsets_match_chromium_layout_order() {
     let mut vm = new_storage_test_vm("https://shadow-offset-wpt.test/");
 
-    let result = vm
-        .eval(
-            r#"
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
 if (!document.documentElement) {
   document.appendChild(document.createElement('html'));
 }
@@ -1441,14 +1449,16 @@ body.setHTMLUnsafe(`
   <div id=target3 style="position: absolute" class=box></div>
 </div>
 `);
-[
+yield; // Publish this scene before reading its geometry.
+return [
   target1.offsetTop,
   target2.offsetLeft,
   target3.offsetTop
-].join('|')
+].join('|');
+})()
 "#,
-        )
-        .expect("headless mock shadow boundary offsets should evaluate");
+    )
+    .expect("headless mock shadow boundary offsets should evaluate");
 
     assert_eq!(result, "38|8|88");
 }
@@ -1463,10 +1473,10 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
         .1;
     let cache_before = vm.layout_snapshot_cache_observability_for_test();
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -1481,6 +1491,7 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
     targets.push(target);
   }
 
+yield; // Publish this scene before reading its geometry.
   const initialLast = targets[3].offsetTop;
   const first = targets.map(target => target.offsetTop);
   const second = targets.map(target => target.offsetTop);
@@ -1500,8 +1511,8 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("latest layout snapshot reads should evaluate");
+    )
+    .expect("latest layout snapshot reads should evaluate");
 
     assert_eq!(result, "38|8|38|8|38|38|0");
     let passes = vm
@@ -1510,10 +1521,13 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
         .layout_pass_observability_for_test()
         .1
         .saturating_sub(passes_before);
-    assert_eq!(passes, 1, "only the cold getter may build layout");
+    assert_eq!(
+        passes, 1,
+        "only the explicit fixture publication builds layout"
+    );
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 10);
-    assert_eq!(cache_after.1, cache_before.1 + 1);
+    assert_eq!(cache_after.0, cache_before.0 + 11);
+    assert_eq!(cache_after.1, cache_before.1);
     assert_eq!(cache_after.2, cache_before.2 + 1);
     assert!(cache_after.3.is_some());
 }
@@ -1525,8 +1539,8 @@ fn switching_to_mock_geometry_drops_the_latest_real_layout_snapshot() {
         "document.appendChild(document.createElement('html')).appendChild(document.createElement('body')); 'installed'",
     )
     .expect("the geometry fixture should initialize");
-    vm.eval("document.body.offsetTop")
-        .expect("the real geometry read should populate the latest snapshot");
+    vm.publish_layout_for_test()
+        .expect("publish the real geometry fixture");
     assert!(
         vm.layout_snapshot_cache_observability_for_test()
             .3
@@ -1641,10 +1655,10 @@ fn body_default_geometry_tracks_each_css_margin_axis() {
 fn child_content_document_created_elements_expose_geometry_methods() {
     let mut vm = new_storage_test_vm("https://child-created-geometry.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const frame = document.createElement('iframe');
   (document.body || document.documentElement || document).appendChild(frame);
   const doc = frame.contentDocument;
@@ -1652,7 +1666,8 @@ fn child_content_document_created_elements_expose_geometry_methods() {
   const item = doc.createElement('div');
   item.id = 'item';
   doc.body.append(item);
-  const rect = item.getBoundingClientRect();
+  yield; // Publish this scene before reading its geometry.
+const rect = item.getBoundingClientRect();
   return [
     typeof item.getBoundingClientRect,
     typeof item.getClientRects,
@@ -1661,14 +1676,14 @@ fn child_content_document_created_elements_expose_geometry_methods() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("child document created geometry should evaluate");
+    )
+    .expect("child document created geometry should evaluate");
 
     assert_eq!(result, "function|function|0|true");
 }
 #[test]
 fn geometry_rect_objects_expose_domrect_to_json() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://geometry-domrect-shape.test/",
         "<!doctype html><body><div id='node'>text</div></body>",
     );
@@ -1960,12 +1975,11 @@ fn geometry_domrect_private_slots_ignore_reflection_and_spoofing() {
 #[test]
 fn fragment_anchor_scroll_ignores_shadow_tree_targets() {
     let mut vm = new_storage_test_vm("https://fragment-shadow-scroll.test/");
-    vm.force_fresh_layout_reads_for_test();
 
-    let result = vm
-        .eval(
-            r##"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r##"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -1979,13 +1993,15 @@ fn fragment_anchor_scroll_ignores_shadow_tree_targets() {
   }
 
   container.innerHTML = tall('doc-target') + '<div id="doc-target">target</div>';
-  container.querySelector('a').click();
+  yield; // Publish this scene before reading its geometry.
+container.querySelector('a').click();
   const documentTargetScrolls = window.pageYOffset > 0;
 
   window.scrollTo(0, 0);
   container.innerHTML = tall('shadow-target') + '<div id="host"></div>';
   container.querySelector('#host').attachShadow({ mode: 'open' }).innerHTML =
     '<div id="shadow-target">shadow</div>';
+  yield;
   container.querySelector('a').click();
   const shadowTargetIgnored = window.pageYOffset === 0;
 
@@ -1998,14 +2014,15 @@ fn fragment_anchor_scroll_ignores_shadow_tree_targets() {
   const host = container.querySelector('#host');
   host.attachShadow({ mode: 'open' }).innerHTML =
     '<div id="duplicate-target">shadow</div>';
+  yield;
   container.querySelector('a').click();
   const duplicateUsesDocumentTree = window.pageYOffset > host.offsetTop;
 
   return [documentTargetScrolls, shadowTargetIgnored, duplicateUsesDocumentTree].join('|');
 })()
 "##,
-        )
-        .expect("fragment anchor scroll should evaluate");
+    )
+    .expect("fragment anchor scroll should evaluate");
 
     assert_eq!(result, "true|true|true");
 }

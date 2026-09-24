@@ -34,8 +34,8 @@ fn read_sizes(page_vm: &mut PageVm, ids: &[&str]) -> anyhow::Result<serde_json::
     )
 }
 
-// Assert the cost contract as well as the returned values. A cache hit is
-// insufficient: CSSOM must not call the geometry provider at all, even cold.
+// Assert that CSSOM reads may inspect published geometry but never publish
+// a new layout, including a cold Grid track query.
 fn read_without_layout(
     page_vm: &mut PageVm,
     expression: &str,
@@ -50,10 +50,11 @@ fn read_without_layout(
         passes,
         "CSSOM read must not execute layout: {expression}"
     );
+    let after = page_vm.vm().layout_snapshot_cache_observability_for_test();
     assert_eq!(
-        page_vm.vm().layout_snapshot_cache_observability_for_test(),
-        cache,
-        "CSSOM read must not request, publish, or retire layout: {expression}"
+        (after.2, after.3),
+        (cache.2, cache.3),
+        "CSSOM read must not publish or retire layout: {expression}"
     );
     Ok(serde_json::from_str(&values)?)
 }

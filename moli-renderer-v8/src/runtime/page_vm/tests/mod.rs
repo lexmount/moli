@@ -10237,7 +10237,7 @@ async fn page_vm_input_event_commits_child_navigation_before_document_script_rea
 "#,
         )?;
 
-        page_vm.vm_mut().eval("document.elementFromPoint(0, 0)")?;
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let mouse_down_handled = page_vm
             .vm_mut()

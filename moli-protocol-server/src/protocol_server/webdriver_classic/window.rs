@@ -3,15 +3,16 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
-use moli_protocol::devtools_runtime::{DevToolsCommand, DevToolsCommandResult};
+use moli_protocol::devtools_runtime::{
+    DevToolsCommand, DevToolsCommandResult, DevToolsScriptResult,
+};
 use moli_protocol_webdriver_classic::{
     ClassicDevToolsCommandContext, ClassicError, ClassicErrorCode, ClassicWindowRect,
     ClassicWindowState, classic_error_from_devtools_error, classic_window_rect_for_state,
-    classic_window_rect_from_metrics, close_window_command, layout_metrics_command,
-    new_window_command, new_window_type, set_window_normal_surface_state_command,
-    set_window_rect_command, set_window_rect_update, set_window_state_command,
-    set_window_surface_state_command, switch_window_command, window_handles_command,
-    window_handles_from_targets,
+    close_window_command, execute_sync_command, new_window_command, new_window_type,
+    set_window_normal_surface_state_command, set_window_rect_command, set_window_rect_update,
+    set_window_state_command, set_window_surface_state_command, switch_window_command,
+    window_handles_command, window_handles_from_targets,
 };
 use serde_json::json;
 use tracing::warn;
@@ -21,6 +22,7 @@ use super::{
     classic_error_into_response, classic_json_body, classic_session_binding,
     classic_success_into_response, classic_top_level_browsing_context_binding,
     classic_top_level_browsing_context_binding_without_prompt_handling,
+    classic_webdriver_command_exception_error,
 };
 
 pub(in crate::protocol_server) async fn webdriver_classic_get_window(
@@ -300,14 +302,33 @@ async fn classic_current_window_rect(
         .window_position(&binding.session_id, &binding.target_id);
     let context =
         ClassicDevToolsCommandContext::with_target_id(&binding.session_id, &binding.target_id);
-    match binding
-        .runtime
-        .execute(layout_metrics_command(&context))
-        .await
-    {
-        Ok(DevToolsCommandResult::LayoutMetrics(metrics)) => {
-            Ok(classic_window_rect_from_metrics(position, metrics))
-        }
+    // Headless window dimensions are live browser state, independent of whether
+    // the page has published layout or resized since its last visual output.
+    let command = execute_sync_command(
+        &context,
+        &json!({
+            "script": "return [window.innerWidth, window.innerHeight];",
+            "args": []
+        }),
+    )?;
+    match binding.runtime.execute(command).await {
+        Ok(DevToolsCommandResult::Script(result)) => match *result {
+            DevToolsScriptResult::Value(value) => {
+                let (width, height): (u32, u32) =
+                    serde_json::from_value(value.value).map_err(|error| {
+                        ClassicError::new(ClassicErrorCode::UnknownError, error.to_string())
+                    })?;
+                Ok(ClassicWindowRect {
+                    x: position.x,
+                    y: position.y,
+                    width,
+                    height,
+                })
+            }
+            DevToolsScriptResult::Exception(exception) => {
+                Err(classic_webdriver_command_exception_error(exception))
+            }
+        },
         Ok(_) => Err(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "window rect returned an unexpected result",

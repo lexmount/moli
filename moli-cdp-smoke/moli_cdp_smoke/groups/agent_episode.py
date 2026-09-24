@@ -80,6 +80,7 @@ async def run_agent_episode_group(
 
         source_url = f"{fixture}/agent-episode-smoke"
         await _navigate_and_wait(client, transcript, session_id, source_url)
+        await _command(client, transcript, "Page.captureScreenshot", session_id=session_id)
         initial = await _observe(client, transcript, session_id)
         assert_equal(initial["url"], source_url, "agent episode initial URL")
         assert_equal(len(initial["elements"]), 2, "agent episode initial control count")

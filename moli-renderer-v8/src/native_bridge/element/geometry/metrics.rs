@@ -24,11 +24,7 @@ fn node_scroll_position_value<'s>(
     horizontal: bool,
 ) -> Result<f64, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let metrics = read_element_metrics(
-            unsafe { &*runtime_ptr },
-            handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?;
+        let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
         return Ok(metrics
             .map(|metrics| {
                 if horizontal {
@@ -63,25 +59,21 @@ fn node_scroll_position_setter_for_object<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     let (minimum, maximum) = if runtime.layout_policy().uses_real_layout() {
-        read_element_metrics(
-            runtime,
-            handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
-        .map(|metrics| {
-            if horizontal {
-                (
-                    f64::from(metrics.minimum_scroll_offset.x),
-                    f64::from(metrics.maximum_scroll_offset.x),
-                )
-            } else {
-                (
-                    f64::from(metrics.minimum_scroll_offset.y),
-                    f64::from(metrics.maximum_scroll_offset.y),
-                )
-            }
-        })
-        .unwrap_or((0.0, 0.0))
+        read_element_metrics(runtime, handle)?
+            .map(|metrics| {
+                if horizontal {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.x),
+                        f64::from(metrics.maximum_scroll_offset.x),
+                    )
+                } else {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.y),
+                        f64::from(metrics.maximum_scroll_offset.y),
+                    )
+                }
+            })
+            .unwrap_or((0.0, 0.0))
     } else {
         // Mock intentionally preserves the old synthetic geometry behavior:
         // non-negative scroll values are stored even without real overflow.
@@ -231,11 +223,7 @@ fn scroll_node_to<'s>(
     } else {
         parse_scroll_coordinates(scope, &args, current_left, current_top)
     };
-    let metrics = read_element_metrics(
-        unsafe { &*runtime_ptr },
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )?;
+    let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
     let Some(metrics) = metrics else {
         return Ok(());
     };
@@ -273,11 +261,7 @@ fn node_box_metric_from_object<'s>(
     metric: &str,
 ) -> Result<i32, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let metrics = read_element_metrics(
-            unsafe { &*runtime_ptr },
-            handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?;
+        let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
         return Ok(metrics
             .as_ref()
             .map(|metrics| layout_box_metric(metrics, metric))
@@ -562,11 +546,7 @@ pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let metrics = match read_element_metrics(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    ) {
+    let metrics = match read_element_metrics(runtime, handle) {
         Ok(metrics) => metrics,
         Err(error) => {
             let message = format!("Layout failed while reading offsetParent: {error}");
@@ -607,13 +587,7 @@ pub(in crate::native_bridge) fn node_scroll_into_view_if_needed_callback(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this())
-        && let Err(error) = scroll_node_into_view_if_needed(
-            scope,
-            runtime_ptr,
-            handle,
-            None,
-            moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
-        )
+        && let Err(error) = scroll_node_into_view_if_needed(scope, runtime_ptr, handle, None)
     {
         throw_scroll_layout_error(scope, "scrollIntoViewIfNeeded", error);
     }

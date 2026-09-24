@@ -24,11 +24,8 @@ pub struct LayoutCssImageReference<N> {
 pub enum LayoutFlushReason {
     Screenshot,
     Screencast,
+    Print,
     SynchronousGeometry,
-    CdpGeometry,
-    ObserverDelivery,
-    HitTest,
-    Paint,
     Test,
 }
 

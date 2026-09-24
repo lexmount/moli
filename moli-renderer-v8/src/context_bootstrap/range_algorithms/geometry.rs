@@ -122,12 +122,14 @@ fn native_range_client_rects<'s>(
     if queries.is_empty() {
         return Some(Ok(Vec::new()));
     }
-    let answers = observable_geometry_batch(
+    let answers = match observable_geometry_batch(
         host,
         document,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
         &moli_layout::LayoutQueryBatch::new(queries),
-    );
+    ) {
+        Err(moli_layout::LayoutError::NoLayoutSnapshot) => return Some(Ok(Vec::new())),
+        answers => answers,
+    };
     Some(answers.and_then(|answers| {
         let mut rects = Vec::new();
         for (kind, answer) in kinds.into_iter().zip(answers.answers) {

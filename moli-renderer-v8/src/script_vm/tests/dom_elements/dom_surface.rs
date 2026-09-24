@@ -181,7 +181,6 @@ fn element_scroll_into_view_surface_is_available() {
 #[test]
 fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    vm.force_fresh_layout_reads_for_test();
 
     vm.eval(
         r#"
@@ -208,7 +207,7 @@ fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
             "#,
     )
     .expect("scrollIntoViewIfNeeded fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     let result = vm
         .eval(
@@ -251,7 +250,16 @@ fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
             .as_f64()
             .is_some_and(|value| value > 0.0)
     );
-    assert_eq!(result["scrollingElementScroll"], result["standardScroll"]);
+    assert_eq!(
+        result["scrollingElementScroll"], 0,
+        "element metrics retain the published scroll position"
+    );
+    publish_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("String(document.scrollingElement.scrollTop)")
+            .unwrap(),
+        result["standardScroll"].to_string()
+    );
 }
 
 #[test]
@@ -280,7 +288,7 @@ fn wheel_default_action_scrolls_unless_canceled() {
         "#,
     )
     .expect("wheel fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     let before = vm
         .eval("document.getElementById('marker').getBoundingClientRect().top")
@@ -293,7 +301,7 @@ fn wheel_default_action_scrolls_unless_canceled() {
     assert!(outcome.handled);
 
     // Publish the scrolled geometry before checking its rendered position.
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -360,7 +368,7 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         "#,
     )
     .expect("intersection scroll fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     vm.eval(
         r#"
@@ -476,10 +484,11 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
         "#,
     )
     .expect("nested wheel fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 35.0, 60.0)
         .expect("nested wheel input should dispatch");
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             "JSON.stringify([document.getElementById('scroller').scrollLeft, document.getElementById('scroller').scrollTop, window.scrollX, window.scrollY])"
@@ -518,7 +527,6 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         ..Default::default()
     }))
     .expect("iframe input viewport should update");
-    vm.force_fresh_layout_reads_for_test();
 
     vm.eval(
         r#"
@@ -575,6 +583,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     )
     .expect("transformed iframe input fixture should initialize");
 
+    publish_layout_for_test(&mut vm);
     let geometry = vm
         .eval(
             r#"
@@ -602,8 +611,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     assert!((rect[2].as_f64().unwrap() - 719.94).abs() < 0.1);
     assert!((rect[3].as_f64().unwrap() - 499.98).abs() < 0.1);
 
-    vm.eval("document.elementFromPoint(0, 0)")
-        .expect("publish the composite snapshot before coordinate input");
+    publish_layout_for_test(&mut vm);
 
     // Child point (240, 90) is the visible center of #hover-target. The
     // iframe's 0.78 transform maps it to root-frame point (287.2, 190.2).
@@ -618,6 +626,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     vm.dispatch_mouse_event_at_point(536.8, 307.2, "wheel", -1, Some(0), 0.0, 100.0)
         .expect("child wheel should dispatch");
 
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -660,11 +669,13 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     assert!((wheel["clientX"].as_f64().unwrap() - 560.0).abs() < 0.1);
     assert!((wheel["clientY"].as_f64().unwrap() - 240.0).abs() < 0.1);
 
+    vm.eval("document.getElementById('input-frame-clip').style.width='624px'")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
             (() => {
-              document.getElementById('input-frame-clip').style.width = '624px';
               const frame = document.getElementById('input-frame');
               return [frame.offsetWidth, frame.contentWindow.innerWidth].join('|');
             })()
@@ -718,7 +729,7 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
     assert_eq!(
         vm.eval("document.body.offsetWidth > 0")
             .expect("parent geometry should evaluate"),
-        "true"
+        "false"
     );
     let passes_before = vm.layout_pass_observability_for_test().1;
     let error = vm
@@ -731,8 +742,7 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
     assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
     assert_eq!(vm.pressed_mouse_buttons, 0);
     assert!(vm.pending_mouse_press.is_none());
-    vm.eval("document.elementFromPoint(140, 130)")
-        .expect("explicit deep geometry demand");
+    publish_layout_for_test(&mut vm);
     let prepared = vm.layout_pass_observability_for_test().1;
     assert_eq!(prepared, passes_before + 1);
     for _ in 0..3 {
@@ -796,8 +806,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     )
     .expect("iframe wheel snapshot fixture should initialize");
 
-    vm.eval("document.elementFromPoint(0, 0)")
-        .expect("publish the composite snapshot before wheel input");
+    publish_layout_for_test(&mut vm);
     let passes_before = vm.layout_pass_observability_for_test().1;
     vm.begin_batched_mouse_event_dispatch();
     for delta_y in [10.0, 20.0, 30.0] {
@@ -828,7 +837,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
         "committing derived effects must not perform another layout"
     );
 
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             "(() => { const frame = document.getElementById('wheel-frame'); return [frame.contentDocument.getElementById('wheel-scroller').scrollTop, frame.contentWindow.__wheelGeometryReads].join('|'); })()"
@@ -855,7 +864,6 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
         ..Default::default()
     }))
     .expect("iframe focus viewport should update");
-    vm.force_fresh_layout_reads_for_test();
 
     vm.eval(
         r#"
@@ -896,8 +904,7 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
     )
     .expect("iframe focus fixture should initialize");
 
-    vm.eval("document.elementFromPoint(0, 0)")
-        .expect("publish the composite snapshot before coordinate input");
+    publish_layout_for_test(&mut vm);
 
     // Child point (60, 40), the button center, maps through scale(.78) to
     // root-frame point (146.8, 431.2). The button is visible, while the frame
@@ -972,7 +979,6 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         ..Default::default()
     }))
     .expect("nested iframe viewport should update");
-    vm.force_fresh_layout_reads_for_test();
 
     vm.eval(
         r#"
@@ -1030,12 +1036,14 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
             });
           }, true);
         }
-        parentScroller.scrollTo(50, 40);
         'installed'
         "#,
     )
     .expect("nested transformed iframe fixture should initialize");
 
+    publish_layout_for_test(&mut vm);
+    vm.eval("parentScroller.scrollTo(50, 40)").unwrap();
+    publish_layout_for_test(&mut vm);
     // The exact used content viewports exclude each frame's border and
     // padding: 240 - 2*(4+6) = 220, then 100 - 2*(2+3) = 90.
     assert_eq!(
@@ -1057,8 +1065,7 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         "[220,160,90,70,50,40]"
     );
 
-    vm.eval("document.elementFromPoint(0, 0)")
-        .expect("publish the composite snapshot before coordinate input");
+    publish_layout_for_test(&mut vm);
 
     // Nested client point (20, 20) maps through scale(.5), the inner frame's
     // 5px border+padding edge, scale(.75), the outer frame's 10px edge, and
@@ -1090,6 +1097,7 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         .expect("nested scrollbar press should dispatch");
     vm.dispatch_mouse_event_at_point(148.875, 120.625, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("nested scrollbar release should dispatch");
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
@@ -1105,9 +1113,6 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         .expect("nested scrollbar result should evaluate"),
         format!("[70,{events_before_scrollbar}]")
     );
-    // The child scrollTop observation above published a child-only snapshot.
-    vm.eval("document.elementFromPoint(0, 0)")
-        .expect("publish root geometry before leaving the child frame");
     // Move to a top-document element. The outgoing events must still convert
     // this new root point through the previous nested frame chain.
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "mousemove", -1, Some(0), 0.0, 0.0)
@@ -1205,7 +1210,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         "#,
     )
     .expect("scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -1240,7 +1245,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     vm.dispatch_mouse_event_at_point(90.0, 90.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("horizontal thumb release should dispatch");
 
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let before_controls = vm
         .eval("scroller.scrollTop")
         .expect("pre-control scrollTop should evaluate")
@@ -1250,7 +1255,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("back button press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 5.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("back button release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let after_back = vm
         .eval("scroller.scrollTop")
         .expect("back-button scrollTop should evaluate")
@@ -1262,7 +1267,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("forward button press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 80.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("forward button release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let after_forward = vm
         .eval("scroller.scrollTop")
         .expect("forward-button scrollTop should evaluate")
@@ -1274,7 +1279,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("forward track press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 60.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("forward track release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let after_track = vm
         .eval("scroller.scrollTop")
         .expect("track scrollTop should evaluate")
@@ -1326,10 +1331,10 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
         "#,
     )
     .expect("painted surface fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     vm.eval("scroller.scrollTop = 80")
         .expect("scroller should move before the overlay probe");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     vm.dispatch_mouse_event_at_point(210.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("overlay press should dispatch");
@@ -1349,7 +1354,7 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
         "#,
     )
     .expect("overlay should be removed before the corner probe");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let corner = vm
         ._context_host
         .borrow()
@@ -1410,7 +1415,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
         "#,
     )
     .expect("viewport overflow fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             "JSON.stringify([document.documentElement.clientWidth, document.documentElement.scrollHeight, scrollY])"
@@ -1436,7 +1441,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
 
     vm.eval("document.body.style.overflow = 'auto'; scrollTo(0, 0)")
         .expect("body auto should become the viewport policy");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("String(document.documentElement.clientWidth)")
             .expect("auto viewport width should evaluate"),
@@ -1452,7 +1457,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
 
     vm.eval("document.body.style.overflow = 'clip'")
         .expect("body clip should become hidden at the viewport boundary");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     vm.eval("scrollTo(0, 100)")
         .expect("clip-derived viewport should remain script-scrollable");
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 80.0)
@@ -1472,7 +1477,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
         "#,
     )
     .expect("stable viewport gutter fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
@@ -1489,7 +1494,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
 
     vm.eval("document.documentElement.style.scrollbarGutter = 'stable both-edges'")
         .expect("both-edge stable gutter should apply");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
@@ -1512,7 +1517,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
         "#,
     )
     .expect("display-contents body fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("String(document.documentElement.getBoundingClientRect().width)")
             .expect("display-contents viewport width should evaluate"),
@@ -1522,7 +1527,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
 
     vm.eval("document.body.style.display = 'block'")
         .expect("principal body fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("String(document.documentElement.getBoundingClientRect().width)")
             .expect("principal-body viewport width should evaluate"),
@@ -1556,7 +1561,7 @@ fn stable_both_edges_preserve_numeric_layout_and_scroll_ranges() {
         "#,
     )
     .expect("both-edge numeric layout fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -1642,7 +1647,7 @@ fn physical_scrollbar_insets_cover_box_intrinsic_ratio_and_vertical_writing_layo
         "#,
     )
     .expect("physical scrollbar inset fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -1728,7 +1733,7 @@ fn vertical_block_flow_uses_writing_mode_instead_of_inline_direction_for_x_ancho
         "#,
     )
     .expect("vertical block-flow fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -1797,7 +1802,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
         "#,
     )
     .expect("nested scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -1828,7 +1833,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
         .expect("captured nested thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(515.0, 115.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("captured nested thumb release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let after_nested: serde_json::Value = serde_json::from_str(
         &vm.eval("JSON.stringify([inner.scrollTop, outer.scrollTop, sibling.scrollTop])")
             .expect("nested drag state should evaluate"),
@@ -1885,7 +1890,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     // remaining visible piece of its thumb is hittable in the new space.
     vm.eval("outer.scrollTop = 50; inner.scrollTop = 0")
         .expect("ancestor and nested scroll positions should reset");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     vm.dispatch_mouse_event_at_point(225.0, 25.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("partly clipped nested thumb press should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 45.0, "mousemove", -1, Some(1), 0.0, 0.0)
@@ -1900,7 +1905,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     vm.dispatch_mouse_event_at_point(295.0, 125.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("outer thumb release should dispatch");
 
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let result: serde_json::Value = serde_json::from_str(
         &vm.eval(
             "JSON.stringify([outer.scrollTop, inner.scrollTop, sibling.scrollTop, horizontal.scrollLeft, document.getElementById('thin-child').scrollLeft, document.getElementById('thin-child').scrollTop, document.getElementById('rtl-child').scrollLeft, document.getElementById('rtl-child').scrollTop, __nestedScrollbarDomEvents])",
@@ -1946,7 +1951,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         "#,
     )
     .expect("transformed scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     let hit = crate::native_bridge::element::observable_scrollbar_hit_test(
         &vm._context_host.borrow(),
@@ -1975,7 +1980,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
     );
     vm.dispatch_mouse_event_at_point(700.0, 420.0, "mousemove", -1, Some(1), 0.0, 0.0)
         .expect("first scaled incremental thumb move should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let first_move = vm
         .eval("scaled.scrollTop")
         .expect("first scaled scrollTop should evaluate")
@@ -1989,7 +1994,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         .expect("scaled captured thumb move should dispatch outside its element");
     vm.dispatch_mouse_event_at_point(700.0, 440.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled captured thumb release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let moderate = vm
         .eval("scaled.scrollTop")
         .expect("scaled scrollTop should evaluate")
@@ -1999,14 +2004,14 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
 
     vm.eval("scaled.scrollTop = 0")
         .expect("scaled scrollTop should reset");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     vm.dispatch_mouse_event_at_point(355.0, 400.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("scaled lower-clamp thumb press should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 590.0, "mousemove", -1, Some(1), 0.0, 0.0)
         .expect("scaled lower-clamp thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 590.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled lower-clamp thumb release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("scaled.scrollTop")
             .expect("maximum scaled scrollTop should evaluate"),
@@ -2019,7 +2024,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         .expect("scaled upper-clamp thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 300.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled upper-clamp thumb release should dispatch");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("scaled.scrollTop")
             .expect("minimum scaled scrollTop should evaluate"),
@@ -2071,7 +2076,7 @@ fn document_replacement_cancels_old_scrollbar_capture_and_allows_a_new_drag() {
         "#,
     )
     .expect("retiring scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     vm.dispatch_mouse_event_at_point(190.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("retiring thumb press should dispatch");
 
@@ -2090,7 +2095,7 @@ fn document_replacement_cancels_old_scrollbar_capture_and_allows_a_new_drag() {
         "#,
     )
     .expect("document.open should install the replacement input fixture");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     vm.dispatch_mouse_event_at_point(320.0, 20.0, "mousemove", -1, Some(1), 0.0, 0.0)
         .expect("replacement-document move should dispatch normally");
@@ -2111,6 +2116,7 @@ fn document_replacement_cancels_old_scrollbar_capture_and_allows_a_new_drag() {
         .expect("replacement thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 50.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("replacement thumb release should dispatch");
+    publish_layout_for_test(&mut vm);
     let replacement_scroll = vm
         .eval("replacementScroller.scrollTop")
         .expect("replacement scroller state should evaluate")
@@ -2156,7 +2162,7 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
         "#,
     )
     .expect("root scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             "JSON.stringify([document.documentElement.clientWidth, document.documentElement.clientHeight, document.documentElement.scrollWidth, document.documentElement.scrollHeight])"
@@ -2269,7 +2275,7 @@ fn closed_absolute_popover_does_not_expand_root_scrollable_overflow() {
     )
     .expect("closed popover overflow fixture should initialize");
 
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
             .expect("closed popover geometry should evaluate"),
@@ -2277,7 +2283,7 @@ fn closed_absolute_popover_does_not_expand_root_scrollable_overflow() {
     );
 
     vm.eval("tip.showPopover()").expect("popover should open");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
             .expect("open popover geometry should evaluate"),
@@ -2285,7 +2291,7 @@ fn closed_absolute_popover_does_not_expand_root_scrollable_overflow() {
     );
 
     vm.eval("tip.hidePopover()").expect("popover should close");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
             .expect("reclosed popover geometry should evaluate"),
@@ -2328,7 +2334,7 @@ fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
         "#,
     )
     .expect("percentage root overflow fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval(
@@ -2364,7 +2370,7 @@ fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
         "#,
     )
     .expect("stable root gutter fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
@@ -2387,7 +2393,7 @@ fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
 
     vm.eval("content.style.height = '1200px'")
         .expect("stable root fixture should overflow vertically");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             r#"
@@ -2417,7 +2423,7 @@ fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
         "#,
     )
     .expect("RTL root scrollbar fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let right = crate::native_bridge::element::observable_scrollbar_hit_test(
         &vm._context_host.borrow(),
         vm.document_runtime.document_handle(),
@@ -4063,7 +4069,7 @@ fn exec_command_select_all_targets_editing_host_and_skips_inert_text() {
 "##,
     )
     .expect("document selectAll fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let document_result = vm
         .eval(
             r##"
@@ -4101,7 +4107,7 @@ fn exec_command_select_all_targets_editing_host_and_skips_inert_text() {
 "##,
     )
     .expect("editing-host selectAll fixture should initialize");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let host_result = vm
         .eval(
             r##"
@@ -4140,10 +4146,10 @@ fn exec_command_select_all_targets_editing_host_and_skips_inert_text() {
 fn exec_command_select_all_respects_modal_dialog_inertness() {
     let mut vm = new_storage_test_vm("https://exec-command-select-all-modal-dialog.test/");
 
-    let result = vm
-        .eval(
-            r##"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r##"
+(function* () {
   const html = document.documentElement || document.appendChild(document.createElement("html"));
   const body = document.body || html.appendChild(document.createElement("body"));
   body.textContent = "";
@@ -4159,6 +4165,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   const selection = getSelection();
 
   dialog.showModal();
+yield; // Publish this scene before reading its geometry.
   selection.selectAllChildren(body);
   const manualBodyText = selection.toString();
   selection.removeAllRanges();
@@ -4179,6 +4186,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
 
   dialog.close();
   selection.selectAllChildren(body);
+yield; // Publish this scene before reading its geometry.
   const afterCloseText = selection.toString();
 
   return JSON.stringify({
@@ -4193,8 +4201,8 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   });
 })()
 "##,
-        )
-        .expect("execCommand selectAll modal dialog inertness probe should evaluate");
+    )
+    .expect("execCommand selectAll modal dialog inertness probe should evaluate");
 
     assert_eq!(
         result,
@@ -4361,7 +4369,7 @@ fn exec_command_insert_text_reuses_adjacent_text_at_element_boundaries() {
 fn selection_to_string_uses_rendered_native_range_projection() {
     let mut vm = new_storage_test_vm("https://selection-rendered-string.test/");
 
-    let result = vm
+    vm
         .eval(
             r##"
 (() => {
@@ -4415,6 +4423,7 @@ fn selection_to_string_uses_rendered_native_range_projection() {
     textContent: "\n beta\n"
   }), "\n gamma");
   root.append(basic, nested, container, contentHidden, inlineWhitespace);
+globalThis.__readFixture = () => {
   const scriptStyleRange = document.createRange();
   scriptStyleRange.selectNode(p);
   const scriptStyle = selectedStringFor(scriptStyleRange).replace(/\r\n/g, "\n");
@@ -4434,9 +4443,15 @@ fn selection_to_string_uses_rendered_native_range_projection() {
     selectContents(contentHidden),
     selectContents(inlineWhitespace)
   ].join("|");
+};
 })()
 "##,
         )
+        .expect("selection rendered string probe should evaluate");
+    vm.publish_layout_for_test()
+        .expect("publish prepared fixture");
+    let result = vm
+        .eval("__readFixture()")
         .expect("selection rendered string probe should evaluate");
 
     assert_eq!(
@@ -4449,9 +4464,8 @@ fn selection_to_string_uses_rendered_native_range_projection() {
 fn selection_only_applies_inert_attribute_to_html_elements() {
     let mut vm = new_storage_test_vm("https://selection-html-inert-namespace.test/");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 (() => {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
@@ -4494,15 +4508,22 @@ fn selection_only_applies_inert_attribute_to_html_elements() {
   htmlAncestor.appendChild(inherited.math);
   root.appendChild(htmlAncestor);
 
+globalThis.__readFixture = () => {
   return [
     selectedText(own.math),
     selectedText(nested.math),
     selectedText(htmlChild),
     selectedText(htmlAncestor)
   ].join('|');
+};
 })()
 "#,
-        )
+    )
+    .expect("Selection inert namespace probe should evaluate");
+    vm.publish_layout_for_test()
+        .expect("publish prepared fixture");
+    let result = vm
+        .eval("__readFixture()")
         .expect("Selection inert namespace probe should evaluate");
 
     assert_eq!(result, "math own|math ancestors||");
@@ -4557,10 +4578,7 @@ fn month_and_week_inputs_do_not_support_variable_length_selection() {
 fn input_button_offset_width_reflects_label_value() {
     let mut vm = new_storage_test_vm("https://forms-input-button-width.test/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    vm.eval(r#"
               const empty = document.createElement('input');
               empty.type = 'button';
               const labelled = document.createElement('input');
@@ -4569,15 +4587,18 @@ fn input_button_offset_width_reflects_label_value() {
               const html = document.documentElement || document.appendChild(document.createElement('html'));
               const body = document.body || html.appendChild(document.createElement('body'));
               body.append(empty, labelled);
-              return [
+"#).expect("prepare button label geometry");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"(() => {              return [
                 empty.value,
                 labelled.value,
                 empty.offsetWidth,
                 labelled.offsetWidth,
                 labelled.offsetWidth > empty.offsetWidth
               ].join('|');
-            })()
-            "#,
+            })()"#,
         )
         .expect("button input intrinsic width should reflect its label");
 

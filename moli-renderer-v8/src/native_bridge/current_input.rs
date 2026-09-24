@@ -61,13 +61,6 @@ impl CurrentInputEvent {
         }
     }
 
-    pub(crate) fn is_mouse(self) -> bool {
-        matches!(
-            self.kind,
-            CurrentInputEventKind::Mouse | CurrentInputEventKind::MouseUp { .. }
-        )
-    }
-
     pub(crate) fn keyboard(key: &str, modifiers: u8) -> Self {
         Self {
             kind: if key.eq_ignore_ascii_case("enter") {

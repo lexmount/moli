@@ -116,13 +116,6 @@ impl LayoutPassRequest {
         self.paint_capture.is_some()
     }
 
-    /// Whether this demand needs a complete embedded-frame input projection.
-    /// Paint always composes child frames, while coordinate input needs their
-    /// source-bearing geometry without retaining independent child snapshots.
-    pub const fn requests_embedded_frames(self) -> bool {
-        self.requests_paint() || matches!(self.reason, LayoutFlushReason::HitTest)
-    }
-
     /// Whether paint snapshots for this demand should include CSS backgrounds.
     /// Layout-only demands return `true` so recursive renderers retain their
     /// normal paint defaults when no capture policy exists.
@@ -237,7 +230,7 @@ where
     let numeric_layout_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
-    if request.requests_embedded_frames() {
+    if request.requests_paint() {
         for index in 0..world.boxes.len() {
             let layout_box = &world.boxes[index];
             if !layout_box.element_semantics().is_some_and(|semantics| {
@@ -283,7 +276,6 @@ where
         started,
         request.paint_capture,
         embedded_frames,
-        request.requests_embedded_frames(),
         crate::projection::LayoutPassPhaseMetrics {
             box_tree_elapsed,
             list_marker_elapsed,

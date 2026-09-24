@@ -1441,8 +1441,14 @@ async fn secondary_webapis_cover_file_file_list_and_resize_observer_basics() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/secondary-webapis"))
+        .await?;
+
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
+    page.evaluate_runtime_expression_async("runGeometryProbe()")
         .await?;
 
     assert!(
@@ -5823,6 +5829,10 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
 
     let mut page = browser.fetch(&server.url("/static")).await?;
 
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
+
     let value = page
         .evaluate_runtime_expression_async(
             r#"JSON.stringify({
@@ -5990,6 +6000,12 @@ async fn intersection_observer_root_geometry_reflects_root_and_target_rects() ->
     let mut page = browser
         .fetch(&server.url("/compat/intersection-observer-root-geometry"))
         .await?;
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
+    page.evaluate_runtime_expression_async("runGeometryProbe()")
+        .await?;
+
     browser
         .wait_for_script_truthy(
             &mut page,

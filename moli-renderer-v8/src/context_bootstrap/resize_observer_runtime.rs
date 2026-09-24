@@ -438,12 +438,15 @@ fn build_resize_observer_entries<'s>(
                 .copied()
                 .map(|source| moli_layout::LayoutQuery::ElementMetrics { source }),
         );
-        let answers = crate::native_bridge::element::observable_geometry_batch(
+        let answers = match crate::native_bridge::element::observable_geometry_batch(
             runtime,
             document,
-            moli_layout::LayoutFlushReason::ObserverDelivery,
             &moli_layout::LayoutQueryBatch::new(queries),
-        )?;
+        ) {
+            Ok(answers) => answers,
+            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(error) => return Err(error),
+        };
         let mut answers = answers.answers.into_iter();
         let dpr = match answers.next() {
             Some(moli_layout::LayoutQueryAnswer::DocumentMetrics(metrics)) => {

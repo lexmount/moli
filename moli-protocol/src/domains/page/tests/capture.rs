@@ -513,16 +513,27 @@ fn mhtml_snapshot_base64_encodes_html_and_sanitizes_header_url() {
     assert!(!mhtml.contains(html));
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn print_to_pdf_returns_base64_pdf() {
+async fn print_to_pdf_returns_base64_pdf_and_publishes_print_geometry() {
     let mut ctx = TestContext::new();
     install_active_screenshot_page(
         &mut ctx,
         "BID-PDF-BASE64",
         "TID-PDF-BASE64",
         "SID-PDF-BASE64",
-        "data:text/html,<style>html,body%7Bmargin%3A0%7D</style><main>pdf</main>",
+        "data:text/html,<style>html,body%7Bmargin%3A0%7Dmain%7Bwidth%3A40px%7D@media print%7Bmain%7Bwidth%3A80px%7D%7D</style><main>pdf</main>",
     )
     .await;
+    let query = json!({
+        "id": 1111,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-PDF-BASE64",
+        "params": {"expression": "document.querySelector('main').getBoundingClientRect().width"}
+    });
+    ctx.process_async(query.clone()).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
+        0
+    );
     ctx.process_async(json!({
         "id": 1112,
         "method": "Page.printToPDF",
@@ -532,6 +543,17 @@ async fn print_to_pdf_returns_base64_pdf() {
     let pdf = screenshot_bytes(&take_response_by_id(&mut ctx, 1112));
     assert!(pdf.starts_with(b"%PDF-1.7"));
     assert!(pdf.ends_with(b"%%EOF\n"));
+    ctx.process_async(query.clone()).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
+        80
+    );
+    ctx.capture_fixture_layout(Some("SID-PDF-BASE64")).await;
+    ctx.process_async(query).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
+        40
+    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn print_to_pdf_return_as_stream_reads_through_io_domain() {
@@ -861,6 +883,8 @@ async fn devtools_node_screenshot_chain_uses_real_box_and_layout_metrics() {
         .as_u64()
         .expect("DOM.querySelector target nodeId");
 
+    ctx.capture_fixture_layout(Some("SID-SCREENSHOT-NODE"))
+        .await;
     ctx.process_async(json!({
         "id": 123,
         "method": "DOM.getBoxModel",
@@ -1085,6 +1109,8 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         .runtime_slot
         .replace_loaded_page(Some(page));
 
+    ctx.capture_fixture_layout(Some("SID-PENDING-LAYOUT-METRICS"))
+        .await;
     ctx.process_async(json!({
         "id": 125,
         "method": "Page.getLayoutMetrics",
@@ -1139,6 +1165,7 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
     .await;
     ctx.expect_result(121, json!({}), Some("SID-background"));
 
+    ctx.capture_fixture_layout(Some("SID-background")).await;
     ctx.process_async(json!({
         "id": 123,
         "method": "Page.getLayoutMetrics",
@@ -1192,6 +1219,7 @@ async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
     .await;
     ctx.expect_result(121, json!({}), Some("SID-inactive"));
 
+    ctx.capture_fixture_layout(Some("SID-inactive")).await;
     ctx.process_async(json!({
         "id": 124,
         "method": "Page.getLayoutMetrics",

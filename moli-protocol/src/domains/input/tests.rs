@@ -173,6 +173,7 @@ async fn coordinate_mouse_commands_hit_test_real_layout_and_dispatch_dom_events(
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     let commands = [
@@ -224,6 +225,7 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
                </body></html>"#,
             )
             .await;
+            ctx.capture_fixture_layout(None).await;
             assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
             ctx.enable_page_events_for_test(None);
 
@@ -274,6 +276,7 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
 async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
+    ctx.capture_fixture_layout(None).await;
     assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     let original_owner = ctx
@@ -471,6 +474,7 @@ async fn coordinate_mouse_down_applies_chromium_focus_default_action() {
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({
         "id": 31,
@@ -513,6 +517,7 @@ async fn canceled_coordinate_mouse_down_keeps_existing_focus() {
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({
         "id": 32,
@@ -557,6 +562,7 @@ async fn touch_tap_and_drag_commands_hit_test_real_layout() {
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let commands = [
         json!({
@@ -1500,6 +1506,7 @@ async fn coordinate_mouse_event_completes_through_pending_renderer_dispatch() {
         r#"<body style='margin:0'><button style='width:80px;height:80px' onclick="window.__clicked = true">go</button></body>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     for (id, event_type, buttons) in [(4001, "mousePressed", 1), (4002, "mouseReleased", 0)] {
@@ -1789,6 +1796,7 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     for (id, event_type, touch_points) in [
         (
@@ -1890,6 +1898,7 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
                </body></html>"#,
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let raw = json!({
         "id": 4107,

@@ -290,10 +290,13 @@ fn intersection_observer_callback_fires_after_dom_mutation_without_mutation_obse
                 window.__lmIoCallbacks += 1;
                 window.__lmIoEntryCount += entries.length;
             });
-            window.__lmIoObserver.observe(window.__lmIoTarget);
+            window.__startPreparedObserver = () => window.__lmIoObserver.observe(window.__lmIoTarget);
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
     let after_initial = eval_with_body(&mut vm, "String(window.__lmIoCallbacks)");
     assert_eq!(
         after_initial, "1",
@@ -456,10 +459,13 @@ fn rootless_intersection_observer_keeps_plain_deep_spa_targets_viewport_visible(
                     top: entry.boundingClientRect.top
                 })));
             }, { root: null, rootMargin: '0px', threshold: [0, 1] });
-            observer.observe(target);
+            window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
 
     let result = eval_with_body(
         &mut vm,
@@ -555,10 +561,13 @@ fn rootless_intersection_observer_keeps_inline_sized_deep_targets_outside_viewpo
                     top: entry.boundingClientRect.top
                 })));
             }, { root: null, rootMargin: '0px', threshold: [0, 1] });
-            observer.observe(target);
+            window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
 
     let result = eval_with_body(&mut vm, "JSON.stringify(window.__lmIoEntries)");
     let entries: serde_json::Value =
@@ -600,10 +609,13 @@ fn rootless_intersection_observer_counts_text_content_flow_units() {
                     top: entry.boundingClientRect.top
                 })));
             }, { root: null, rootMargin: '0px', threshold: [0, 1] });
-            observer.observe(target);
+            window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
 
     let result = eval_with_body(&mut vm, "JSON.stringify(window.__lmIoEntries)");
     let entries: serde_json::Value =
@@ -641,11 +653,14 @@ fn intersection_observer_and_mutation_observer_coexist_during_dom_mutations() {
             window.__lmMoObserver = new MutationObserver((records) => {
                 window.__lmMoCount += records.length;
             });
-            window.__lmIoObserver.observe(window.__lmIoTarget);
+            window.__startPreparedObserver = () => window.__lmIoObserver.observe(window.__lmIoTarget);
             window.__lmMoObserver.observe(document.body, { childList: true, subtree: true });
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
     eval_with_body(&mut vm, "String(window.__lmIoCount)");
     eval_with_body(
         &mut vm,
@@ -695,10 +710,13 @@ fn mutation_observer_disconnect_does_not_starve_intersection_observer() {
             window.__lmIoObserver = new IntersectionObserver(() => {
                 window.__lmIoCount += 1;
             });
-            window.__lmIoObserver.observe(window.__lmIoTarget);
+            window.__startPreparedObserver = () => window.__lmIoObserver.observe(window.__lmIoTarget);
             return 'observed';
         })()"#,
     );
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+    eval_with_body(&mut vm, "window.__startPreparedObserver()");
     eval_with_body(&mut vm, "String(window.__lmIoCount)");
     eval_with_body(
         &mut vm,

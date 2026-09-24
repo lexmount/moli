@@ -184,6 +184,7 @@
         body.setAttribute("data-context-error", String(error));
       }
 
+      globalThis.runGeometryProbe = () => {
       try {
         const range = document.createRange();
         range.selectNodeContents(geometryTarget);
@@ -196,6 +197,7 @@
       } catch (error) {
         body.setAttribute("data-geometry-error", String(error));
       }
+      };
     </script>
   </body>
 </html>

@@ -5228,12 +5228,7 @@ fn resolved_grid_template_tracks(
     if !runtime.layout_policy().uses_real_layout() {
         return None;
     }
-    let grid = observable_used_grid_tracks(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )
-    .ok()??;
+    let grid = observable_used_grid_tracks(runtime, handle).ok()??;
     let tracks = match property {
         "grid-template-columns" => &grid.columns,
         "grid-template-rows" => &grid.rows,
@@ -6188,12 +6183,7 @@ fn runtime_static_position_offset(
         .dom_host()
         .node(containing_block)
         .and_then(Node::parent_node)?;
-    let rects = observable_bounding_client_rects(
-        runtime,
-        &[parent, containing_block],
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )
-    .ok()?;
+    let rects = observable_bounding_client_rects(runtime, &[parent, containing_block]).ok()?;
     let [parent_rect, containing_rect] = rects.as_slice() else {
         return None;
     };
@@ -6206,12 +6196,7 @@ fn runtime_static_position_offset(
 }
 
 fn computed_style_geometry_rect(runtime: &JsContextHost, handle: DomHandle) -> Option<ClientRect> {
-    read_bounding_client_rect(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )
-    .ok()
+    read_bounding_client_rect(runtime, handle).ok()
 }
 
 fn inset_uses_start_static_position(

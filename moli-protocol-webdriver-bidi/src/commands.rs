@@ -2049,9 +2049,15 @@ fn bidi_capture_screenshot_command(
     Ok(DevToolsCaptureScreenshotCommand {
         context: context.command_context(Some(DevToolsTargetId::from(target_id))),
         format,
-        quality: None,
+        quality: command
+            .params
+            .get("format")
+            .and_then(|format| format.get("quality"))
+            .and_then(Value::as_f64)
+            .map(|quality| (quality * 100.0).round() as u8),
         clip,
-        capture_beyond_viewport: true,
+        capture_beyond_viewport: command.params.get("origin").and_then(Value::as_str)
+            == Some("document"),
         optimize_for_speed: false,
     })
 }

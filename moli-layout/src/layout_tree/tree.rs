@@ -111,7 +111,6 @@ where
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
-    embedded_frames_complete: bool,
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -246,13 +245,6 @@ where
             .map(|frame| frame.tree.as_ref())
     }
 
-    /// Whether every live child frame encountered by this pass was projected.
-    /// Hit-test demands require this bit before reusing a tree produced by a
-    /// geometry-only pass.
-    pub const fn embedded_frames_complete(&self) -> bool {
-        self.embedded_frames_complete
-    }
-
     pub fn embedded_frames(&self) -> impl ExactSizeIterator<Item = &FrozenEmbeddedFrame<N>> {
         self.embedded_frames.iter()
     }
@@ -274,7 +266,6 @@ where
         viewport_coordinate_space: FrozenCoordinateSpace,
         clip_chain: Vec<LayoutClipNode>,
         embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
-        embedded_frames_complete: bool,
     ) -> Self {
         Self {
             source_root,
@@ -288,7 +279,6 @@ where
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,
-            embedded_frames_complete,
         }
     }
 }

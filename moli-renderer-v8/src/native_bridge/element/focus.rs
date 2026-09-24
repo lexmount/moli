@@ -6,7 +6,7 @@ use super::super::{
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
 };
-use super::geometry::{GeometryRead, read_element_metrics, scroll_node_into_view_if_needed};
+use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
 use super::styles::{StyleMode, style_property_value};
 use super::{
     construct_click_event, construct_focus_event, construct_interest_event,
@@ -74,14 +74,6 @@ fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
 }
 
 pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    is_focusable_with_geometry(runtime, handle, GeometryRead::for_default_action(runtime))
-}
-
-fn is_focusable_with_geometry(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    geometry: GeometryRead,
-) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
     };
@@ -98,7 +90,7 @@ fn is_focusable_with_geometry(
         "body" | "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame"
     ) || element.has_attribute("tabindex")
         || contenteditable_editing_host(runtime, handle) == Some(handle)
-        || element_is_scrollable_with_geometry(runtime, handle, geometry)
+        || element_is_scrollable(runtime, handle)
 }
 
 fn overflow_makes_scroll_container(value: &str) -> bool {
@@ -109,14 +101,6 @@ fn overflow_makes_scroll_container(value: &str) -> bool {
 }
 
 fn element_is_scrollable(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    element_is_scrollable_with_geometry(runtime, handle, GeometryRead::for_default_action(runtime))
-}
-
-fn element_is_scrollable_with_geometry(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    geometry: GeometryRead,
-) -> bool {
     let scrolls_x = overflow_makes_scroll_container(&style_property_value(
         runtime,
         handle,
@@ -132,7 +116,7 @@ fn element_is_scrollable_with_geometry(
     if !scrolls_x && !scrolls_y {
         return false;
     }
-    match read_element_metrics(runtime, handle, geometry) {
+    match read_element_metrics(runtime, handle) {
         Ok(Some(metrics)) => {
             metrics.is_scroll_container
                 && (scrolls_x && metrics.maximum_scroll_offset.x > metrics.minimum_scroll_offset.x
@@ -176,7 +160,6 @@ fn first_delegates_focus_descendant(
     runtime: &JsContextHost,
     root: DomHandle,
     autofocus_only: bool,
-    geometry: GeometryRead,
 ) -> Option<DomHandle> {
     let mut stack = runtime.dom_host().child_handles(root).collect::<Vec<_>>();
     stack.reverse();
@@ -186,14 +169,14 @@ fn first_delegates_focus_descendant(
             .node(handle)
             .and_then(Node::as_element)
             .is_some_and(|element| element.has_attribute("autofocus"));
-        if (!autofocus_only || autofocus) && is_focusable_with_geometry(runtime, handle, geometry) {
+        if (!autofocus_only || autofocus) && is_focusable(runtime, handle) {
             return Some(handle);
         }
 
         if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(handle)
             && runtime.dom_host().shadow_root_delegates_focus(shadow_root) == Some(true)
             && let Some(target) =
-                first_delegates_focus_descendant(runtime, shadow_root, autofocus_only, geometry)
+                first_delegates_focus_descendant(runtime, shadow_root, autofocus_only)
         {
             return Some(target);
         }
@@ -205,24 +188,12 @@ fn first_delegates_focus_descendant(
     None
 }
 
-fn first_delegates_focus_target(
-    runtime: &JsContextHost,
-    root: DomHandle,
-    geometry: GeometryRead,
-) -> Option<DomHandle> {
-    first_delegates_focus_descendant(runtime, root, true, geometry)
-        .or_else(|| first_delegates_focus_descendant(runtime, root, false, geometry))
+fn first_delegates_focus_target(runtime: &JsContextHost, root: DomHandle) -> Option<DomHandle> {
+    first_delegates_focus_descendant(runtime, root, true)
+        .or_else(|| first_delegates_focus_descendant(runtime, root, false))
 }
 
 fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
-    delegated_focus_target_with_geometry(runtime, handle, GeometryRead::for_default_action(runtime))
-}
-
-fn delegated_focus_target_with_geometry(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    geometry: GeometryRead,
-) -> Option<DomHandle> {
     let root = runtime.dom_host().shadow_root_handle(handle)?;
     if runtime.dom_host().shadow_root_delegates_focus(root) != Some(true) {
         return None;
@@ -232,7 +203,7 @@ fn delegated_focus_target_with_geometry(
     {
         return Some(active);
     }
-    first_delegates_focus_target(runtime, root, geometry)
+    first_delegates_focus_target(runtime, root)
 }
 
 fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
@@ -1251,13 +1222,7 @@ pub(crate) fn focus_element(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
-    if let Err(error) = focus_element_with_options(
-        scope,
-        runtime_ptr,
-        handle,
-        false,
-        GeometryRead::for_default_action(unsafe { &*runtime_ptr }),
-    ) {
+    if let Err(error) = focus_element_with_options(scope, runtime_ptr, handle, false) {
         tracing::warn!(?handle, %error, "failed to scroll focused element into view");
     }
 }
@@ -1319,25 +1284,23 @@ fn focus_element_with_options(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     prevent_scroll: bool,
-    geometry: GeometryRead,
 ) -> Result<(), moli_layout::LayoutError> {
     let runtime = unsafe { &*runtime_ptr };
     let target = if runtime.dom_host().is_html_element_named(handle, "label")
         && !label_receives_programmatic_focus(runtime, handle)
     {
-        label_control_handle(runtime, handle)
-            .filter(|control| is_focusable_with_geometry(runtime, *control, geometry))
+        label_control_handle(runtime, handle).filter(|control| is_focusable(runtime, *control))
     } else if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(handle)
         && runtime.dom_host().shadow_root_delegates_focus(shadow_root) == Some(true)
     {
-        delegated_focus_target_with_geometry(runtime, handle, geometry)
+        delegated_focus_target(runtime, handle)
     } else {
-        is_focusable_with_geometry(runtime, handle, geometry).then_some(handle)
+        is_focusable(runtime, handle).then_some(handle)
     };
     if let Some(target) = target {
         update_focus(scope, runtime_ptr, Some(target));
         if !prevent_scroll {
-            scroll_node_into_view_if_needed(scope, runtime_ptr, target, None, geometry)?;
+            scroll_node_into_view_if_needed(scope, runtime_ptr, target, None)?;
         }
     }
     Ok(())
@@ -1403,13 +1366,7 @@ pub(in crate::native_bridge) fn node_focus_callback<'s>(
     let Some(prevent_scroll) = focus_options_prevent_scroll(scope, &args) else {
         return;
     };
-    if let Err(error) = focus_element_with_options(
-        scope,
-        runtime_ptr,
-        handle,
-        prevent_scroll,
-        moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
-    ) {
+    if let Err(error) = focus_element_with_options(scope, runtime_ptr, handle, prevent_scroll) {
         throw_focus_layout_error(scope, error);
     }
     rv.set_undefined();

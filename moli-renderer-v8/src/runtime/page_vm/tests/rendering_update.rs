@@ -91,8 +91,6 @@ getComputedStyle(document.getElementById('fallback')).display
         ]);
         let output = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
             &batch,
         )?;
         assert!(matches!(
@@ -116,7 +114,7 @@ getComputedStyle(document.getElementById('fallback')).display
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn geometry_batch_reuses_latest_tree_at_same_viewport_until_fresh_paint_replaces_it() {
+async fn geometry_batch_requires_explicit_output_and_reuses_it_until_the_next_output() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -170,10 +168,15 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             },
         ]);
         let viewport = moli_layout::LayoutViewport::new(320, 200, 1.0);
+        let error = moli_layout::GeometryProvider::answer(page_vm.vm_mut(), &batch).unwrap_err();
+        assert_eq!(error, moli_layout::LayoutError::NoLayoutSnapshot);
+        for command in ["Page.captureScreenshot", "Page.printToPDF", "Page.startScreencast"] {
+            assert!(error.to_string().contains(command));
+        }
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, before.1);
+        page_vm.vm_mut().screenshot_layout_snapshot(viewport)?.expect("initial screenshot layout");
         let first = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
             &batch,
         )?;
         let after_first = page_vm.vm().layout_pass_observability_for_test();
@@ -182,15 +185,15 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_first.0);
         assert_eq!(after_first.1, before.1 + 1);
-        assert_eq!(cache_after_first.0, cache_before.0);
+        assert_eq!(cache_after_first.0, cache_before.0 + 1);
         assert_eq!(cache_after_first.1, cache_before.1 + 1);
         assert_eq!(cache_after_first.2, cache_before.2 + 1);
         assert_eq!(first.answers.len(), batch.queries.len());
         assert_eq!(
             first.metrics.reason,
-            moli_layout::LayoutFlushReason::SynchronousGeometry
+            moli_layout::LayoutFlushReason::Screenshot
         );
-        assert_eq!(first.metrics.paint_operation_count, 0);
+        assert!(first.metrics.paint_operation_count > 0);
         let first_width = match &first.answers[1] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
@@ -231,8 +234,6 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .eval("document.getElementById('target').style.width='180px'; 'mutated'")?;
         let second = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
             &batch,
         )?;
         let after_second = page_vm.vm().layout_pass_observability_for_test();
@@ -241,7 +242,7 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_second.0);
         assert_eq!(after_second.1, before.1 + 1);
-        assert_eq!(cache_after_second.0, cache_before.0 + 1);
+        assert_eq!(cache_after_second.0, cache_before.0 + 2);
         assert_eq!(cache_after_second.1, cache_before.1 + 1);
         assert_eq!(cache_after_second.2, cache_before.2 + 1);
         let second_width = match &second.answers[1] {
@@ -270,7 +271,7 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_screenshot.0);
         assert_eq!(after_screenshot.1, before.1 + 2);
-        assert_eq!(cache_after_screenshot.0, cache_before.0 + 1);
+        assert_eq!(cache_after_screenshot.0, cache_before.0 + 2);
         assert_eq!(cache_after_screenshot.1, cache_before.1 + 1);
         assert_eq!(cache_after_screenshot.2, cache_before.2 + 2);
         let (_, retention) = cache_after_screenshot
@@ -295,8 +296,6 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
 
         let third = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
             &batch,
         )?;
         let after_third = page_vm.vm().layout_pass_observability_for_test();
@@ -304,7 +303,7 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert_eq!(after_third.1, before.1 + 2);
-        assert_eq!(cache_after_third.0, cache_before.0 + 2);
+        assert_eq!(cache_after_third.0, cache_before.0 + 3);
         assert_eq!(cache_after_third.1, cache_before.1 + 1);
         assert_eq!(cache_after_third.2, cache_before.2 + 2);
         let third_width = match &third.answers[1] {
@@ -373,8 +372,6 @@ document.body.innerHTML = '<div id=target></div>';
             .eval("document.getElementById('target').style.width='80px'; 'mutated'")?;
         let stale = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
         let stale_width = match &stale.answers[0] {
@@ -410,8 +407,6 @@ document.body.innerHTML = '<div id=target></div>';
 
         let refreshed = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-            moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
         let refreshed_width = match &refreshed.answers[0] {
@@ -1040,6 +1035,7 @@ document.body.innerHTML = `<div id=centered></div><div id=definite-parent><div i
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['centered','definite-parent','definite-child','indefinite-parent','indefinite-child'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -1156,6 +1152,7 @@ shadow.innerHTML=`<style>.root{contain:content;margin-left:40px;width:200px;heig
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let result = page_vm.vm_mut().eval(
             r#"JSON.stringify((()=>{const shadow=document.getElementById('shadow-host').shadowRoot;
@@ -1478,6 +1475,7 @@ document.body.innerHTML = `<main id=stage><header id=header><div id=left></div><
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['stage','header','left','right'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -1551,6 +1549,7 @@ document.body.innerHTML = `
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['wide','wide-card','wide-primary','wide-secondary','narrow','narrow-card','narrow-primary','narrow-secondary','flex','flex-card','grid','grid-card','specified','specified-card','margined','margined-card','table','table-card','table-a','table-b'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -1619,6 +1618,7 @@ document.body.innerHTML = `<center id=host><span id=first></span><span id=second
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['host','first','second'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -1708,6 +1708,7 @@ document.body.innerHTML = `<div id=stage>
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['left-max-case','left-max','left-limit-case','left-limit','left-min-case','left-min','right-max-case','right-max','stretch-case','stretch','margin-min-case','margin-min','max-clamp-case','max-clamp','min-clamp-case','min-clamp','specified-case','specified','static-ltr-case','static-ltr','static-rtl-case','static-rtl','flex-case','flex-abs'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -1787,6 +1788,7 @@ document.body.innerHTML = `<div class=case id=pre><div class=float></div><p>abcd
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(['pre','nowrap','wrap'].map(id=>{
 const c=document.getElementById(id), p=c.querySelector('p');
@@ -1888,6 +1890,7 @@ document.body.innerHTML = `<div id=stage>
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['baidu-case','baidu-logo','baidu-logo-image','baidu-main','max-case','max','limit-case','limit','min-case','min','right-case','right','margin-case','margin-float','max-clamp-case','max-clamp','min-clamp-case','min-clamp','specified-case','specified','edge-case','edge','block-control-case','block-control','replaced-control-case','replaced-control','stretch-control-case','stretch-control','inline-margin-case','inline-margin-float','negative-margin-case','negative-margin-float','inline-negative-margin-case','inline-negative-margin-float'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -2014,6 +2017,7 @@ document.body.innerHTML = `
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let supports = page_vm.vm_mut().eval(
             r#"(()=>{const values=['min-content','max-content','fit-content','fit-content(120px)','fit-content(50%)','stretch','-webkit-fill-available'];const result=Object.fromEntries(values.map(value=>[value,CSS.supports('width',value)]));result['grid-fit-content(120px)']=CSS.supports('grid-template-columns','fit-content(120px)');for(const [key,property,value] of [['min-width:fit-content','min-width','fit-content'],['max-width:fit-content','max-width','fit-content'],['min-width:stretch','min-width','stretch'],['max-width:stretch','max-width','stretch'],['min-width:-webkit-fill-available','min-width','-webkit-fill-available'],['max-width:-webkit-fill-available','max-width','-webkit-fill-available']])result[key]=CSS.supports(property,value);return JSON.stringify(result)})()"#,
@@ -2169,6 +2173,7 @@ document.body.innerHTML = `<table id=precedence><colgroup><col><col></colgroup><
 "#,
         )?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
 
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['precedence','p0','p1','rules','wide-left','wide-right','style-left','style-right','hidden-left','hidden-right','span','spanning','upper','lower','colspan','across','col-left','col-right'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
@@ -3870,6 +3875,7 @@ document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span i
             .vm_mut()
             .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
 
+        page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['bar','header','wrapper','atomic'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
         )?;
@@ -3922,6 +3928,7 @@ document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after
             .vm_mut()
             .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
 
+        page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify((()=>{const line=document.getElementById('line');const atomic=document.getElementById('atomic');const rect=node=>{const range=document.createRange();range.selectNodeContents(node);const value=range.getBoundingClientRect();return [value.x,value.right]};const box=atomic.getBoundingClientRect();return {preceding:rect(line.firstChild),atomic:[box.x,box.right],text:rect(atomic)}})())"#,
         )?;
@@ -3995,6 +4002,7 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
             .vm_mut()
             .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
 
+        page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
             r#"JSON.stringify(Object.fromEntries(['ask','ask-text','constrained'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
         )?;

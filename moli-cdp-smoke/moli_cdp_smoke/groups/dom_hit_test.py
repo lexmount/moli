@@ -110,6 +110,7 @@ async def run_dom_hit_test_group(
         if navigation.get("errorText"):
             raise SmokeError(f"Page.navigate failed: {navigation!r}")
         await _wait_for_load(client, session_id, seen)
+        await _success(client, "Page.captureScreenshot", session_id=session_id)
 
         command_id = await client.send(
             "DOM.getNodeForLocation",

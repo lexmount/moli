@@ -7044,7 +7044,7 @@ fn serializes_devtools_navigate_result_to_bidi_response() {
 }
 
 #[test]
-fn rejects_cdp_screenshot_result_at_bidi_projection_boundary() {
+fn projects_screenshot_bytes_as_bidi_base64_data() {
     let response = super::bidi_response_from_devtools_result(
         8,
         moli_protocol::devtools_runtime::DevToolsCommandResult::CaptureScreenshot(
@@ -7057,9 +7057,9 @@ fn rejects_cdp_screenshot_result_at_bidi_projection_boundary() {
         ),
     );
 
-    assert_eq!(response["type"], json!("error"));
+    assert_eq!(response["type"], json!("success"));
     assert_eq!(response["id"], json!(8));
-    assert_eq!(response["error"], json!("unsupported operation"));
+    assert_eq!(response["result"]["data"], json!("cG5n"));
 }
 
 #[test]
@@ -11668,7 +11668,7 @@ fn maps_browsing_context_capture_screenshot_to_shared_page_command() {
         "params": {
             "context": "TARGET-1",
             "format": {
-                "type": "image/png"
+                "type": "image/jpeg", "quality": 0.6
             },
             "origin": "viewport",
             "clip": {
@@ -11690,7 +11690,9 @@ fn maps_browsing_context_capture_screenshot_to_shared_page_command() {
     else {
         panic!("expected CaptureScreenshot command");
     };
-    assert_eq!(command.format.as_deref(), Some("png"));
+    assert_eq!(command.quality, Some(60));
+    assert!(!command.capture_beyond_viewport);
+    assert_eq!(command.format.as_deref(), Some("jpeg"));
     assert_eq!(
         command
             .context

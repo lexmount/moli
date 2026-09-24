@@ -5418,21 +5418,16 @@ async fn devtools_command_dispatches_coordinate_mouse_input_for_target() {
 
     execute_direct_devtools_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+        DevToolsCommand::CaptureScreenshot(DevToolsCaptureScreenshotCommand {
             context: DevToolsCommandContext {
                 target_id: Some(target_id.clone()),
                 ..context.clone()
             },
-            realm_id: None,
-            world_name: None,
-            expression: "document.elementFromPoint(0, 0); true".to_owned(),
-            await_promise: true,
-            user_gesture: false,
-            webdriver_bidi_file_prompt_handler: None,
-            result_ownership: DevToolsResultOwnership::None,
-            preserve_remote_metadata: false,
-            materialize_bidi_script_result: false,
-            serialization_options: None,
+            format: Some("png".to_owned()),
+            quality: None,
+            clip: None,
+            capture_beyond_viewport: false,
+            optimize_for_speed: false,
         }),
     )
     .await

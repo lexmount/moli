@@ -164,29 +164,15 @@ fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Resul
             serde_json::json!(["auto", "auto", "auto", "auto"]),
             "width/height must not initiate layout: {args:?}: {value}"
         );
+        assert_eq!(
+            value["after"], value["before"],
+            "geometry reads cannot publish used sizes: {args:?}: {value}"
+        );
         if args.contains(&"--layout") {
-            let expected = value["geometry"]
-                .as_array()
-                .expect("geometry array")
-                .iter()
-                .map(|value| format!("{}px", value.as_i64().expect("integer offset size")))
-                .collect::<Vec<_>>();
             assert_eq!(
-                value["after"],
-                serde_json::json!(expected),
-                "{args:?}: {value}"
-            );
-            if args.contains(&"--disable-css") {
-                assert!(value["geometry"][0].as_i64().expect("block width") > 20);
-                assert_eq!(value["geometry"][2], 300);
-                assert_eq!(value["geometry"][3], 150);
-            } else {
-                assert_eq!(value["geometry"], serde_json::json!([20, 0, 40, 20]));
-            }
-        } else {
-            assert_eq!(
-                value["after"], value["before"],
-                "Mock geometry must not manufacture a real layout snapshot"
+                value["geometry"],
+                serde_json::json!([0, 0, 0, 0]),
+                "real geometry is empty before an explicit output"
             );
         }
     }

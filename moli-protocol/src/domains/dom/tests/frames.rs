@@ -4032,6 +4032,7 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
         "<!doctype html><html><body><iframe id='child' srcdoc=\"<main id='inside-frame'>child</main>\"></iframe></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 2).await;
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverClassic,
@@ -4131,6 +4132,7 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
         "<!doctype html><html><body><main id='top' style='display:flex'>top</main><iframe id='child' srcdoc=\"<main id='inside-frame' style='display:grid'>child</main>\"></iframe></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 2).await;
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverClassic,

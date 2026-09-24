@@ -424,11 +424,7 @@ fn media_is_inside_initial_viewport(
     runtime: &JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
-    let Ok(rect) = read_bounding_client_rect(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    ) else {
+    let Ok(rect) = read_bounding_client_rect(runtime, handle) else {
         return false;
     };
     if rect.width <= 0.0 || rect.height <= 0.0 {

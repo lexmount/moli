@@ -1,22 +1,10 @@
 use moli_layout::FrozenLayoutTree;
 
-use crate::{
-    document_runtime::DomHandle,
-    style_engine::{StyleViewport, StyloStyleEnvironment},
-};
-
-/// Ambient browser style inputs shared by the snapshot's Document trees.
-/// DOM and stylesheet mutations deliberately remain outside this identity.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct LayoutEnvironment {
-    pub(super) viewport: StyleViewport,
-    pub(super) media: StyloStyleEnvironment,
-}
+use crate::document_runtime::DomHandle;
 
 struct LatestFrozenLayout {
     document: DomHandle,
     tree: Box<FrozenLayoutTree<DomHandle>>,
-    environment: LayoutEnvironment,
 }
 
 /// Single-slot storage for the latest successful frozen layout tree.
@@ -24,8 +12,7 @@ struct LatestFrozenLayout {
 /// This owns exactly one recursively frozen snapshot. It has no separately
 /// keyed child tree, working layout world, source index, hit-test index, Taffy
 /// cache, style borrow, pass diagnostics, paint snapshot, timer, or invalidation
-/// policy. The captured browser environment lets geometry demands check reuse
-/// without discarding the sample used by snapshot-only CSSOM readers.
+/// policy. Only explicit visual output replaces this published layout.
 #[derive(Default)]
 pub(super) struct LatestLayoutTreeCache {
     latest: Option<LatestFrozenLayout>,
@@ -43,22 +30,10 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
-    pub(super) fn matches_environment(&self, environment: LayoutEnvironment) -> bool {
-        self.latest
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.environment == environment)
-    }
-
-    pub(super) fn publish(
-        &mut self,
-        document: DomHandle,
-        tree: FrozenLayoutTree<DomHandle>,
-        environment: LayoutEnvironment,
-    ) {
+    pub(super) fn publish(&mut self, document: DomHandle, tree: FrozenLayoutTree<DomHandle>) {
         self.latest = Some(LatestFrozenLayout {
             document,
             tree: Box::new(tree),
-            environment,
         });
     }
 

@@ -1,4 +1,4 @@
-//! Grid queries are geometry demands; the four size getters are snapshot-only.
+//! Grid and size queries only read published layout; explicit output publishes it.
 //! Unlike an internal synchronous property batch, a held JavaScript CSSOM
 //! wrapper starts a new read for each getter and must see newly sampled boxes.
 
@@ -14,61 +14,66 @@ fn held_sizes(page: &mut PageVm) -> anyhow::Result<serde_json::Value> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_size_held_getters_observe_grid_sampling_without_dom_mutation() {
+async fn computed_size_held_getters_wait_for_explicit_publication() {
     run_page_vm_async_test(async move {
         for real in [false, true] {
-            for (property, raw, used) in [
-                ("gridTemplateColumns", "1fr 3fr", "40px 120px"),
-                ("gridTemplateRows", "40px", "40px"),
-            ] {
-                let mut page = page_with_size_fixture(GRID)?;
-                if !real {
-                    page.vm_mut()
-                        .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
-                }
-                let before = page.vm().layout_snapshot_cache_observability_for_test();
-                let passes = page.vm().layout_pass_observability_for_test().1;
-                assert!(before.3.is_none());
-                let result = page.vm_mut().eval(&format!(
-                    r#"JSON.stringify((() => {{
-                    const held = getComputedStyle(document.getElementById('target'));
-                    const sizes = () => [held.width,held.height,held.inlineSize,held.blockSize];
-                    const before = sizes();
-                    const tracks = held.{property};
-                    return {{before, tracks, after:sizes(), repeated:sizes()}};
-                }})())"#
-                ))?;
-                let result: serde_json::Value = serde_json::from_str(&result)?;
-                let expected = if real {
-                    json!(["160px", "40px", "160px", "40px"])
-                } else {
-                    json!(["auto", "auto", "auto", "auto"])
-                };
+            let mut page = page_with_size_fixture(GRID)?;
+            if !real {
+                page.vm_mut()
+                    .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            }
+            page.vm_mut().eval(
+                "globalThis.held=getComputedStyle(document.getElementById('target'));'held'",
+            )?;
+            let passes = page.vm().layout_pass_observability_for_test().1;
+            for _ in 0..3 {
                 assert_eq!(
-                    result,
-                    json!({
-                        "before":["auto","auto","auto","auto"],
-                        "tracks":if real { used } else { raw },
-                        "after":expected, "repeated":expected,
-                    }),
-                    "{property}, real={real}"
+                    read_without_layout(
+                        &mut page,
+                        "[held.gridTemplateColumns,held.gridTemplateRows]"
+                    )?,
+                    json!(["1fr 3fr", "40px"])
+                );
+                assert_eq!(
+                    held_sizes(&mut page)?,
+                    json!(["auto", "auto", "auto", "auto"])
+                );
+            }
+            assert!(
+                page.vm()
+                    .layout_snapshot_cache_observability_for_test()
+                    .3
+                    .is_none()
+            );
+            if real {
+                publish_size_layout(&mut page)?;
+            }
+            for _ in 0..3 {
+                assert_eq!(
+                    held_sizes(&mut page)?,
+                    if real {
+                        json!(["160px", "40px", "160px", "40px"])
+                    } else {
+                        json!(["auto", "auto", "auto", "auto"])
+                    }
+                );
+                assert_eq!(
+                    read_without_layout(
+                        &mut page,
+                        "[held.gridTemplateColumns,held.gridTemplateRows]"
+                    )?,
+                    json!([if real { "40px 120px" } else { "1fr 3fr" }, "40px"])
                 );
                 assert_eq!(
                     page.vm().layout_pass_observability_for_test().1,
                     passes + u64::from(real)
                 );
-                let after = page.vm().layout_snapshot_cache_observability_for_test();
-                assert_eq!(after.2, before.2 + u64::from(real));
-                assert_eq!(after.3.is_some(), real);
-                if !real {
-                    assert_eq!(after, before);
-                }
             }
         }
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("held CSSOM objects must not retain a cold geometry miss across getters");
+    .expect("held CSSOM objects observe the next explicit publication");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -88,6 +93,11 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(
             json!(["auto", "auto", "auto", "auto"])
         );
         let passes = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            read_without_layout(&mut page, "held.gridTemplateColumns")?,
+            json!("1fr 3fr")
+        );
+        publish_size_layout(&mut page)?;
         assert_eq!(
             page.vm_mut().eval("held.gridTemplateColumns")?,
             "40px 120px"
@@ -136,7 +146,7 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("Grid-created geometry follows the same snapshot lifecycle as explicit box reads");
+    .expect("Grid geometry follows explicit visual publication");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -152,6 +162,7 @@ async fn computed_size_grid_sampling_does_not_warm_another_page() {
         }
         let second_cache = second.vm().layout_snapshot_cache_observability_for_test();
         let second_passes = second.vm().layout_pass_observability_for_test().1;
+        publish_size_layout(&mut first)?;
         assert_eq!(
             first.vm_mut().eval("held.gridTemplateColumns")?,
             "40px 120px"
@@ -173,6 +184,15 @@ async fn computed_size_grid_sampling_does_not_warm_another_page() {
             second_passes
         );
         assert_eq!(second.vm_mut().eval("held.gridTemplateRows")?, "40px");
+        assert_eq!(
+            second.vm().layout_pass_observability_for_test().1,
+            second_passes
+        );
+        assert_eq!(
+            held_sizes(&mut second)?,
+            json!(["auto", "auto", "auto", "auto"])
+        );
+        publish_size_layout(&mut second)?;
         assert_eq!(
             held_sizes(&mut second)?,
             json!(["160px", "40px", "160px", "40px"])

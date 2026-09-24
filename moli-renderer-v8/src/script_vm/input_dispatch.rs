@@ -24,13 +24,12 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, is_text_control,
+    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
     observable_input_hit_test, perform_auxiliary_link_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, snapshot_input_surface_hit_test,
-    text_control_set_selection_range_internal,
+    select_contenteditable_contents, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -475,7 +474,7 @@ impl ScriptVm {
         y: f64,
         event_name: &str,
     ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
-        Ok(snapshot_input_surface_hit_test(
+        Ok(input_surface_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),

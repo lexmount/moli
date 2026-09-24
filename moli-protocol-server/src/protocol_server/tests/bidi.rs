@@ -6850,13 +6850,13 @@ async fn websocket_bidi_bound_devtools_command_executes_target_commands() {
         .await
         .expect("send browsingContext.captureScreenshot");
     let screenshot = recv_ws_json(&mut socket).await;
-    assert_eq!(screenshot["type"], json!("error"));
-    assert_eq!(screenshot["id"], json!(20_u64));
-    assert_eq!(screenshot["error"], json!("unsupported operation"));
-    assert_eq!(
-        screenshot["message"],
-        json!("Page.captureScreenshot is not supported: renderer screenshots are not implemented.")
-    );
+    assert_eq!(screenshot["type"], "success", "{screenshot:?}");
+    let bytes = BASE64_STANDARD
+        .decode(screenshot["result"]["data"].as_str().expect("PNG data"))
+        .expect("valid base64");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 40);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 20);
 
     socket
         .send(WsMessage::Text(
@@ -10786,7 +10786,7 @@ async fn websocket_bidi_iframe_context_print_and_capture_screenshot() {
 }
 
 #[tokio::test]
-async fn websocket_bidi_capture_screenshot_reports_unsupported_without_placeholder_payload() {
+async fn websocket_bidi_page_and_box_screenshot_publish_real_png() {
     // Ported from Chromium/WPT
     // webdriver/tests/bidi/browsing_context/capture_screenshot/capture_screenshot.py and
     // webdriver/tests/bidi/browsing_context/capture_screenshot/clip.py.
@@ -10834,12 +10834,14 @@ async fn websocket_bidi_capture_screenshot_reports_unsupported_without_placehold
         }),
     )
     .await;
-    assert_eq!(full["type"], json!("error"));
-    assert_eq!(full["error"], json!("unsupported operation"));
-    assert_eq!(
-        full["message"],
-        json!("Page.captureScreenshot is not supported: renderer screenshots are not implemented.")
-    );
+    assert_eq!(full["type"], "success", "{full:?}");
+    let bytes = BASE64_STANDARD
+        .decode(full["result"]["data"].as_str().expect("PNG data"))
+        .expect("valid base64");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 180);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 120);
 
     let clip = send_bidi_command(
         &mut socket,
@@ -10857,12 +10859,13 @@ async fn websocket_bidi_capture_screenshot_reports_unsupported_without_placehold
         }),
     )
     .await;
-    assert_eq!(clip["type"], json!("error"));
-    assert_eq!(clip["error"], json!("unsupported operation"));
-    assert_eq!(
-        clip["message"],
-        json!("Page.captureScreenshot is not supported: renderer screenshots are not implemented.")
-    );
+    assert_eq!(clip["type"], "success", "{clip:?}");
+    let bytes = BASE64_STANDARD
+        .decode(clip["result"]["data"].as_str().expect("PNG data"))
+        .expect("valid base64");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 50);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 26);
 
     let navigate_element = send_bidi_command(
         &mut socket,
@@ -17724,8 +17727,7 @@ async fn websocket_bidi_print_invalid_parameters_match_wpt_error_shape() {
 async fn websocket_bidi_capture_screenshot_invalid_parameters_and_unsupported_boundary() {
     // Ported from Chromium/WPT
     // webdriver/tests/bidi/browsing_context/capture_screenshot/invalid.py.
-    // Unknown element clips would be `no such node` once real screenshots exist, but the
-    // current product boundary is to fail all valid screenshot requests as unsupported.
+    // Element clips remain unsupported; page and box captures use the renderer.
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, context_id) = bidi_session_with_context(cdp_addr).await;
     let mut id = 100_u64;
@@ -18989,6 +18991,14 @@ async fn websocket_bidi_input_perform_and_release_actions_use_shared_input() {
     )
     .await;
     assert_eq!(navigate["type"], json!("success"));
+    let captured = send_bidi_command_response(
+        &mut socket,
+        90,
+        "browsingContext.captureScreenshot",
+        json!({"context": context_id.clone()}),
+    )
+    .await;
+    assert_eq!(captured["type"], "success");
 
     let type_a = send_bidi_command_response(
         &mut socket,
@@ -19508,6 +19518,14 @@ async fn websocket_bidi_input_element_origin_uses_real_geometry() {
     )
     .await;
     assert_eq!(navigate["type"], json!("success"));
+    let captured = send_bidi_command_response(
+        &mut socket,
+        90,
+        "browsingContext.captureScreenshot",
+        json!({"context": context_id.clone()}),
+    )
+    .await;
+    assert_eq!(captured["type"], "success");
 
     let button = send_bidi_command_response(
         &mut socket,

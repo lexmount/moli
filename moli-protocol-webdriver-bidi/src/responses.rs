@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_protocol::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
     DevToolsNetworkDataBytesType, DevToolsScriptResult, RuntimeConsoleEvent,
@@ -55,13 +56,6 @@ pub fn bidi_response_from_devtools_result(id: u64, result: DevToolsCommandResult
             Some(id),
             BidiErrorCode::UnsupportedOperation,
             "DOM.getNodeForLocation results are not part of the WebDriver BiDi surface",
-        );
-    }
-    if matches!(result, DevToolsCommandResult::CaptureScreenshot(_)) {
-        return error_response(
-            Some(id),
-            BidiErrorCode::UnsupportedOperation,
-            "browsingContext.captureScreenshot is not supported by the layout POC",
         );
     }
     if let DevToolsCommandResult::SetCookies(result) = &result
@@ -309,12 +303,9 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
             "message": result.message,
             "defaultValue": result.default_prompt,
         }),
-        // The public projection rejects this variant before reaching the
-        // success payload mapper. Keep the arm explicit so adding CDP support
-        // cannot silently broaden the WebDriver BiDi surface.
-        DevToolsCommandResult::CaptureScreenshot(_) => unreachable!(
-            "capture screenshot results must be rejected before BiDi success projection"
-        ),
+        DevToolsCommandResult::CaptureScreenshot(result) => json!({
+            "data": BASE64_STANDARD.encode(result.bytes.as_ref()),
+        }),
     }
 }
 

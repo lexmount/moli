@@ -191,6 +191,12 @@ async fn range_internal_algorithms_ignore_page_tampered_methods() -> Result<()> 
         .fetch(&server.url("/compat/range-internal-algorithms-ignore-page-tampered-methods"))
         .await?;
 
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
+    page.evaluate_runtime_expression_async("runGeometryProbe()")
+        .await?;
+
     assert!(
         page.serialize_html_async()
             .await

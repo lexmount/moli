@@ -7,7 +7,7 @@ use crate::runtime::{
     RendererElementClickError as ClickError, RendererElementClickTarget as ClickTarget,
     RendererInputDispatchOutcome, RendererPointerEventProperties, RendererPreparedPointerClick,
 };
-use moli_layout::{LayoutFlushReason, LayoutPassRequest, LayoutPoint, LayoutQuad};
+use moli_layout::{LayoutPoint, LayoutQuad};
 
 fn layout_error(error: impl std::fmt::Display) -> ClickError {
     ClickError::LayoutUnavailable(error.to_string())
@@ -35,26 +35,17 @@ impl ScriptVm {
             if !host.layout_policy().uses_real_layout() {
                 return Ok(ClickTarget::DomActivation);
             }
+            let document = host
+                .layout_document_for_source(handle)
+                .ok_or(ClickError::StaleNode)?;
+            host.with_latest_layout_tree_for_document(document, |_| ())
+                .ok_or_else(|| layout_error(moli_layout::LayoutError::NoLayoutSnapshot))?;
         }
-        let scrolled = self
-            .with_default_context_scope(|scope, runtime_ptr| {
-                Ok(scroll_node_into_view_at_center(scope, runtime_ptr, handle)?)
-            })
-            .map_err(layout_error)?
-            .ok_or(ClickError::NoClickableRect)?;
-        if scrolled {
-            // Element click must prepare a point in the newly scrolled view.
-            // Ordinary geometry reads and coordinate input retain the snapshot.
-            let viewport = {
-                let host = self._context_host.borrow();
-                host.layout_viewport_for_document(host.document_handle())
-            };
-            self.with_fresh_layout_pass(
-                LayoutPassRequest::new(viewport, LayoutFlushReason::HitTest),
-                |_| Ok(()),
-            )
-            .map_err(layout_error)?;
-        }
+        self.with_default_context_scope(|scope, runtime_ptr| {
+            Ok(scroll_node_into_view_at_center(scope, runtime_ptr, handle)?)
+        })
+        .map_err(layout_error)?
+        .ok_or(ClickError::NoClickableRect)?;
         self.prepare_pointer_click_geometry(handle)
             .map(ClickTarget::Pointer)
     }
@@ -63,7 +54,6 @@ impl ScriptVm {
         &mut self,
         handle: DomHandle,
     ) -> Result<RendererPreparedPointerClick, ClickError> {
-        self.reconcile_document_web_fonts_for_layout();
         let (document, point, root_document) = {
             let host = self._context_host.borrow();
             if !host.dom_host().is_connected(handle) {
@@ -73,12 +63,14 @@ impl ScriptVm {
                 .dom_host()
                 .owner_document_handle(handle)
                 .ok_or(ClickError::StaleNode)?;
-            let rect = read_client_rects(&host, handle, LayoutFlushReason::SynchronousGeometry)
+            let rect = read_client_rects(&host, handle)
                 .map_err(layout_error)?
                 .into_iter()
                 .next()
                 .ok_or(ClickError::NoClickableRect)?;
-            let viewport = host.layout_viewport_for_document(document);
+            let viewport = host
+                .with_latest_layout_tree_for_document(document, |tree| tree.viewport)
+                .ok_or_else(|| layout_error(moli_layout::LayoutError::NoLayoutSnapshot))?;
             let left = rect.left.max(0.0);
             let top = rect.top.max(0.0);
             let right = rect.right.min(f64::from(viewport.css_width));

@@ -28,7 +28,7 @@ async fn set_metrics(ctx: &mut TestContext, extra: serde_json::Value) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn device_metrics_screen_only_changes_refresh_geometry() {
+async fn device_metrics_screen_changes_take_effect_after_explicit_capture() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
     evaluate(
@@ -63,6 +63,7 @@ async fn device_metrics_screen_only_changes_refresh_geometry() {
             }),
         )
         .await;
+        ctx.capture_fixture_layout(Some("SID-1")).await;
         assert_eq!(
             evaluate(
                 &mut ctx,

@@ -981,24 +981,9 @@ impl moli_layout::GeometryProvider for ScriptVm {
 
     fn answer(
         &mut self,
-        reason: moli_layout::LayoutFlushReason,
-        viewport: moli_layout::LayoutViewport,
         queries: &moli_layout::LayoutQueryBatch<Self::NodeId>,
     ) -> Result<moli_layout::LayoutAnswers<Self::NodeId>, moli_layout::LayoutError> {
-        let needs_refresh = {
-            let context_host = self._context_host.borrow();
-            !context_host.can_answer_layout_from_snapshot(
-                context_host.document_handle(),
-                reason,
-                viewport,
-            )
-        };
-        if needs_refresh {
-            self.reconcile_document_web_fonts_for_layout();
-        }
-        self._context_host
-            .borrow_mut()
-            .answer(reason, viewport, queries)
+        self._context_host.borrow_mut().answer(queries)
     }
 }
 
@@ -2458,6 +2443,17 @@ impl ScriptVm {
     }
 
     #[cfg(test)]
+    pub(crate) fn publish_layout_for_test(&mut self) -> anyhow::Result<()> {
+        let viewport = {
+            let host = self._context_host.borrow();
+            host.layout_viewport_for_document(host.document_handle())
+        };
+        self.screenshot_layout_snapshot(viewport)?
+            .ok_or_else(|| anyhow::anyhow!("fixture screenshot requires a document"))?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn refresh_layout_snapshot_for_test(
         &mut self,
         viewport: moli_layout::LayoutViewport,
@@ -2551,11 +2547,7 @@ impl ScriptVm {
         self.start_css_images_discovered_by_layout(css_images);
         if matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
-                crate::observer_runtime::queue_intersection_checks(
-                    scope,
-                    runtime_ptr,
-                    crate::native_bridge::element::GeometryRead::Snapshot,
-                );
+                crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,
@@ -2747,29 +2739,19 @@ impl ScriptVm {
 
     pub(crate) fn observable_geometry_batch_for_current_document(
         &mut self,
-        reason: moli_layout::LayoutFlushReason,
         batch: &moli_layout::LayoutQueryBatch<DomHandle>,
     ) -> Result<moli_layout::LayoutAnswers<DomHandle>, moli_layout::LayoutError> {
         let document = self._context_host.borrow().document_handle();
-        self.observable_geometry_batch_for_document(document, reason, batch)
+        self.observable_geometry_batch_for_document(document, batch)
     }
 
     pub(crate) fn observable_geometry_batch_for_document(
         &mut self,
         document: DomHandle,
-        reason: moli_layout::LayoutFlushReason,
         batch: &moli_layout::LayoutQueryBatch<DomHandle>,
     ) -> Result<moli_layout::LayoutAnswers<DomHandle>, moli_layout::LayoutError> {
-        if self
-            ._context_host
-            .borrow()
-            .layout_policy()
-            .uses_real_layout()
-        {
-            self.reconcile_document_web_fonts_for_layout();
-        }
         let host = self._context_host.borrow();
-        crate::native_bridge::element::observable_geometry_batch(&host, document, reason, batch)
+        crate::native_bridge::element::observable_geometry_batch(&host, document, batch)
     }
 
     pub(crate) fn observable_deep_hit_test_for_current_document(
@@ -2777,14 +2759,6 @@ impl ScriptVm {
         point: moli_layout::LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Result<Option<DomHandle>, moli_layout::LayoutError> {
-        if self
-            ._context_host
-            .borrow()
-            .layout_policy()
-            .uses_real_layout()
-        {
-            self.reconcile_document_web_fonts_for_layout();
-        }
         let host = self._context_host.borrow();
         let document = host.document_handle();
         crate::native_bridge::element::observable_deep_hit_test(
@@ -4493,6 +4467,16 @@ impl ScriptVm {
         if !self._context_host.borrow().dom_host().is_connected(handle) {
             return Ok(RendererScrollIntoViewResult::NodeDetached);
         }
+        {
+            let host = self._context_host.borrow();
+            if host.layout_policy().uses_real_layout() {
+                let document = host
+                    .layout_document_for_source(handle)
+                    .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
+                host.with_latest_layout_tree_for_document(document, |_| ())
+                    .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
+            }
+        }
         self.with_default_context_scope(|scope, runtime_ptr| {
             Ok(
                 match crate::native_bridge::element::scroll_node_into_view_if_needed(
@@ -4500,7 +4484,6 @@ impl ScriptVm {
                     runtime_ptr,
                     handle,
                     rect,
-                    moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
                 )? {
                     Some(_) => RendererScrollIntoViewResult::ScrolledOrAlreadyVisible,
                     None => RendererScrollIntoViewResult::NodeDoesNotHaveLayoutObject,
@@ -4523,7 +4506,6 @@ impl ScriptVm {
         };
         let answers = self.observable_geometry_batch_for_document(
             document,
-            moli_layout::LayoutFlushReason::CdpGeometry,
             &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::ClientRects {
                 source: handle,
             }]),
@@ -4590,7 +4572,6 @@ impl ScriptVm {
             let (frame, parent_document, child_viewport) = frame_context;
             let answers = self.observable_geometry_batch_for_document(
                 parent_document,
-                moli_layout::LayoutFlushReason::CdpGeometry,
                 &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::BoxModel {
                     source: frame,
                 }]),
@@ -5157,13 +5138,6 @@ impl ScriptVm {
 
     pub(super) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         self._context_host.borrow_mut().set_layout_policy(policy);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_fresh_layout_reads_for_test(&mut self) {
-        self._context_host
-            .borrow_mut()
-            .force_fresh_layout_reads_for_test();
     }
 
     fn sync_document_fonts_for_environment(&mut self) {

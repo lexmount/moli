@@ -9983,7 +9983,6 @@ parserTarget.focus();
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
             let body = create_connected_html_body_for_test(&mut page_vm);
-            page_vm.vm_mut().force_fresh_layout_reads_for_test();
 
             page_vm
                 .evaluate_expression(
@@ -10151,7 +10150,6 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
             create_connected_html_body_for_test(&mut page_vm);
-            page_vm.vm_mut().force_fresh_layout_reads_for_test();
 
             page_vm
                 .evaluate_expression(
@@ -10341,7 +10339,6 @@ window.parserPendingPointerCaptureReparent =
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
             let body = create_connected_html_body_for_test(&mut page_vm);
-            page_vm.vm_mut().force_fresh_layout_reads_for_test();
 
             page_vm
                 .evaluate_expression(
@@ -10410,7 +10407,6 @@ window.parserScrollAnchorTarget = parserTarget;
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
             create_connected_html_body_for_test(&mut page_vm);
-            page_vm.vm_mut().force_fresh_layout_reads_for_test();
 
             page_vm
                 .evaluate_expression(
@@ -10500,7 +10496,6 @@ window.parserScrollAnchorReparentTarget = parserTarget;
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
             create_connected_html_body_for_test(&mut page_vm);
-            page_vm.vm_mut().force_fresh_layout_reads_for_test();
 
             page_vm
                 .evaluate_expression(

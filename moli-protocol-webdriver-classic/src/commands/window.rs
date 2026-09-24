@@ -2,10 +2,10 @@ use moli_protocol::devtools_runtime::{
     DevToolsActivateTargetCommand, DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
     DevToolsCloseTargetCommand, DevToolsCommand, DevToolsCreateTargetCommand,
     DevToolsDevicePixelRatioSetting, DevToolsGetLayoutMetricsCommand, DevToolsGetTargetsCommand,
-    DevToolsGetTargetsResult, DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand,
-    DevToolsPrintToPdfTransferMode, DevToolsRemoteHandleId, DevToolsScreenshotElementClip,
-    DevToolsSetViewportCommand, DevToolsSetWindowStateCommand, DevToolsTargetId,
-    DevToolsTargetKind, DevToolsViewportSetting, DevToolsWindowState,
+    DevToolsGetTargetsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
+    DevToolsRemoteHandleId, DevToolsScreenshotElementClip, DevToolsSetViewportCommand,
+    DevToolsSetWindowStateCommand, DevToolsTargetId, DevToolsTargetKind, DevToolsViewportSetting,
+    DevToolsWindowState,
 };
 use serde_json::{Value, json};
 
@@ -87,18 +87,6 @@ impl ClassicWindowRect {
             "width": self.width,
             "height": self.height,
         })
-    }
-}
-
-pub fn classic_window_rect_from_metrics(
-    position: ClassicWindowPosition,
-    metrics: DevToolsLayoutMetricsResult,
-) -> ClassicWindowRect {
-    ClassicWindowRect {
-        x: position.x,
-        y: position.y,
-        width: metrics.layout_viewport_width,
-        height: metrics.layout_viewport_height,
     }
 }
 

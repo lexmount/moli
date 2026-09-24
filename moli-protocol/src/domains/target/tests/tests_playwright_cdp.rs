@@ -5903,6 +5903,7 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
         "denied"
     );
 
+    ctx.capture_fixture_layout(Some(&session_id)).await;
     ctx.process_async(json!({
         "id": 238,
         "method": "Page.getLayoutMetrics",

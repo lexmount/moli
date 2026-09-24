@@ -1,7 +1,7 @@
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
 
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
-use super::provider::{GeometryRead, read_element_metrics, read_scroll_into_view_geometry};
+use super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 
 pub(super) fn node_scroll_position(runtime: &JsContextHost, handle: DomHandle) -> (f64, f64) {
     runtime
@@ -159,11 +159,7 @@ pub(crate) fn apply_scroll_observable_effects(
     }
     queue_revealed_lazy_media_loads(scope, runtime_ptr);
     unsafe { &*runtime_ptr }.invalidate_layout_after_interaction_state_change();
-    crate::observer_runtime::queue_intersection_checks(
-        scope,
-        runtime_ptr,
-        moli_layout::LayoutFlushReason::ObserverDelivery.into(),
-    );
+    crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
     if effects
         .iter()
         .any(|effects| effects.queue_document_events())
@@ -208,16 +204,14 @@ pub(crate) fn perform_wheel_scroll_default_action(
     let Some(target) = resolve_scroll_target(runtime, handle) else {
         return Ok(false);
     };
-    let Some(mut geometry) =
-        read_scroll_into_view_geometry(runtime, target, GeometryRead::Snapshot)?
-    else {
+    let Some(mut geometry) = read_scroll_into_view_geometry(runtime, target)? else {
         return Ok(false);
     };
 
     // ScrollIntoView geometry begins at the target's parent. Include the
     // target itself so an empty overflow scroller still responds when its own
     // background is the hit-test result.
-    if let Some(metrics) = read_element_metrics(runtime, target, GeometryRead::Snapshot)?
+    if let Some(metrics) = read_element_metrics(runtime, target)?
         && metrics.is_scroll_container
         && geometry
             .scroll_containers

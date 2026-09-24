@@ -116,6 +116,7 @@ def _raw_semantic_contracts() -> tuple[RawSemanticContract, ...]:
                 "Target.createTarget",
                 "Target.attachToTarget x2",
                 "Runtime.evaluate",
+                "Page.captureScreenshot",
                 "Input.dispatchMouseEvent x2",
                 "Target.getTargetInfo",
             ],
@@ -1441,7 +1442,7 @@ async def _middle_click_background_popup(
         await wait_until(source_document_loaded, "middle-click source document complete")
 
         stage = "install middle-click anchor"
-        fixture_result, _ = await _raw_command(
+        await _raw_command(
             client,
             "Runtime.evaluate",
             {
@@ -1458,9 +1459,19 @@ async def _middle_click_background_popup(
                     "window.__middleAuxclickEvents.push(`${event.type}:${event.button}:${event.isTrusted}`);"
                     "});"
                     "document.body.append(anchor);"
-                    "return anchor.getBoundingClientRect().toJSON();"
                     "})()"
                 ),
+                "returnByValue": True,
+            },
+            session_id=source_session_id,
+        )
+        stage = "publish middle-click fixture"
+        await _raw_command(client, "Page.captureScreenshot", {}, session_id=source_session_id)
+        fixture_result, _ = await _raw_command(
+            client,
+            "Runtime.evaluate",
+            {
+                "expression": "document.querySelector('a').getBoundingClientRect().toJSON()",
                 "returnByValue": True,
             },
             session_id=source_session_id,

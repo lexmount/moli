@@ -3623,6 +3623,7 @@ async fn get_outer_html_and_scroll_low_node_refs_use_renderer_dispatch() {
         "<!doctype html><html><body><section id='target' data-state='ready' style='left:1px;top:2px;width:3px;height:4px'>go</section></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -6057,6 +6058,7 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "<!doctype html><html><body><input value='main'><iframe srcdoc=\"<body><div id='child' style='left:3px;top:4px;width:9px;height:11px'>child-body</div></body>\"></iframe></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 2).await;
 
     ctx.process_async(json!({

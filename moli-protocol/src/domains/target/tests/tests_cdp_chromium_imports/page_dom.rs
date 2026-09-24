@@ -382,6 +382,7 @@ async fn rust_cdp_chromium_import_dom_get_box_model_contract() {
     }))
     .await;
     let selected = take_response_by_id(&mut ctx, 114_007);
+    ctx.capture_fixture_layout(Some(&attached.session_id)).await;
     let node_id = selected["result"]["nodeId"]
         .as_i64()
         .unwrap_or_else(|| panic!("selected node id: {selected}"));

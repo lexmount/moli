@@ -11,6 +11,7 @@ use axum::{
     http::StatusCode,
     response::Response,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
     RendererDocumentLifecycleMilestone, RendererElementClickError, RendererElementClickTarget,
 };
@@ -2220,6 +2221,9 @@ pub(super) async fn webdriver_classic_take_screenshot(
     };
     let context = classic_top_level_context(&binding);
     match binding.runtime.execute(screenshot_command(&context)).await {
+        Ok(DevToolsCommandResult::CaptureScreenshot(result)) => {
+            classic_success_into_response(json!(BASE64_STANDARD.encode(result.bytes.as_ref())))
+        }
         Ok(_) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "screenshot returned an unexpected result",

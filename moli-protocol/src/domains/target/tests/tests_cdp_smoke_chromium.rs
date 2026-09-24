@@ -239,6 +239,7 @@ async fn rust_cdp_chromium_page_layout_metrics_are_populated() {
     )
     .await;
 
+    ctx.capture_fixture_layout(Some(&attached.session_id)).await;
     ctx.process_async(json!({
         "id": 74_006,
         "method": "Page.getLayoutMetrics",
@@ -1307,6 +1308,7 @@ async fn rust_cdp_chromium_dom_get_node_for_location_contract() {
         .as_u64()
         .expect("hit target backend node id");
 
+    ctx.capture_fixture_layout(Some(&attached.session_id)).await;
     ctx.process_async(json!({
         "id": 80_009,
         "method": "DOM.getNodeForLocation",

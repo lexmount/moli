@@ -3325,7 +3325,6 @@ impl PageVm {
             .vm_mut()
             .observable_geometry_batch_for_document(
                 document,
-                moli_layout::LayoutFlushReason::CdpGeometry,
                 &moli_layout::LayoutQueryBatch::new(vec![
                     moli_layout::LayoutQuery::BoxModel { source: handle },
                     moli_layout::LayoutQuery::ContentQuads { source: handle },
@@ -3541,7 +3540,6 @@ impl PageVm {
             .vm_mut()
             .observable_geometry_batch_for_document(
                 document,
-                moli_layout::LayoutFlushReason::CdpGeometry,
                 &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::ClientRects {
                     source: handle,
                 }]),

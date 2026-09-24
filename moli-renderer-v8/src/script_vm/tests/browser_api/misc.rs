@@ -23582,10 +23582,10 @@ fn zhihu_probe_screen_orientation_surface_matches_chromium_headless_essentials()
 fn empty_main_and_section_use_ordinary_css_block_geometry() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               if (!document.documentElement) {
                 document.appendChild(document.createElement("html"));
               }
@@ -23601,7 +23601,8 @@ fn empty_main_and_section_use_ordinary_css_block_geometry() {
               child.id = "message-list";
               main.appendChild(child);
               document.body.appendChild(main);
-              const mainRect = main.getBoundingClientRect();
+              yield; // Publish this scene before reading its geometry.
+const mainRect = main.getBoundingClientRect();
               const childRect = child.getBoundingClientRect();
               return JSON.stringify({
                 main: {
@@ -23620,8 +23621,8 @@ fn empty_main_and_section_use_ordinary_css_block_geometry() {
               });
             })()
             "#,
-        )
-        .expect("main geometry probe should evaluate");
+    )
+    .expect("main geometry probe should evaluate");
 
     assert_eq!(
         result,
@@ -23633,10 +23634,9 @@ fn empty_main_and_section_use_ordinary_css_block_geometry() {
 fn utility_class_names_do_not_synthesize_app_shell_geometry() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
-    let result = vm
-        .eval(
+    let result = eval_with_layout_publications(&mut vm,
             r#"
-            (() => {
+            (function* () {
               if (!document.documentElement) {
                 document.appendChild(document.createElement("html"));
               }
@@ -23672,7 +23672,8 @@ fn utility_class_names_do_not_synthesize_app_shell_geometry() {
               app.appendChild(outer);
               root.appendChild(app);
               document.body.appendChild(root);
-              const outerRect = outer.getBoundingClientRect();
+              yield; // Publish this scene before reading its geometry.
+const outerRect = outer.getBoundingClientRect();
               const innerRect = inner.getBoundingClientRect();
               const scrollRootRect = scrollRoot.getBoundingClientRect();
               const threadRect = thread.getBoundingClientRect();
@@ -23727,10 +23728,10 @@ fn utility_class_names_do_not_synthesize_app_shell_geometry() {
 fn app_shell_geometry_does_not_match_site_specific_names() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               if (!document.documentElement) {
                 document.appendChild(document.createElement("html"));
               }
@@ -23746,7 +23747,8 @@ fn app_shell_geometry_does_not_match_site_specific_names() {
               main.appendChild(namedThread);
               main.appendChild(namedComposer);
               document.body.appendChild(main);
-              const threadRect = namedThread.getBoundingClientRect();
+              yield; // Publish this scene before reading its geometry.
+const threadRect = namedThread.getBoundingClientRect();
               const composerRect = namedComposer.getBoundingClientRect();
               return JSON.stringify({
                 thread: {width: threadRect.width, height: threadRect.height},
@@ -23754,8 +23756,8 @@ fn app_shell_geometry_does_not_match_site_specific_names() {
               });
             })()
             "#,
-        )
-        .expect("site-specific geometry probe should evaluate");
+    )
+    .expect("site-specific geometry probe should evaluate");
 
     assert_eq!(
         result,

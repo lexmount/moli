@@ -10,6 +10,7 @@ async fn async_dispatch_box_quads_and_scroll_support_object_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:3px;top:4px;width:9px;height:11px'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();

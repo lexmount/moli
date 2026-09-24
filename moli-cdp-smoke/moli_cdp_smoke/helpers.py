@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+import base64
 from typing import Any
+
+
+async def capture_layout(page: Any) -> bytes:
+    """Publish fixture layout with CDP, without Playwright's geometry preflight."""
+    client = await page.context.new_cdp_session(page)
+    try:
+        result = await client.send("Page.captureScreenshot", {"format": "png"})
+        return base64.b64decode(result["data"], validate=True)
+    finally:
+        await client.detach()
 
 
 def attach_cdp_event_collector(client: Any, methods: list[str]) -> list[dict[str, Any]]:

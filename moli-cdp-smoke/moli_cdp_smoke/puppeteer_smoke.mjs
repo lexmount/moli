@@ -444,6 +444,9 @@ async function main() {
     );
     record('puppeteer_dom_selector_activation_workflow', domInteractionResult);
 
+    const layoutClient = await page.createCDPSession();
+    await layoutClient.send('Page.captureScreenshot');
+    await layoutClient.detach();
     const nameHandle = await withTimeout('page.$(#name)', page.$('#name'));
     if (!nameHandle) {
       throw new Error('Puppeteer ElementHandle lookup for #name returned null');
@@ -814,6 +817,9 @@ async function main() {
         globalThis.__puppeteerPositionClickCount += 1;
       });
     }));
+    const positionLayout = await page.createCDPSession();
+    await positionLayout.send('Page.captureScreenshot');
+    await positionLayout.detach();
     let positionClickError = null;
     try {
       await withTimeout('page.click(position boundary)', page.click('#position-click'));

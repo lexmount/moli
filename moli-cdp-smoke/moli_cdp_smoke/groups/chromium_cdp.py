@@ -10,7 +10,7 @@ from uuid import UUID
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..fixture import FixtureServer
-from ..helpers import attach_cdp_event_collector, run_worker_command
+from ..helpers import capture_layout, attach_cdp_event_collector, run_worker_command
 
 
 async def run_chromium_cdp_group(state: SmokeState) -> None:
@@ -648,6 +648,7 @@ async def _verify_chromium_cookie_blocked_reason_sample(state: SmokeState) -> No
 async def _verify_chromium_fetch_continuation_extra_info_sample(state: SmokeState) -> None:
     fixture = state.fixture
     await state.page.goto(f"{fixture}/chromium-cdp-lifecycle-page")
+
     observed_methods = [
         "Fetch.requestPaused",
         "Fetch.authRequired",
@@ -894,6 +895,7 @@ async def _verify_chromium_fetch_cancel_auth_response_stage_sample(
     state: SmokeState,
 ) -> None:
     await state.page.goto(f"{state.fixture}/chromium-cdp-lifecycle-page")
+
     url = f"{state.fixture}/api-auth?realm=chromium-fetch-cancel-response-stage"
     methods = [
         "Fetch.requestPaused",
@@ -1006,6 +1008,7 @@ async def _verify_chromium_fetch_cancel_auth_response_stage_sample(
 
 async def _verify_chromium_worker_cancel_auth_response_sample(state: SmokeState) -> None:
     await state.page.goto(f"{state.fixture}/plain")
+
     methods = [
         "Fetch.requestPaused",
         "Fetch.authRequired",
@@ -1145,6 +1148,7 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
         fixture.start()
         origin = fixture.url
         await state.page.goto(f"{origin}/plain")
+
         realm = f"chromium-worker-{kind}-extra-info"
         relative_url = f"/api-auth?realm={realm}"
         url = f"{origin}{relative_url}"
@@ -1303,6 +1307,7 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
     await verify("fetch")
     await verify("xhr")
     await state.page.goto(f"{state.fixture}/plain")
+
     state.record("chromium_worker_auth_extra_info_sample")
 
 
@@ -1312,6 +1317,7 @@ async def _verify_chromium_navigation_cancel_auth_response_sample(
     page = state.page
     cdp = state.cdp
     await page.goto(f"{state.fixture}/plain")
+
     url = f"{state.fixture}/api-auth?realm=chromium-navigation-cancel"
     methods = [
         "Fetch.requestPaused",
@@ -2170,6 +2176,7 @@ async def _verify_chromium_child_frame_multi_session_fanout_sample(
 
     try:
         await page.goto(f"{state.fixture}/plain?child-frame-session-fanout", wait_until="load")
+
         page_only = await state.context.new_cdp_session(page)
         lifecycle = await state.context.new_cdp_session(page)
         page_only_events = attach_cdp_event_collector(page_only, methods)
@@ -2416,6 +2423,7 @@ async def _verify_chromium_page_fragment_navigation_sample(state: SmokeState) ->
 
 async def _verify_chromium_page_layout_metrics_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/chromium-cdp-layout-page")
+    await capture_layout(state.page)
     initial = await state.cdp.send("Page.getLayoutMetrics")
     content = initial.get("cssContentSize") or {}
     viewport = initial.get("cssLayoutViewport") or {}
@@ -3066,6 +3074,7 @@ async def _verify_chromium_input_session_state_sample(state: SmokeState) -> None
 
     try:
         await page.goto(f"{state.fixture}/plain?chromium-input-session-state")
+
         await install_input_fixture()
         primary = await state.context.new_cdp_session(page)
         peer = await state.context.new_cdp_session(page)
@@ -3106,6 +3115,7 @@ async def _verify_chromium_input_session_state_sample(state: SmokeState) -> None
         )
 
         await page.goto(f"{state.fixture}/plain?chromium-input-session-navigation")
+
         await install_input_fixture()
         await dispatch_key(primary, "n")
         assert_equal(
@@ -3139,6 +3149,7 @@ async def _verify_chromium_input_session_state_sample(state: SmokeState) -> None
 async def _verify_chromium_log_domain_sample(state: SmokeState) -> None:
     page = await state.context.new_page()
     await page.goto(f"{state.fixture}/plain?chromium-log-domain")
+
     primary = await state.context.new_cdp_session(page)
     peer = await state.context.new_cdp_session(page)
     controls = await state.context.new_cdp_session(page)
@@ -3364,6 +3375,7 @@ async def _verify_chromium_audits_domain_sample(state: SmokeState) -> None:
     late = None
     try:
         await page.goto(f"{state.fixture}/chromium-audits-quirks-page")
+
         primary = await state.context.new_cdp_session(page)
         peer = await state.context.new_cdp_session(page)
         primary_events = attach_cdp_event_collector(primary, ["Audits.issueAdded"])
@@ -3433,6 +3445,7 @@ async def _verify_chromium_audits_domain_sample(state: SmokeState) -> None:
         assert_equal(await peer.send("Audits.disable"), {}, "peer Audits.disable result")
 
         await page.goto(f"{state.fixture}/chromium-audits-csp-page")
+
         primary_csp_start = len(primary_events)
         peer_disabled_count = len(peer_events)
         evaluate = await primary.send(
@@ -3511,6 +3524,7 @@ async def _verify_chromium_audits_domain_sample(state: SmokeState) -> None:
         )
 
         await page.goto(f"{state.fixture}/plain?chromium-audits-storage-reset")
+
         late = await state.context.new_cdp_session(page)
         late_events = attach_cdp_event_collector(late, ["Audits.issueAdded"])
         assert_equal(await late.send("Audits.enable"), {}, "late Audits.enable result")
@@ -4801,6 +4815,7 @@ async def _verify_chromium_css_computed_style_breadth_sample(state: SmokeState) 
     # only Moli's four size values change; both are stable after getBoxModel.
     size_names = ("width", "height", "inline-size", "block-size")
     initial_sizes = {name: values[name] for name in size_names}
+    await capture_layout(state.page)
     await state.cdp.send("DOM.getBoxModel", {"nodeId": target["nodeId"]})
     sampled_names, sampled_values = await read_computed_style()
     assert_equal(sampled_names, names, "sampled CDP computed style names")
@@ -4880,6 +4895,7 @@ async def _verify_sampled_computed_sizes(state: SmokeState) -> None:
             f'<!doctype html><style>html,body{{margin:0}}</style>'
             f'<{tag} id="sampled-size-target" style="{style}"></{tag}>'
         )
+
         await state.page.evaluate(
             "globalThis.heldSizeStyle = getComputedStyle(document.getElementById('sampled-size-target'))"
         )
@@ -5161,6 +5177,7 @@ async def _verify_chromium_dom_debugger_event_listeners_sample(state: SmokeState
     peer = None
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-listeners")
+
         primary = await state.context.new_cdp_session(page)
         peer = await state.context.new_cdp_session(page)
         evaluated = await primary.send(
@@ -5477,6 +5494,7 @@ async def _verify_chromium_dom_debugger_event_listener_breakpoint_sample(
     peer = None
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-event-breakpoint")
+
         owner = await state.context.new_cdp_session(page)
         peer = await state.context.new_cdp_session(page)
         owner_events = attach_cdp_event_collector(owner, ["Debugger.paused"])
@@ -5636,6 +5654,7 @@ async def _verify_chromium_dom_debugger_event_listener_breakpoint_sample(
             {"eventName": "click"},
         )
         await page.goto(f"{state.fixture}/plain?dom-debugger-event-breakpoint-after-navigation")
+
         navigation_dispatch = asyncio.create_task(
             peer.send(
                 "Runtime.evaluate",
@@ -5716,6 +5735,7 @@ async def _verify_chromium_dom_debugger_dom_breakpoint_sample(
     pause_promise_task: asyncio.Task[Any] | None = None
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-dom-breakpoint")
+
         await page.evaluate(
             """
             document.body.innerHTML = `
@@ -6517,6 +6537,7 @@ async def _verify_chromium_dom_debugger_dom_breakpoint_sample(
         await page.goto(
             f"{state.fixture}/plain?dom-debugger-dom-breakpoint-after-navigation"
         )
+
         navigation_result = await asyncio.wait_for(
             peer.send(
                 "Runtime.evaluate",
@@ -6592,6 +6613,7 @@ async def _verify_chromium_dom_debugger_parser_mutation_no_pause_sample(
     set_content_task: asyncio.Task[Any] | None = None
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-parser-mutation")
+
         session = await state.context.new_cdp_session(page)
         pauses = attach_cdp_event_collector(session, ["Debugger.paused"])
         await session.send("DOM.enable")
@@ -6650,6 +6672,7 @@ async def _verify_chromium_dom_debugger_xhr_breakpoint_sample(
     pending_tasks: list[asyncio.Task[Any]] = []
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-xhr-breakpoint")
+
         owner = await state.context.new_cdp_session(page)
         peer = await state.context.new_cdp_session(page)
         owner_events = attach_cdp_event_collector(owner, ["Debugger.paused"])
@@ -6842,6 +6865,7 @@ async def _verify_chromium_dom_debugger_xhr_breakpoint_sample(
         )
 
         await page.goto(f"{state.fixture}/semantic-frames?dom-debugger-xhr-navigation")
+
         child = next(
             (
                 frame

@@ -3331,6 +3331,7 @@ async fn process_message_async_observes_background_timer_between_evaluates() {
 async fn runtime_evaluate_document_replacement_clears_timer_mutated_inline_style_state() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 3_120,
@@ -3351,6 +3352,7 @@ async fn runtime_evaluate_document_replacement_clears_timer_mutated_inline_style
     let mutated = take_response_by_id(&mut ctx, 3_120);
     assert_eq!(mutated["result"]["result"]["value"], json!("mutated"));
 
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 3_121,
         "method": "Runtime.evaluate",
@@ -3403,6 +3405,7 @@ async fn runtime_evaluate_document_replacement_clears_timer_mutated_inline_style
 async fn isolated_call_function_document_replacement_clears_default_world_style_state() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
+    ctx.capture_fixture_layout(None).await;
     ctx.conn
         .browser_context
         .as_mut()
@@ -3431,6 +3434,7 @@ async fn isolated_call_function_document_replacement_clears_default_world_style_
     let mutated = take_response_by_id(&mut ctx, 3_132);
     assert_eq!(mutated["result"]["result"]["value"], json!("mutated"));
 
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 3_133,
         "method": "Runtime.evaluate",
@@ -3486,6 +3490,7 @@ async fn isolated_call_function_document_replacement_clears_default_world_style_
 async fn playwright_utility_document_replacement_clears_default_world_style_state() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
+    ctx.capture_fixture_layout(None).await;
     ctx.conn
         .browser_context
         .as_mut()
@@ -3540,6 +3545,7 @@ async fn playwright_utility_document_replacement_clears_default_world_style_stat
     .await;
     let _ = take_response_by_id(&mut ctx, 3_144);
 
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 3_145,
         "method": "Runtime.callFunctionOn",

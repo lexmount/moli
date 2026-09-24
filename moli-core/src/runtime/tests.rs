@@ -4950,6 +4950,10 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
+
     let input_backend_node_id = query_selector_node_from_live_document(&mut page, "#field")
         .await?
         .expect("input node should exist")
@@ -5045,6 +5049,10 @@ async fn renderer_owner_created_page_reports_real_client_rect_for_positioned_nod
         .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
+
+    let capture = page.start_capture_screenshot()?;
+    let captured = capture.wait().await?;
+    page.finish_capture_screenshot(captured)?;
 
     let target_backend_node_id = query_selector_node_from_live_document(&mut page, "#target")
         .await?

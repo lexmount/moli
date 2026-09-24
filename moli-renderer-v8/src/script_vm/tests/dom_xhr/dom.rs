@@ -2327,7 +2327,7 @@ fn dom_parser_detached_event_handler_properties_dispatch_through_local_events() 
 }
 #[test]
 fn document_point_queries_use_real_paint_order_geometry() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://document-point-query.test/path/index.html",
         r#"<html><body>
             <div id="target" style="width:100px;height:50px">target</div>
@@ -2353,34 +2353,35 @@ fn document_point_queries_use_real_paint_order_geometry() {
 
 #[test]
 fn parser_coalesced_style_text_updates_main_and_child_hit_tests() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://parser-style-hit-test.test/",
         "<!doctype html><body></body>",
     );
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  function exercise(w) {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
+  function* exercise(w) {
     const d = w.document;
     d.open();
     d.write('<!doctype html><style>\n');
     d.write('html, body {margin:0;padding:0} #target {width:100px;height:100px}');
     d.write('</style><body><div id=target></div>');
+yield; // Publish this scene before reading its geometry.
     const rect = d.getElementById('target').getBoundingClientRect();
     const result = {rect:[rect.x,rect.y,rect.width,rect.height],
       hits:d.elementsFromPoint(1,1).map(e => e.id || e.localName)};
     d.close();
     return result;
   }
-  const main = exercise(window);
+  const main = yield* exercise(window);
   const frame = document.body.appendChild(document.createElement('iframe'));
-  const child = exercise(frame.contentWindow);
+  const child = yield* exercise(frame.contentWindow);
   return JSON.stringify([main,child]);
 })()
 "#,
-        )
-        .expect("coalesced parser text must update its stylesheet before layout queries");
+    )
+    .expect("coalesced parser text must update its stylesheet before layout queries");
     let expected = serde_json::json!({"rect":[0,0,100,100], "hits":["target","body","html"]});
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result).unwrap(),
@@ -2422,10 +2423,10 @@ fn parser_coalesced_text_notifies_main_and_child_mutation_observers() {
     );
 }
 #[test]
-fn point_queries_refresh_geometry_only_when_viewport_changes() {
+fn point_queries_only_follow_explicit_viewport_publication() {
     use moli_layout::{
-        GeometryProvider, LayoutFlushReason, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
-        LayoutQueryBatch, LayoutViewport,
+        GeometryProvider, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
+        LayoutViewport,
     };
 
     let mut vm = new_parsed_test_vm(
@@ -2464,13 +2465,12 @@ fn point_queries_refresh_geometry_only_when_viewport_changes() {
         (100, false, 2),
         (320, true, 3),
     ] {
-        let answers = GeometryProvider::answer(
-            &mut *vm,
-            LayoutFlushReason::HitTest,
-            LayoutViewport::new(width, 200, 1.0),
-            &batch,
-        )
-        .expect("point query batch");
+        if vm.layout_pass_observability_for_test().1 < before + expected_passes {
+            vm.screenshot_layout_snapshot(LayoutViewport::new(width, 200, 1.0))
+                .unwrap()
+                .unwrap();
+        }
+        let answers = GeometryProvider::answer(&mut *vm, &batch).expect("point query batch");
         assert_eq!(answers.answers[0], LayoutQueryAnswer::HitTest(None));
         assert_eq!(
             answers.answers[1],
@@ -2492,16 +2492,16 @@ fn point_queries_refresh_geometry_only_when_viewport_changes() {
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
             before + expected_passes,
-            "viewport changes refresh geometry; same-viewport queries reuse it"
+            "only explicit output publishes the changed viewport"
         );
     }
 }
 
 #[test]
-fn point_queries_refresh_geometry_when_viewport_expands() {
+fn point_queries_follow_explicit_output_when_viewport_expands() {
     use moli_layout::{
-        GeometryProvider, LayoutFlushReason, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
-        LayoutQueryBatch, LayoutViewport,
+        GeometryProvider, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
+        LayoutViewport,
     };
 
     for (initial_size, expanded_size, point) in [
@@ -2530,13 +2530,13 @@ fn point_queries_refresh_geometry_when_viewport_expands() {
             (expanded_size, true, 2),
             (expanded_size, true, 2),
         ] {
-            let answers = GeometryProvider::answer(
-                &mut *vm,
-                LayoutFlushReason::HitTest,
-                LayoutViewport::new(width, height, 1.0),
-                &batch,
-            )
-            .expect("point query batch after viewport expansion");
+            if vm.layout_pass_observability_for_test().1 < before + expected_passes {
+                vm.screenshot_layout_snapshot(LayoutViewport::new(width, height, 1.0))
+                    .unwrap()
+                    .unwrap();
+            }
+            let answers = GeometryProvider::answer(&mut *vm, &batch)
+                .expect("point query batch after viewport expansion");
             assert_eq!(
                 matches!(answers.answers[0], LayoutQueryAnswer::HitTest(Some(_))),
                 expect_hit,
@@ -2553,20 +2553,26 @@ fn point_queries_refresh_geometry_when_viewport_expands() {
             assert_eq!(
                 vm.layout_pass_observability_for_test().1,
                 before + expected_passes,
-                "expansion must rebuild once; repeated queries reuse the expanded tree"
+                "the explicit output builds once; repeated queries consume its tree"
             );
         }
     }
 }
 
 #[test]
-fn document_point_queries_refresh_responsive_geometry_after_viewport_resize() {
+fn document_point_queries_retain_published_geometry_after_viewport_resize() {
     let mut vm = new_parsed_test_vm(
         "https://document-point-query-viewport-expansion.test/",
         "<html><body style='margin:0'><div id='target' style='width:50vw;height:100px'></div></body></html>",
     );
     let before = vm.layout_pass_observability_for_test().1;
     let mut completed_passes = before;
+    let mut published = "[false,false,0]".to_owned();
+    let query = r#"JSON.stringify([
+        document.elementFromPoint(75, 20)?.id === 'target',
+        document.elementsFromPoint(75, 20).some(element => element.id === 'target'),
+        document.getElementById('target').getBoundingClientRect().width
+    ])"#;
     for (width, expected, expected_passes) in [
         (100, "[false,false,50]", 1),
         (320, "[true,true,160]", 2),
@@ -2586,27 +2592,29 @@ fn document_point_queries_refresh_responsive_geometry_after_viewport_resize() {
             completed_passes,
             "changing the viewport alone must not trigger layout"
         );
+        assert_eq!(vm.eval(query).unwrap(), published);
+        assert_eq!(vm.layout_pass_observability_for_test().1, completed_passes);
+        if completed_passes < before + expected_passes {
+            vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(width, 200, 1.0))
+                .unwrap()
+                .unwrap();
+        }
         let result = vm
-            .eval(
-                r#"JSON.stringify([
-                    document.elementFromPoint(75, 20)?.id === 'target',
-                    document.elementsFromPoint(75, 20).some(element => element.id === 'target'),
-                    document.getElementById('target').getBoundingClientRect().width
-                ])"#,
-            )
+            .eval(query)
             .expect("document point queries after viewport resize");
         assert_eq!(result, expected, "viewport width {width}");
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
             before + expected_passes,
-            "both expanding and shrinking refresh the viewport-dependent geometry"
+            "only explicit output refreshes the viewport-dependent geometry"
         );
         completed_passes = before + expected_passes;
+        published = result;
     }
 }
 
 #[test]
-fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
+fn geometry_queries_retain_published_screen_and_resolution_environment() {
     // Exercise each entry point without first warming the other layout mode.
     for hit_test in [false, true] {
         let mut vm = new_parsed_test_vm(
@@ -2626,6 +2634,7 @@ fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
             ..Default::default()
         };
         let before = vm.layout_pass_observability_for_test().1;
+        let mut published_width = "0".to_owned();
         for (screen_width, screen_height, dpr, expected_width, expected_passes) in [
             (1920, 1080, 1.0, 100, 1),
             (1280, 1080, 1.0, 200, 2),
@@ -2653,6 +2662,19 @@ fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
                 passes,
                 "an environment update alone must not trigger layout"
             );
+            assert_eq!(
+                vm.eval("String(target.getBoundingClientRect().width)")
+                    .unwrap(),
+                published_width
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            if passes < before + expected_passes {
+                vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(
+                    800, 600, dpr as f32,
+                ))
+                .unwrap()
+                .unwrap();
+            }
             let result = vm
                 .eval(if hit_test {
                     r#"JSON.stringify([
@@ -2664,6 +2686,7 @@ fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
                     "String(document.getElementById('target').getBoundingClientRect().width)"
                 })
                 .expect("geometry query after screen environment update");
+            published_width = expected_width.to_string();
             let hit = expected_width == 200;
             let expected = if hit_test {
                 format!("[{hit},{hit},{expected_width}]")
@@ -2677,14 +2700,14 @@ fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
             assert_eq!(
                 vm.layout_pass_observability_for_test().1,
                 before + expected_passes,
-                "screen/resolution changes refresh once; unchanged style inputs reuse the tree"
+                "screen/resolution changes become visible only after explicit output"
             );
         }
     }
 }
 
 #[test]
-fn geometry_queries_refresh_after_media_environment_changes() {
+fn geometry_queries_retain_published_media_environment() {
     use crate::protocol_types::EmulatedMediaOverrides;
 
     for overrides in [
@@ -2713,6 +2736,7 @@ fn geometry_queries_refresh_after_media_environment_changes() {
         );
         let defaults = EmulatedMediaOverrides::default();
         let before = vm.layout_pass_observability_for_test().1;
+        let mut published_width = "0".to_owned();
         for (environment, expected_width, expected_passes) in [
             (&defaults, 100, 1),
             (&overrides, 200, 2),
@@ -2722,6 +2746,17 @@ fn geometry_queries_refresh_after_media_environment_changes() {
             let passes = vm.layout_pass_observability_for_test().1;
             vm.set_emulated_media(environment);
             assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            assert_eq!(
+                vm.eval("String(target.getBoundingClientRect().width)")
+                    .unwrap(),
+                published_width
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            if passes < before + expected_passes {
+                vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(800, 600, 1.0))
+                    .unwrap()
+                    .unwrap();
+            }
             let result = vm
                 .eval(
                     r#"JSON.stringify([
@@ -2730,6 +2765,7 @@ fn geometry_queries_refresh_after_media_environment_changes() {
                     ])"#,
                 )
                 .expect("geometry query after media environment update");
+            published_width = expected_width.to_string();
             assert_eq!(
                 result,
                 format!("[{},{}]", expected_width == 200, expected_width)
@@ -2737,7 +2773,7 @@ fn geometry_queries_refresh_after_media_environment_changes() {
             assert_eq!(
                 vm.layout_pass_observability_for_test().1,
                 before + expected_passes,
-                "media changes refresh once; repeated queries reuse the new environment"
+                "media changes become visible only after explicit output"
             );
         }
     }
@@ -2745,7 +2781,7 @@ fn geometry_queries_refresh_after_media_environment_changes() {
 
 #[test]
 fn document_point_queries_parse_webidl_coordinates() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://document-point-query-webidl.test/path/index.html",
         r#"<html><body>
             <div id="target" style="width:100px;height:50px">target</div>
@@ -2795,7 +2831,7 @@ fn document_point_queries_parse_webidl_coordinates() {
 }
 #[test]
 fn shadow_root_point_queries_retarget_real_layout_hits_to_the_tree_scope() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://shadow-root-point-query.test/path/index.html",
         r#"<html><head><style>
             html, body { margin: 0; }
@@ -2803,13 +2839,14 @@ fn shadow_root_point_queries_retarget_real_layout_hits_to_the_tree_scope() {
         </style></head><body><div id="host"></div></body></html>"#,
     );
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const host = document.getElementById('host');
   const shadow = host.attachShadow({ mode: 'closed' });
   shadow.innerHTML = '<span id="inside">text</span>';
+yield; // Publish this scene before reading its geometry.
   return [
     document.elementFromPoint(1, 1)?.id,
     document.elementsFromPoint(1, 1).map(element => element.id || element.localName).join(','),
@@ -2818,8 +2855,8 @@ fn shadow_root_point_queries_retarget_real_layout_hits_to_the_tree_scope() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("shadow root point queries should evaluate");
+    )
+    .expect("shadow root point queries should evaluate");
 
     assert_eq!(result, "host|host,body,html|inside|inside,host,body,html");
 }
@@ -4660,7 +4697,7 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
 fn data_transfer_directory_entries_use_private_slots_for_reflection_and_spoofing() {
     use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
 
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://data-transfer-directory-slots.test/",
         r#"<html><body><div id="drop" style="width: 100px; height: 100px">drop</div></body></html>"#,
     );
@@ -5047,7 +5084,7 @@ fn data_transfer_file_list_reference_tracks_item_mutations() {
 
 #[test]
 fn mouse_dragstart_bubbles_to_window_once() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://dragstart-bubbles-once.test/",
         r#"<html><body><div id="drag" draggable="true">drag</div></body></html>"#,
     );
@@ -5069,7 +5106,7 @@ fn mouse_dragstart_bubbles_to_window_once() {
     )
     .expect("dragstart listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5089,7 +5126,7 @@ fn mouse_dragstart_bubbles_to_window_once() {
 
 #[test]
 fn mouse_drop_requires_prevented_dragover() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://drop-requires-prevented-dragover.test/",
         r#"<html><body><div id="drag" draggable="true">drag</div></body></html>"#,
     );
@@ -5118,7 +5155,7 @@ fn mouse_drop_requires_prevented_dragover() {
     )
     .expect("drag listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5161,7 +5198,7 @@ fn mouse_drop_requires_prevented_dragover() {
 
 #[test]
 fn mouse_dragstart_prevent_default_cancels_drag_session() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://dragstart-prevent-default-cancels.test/",
         r#"<html><body><div id="drag" draggable="true">drag</div></body></html>"#,
     );
@@ -5188,7 +5225,7 @@ fn mouse_dragstart_prevent_default_cancels_drag_session() {
     )
     .expect("drag cancel listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5210,7 +5247,7 @@ fn mouse_dragstart_prevent_default_cancels_drag_session() {
 
 #[test]
 fn mouse_dispatch_emits_pointer_event_properties() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-event-properties.test/",
         r#"<html><body><button id="target">tap</button></body></html>"#,
     );
@@ -5240,7 +5277,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
     )
     .expect("pointer listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer(
@@ -5295,7 +5332,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
 
 #[test]
 fn canceled_pointerdown_suppresses_compat_mouse_events_but_keeps_click() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointerdown-suppresses-compat-mouse.test/",
         r#"<html><body><button id="target">tap</button></body></html>"#,
     );
@@ -5317,7 +5354,7 @@ fn canceled_pointerdown_suppresses_compat_mouse_events_but_keeps_click() {
     )
     .expect("compat suppression listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5333,7 +5370,7 @@ fn canceled_pointerdown_suppresses_compat_mouse_events_but_keeps_click() {
 
 #[test]
 fn pointer_capture_routes_mouse_pointer_until_pointerup() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-routes-mouse.test/",
         r#"<html><body><div id="target0">first</div><div id="target1">second</div></body></html>"#,
     );
@@ -5367,7 +5404,7 @@ fn pointer_capture_routes_mouse_pointer_until_pointerup() {
     )
     .expect("pointer capture listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5388,7 +5425,7 @@ fn pointer_capture_routes_mouse_pointer_until_pointerup() {
 
 #[test]
 fn pointer_capture_lost_dispatches_before_compat_mouseup() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-lost-before-mouseup.test/",
         r#"<html><body><div id="target0">capture</div></body></html>"#,
     );
@@ -5410,7 +5447,7 @@ fn pointer_capture_lost_dispatches_before_compat_mouseup() {
     )
     .expect("pointer capture mouseup order listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5429,7 +5466,7 @@ fn pointer_capture_lost_dispatches_before_compat_mouseup() {
 
 #[test]
 fn pointer_capture_mouse_events_preserve_modifiers() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-mouse-modifiers.test/",
         r#"<html><body><div id="target0">capture</div></body></html>"#,
     );
@@ -5451,7 +5488,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
     )
     .expect("pointer capture modifier listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -5492,7 +5529,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
 
 #[test]
 fn touch_pointer_implicit_capture_routes_until_pointerup() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://touch-pointer-implicit-capture.test/",
         r#"<html><body><div id="target0">first</div><div id="target1">second</div></body></html>"#,
     );
@@ -5535,7 +5572,7 @@ fn touch_pointer_implicit_capture_routes_until_pointerup() {
 
 #[test]
 fn touch_pointer_capture_lost_dispatches_before_touchend() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://touch-pointer-lost-before-touchend.test/",
         r#"<html><body><div id="target0">capture</div></body></html>"#,
     );
@@ -5570,7 +5607,7 @@ fn touch_pointer_capture_lost_dispatches_before_touchend() {
 
 #[test]
 fn touch_pointer_capture_can_route_to_explicit_capture_target() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://touch-pointer-explicit-capture.test/",
         r#"<html><body><div id="button">button</div><div id="target0">capture</div></body></html>"#,
     );
@@ -5623,7 +5660,7 @@ fn touch_pointer_capture_can_route_to_explicit_capture_target() {
 
 #[test]
 fn pointer_raw_update_dispatches_after_pointer_boundary_before_mouse_boundary() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-raw-update-order.test/",
         r#"<html><body><div id="init">init</div><div id="target">target</div></body></html>"#,
     );
@@ -5647,7 +5684,7 @@ fn pointer_raw_update_dispatches_after_pointer_boundary_before_mouse_boundary() 
     )
     .expect("pointer raw update listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousemove", -1, None, 0.0, 0.0)
@@ -5666,7 +5703,7 @@ fn pointer_raw_update_dispatches_after_pointer_boundary_before_mouse_boundary() 
 
 #[test]
 fn pointer_raw_update_flushes_capture_before_pointermove() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-raw-update-capture.test/",
         r#"<html><body><div id="target0">first</div><div id="target1">second</div></body></html>"#,
     );
@@ -5701,7 +5738,7 @@ fn pointer_raw_update_flushes_capture_before_pointermove() {
     )
     .expect("pointer raw update capture listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5722,7 +5759,7 @@ fn pointer_raw_update_flushes_capture_before_pointermove() {
 
 #[test]
 fn release_pointer_capture_clears_pending_capture_before_got_event() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-release-pending.test/",
         r#"<html><body><div id="target0">first</div><div id="target1">second</div></body></html>"#,
     );
@@ -5759,7 +5796,7 @@ fn release_pointer_capture_clears_pending_capture_before_got_event() {
     )
     .expect("release capture listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5780,7 +5817,7 @@ fn release_pointer_capture_clears_pending_capture_before_got_event() {
 
 #[test]
 fn removing_got_pointer_capture_target_dispatches_lost_on_document() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-got-removal.test/",
         r#"<html><body><div id="button">button</div><div id="target0">capture</div></body></html>"#,
     );
@@ -5817,7 +5854,7 @@ fn removing_got_pointer_capture_target_dispatches_lost_on_document() {
     )
     .expect("capture removal listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5836,7 +5873,7 @@ fn removing_got_pointer_capture_target_dispatches_lost_on_document() {
 
 #[test]
 fn lost_pointer_capture_can_remove_pending_target_before_got() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-lost-removes-pending.test/",
         r#"<html><body><div id="button">button</div><div id="target0">capture0</div><div id="target1">capture1</div></body></html>"#,
     );
@@ -5873,7 +5910,7 @@ fn lost_pointer_capture_can_remove_pending_target_before_got() {
     )
     .expect("pending capture removal listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5894,7 +5931,7 @@ fn lost_pointer_capture_can_remove_pending_target_before_got() {
 
 #[test]
 fn removed_pending_pointer_capture_target_is_cleared_immediately() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-pending-removal-hook.test/",
         r#"<html><body><div id="button">button</div><div id="target0">capture</div></body></html>"#,
     );
@@ -5926,7 +5963,7 @@ fn removed_pending_pointer_capture_target_is_cleared_immediately() {
     )
     .expect("pending capture hook listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -5942,7 +5979,7 @@ fn removed_pending_pointer_capture_target_is_cleared_immediately() {
 
 #[test]
 fn removed_active_pointer_capture_target_loses_capture_on_next_event() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-capture-active-removal-hook.test/",
         r#"<html><body><div id="button">button</div><div id="target0">capture</div></body></html>"#,
     );
@@ -5980,7 +6017,7 @@ fn removed_active_pointer_capture_target_loses_capture_on_next_event() {
     )
     .expect("active capture hook listener setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
@@ -6001,7 +6038,7 @@ fn removed_active_pointer_capture_target_loses_capture_on_next_event() {
 
 #[test]
 fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://pointer-boundary-order.test/",
         r#"<html><body><div id="a">a</div><div id="b">b</div></body></html>"#,
     );
@@ -6041,7 +6078,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
         twist: 0.0,
     };
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
     vm.dispatch_mouse_event_at_point_with_pointer(
         10.0,
@@ -6079,7 +6116,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
 
 #[test]
 fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_fresh_paint() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://hover-dropdown.test/",
         r#"
 <!doctype html>
@@ -6139,7 +6176,7 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_fresh_paint() {
         "false|none"
     );
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "mousemove", -1, Some(0), 0.0, 0.0)
@@ -8137,7 +8174,7 @@ fn dom_parser_inner_text_is_html_only() {
 
 #[test]
 fn live_inner_text_applies_inline_text_transform() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-transform.test/",
         r#"<!doctype html><html><body>
           <a id="upper" style="text-transform: uppercase">link<br>text</a>
@@ -8170,7 +8207,7 @@ fn live_inner_text_applies_inline_text_transform() {
 
 #[test]
 fn live_inner_text_preserves_breaks_and_private_use_text_during_normalization() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-single-pass.test/",
         r#"<!doctype html><html><body>
           <div id="target" style="text-transform: uppercase">
@@ -8189,12 +8226,12 @@ fn live_inner_text_preserves_breaks_and_private_use_text_during_normalization() 
 
 #[test]
 fn inner_text_matches_chromium_structural_and_white_space_rules() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-structure.test/",
         "<!doctype html><html><body></body></html>",
     );
 
-    let result = vm
+    vm
         .eval(
             r#"
 (() => {
@@ -8257,12 +8294,19 @@ fn inner_text_matches_chromium_structural_and_white_space_rules() {
     canvas: read('<div id="x">a<canvas>b</canvas>c</div>'),
     svgStop: read('<div id="x"><svg><stop>abc</stop></svg></div>')
   };
+globalThis.__readFixture = () => {
   return JSON.stringify(Object.fromEntries(
     Object.entries(cases).map(([name, index]) => [name, targets[index].innerText])
   ));
+};
 })()
 "#,
         )
+        .expect("Chromium-shaped structural innerText cases should evaluate");
+    vm.publish_layout_for_test()
+        .expect("publish prepared fixture");
+    let result = vm
+        .eval("__readFixture()")
         .expect("Chromium-shaped structural innerText cases should evaluate");
 
     assert_eq!(
@@ -8273,12 +8317,12 @@ fn inner_text_matches_chromium_structural_and_white_space_rules() {
 
 #[test]
 fn inner_text_matches_chromium_table_and_select_rules() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-table-select.test/",
         "<!doctype html><html><body></body></html>",
     );
 
-    let result = vm
+    vm
         .eval(
             r#"
 (() => {
@@ -8311,12 +8355,19 @@ fn inner_text_matches_chromium_table_and_select_rules() {
     outsideOptgroup: read('<div id="x">a<optgroup>ignored</optgroup>bc</div>'),
     outsideOption: read('<div id="x">a<option>one</option>bc</div>')
   };
+globalThis.__readFixture = () => {
   return JSON.stringify(Object.fromEntries(
     Object.entries(cases).map(([name, index]) => [name, targets[index].innerText])
   ));
+};
 })()
 "#,
         )
+        .expect("Chromium-shaped table/select innerText cases should evaluate");
+    vm.publish_layout_for_test()
+        .expect("publish prepared fixture");
+    let result = vm
+        .eval("__readFixture()")
         .expect("Chromium-shaped table/select innerText cases should evaluate");
 
     assert_eq!(
@@ -8327,7 +8378,7 @@ fn inner_text_matches_chromium_table_and_select_rules() {
 
 #[test]
 fn inner_text_projects_closed_details_rendered_subtree() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-details.test/",
         r#"<!doctype html><html><body>
           <details id="target"><summary><span id="summary-child">first</span></summary><summary id="second">second</summary><div id="hidden-child">details</div></details>
@@ -8370,7 +8421,7 @@ fn inner_text_projects_closed_details_rendered_subtree() {
 
 #[test]
 fn check_visibility_and_inner_text_use_computed_rendered_state() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://rendered-state.test/",
         r#"<!doctype html><html><head><style>
           .hidden { display: none; }
@@ -8457,7 +8508,7 @@ fn check_visibility_and_inner_text_use_computed_rendered_state() {
 
 #[test]
 fn content_visibility_only_locks_chromium_eligible_boxes() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://content-visibility-applicability.test/",
         r#"<!doctype html><html><body>
           <span id="inline" style="content-visibility: hidden">inline visible</span>
@@ -8497,7 +8548,7 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
 
 #[test]
 fn rendered_style_facts_refresh_after_synchronous_mutations() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://rendered-style-mutation.test/",
         r#"<!doctype html><html><head><style>
           .hidden { display: none; }
@@ -8572,6 +8623,7 @@ for (let index = 0; index < 128; index++) {
         .borrow()
         .style_world_full_snapshots_for_test();
     let layout_before = vm.layout_pass_observability_for_test();
+    publish_layout_for_test(&mut vm);
     let first = vm
         .eval(
             "(() => { const text = target.innerText; return [text.length, text[0], text[127]].join('|'); })()",
@@ -8692,7 +8744,7 @@ for (let index = 0; index < 128; index++) {
 
 #[test]
 fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-latest-layout.test/",
         "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
     );
@@ -8708,10 +8760,10 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
 
     assert_eq!(
         vm.eval("document.getElementById('target').innerText")
-            .expect("the cold innerText read should evaluate"),
+            .expect("the published innerText read should evaluate"),
         "a"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
 
     assert_eq!(
         vm.eval(
@@ -8721,23 +8773,23 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
         "a",
         "a text source absent from the latest frozen layout tree remains unrendered until refresh"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
 
     vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
         .expect("fresh paint layout should succeed")
         .expect("the fixture should have a layout root");
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
     assert_eq!(
         vm.eval("target.innerText")
             .expect("innerText should read the refreshed geometry snapshot"),
         "ab"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
 
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 2);
-    assert_eq!(cache_after.1, cache_before.1 + 1);
-    assert_eq!(cache_after.2, cache_before.2 + 2);
+    assert_eq!(cache_after.0, cache_before.0 + 3);
+    assert_eq!(cache_after.1, cache_before.1);
+    assert_eq!(cache_after.2, cache_before.2 + 1);
 }
 
 #[test]
@@ -8757,6 +8809,7 @@ fn inner_text_updates_device_in_place_without_full_style_world_snapshots() {
         ._context_host
         .borrow()
         .style_world_full_snapshots_for_test();
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("document.getElementById('target').innerText")
             .expect("screen innerText read should evaluate"),
@@ -8834,7 +8887,7 @@ fn inner_text_updates_device_in_place_without_full_style_world_snapshots() {
 
 #[test]
 fn same_document_history_url_mutations_preserve_style_world() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://inner-text-document-url-style-world.test/start/index.html",
         r#"<!doctype html><html><head><style>
           #target { text-transform: uppercase; background-image: url(asset.png); }
@@ -8989,6 +9042,7 @@ host.attachShadow({mode: 'open'}).innerHTML =
         .borrow()
         .style_world_full_snapshots_for_test();
     let layout_before = vm.layout_pass_observability_for_test();
+    publish_layout_for_test(&mut vm);
 
     let first_text = vm
         .eval("host.innerText")
@@ -9458,10 +9512,10 @@ fn dom_parser_elements_expose_dataset_has_attribute_and_element_traversal() {
 fn child_shadow_root_legacy_wpt_attributes_and_methods() {
     let mut vm = new_storage_test_vm("https://child-shadow-root-legacy-wpt.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const frame = document.createElement('iframe');
   (document.body || document.documentElement || document).appendChild(frame);
   const doc = frame.contentWindow.document;
@@ -9499,6 +9553,7 @@ fn child_shadow_root_legacy_wpt_attributes_and_methods() {
   const selection = selectionRoot.getSelection();
   selection.removeAllRanges();
   selection.addRange(range);
+yield; // Publish this scene before reading its geometry.
   const selectedText = selectionRoot.getSelection().toString();
 
   let cloneError = '';
@@ -9520,8 +9575,8 @@ fn child_shadow_root_legacy_wpt_attributes_and_methods() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("child ShadowRoot legacy WPT surface should evaluate");
+    )
+    .expect("child ShadowRoot legacy WPT surface should evaluate");
 
     assert_eq!(
         result,

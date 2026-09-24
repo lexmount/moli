@@ -6151,11 +6151,11 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
             let (result, events) = execute_devtools_handle_javascript_dialog_command(conn, command);
             (result, events, None)
         }
-        DevToolsCommand::CaptureScreenshot(command) => (
-            execute_devtools_capture_screenshot_command(conn, command).await,
-            Vec::new(),
-            None,
-        ),
+        DevToolsCommand::CaptureScreenshot(command) => {
+            let (result, predecessor) =
+                execute_devtools_capture_screenshot_command(conn, command).await;
+            (result, Vec::new(), predecessor)
+        }
         DevToolsCommand::PrintToPdf(command) => (
             execute_devtools_print_to_pdf_command(conn, command),
             Vec::new(),
@@ -6424,12 +6424,112 @@ fn devtools_target_info_for_target_id(
         .find_map(|browser_context| browser_context.devtools_target_info(target_id))
 }
 
+fn renderer_screenshot_request(
+    command: &DevToolsCaptureScreenshotCommand,
+    base_background_color: [u8; 4],
+) -> Result<RendererCaptureScreenshotRequest, DevToolsError> {
+    let format = match command.format.as_deref() {
+        None | Some("png") => RendererScreenshotFormat::Png,
+        Some("jpeg") => RendererScreenshotFormat::Jpeg,
+        Some(_) => {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::InvalidArgument,
+                "Invalid image format",
+            ));
+        }
+    };
+    let region = match command.clip.as_ref() {
+        Some(DevToolsCaptureScreenshotClip::Box(clip)) => {
+            let clip = RendererScreenshotClip {
+                x: clip.x,
+                y: clip.y,
+                width: clip.width,
+                height: clip.height,
+                scale: clip.scale,
+            };
+            if command.capture_beyond_viewport {
+                RendererScreenshotRegion::PageClip(clip)
+            } else {
+                RendererScreenshotRegion::ViewportClip(clip)
+            }
+        }
+        Some(DevToolsCaptureScreenshotClip::Element(_)) => {
+            return Err(devtools_capture_screenshot_error(command));
+        }
+        None if command.capture_beyond_viewport => RendererScreenshotRegion::FullDocument,
+        None => RendererScreenshotRegion::Viewport,
+    };
+    Ok(RendererCaptureScreenshotRequest {
+        purpose: RendererScreenshotPurpose::Screenshot,
+        base_background_color,
+        format,
+        quality: command.quality.unwrap_or(80),
+        region,
+        optimize_for_speed: command.optimize_for_speed,
+        max_width: None,
+        max_height: None,
+    })
+}
+
 async fn execute_devtools_capture_screenshot_command(
     conn: &mut CdpConnection,
     command: DevToolsCaptureScreenshotCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
-    validate_page_capture_target_context(conn, &command.context)?;
-    Err(devtools_capture_screenshot_error(&command))
+) -> (
+    Result<DevToolsCommandResult, DevToolsError>,
+    Option<moli_core::RendererOutputFence>,
+) {
+    let mut predecessor = None;
+    let result = async {
+        validate_page_capture_target_context(conn, &command.context)?;
+        // Child-context and element-clip captures retain their unsupported boundary.
+        if command.context.target_id.as_ref().is_some_and(|target| {
+            conn.target_session_route_for_target_id(target.as_str())
+                .is_none()
+        }) || !conn.layout_policy().uses_real_layout()
+        {
+            return Err(devtools_capture_screenshot_error(&command));
+        }
+        let owner = page_command_owner(conn, &command.context)?;
+        let request =
+            renderer_screenshot_request(&command, conn.default_background_color_for_owner(&owner))?;
+        let capture_error =
+            |message| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
+        let page = conn
+            .loaded_page_mut_for_protocol_access_for_owner(&owner)
+            .map_err(capture_error)?;
+        let pending = page
+            .start_capture_screenshot_with_request(request)
+            .map_err(|error| capture_error(error.to_string()))?;
+        let completion = pending
+            .wait()
+            .await
+            .map_err(|error| capture_error(error.to_string()))?;
+        predecessor = completion.renderer_output_predecessor();
+        let page = conn
+            .loaded_page_mut_for_protocol_access_for_owner(&owner)
+            .map_err(capture_error)?;
+        let reply = page
+            .finish_capture_screenshot(completion)
+            .map_err(|error| capture_error(error.to_string()))?;
+        match reply {
+            RendererCaptureScreenshotReply::Captured(image) => Ok(
+                DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
+                    mime_type: image.mime_type,
+                    width: image.width,
+                    height: image.height,
+                    bytes: image.bytes,
+                }),
+            ),
+            RendererCaptureScreenshotReply::LayoutDisabled => Err(capture_error(
+                CAPTURE_SCREENSHOT_LAYOUT_DISABLED_MESSAGE.to_owned(),
+            )),
+            RendererCaptureScreenshotReply::NoDocument => {
+                Err(capture_error("NoDocumentLoaded".to_owned()))
+            }
+        }
+    }
+    .await;
+    (result, predecessor)
 }
 
 fn execute_devtools_get_javascript_dialog_command(
@@ -6768,48 +6868,11 @@ fn start_devtools_capture_screenshot_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let format = match command.format.as_deref() {
-        None | Some("png") => RendererScreenshotFormat::Png,
-        Some("jpeg") => RendererScreenshotFormat::Jpeg,
-        Some(_) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32602,
-                "Invalid image format",
-            ));
+    let request = match renderer_screenshot_request(&command, base_background_color) {
+        Ok(request) => request,
+        Err(error) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
         }
-    };
-    let region = match command.clip.as_ref() {
-        Some(DevToolsCaptureScreenshotClip::Box(clip)) => {
-            let clip = RendererScreenshotClip {
-                x: clip.x,
-                y: clip.y,
-                width: clip.width,
-                height: clip.height,
-                scale: clip.scale,
-            };
-            if command.capture_beyond_viewport {
-                RendererScreenshotRegion::PageClip(clip)
-            } else {
-                RendererScreenshotRegion::ViewportClip(clip)
-            }
-        }
-        Some(DevToolsCaptureScreenshotClip::Element(_)) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                devtools_capture_screenshot_error(&command),
-            ));
-        }
-        None if command.capture_beyond_viewport => RendererScreenshotRegion::FullDocument,
-        None => RendererScreenshotRegion::Viewport,
-    };
-    let request = RendererCaptureScreenshotRequest {
-        purpose: RendererScreenshotPurpose::Screenshot,
-        base_background_color,
-        format,
-        quality: command.quality.unwrap_or(80),
-        region,
-        optimize_for_speed: command.optimize_for_speed,
-        max_width: None,
-        max_height: None,
     };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {

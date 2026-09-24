@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 from . import SmokeState
+from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal
 from ..png_image import decode_png
 from ..raw_cdp import discover_websocket_url
@@ -70,6 +71,7 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("initial/read-geometry")
     metrics = await page.evaluate(
         """() => [
@@ -100,7 +102,7 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     )
 
     _checkpoint("initial/capture-screenshot")
-    image = decode_png(await page.screenshot())
+    image = decode_png(await capture_layout(page))
     assert_equal(
         (image.width, image.height),
         (800, 700),
@@ -144,7 +146,7 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
             "scroll input retains the published geometry",
         )
     _checkpoint("initial/publish-drag-state")
-    await page.screenshot()
+    await capture_layout(page)
     _checkpoint("initial/read-drag-state")
     state_after_drag = await page.evaluate(
         """() => ({
@@ -167,17 +169,17 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
         before_controls = float(state_after_drag["top"])
         await mouse("mousePressed", 190, 5, pressed=True)
         await mouse("mouseReleased", 190, 5, pressed=False)
-        await page.screenshot()
+        await capture_layout(page)
         _checkpoint("initial/read-back-button-state")
         after_back = float(await page.evaluate("() => scroller.scrollTop"))
         await mouse("mousePressed", 190, 80, pressed=True)
         await mouse("mouseReleased", 190, 80, pressed=False)
-        await page.screenshot()
+        await capture_layout(page)
         _checkpoint("initial/read-forward-button-state")
         after_forward = float(await page.evaluate("() => scroller.scrollTop"))
         await mouse("mousePressed", 190, 60, pressed=True)
         await mouse("mouseReleased", 190, 60, pressed=False)
-        await page.screenshot()
+        await capture_layout(page)
         _checkpoint("initial/read-track-state")
         after_track = float(await page.evaluate("() => scroller.scrollTop"))
         control_scroll = [before_controls, after_back, after_forward, after_track]
@@ -286,6 +288,7 @@ async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) ->
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("multi-scroller/read-geometry")
     metrics = await page.evaluate(
         """() => {
@@ -336,7 +339,7 @@ async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) ->
         await mouse("mousePressed", 225, 75, pressed=True)
         await mouse("mouseMoved", 515, 115, pressed=True)
         await mouse("mouseReleased", 515, 115, pressed=False)
-        await page.screenshot()
+        await capture_layout(page)
         _checkpoint("multi-scroller/read-captured-drag-state")
         first_drag = await page.evaluate(
             """() => [
@@ -376,7 +379,7 @@ async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) ->
               document.getElementById("inner").scrollTop = 0;
             }"""
         )
-        await page.screenshot()
+        await capture_layout(page)
         await mouse("mousePressed", 225, 25, pressed=True)
         await mouse("mouseMoved", 700, 45, pressed=True)
         await mouse("mouseReleased", 700, 45, pressed=False)
@@ -384,7 +387,7 @@ async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) ->
         await mouse("mouseMoved", 295, 125, pressed=True)
         await mouse("mouseReleased", 295, 125, pressed=False)
 
-        await page.screenshot()
+        await capture_layout(page)
         _checkpoint("multi-scroller/read-final-drag-state")
         state_after = await page.evaluate(
             """() => ({
@@ -460,6 +463,7 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("root/read-overflow-geometry")
     metrics = await page.evaluate(
         """() => ({
@@ -486,7 +490,7 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         raise SmokeError(f"root scrollbar fixture did not overflow: {metrics!r}")
 
     _checkpoint("root/capture-overflow-screenshot")
-    image = decode_png(await page.screenshot())
+    image = decode_png(await capture_layout(page))
     right = metrics["innerWidth"] - 5
     bottom = metrics["innerHeight"] - 5
     assert_equal(image.pixel(right, 30), (255, 0, 0, 255), "root vertical thumb paint")
@@ -557,6 +561,7 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("root/read-containing-block-geometry")
     containing_block = await page.evaluate(
         """() => {
@@ -594,6 +599,7 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
 
     async def stable_metrics() -> list[float]:
         return await page.evaluate(
@@ -630,6 +636,7 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("root/read-stable-overflow-geometry")
     stable_overflow = await stable_metrics()
     assert_equal(
@@ -654,8 +661,9 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("root/capture-rtl-screenshot")
-    rtl_image = decode_png(await page.screenshot())
+    rtl_image = decode_png(await capture_layout(page))
     assert_equal(
         rtl_image.pixel(795, 30),
         (255, 0, 0, 255),
@@ -702,6 +710,7 @@ async def _run_closed_popover_overflow_workflow(state: SmokeState, is_moli: bool
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
 
     async def metrics() -> list[float | str]:
         return await page.evaluate(
@@ -718,7 +727,7 @@ async def _run_closed_popover_overflow_workflow(state: SmokeState, is_moli: bool
     assert_equal(closed, ["none", 0, 785, 785], "closed popover stays out of root overflow")
     _checkpoint("popover/show")
     await page.evaluate("() => tip.showPopover()")
-    await page.screenshot()
+    await capture_layout(page)
     _checkpoint("popover/read-open-geometry")
     opened = await metrics()
     assert_equal(
@@ -728,7 +737,7 @@ async def _run_closed_popover_overflow_workflow(state: SmokeState, is_moli: bool
     )
     _checkpoint("popover/hide")
     await page.evaluate("() => tip.hidePopover()")
-    await page.screenshot()
+    await capture_layout(page)
     _checkpoint("popover/read-reclosed-geometry")
     reclosed = await metrics()
     assert_equal(reclosed, closed, "closing popover removes its root overflow contribution")
@@ -780,6 +789,7 @@ async def _run_painted_surface_workflow(state: SmokeState, is_moli: bool) -> Non
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("painted-surface/prepare-overlap")
     await page.evaluate(
         """() => {
@@ -787,7 +797,7 @@ async def _run_painted_surface_workflow(state: SmokeState, is_moli: bool) -> Non
           return [scroller.clientWidth, scroller.clientHeight, overlay.getBoundingClientRect().x];
         }"""
     )
-    await page.screenshot()
+    await capture_layout(page)
 
     async def mouse(event_type: str, x: int, y: int, *, pressed: bool) -> None:
         _checkpoint(f"painted-surface/input-{event_type}-{x}-{y}")
@@ -834,7 +844,7 @@ async def _run_painted_surface_workflow(state: SmokeState, is_moli: bool) -> Non
     )
     # Publish the scene after hiding the overlay so input uses the new surface.
     _checkpoint("painted-surface/render-after-mutation")
-    await page.screenshot()
+    await capture_layout(page)
     # The lower-right 15x15 intersection is painted UA chrome. Moli exposes
     # it as a consume-only control surface rather than a DOM target.
     await mouse("mousePressed", 210, 110, pressed=True)
@@ -891,6 +901,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("viewport-policy/read-both-edges-geometry")
     both_edges = await page.evaluate(
         """() => ["block", "flex", "grid", "overflow"].map(id => {
@@ -965,6 +976,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("viewport-policy/read-edge-insets-geometry")
     resolved_edge_insets = await page.evaluate(
         """() => [
@@ -1009,6 +1021,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
 
     async def wheel(delta_y: int) -> None:
         await cdp.send(
@@ -1052,7 +1065,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
           scrollTo(0, 0);
         }"""
     )
-    await page.screenshot()
+    await capture_layout(page)
     auto_width = await page.evaluate("() => document.documentElement.clientWidth")
     assert_equal(auto_width, 785, "body auto exposes the viewport scrollbar")
     _checkpoint("viewport-policy/wheel-auto")
@@ -1070,7 +1083,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
           scrollTo(0, 100);
         }"""
     )
-    await page.screenshot()
+    await capture_layout(page)
     clip_width = await page.evaluate("() => document.documentElement.clientWidth")
     assert_equal(clip_width, 800, "body clip maps to hidden at the viewport")
     _checkpoint("viewport-policy/wheel-clip")
@@ -1092,6 +1105,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
 
     async def root_gutter_metrics() -> list[float]:
         return await page.evaluate(
@@ -1113,7 +1127,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         "() => { document.documentElement.style.scrollbarGutter = 'stable both-edges'; }"
     )
     _checkpoint("viewport-policy/render-root-both-edges")
-    await page.screenshot()
+    await capture_layout(page)
     _checkpoint("viewport-policy/read-root-both-edges-geometry")
     both_edge_root = await root_gutter_metrics()
     assert_equal(
@@ -1133,6 +1147,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     _checkpoint("viewport-policy/read-display-contents-width")
     display_contents_width = await page.evaluate(
         "() => document.documentElement.getBoundingClientRect().width"
@@ -1145,7 +1160,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
     _checkpoint("viewport-policy/restore-principal-body")
     await page.evaluate("() => { document.body.style.display = 'block'; }")
     _checkpoint("viewport-policy/render-principal-body")
-    await page.screenshot()
+    await capture_layout(page)
     _checkpoint("viewport-policy/read-principal-body-width")
     principal_body_width = await page.evaluate(
         "() => document.documentElement.getBoundingClientRect().width"

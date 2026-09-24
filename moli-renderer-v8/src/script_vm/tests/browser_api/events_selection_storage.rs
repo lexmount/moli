@@ -3121,9 +3121,8 @@ fn range_uses_native_record_storage_and_static_range_keeps_boundary_slots() {
 fn selection_record_handle_ignores_legacy_slot_name_property() {
     let mut vm = new_storage_test_vm("https://selection-record-internal-field.test/");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
             (() => {
               const container = document.body || document.documentElement || document;
               const host = document.createElement("div");
@@ -3131,6 +3130,7 @@ fn selection_record_handle_ignores_legacy_slot_name_property() {
               host.appendChild(text);
               container.appendChild(host);
 
+globalThis.__readFixture = () => {
               const selection = getSelection();
               selection.__moliSelectionRecordId = 0n;
               selection.setBaseAndExtent(text, 1, text, 3);
@@ -3148,9 +3148,15 @@ fn selection_record_handle_ignores_legacy_slot_name_property() {
                 range.endOffset,
                 selection.toString()
               ].join("|");
-            })()
+            };
+})()
             "#,
-        )
+    )
+    .expect("Selection native record handle should ignore public legacy-slot-name spoofing");
+    vm.publish_layout_for_test()
+        .expect("publish prepared fixture");
+    let result = vm
+        .eval("__readFixture()")
         .expect("Selection native record handle should ignore public legacy-slot-name spoofing");
 
     assert_eq!(result, "true|true|1|true|3|true|1|true|3|bc");
@@ -3198,10 +3204,10 @@ fn document_create_range_declared_method_keeps_descriptor_and_behavior() {
 fn range_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://range-prototype-methods.test/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               const methods = [
                 ["setStart", 2],
                 ["setEnd", 2],
@@ -3256,7 +3262,8 @@ fn range_prototype_methods_are_declared_operations() {
               range.setStart(text, 1);
               range.setEnd(text, 4);
               const clone = range.cloneRange();
-              const rect = range.getBoundingClientRect();
+              yield; // Publish this scene before reading its geometry.
+const rect = range.getBoundingClientRect();
               const rects = range.getClientRects();
               const behavior = [
                 range.toString(),
@@ -3283,8 +3290,8 @@ fn range_prototype_methods_are_declared_operations() {
               });
             })()
             "#,
-        )
-        .expect("Range prototype method descriptor probe should evaluate");
+    )
+    .expect("Range prototype method descriptor probe should evaluate");
 
     assert_eq!(
         result,
@@ -3620,10 +3627,10 @@ fn range_contents_handles_cdata_pi_foreign_text_and_doctype_edges() {
 fn selection_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://selection-prototype-methods.test/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               const methods = [
                 ["getRangeAt", 1],
                 ["addRange", 1],
@@ -3720,7 +3727,8 @@ fn selection_prototype_methods_are_declared_operations() {
                 Selection.prototype[slot] = "prototype-spoof";
                 selection[slot] = "own-spoof";
               }
-              const behavior = [
+              yield; // Publish this scene before reading its geometry.
+const behavior = [
                 selection.getRangeAt(0) === range,
                 selection.toString(),
                 selection.containsNode(text, true),
@@ -3765,8 +3773,8 @@ fn selection_prototype_methods_are_declared_operations() {
               });
             })()
             "#,
-        )
-        .expect("Selection prototype method descriptor probe should evaluate");
+    )
+    .expect("Selection prototype method descriptor probe should evaluate");
 
     assert_eq!(
         result,
@@ -8348,10 +8356,10 @@ fn selection_add_range_ignores_detached_and_foreign_ranges() {
 fn window_selection_rejects_child_document_shadow_ranges() {
     let mut vm = new_storage_test_vm("https://selection-child-shadow-range.test/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               const frame = document.createElement("iframe");
               (document.body || document.documentElement || document).appendChild(frame);
               const childDocument = frame.contentWindow.document;
@@ -8390,7 +8398,8 @@ fn window_selection_rejects_child_document_shadow_ranges() {
                 parentSelection.toString()
               ].join(":");
 
-              const childSelection = frame.contentWindow.getSelection();
+              yield; // Publish this scene before reading its geometry.
+const childSelection = frame.contentWindow.getSelection();
               childSelection.removeAllRanges();
               childSelection.addRange(shadowRange);
               const childState = [
@@ -8401,8 +8410,8 @@ fn window_selection_rejects_child_document_shadow_ranges() {
               return `${shadowState}|${slottedState}|${childState}`;
             })()
             "#,
-        )
-        .expect("window Selection should reject child document shadow ranges");
+    )
+    .expect("window Selection should reject child document shadow ranges");
 
     assert_eq!(result, "0:|0:|1:Som");
 }
@@ -9110,10 +9119,10 @@ fn document_get_selection_uses_associated_window_selection() {
 fn modal_dialog_selection_inertness_is_scoped_to_its_document() {
     let mut vm = new_storage_test_vm("https://selection-modal-document-scope.test/");
 
-    let result = vm
-        .eval(
-            r#"
-            (() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+            (function* () {
               const html = document.documentElement ||
                 document.appendChild(document.createElement("html"));
               const body = document.body || html.appendChild(document.createElement("body"));
@@ -9146,7 +9155,8 @@ fn modal_dialog_selection_inertness_is_scoped_to_its_document() {
               const childSelection = frame.contentWindow.getSelection();
 
               parentDialog.showModal();
-              const parentWithParentModal = selectedText(parentSelection, body);
+              yield; // Publish this scene before reading its geometry.
+const parentWithParentModal = selectedText(parentSelection, body);
               const childWithParentModal = selectedText(childSelection, childBody);
               childSelection.removeAllRanges();
               const childCommandWithParentModal = childDocument.execCommand("selectAll");
@@ -9154,7 +9164,8 @@ fn modal_dialog_selection_inertness_is_scoped_to_its_document() {
               parentDialog.close();
 
               childDialog.showModal();
-              const parentWithChildModal = selectedText(parentSelection, body);
+              yield; // Publish this scene before reading its geometry.
+const parentWithChildModal = selectedText(parentSelection, body);
               const childWithChildModal = selectedText(childSelection, childBody);
               parentSelection.removeAllRanges();
               const parentCommandWithChildModal = document.execCommand("selectAll");
@@ -9172,8 +9183,8 @@ fn modal_dialog_selection_inertness_is_scoped_to_its_document() {
               });
             })()
             "#,
-        )
-        .expect("modal selection inertness should remain document-scoped");
+    )
+    .expect("modal selection inertness should remain document-scoped");
 
     assert_eq!(
         result,

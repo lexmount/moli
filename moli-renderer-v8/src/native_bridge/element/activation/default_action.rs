@@ -1701,11 +1701,7 @@ fn image_submitter_coordinate(
     client_x: f64,
     client_y: f64,
 ) -> Result<(u32, u32), moli_layout::LayoutError> {
-    let rect = super::super::geometry::read_bounding_client_rect(
-        runtime,
-        handle,
-        super::super::geometry::GeometryRead::for_default_action(runtime),
-    )?;
+    let rect = super::super::geometry::read_bounding_client_rect(runtime, handle)?;
     Ok((
         image_submitter_coordinate_component(client_x - rect.left, rect.width),
         image_submitter_coordinate_component(client_y - rect.top, rect.height),

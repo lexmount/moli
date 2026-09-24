@@ -35,7 +35,13 @@ fn mouse_input_rejects_missing_snapshot_without_layout_or_input_state_changes() 
         assert!(vm.pending_mouse_press.is_none());
     }
     assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
-    vm.eval("target.getBoundingClientRect()").unwrap();
+    assert_eq!(
+        vm.eval("String(target.getBoundingClientRect().width)")
+            .unwrap(),
+        "0"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    refresh_layout_for_test(&mut vm);
     let prepared = vm.layout_pass_observability_for_test().1;
     // A rejected down must not leave a press that a subsequent up can activate.
     mouse(&mut vm, "mouseup").unwrap();
@@ -49,7 +55,9 @@ fn mouse_input_rejects_a_snapshot_from_a_replaced_document() {
         "https://mouse-snapshot.test/",
         "<!doctype html><button>old</button>",
     );
-    vm.eval("document.body.getBoundingClientRect();document.open();document.write('<button>new</button>');document.close()").unwrap();
+    refresh_layout_for_test(&mut vm);
+    vm.eval("document.open();document.write('<button>new</button>');document.close()")
+        .unwrap();
     let before = vm.layout_pass_observability_for_test().1;
     let error = mouse(&mut vm, "mousedown").unwrap_err();
     assert_eq!(
@@ -84,9 +92,10 @@ fn mouse_click_consumes_snapshot_through_hover_focus_and_dom_mutation() {
                 veil.style.cssText='position:fixed;inset:0;z-index:999';
                 document.body.appendChild(veil);
             });
-            target.getBoundingClientRect();"#,
+            "#,
         )
         .unwrap();
+        refresh_layout_for_test(&mut vm);
         let before = vm.layout_pass_observability_for_test().1;
         for event in ["mousemove", "mousedown", "mouseup"] {
             mouse(&mut vm, event).unwrap();
@@ -116,7 +125,11 @@ fn mouse_and_geometry_reuse_the_snapshot_until_fresh_paint() {
         r#"<!doctype html><style>body{min-height:100px}</style>
         <button id=target style='position:absolute;left:20px;top:20px;width:100px;height:100px'>go</button>"#,
     );
-    vm.eval("window.hits=[];document.onmousemove=e=>hits.push(e.target.id);target.getBoundingClientRect();target.style.left='300px'").unwrap();
+    refresh_layout_for_test(&mut vm);
+    vm.eval(
+        "window.hits=[];document.onmousemove=e=>hits.push(e.target.id);target.style.left='300px'",
+    )
+    .unwrap();
     let before = vm.layout_pass_observability_for_test().1;
     mouse(&mut vm, "mousemove").unwrap();
     assert_eq!(vm.eval("JSON.stringify(hits)").unwrap(), r#"["target"]"#);
@@ -149,7 +162,8 @@ fn mouse_handler_geometry_reads_reuse_the_published_snapshot() {
         r#"<!doctype html>
         <button id=target style='position:absolute;left:20px;top:20px;width:100px;height:100px'>go</button>"#,
     );
-    vm.eval("target.getBoundingClientRect();target.onmousemove=()=>{target.style.left='300px';window.observedLeft=target.getBoundingClientRect().left}").unwrap();
+    refresh_layout_for_test(&mut vm);
+    vm.eval("target.onmousemove=()=>{target.style.left='300px';window.observedLeft=target.getBoundingClientRect().left}").unwrap();
     let before = vm.layout_pass_observability_for_test().1;
     mouse(&mut vm, "mousemove").unwrap();
     assert_eq!(vm.eval("String(observedLeft)").unwrap(), "20");
@@ -165,7 +179,7 @@ fn mouse_wheel_updates_scroll_without_refreshing_the_rendered_world() {
             <div style='height:1000px'>content</div>
         </div>"#,
     );
-    vm.eval("target.getBoundingClientRect()").unwrap();
+    refresh_layout_for_test(&mut vm);
     let before = vm.layout_pass_observability_for_test().1;
     for _ in 0..3 {
         vm.dispatch_mouse_event_at_point(60.0, 60.0, "wheel", -1, Some(0), 0.0, 50.0)

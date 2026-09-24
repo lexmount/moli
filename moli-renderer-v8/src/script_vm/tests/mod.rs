@@ -544,6 +544,32 @@ fn refresh_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
     );
 }
 
+fn publish_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
+    vm.publish_layout_for_test()
+        .expect("fixture screenshot should succeed");
+}
+
+// Fixture generators yield only at explicit visual publication boundaries.
+// This lets multi-scene probes retain their JS bindings while all ordinary
+// evaluate and input helpers remain read-only with respect to layout.
+fn eval_with_layout_publications(
+    vm: &mut StandaloneScriptVmHarness,
+    fixture: &str,
+) -> anyhow::Result<String> {
+    vm.eval(&format!("globalThis.__layoutFixture = {fixture}"))?;
+    while vm.eval("globalThis.__layoutStep = __layoutFixture.next(); __layoutStep.done")? == "false"
+    {
+        vm.publish_layout_for_test()?;
+    }
+    vm.eval("__layoutStep.value")
+}
+
+fn new_rendered_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
+    let mut vm = new_parsed_test_vm(url, markup);
+    publish_layout_for_test(&mut vm);
+    vm
+}
+
 fn new_storage_test_vm_without_page_residence(url: &str) -> StandaloneScriptVmHarness {
     let resource_completion_queue = RendererResourceCompletionTestHarness::new();
     new_storage_test_vm_with_resource_mode_and_residence(

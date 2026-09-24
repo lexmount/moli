@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import SmokeState
+from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..raw_cdp import discover_websocket_url
 
@@ -82,10 +83,11 @@ async def run_iframe_input_group(state: SmokeState) -> None:
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
 
     # Publish the full frame tree; a parent rect alone need not include child
     # hit-test surfaces, and coordinate input never builds missing geometry.
-    await page.screenshot()
+    await capture_layout(page)
     geometry = await page.evaluate(
         """() => {
           const frame = document.getElementById("input-frame");
@@ -161,7 +163,7 @@ async def run_iframe_input_group(state: SmokeState) -> None:
     # Child point (560, 240) lies in the nested overflow element.
     await mouse("mouseWheel", 536.8, 307.2, delta_y=120)
     # The screenshot flushes pending wheel work and publishes its scroll offsets.
-    await page.screenshot()
+    await capture_layout(page)
 
     async def wheel_applied() -> bool:
         return bool(
@@ -237,7 +239,7 @@ async def run_iframe_input_group(state: SmokeState) -> None:
         }"""
     )
 
-    await page.screenshot()
+    await capture_layout(page)
     _assert_close(
         await page.evaluate(
             """() => document.getElementById("input-frame")
@@ -334,6 +336,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
         """,
         wait_until="domcontentloaded",
     )
+    await capture_layout(page)
     await page.evaluate(
         """() => {
           const parentScroller = document.getElementById("parent-scroller");
@@ -382,7 +385,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
           parentScroller.scrollTo(50, 40);
         }"""
     )
-    await page.screenshot()
+    await capture_layout(page)
 
     geometry = await page.evaluate(
         """() => {
@@ -510,7 +513,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
 
     # Nested client point (20, 35) lies in the innermost overflow content.
     await mouse("mouseWheel", 136.875, 115.0, delta_x=25, delta_y=30)
-    await page.screenshot()
+    await capture_layout(page)
 
     async def nested_wheel_applied() -> bool:
         return bool(
@@ -605,7 +608,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
         await mouse("mousePressed", 148.875, 120.625, button="left", buttons=1)
         await mouse("mouseReleased", 148.875, 120.625, button="left", buttons=0)
 
-        await page.screenshot()
+        await capture_layout(page)
         scrollbar_probe = await page.evaluate(
             """() => {
               const outer = document.getElementById("outer-frame");

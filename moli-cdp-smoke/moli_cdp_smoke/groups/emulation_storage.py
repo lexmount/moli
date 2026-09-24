@@ -6,6 +6,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Awaitable
 
+from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal, record, record_contract
 from ..png_image import decode_png
 
@@ -28,6 +29,7 @@ async def run_playwright_screenshot_clip_surface(
     try:
         page = await context.new_page()
         await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
+        await capture_layout(page)
         initial = decode_png(await page.screenshot())
         assert_equal(
             (initial.width, initial.height),
@@ -36,6 +38,7 @@ async def run_playwright_screenshot_clip_surface(
         )
 
         await page.set_viewport_size({"width": 320, "height": 240})
+        await capture_layout(page)
         resized = decode_png(await page.screenshot())
         assert_equal(
             (resized.width, resized.height),

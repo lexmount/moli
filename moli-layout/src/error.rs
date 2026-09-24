@@ -3,9 +3,9 @@ use thiserror::Error;
 /// A structured failure while constructing or evaluating one layout pass.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum LayoutError {
-    /// Coordinate input consumes a published snapshot and cannot create one.
+    /// Geometry and input consume published layout and cannot create it.
     #[error(
-        "coordinate input requires an existing layout snapshot; request geometry or a screenshot first"
+        "no published layout is available for the current document; call Page.captureScreenshot or Page.printToPDF, or start Page.startScreencast and wait for a frame, then retry. Geometry queries and input do not create layout"
     )]
     NoLayoutSnapshot,
     /// A geometry consumer forced layout before the Document had an element root.

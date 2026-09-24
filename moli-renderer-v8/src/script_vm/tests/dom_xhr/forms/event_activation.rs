@@ -118,7 +118,7 @@ fn pointer_release_does_not_reapply_canceled_mouse_focus() {
     for canceled_event in ["none", "mousedown", "pointerdown"] {
         for label in [false, true] {
             let target = if label { "label" } else { "button" };
-            let mut vm = new_parsed_test_vm(
+            let mut vm = new_rendered_test_vm(
                 "https://pointer-focus-ownership.test/",
                 r#"<html><body><input id="origin" style="position:absolute;left:200px;top:100px">
 <button id="button" type="button" style="position:absolute;left:10px;top:10px;width:100px;height:40px">Button</button>

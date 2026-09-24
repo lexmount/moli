@@ -802,12 +802,13 @@ fn node_inner_text(
     }
     let sources = inner_text_source_handles(runtime, handle);
     let rendered_text_sources = if let Some(document) = runtime.layout_document_for_source(handle) {
-        observable_sources_with_fragments(
-            runtime,
-            document,
-            &sources,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
+        match observable_sources_with_fragments(runtime, document, &sources) {
+            Ok(sources) => sources,
+            Err(moli_layout::LayoutError::NoLayoutSnapshot) => {
+                return Ok(node.text_content(runtime.dom_host().dom()));
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         HashSet::new()
     };

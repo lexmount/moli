@@ -2,36 +2,31 @@ use super::*;
 use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
 
 #[test]
-fn native_element_click_cold_preparation_keeps_existing_layout_cost() {
-    let markup = r#"<!doctype html><html><body>
-        <button id='target' style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>
-        </body></html>"#;
-    let mut reference = new_parsed_test_vm("https://click-js-geometry.test/", markup);
-    let before = reference.layout_pass_observability_for_test().1;
-    // The previous preflight's public geometry operations define the budget.
-    reference
-        .eval(
-            r#"(() => {
-            const target=document.getElementById('target');
-            target.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
-            const rect=target.getClientRects()[0];
-            return document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2).id;
-        })()"#,
-        )
-        .expect("existing geometry preparation");
-    let existing_passes = reference.layout_pass_observability_for_test().1 - before;
-
-    let mut vm = new_parsed_test_vm("https://click-native-geometry.test/", markup);
+fn native_element_click_requires_explicit_layout_without_building_it() {
+    let mut vm = new_parsed_test_vm(
+        "https://click-native-geometry.test/",
+        "<!doctype html><button id=target style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>",
+    );
     let target = vm.document_runtime.get_element_by_id("target").unwrap();
     let before = vm.layout_pass_observability_for_test().1;
+    let error = vm.prepare_element_click(target).unwrap_err();
+    let crate::runtime::RendererElementClickError::LayoutUnavailable(message) = error else {
+        panic!("expected missing-layout guidance, got {error:?}");
+    };
+    for command in [
+        "Page.captureScreenshot",
+        "Page.printToPDF",
+        "Page.startScreencast",
+    ] {
+        assert!(message.contains(command), "{message}");
+    }
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    publish_layout_for_test(&mut vm);
     assert!(matches!(
         vm.prepare_element_click(target).unwrap(),
         RendererElementClickTarget::Pointer(_)
     ));
-    assert!(
-        vm.layout_pass_observability_for_test().1 - before <= existing_passes,
-        "native preparation must not increase the existing cold layout cost"
-    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]
@@ -58,8 +53,7 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
             .expect("install click listener");
             let target = vm.document_runtime.get_element_by_id("target").unwrap();
             let before = vm.layout_pass_observability_for_test().1;
-            vm.eval("document.elementFromPoint(100,75)")
-                .expect("populate the existing hit-test snapshot");
+            publish_layout_for_test(&mut vm);
             assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
             let RendererElementClickTarget::Pointer(first) =
                 vm.prepare_element_click(target).unwrap()
@@ -133,4 +127,25 @@ fn native_element_click_mock_preparation_does_not_build_layout() {
         RendererElementClickTarget::DomActivation
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
+}
+
+#[test]
+fn native_element_click_does_not_publish_after_scrolling_an_offscreen_target() {
+    let mut vm = new_rendered_test_vm(
+        "https://click-offscreen.test/",
+        "<!doctype html><button id=target style='position:absolute;top:3000px'>go</button>",
+    );
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    let before = vm.layout_pass_observability_for_test().1;
+    assert!(matches!(
+        vm.prepare_element_click(target),
+        Err(crate::runtime::RendererElementClickError::NoClickableRect)
+    ));
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    publish_layout_for_test(&mut vm);
+    assert!(matches!(
+        vm.prepare_element_click(target).unwrap(),
+        RendererElementClickTarget::Pointer(_)
+    ));
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }

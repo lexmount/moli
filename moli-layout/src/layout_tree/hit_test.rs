@@ -610,7 +610,6 @@ mod tests {
                 })
                 .collect(),
             Vec::new(),
-            true,
         );
         let mut query = PointClipQuery::new(&tree, LayoutPoint::new(25.0, 25.0));
         assert!(query.results.is_empty());

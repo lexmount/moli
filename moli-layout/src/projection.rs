@@ -40,7 +40,6 @@ pub(crate) fn finish_layout_pass<N>(
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
-    embedded_frames_complete: bool,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
@@ -135,12 +134,7 @@ where
             tree: Box::new(snapshot.tree),
         })
         .collect();
-    let tree = projection.into_frozen_tree(
-        source_root,
-        content_size,
-        embedded_frames,
-        embedded_frames_complete,
-    );
+    let tree = projection.into_frozen_tree(source_root, content_size, embedded_frames);
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
@@ -916,7 +910,6 @@ where
         source_root: N,
         content_size: LayoutSize,
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
-        embedded_frames_complete: bool,
     ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
         let mut coordinate_spaces = self
@@ -991,7 +984,6 @@ where
             viewport_coordinate_space,
             self.clip_chain,
             embedded_frames,
-            embedded_frames_complete,
         )
     }
 }

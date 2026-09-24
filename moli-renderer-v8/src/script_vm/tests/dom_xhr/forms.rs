@@ -3704,7 +3704,7 @@ fn anchor_download_synthetic_click_records_pending_download_without_navigation()
 
 #[test]
 fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://anchor-alt-download.test/path/index.html",
         r#"<!doctype html><html><head><style>
             body { margin: 0; }
@@ -3714,7 +3714,7 @@ fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
         </body></html>"#,
     );
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -3774,7 +3774,7 @@ fn alt_input_does_not_turn_window_open_into_a_download_or_background_popup() {
     )
     .expect("Alt window.open fixture should initialize");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -3843,7 +3843,7 @@ fn window_open_in_click_listener_uses_current_input_event() {
         .expect("trusted window.open fixture should initialize");
 
     trusted
-        .eval("document.elementFromPoint(0, 0)")
+        .publish_layout_for_test()
         .expect("publish geometry before coordinate input");
     trusted
         .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -3946,7 +3946,7 @@ fn current_mouseup_input_covers_pointer_mouse_click_and_microtask_callbacks() {
     )
     .expect("current input scope fixture should initialize");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -4025,7 +4025,7 @@ fn middle_auxclick_runs_the_anchor_default_action_in_the_background() {
     )
     .expect("auxclick listener should install");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 1, None, 0.0, 0.0)
@@ -4075,7 +4075,7 @@ fn canceling_middle_auxclick_suppresses_the_anchor_default_action() {
     )
     .expect("canceling auxclick listener should install");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 1, None, 0.0, 0.0)
@@ -4202,7 +4202,7 @@ fn keyboard_activation_click_preserves_modifiers() {
 
 #[test]
 fn image_submit_click_coordinates_use_live_layout_geometry() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://image-submit-coordinates.test/path/index.html",
         r#"<!doctype html><html><head><style>
             body { margin: 0; }
@@ -4232,7 +4232,7 @@ form.addEventListener('submit', event => {
     )
     .expect("image submit coordinate fixture should initialize");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(125.4, 68.6, "mousedown", 0, None, 0.0, 0.0)
@@ -4250,14 +4250,14 @@ form.addEventListener('submit', event => {
 
 #[test]
 fn button_click_listener_window_open_self_reports_top_level_navigation() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://button-open-self-outcome.test/path/index.html",
         r#"<html><body>
             <button id="go" type="button" onclick="window.open('/next', '_self')">go</button>
         </body></html>"#,
     );
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
@@ -4360,7 +4360,7 @@ fn file_input_click_returns_pending_file_chooser_activation() {
     const FILE_INPUT_HIT_X: f64 = 20.0;
     const FILE_INPUT_HIT_Y: f64 = 20.0;
 
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://file-input-click.test/path/index.html",
         r#"<html><body>
             <input id="picker" type="file" multiple>
@@ -4372,7 +4372,7 @@ fn file_input_click_returns_pending_file_chooser_activation() {
     let source_document = lifecycle.identity();
     vm.set_root_document_lifecycle(lifecycle);
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
     vm.dispatch_mouse_event_at_point(
         FILE_INPUT_HIT_X,
@@ -4553,7 +4553,7 @@ fn label_click_for_file_input_returns_pending_file_chooser_activation() {
     const LABEL_HIT_X: f64 = 20.0;
     const LABEL_HIT_Y: f64 = 20.0;
 
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://file-label-click.test/path/index.html",
         r#"<html><body>
             <label for="picker" style="display:block;width:120px;height:40px">Choose file</label>
@@ -4566,7 +4566,7 @@ fn label_click_for_file_input_returns_pending_file_chooser_activation() {
     let source_document = lifecycle.identity();
     vm.set_root_document_lifecycle(lifecycle);
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
     vm.dispatch_mouse_event_at_point(LABEL_HIT_X, LABEL_HIT_Y, "mousedown", 0, None, 0.0, 0.0)
         .expect("label mousedown should dispatch");
@@ -4709,7 +4709,7 @@ fn pointer_click_enters_shadow_root_for_label_activation() {
     // this fixture. Hit inside the label rather than the intervening margin.
     const LABEL_HIT_Y: f64 = 35.0;
 
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://shadow-label-click.test/path/index.html",
         r#"<html><body><div id="host" class="h-screen"></div></body></html>"#,
     );
@@ -4730,7 +4730,7 @@ root.appendChild(label);
     )
     .expect("shadow label setup should evaluate");
 
-    vm.eval("document.elementFromPoint(0, 0)")
+    vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(LABEL_HIT_X, LABEL_HIT_Y, "mousedown", 0, None, 0.0, 0.0)

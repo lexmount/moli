@@ -838,7 +838,6 @@ mod tests {
             identity_space(None),
             Vec::new(),
             Vec::new(),
-            true,
         );
         let output = LayoutNodeOutput {
             principal_box: Some(box_id),

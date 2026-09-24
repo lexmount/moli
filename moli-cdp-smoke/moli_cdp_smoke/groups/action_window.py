@@ -263,6 +263,7 @@ async def _run_deadline_contract(
 ) -> None:
     await _reset_witness(fixture)
     await _navigate(client, session_id, f"{fixture}/action-window-deadline")
+    await _capture_png(client, session_id)
     await _wait_for_intersections(client, session_id, [False])
 
     opened_at = asyncio.get_running_loop().time()
@@ -337,6 +338,7 @@ async def _run_overflow_container_contract(
 ) -> None:
     await _reset_witness(fixture)
     await _navigate(client, session_id, f"{fixture}/action-window-overflow")
+    await _capture_png(client, session_id)
     initial = await _evaluate_json(
         client,
         session_id,

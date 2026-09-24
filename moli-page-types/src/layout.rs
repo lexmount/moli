@@ -6,7 +6,8 @@ pub enum LayoutPolicy {
     /// such as renderer screenshots that require a real layout backend.
     #[default]
     Mock,
-    /// Build layout only for an operation that observes geometry or paint.
+    /// Only screenshot, screencast, and PDF output build and publish layout.
+    /// Geometry queries and input read the last published layout, if any.
     OnDemand,
 }
 

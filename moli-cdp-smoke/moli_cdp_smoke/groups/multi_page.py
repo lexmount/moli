@@ -9,6 +9,7 @@ from typing import Any
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector, run_worker_command
 from .multi_page_chromium_contracts import multi_page_chromium_contract_cases
@@ -918,6 +919,7 @@ async def _background_tasks_workers_and_screenshots(
                 )
             )
         )
+        await asyncio.gather(*(capture_layout(page) for page in pages))
         screenshots = await asyncio.gather(*(page.screenshot() for page in pages))
         if any(not screenshot.startswith(b"\x89PNG\r\n\x1a\n") for screenshot in screenshots):
             raise SmokeError("concurrent page screenshot returned a non-PNG payload")

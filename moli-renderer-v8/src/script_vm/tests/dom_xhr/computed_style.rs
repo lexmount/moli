@@ -4822,10 +4822,9 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
 fn transformed_oversized_inline_iframe_uses_its_containing_block_percentage_basis() {
     let mut vm = new_storage_test_vm("https://inline-iframe-percentage-size.test/");
 
-    let result = vm
-        .eval(
+    let result = eval_with_layout_publications(&mut vm,
             r#"
-(() => {
+(function* () {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
   const container = document.createElement('div');
@@ -4834,6 +4833,7 @@ fn transformed_oversized_inline_iframe_uses_its_containing_block_percentage_basi
   frame.style.cssText = 'width:calc(100% / 0.8);height:50px;border:0;transform:scale(0.8);transform-origin:0 0';
   container.appendChild(frame);
   body.appendChild(container);
+  yield; // Publish this scene before reading its geometry.
   const rect = frame.getBoundingClientRect();
   return [
     frame.offsetWidth,
@@ -5284,12 +5284,11 @@ fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes()
 #[test]
 fn cached_child_viewport_units_update_after_the_iframe_viewport_changes() {
     let mut vm = new_storage_test_vm("https://cached-child-viewport-units.test/");
-    vm.force_fresh_layout_reads_for_test();
 
-    let before = vm
-        .eval(
-            r#"
-(() => {
+    let before = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const frame = document.createElement('iframe');
   frame.id = 'cached-viewport-unit-frame';
   frame.style.cssText = 'width:200px;height:160px';
@@ -5313,6 +5312,7 @@ fn cached_child_viewport_units_update_after_the_iframe_viewport_changes() {
   childDocument.close();
   const target = childDocument.getElementById('target');
   const held = childWindow.getComputedStyle(target);
+yield; // Publish this scene before reading its geometry.
   frame.getBoundingClientRect();
   globalThis.__cachedViewportUnitFixture = { frame, childWindow, target, held };
   return [
@@ -5325,19 +5325,20 @@ fn cached_child_viewport_units_update_after_the_iframe_viewport_changes() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("the child viewport-unit style should be cached before resize");
+    )
+    .expect("the child viewport-unit style should be cached before resize");
     assert_eq!(before, "200|160|20px|16px|18px|100px");
     let child_document = child_document_handle_for_frame_id(&vm, "cached-viewport-unit-frame");
     let updates = vm.retained_style_system_update_count_for_document_for_test(child_document);
 
-    let after = vm
-        .eval(
-            r#"
-(() => {
+    let after = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const { frame, childWindow, target, held } = __cachedViewportUnitFixture;
   frame.style.width = '100px';
   frame.style.height = '80px';
+yield; // Publish this scene before reading its geometry.
   const frameWidth = frame.getBoundingClientRect().width;
   const heldValues = [held.width, held.height, held.paddingLeft, held.left];
   const fresh = childWindow.getComputedStyle(target);
@@ -5351,8 +5352,8 @@ fn cached_child_viewport_units_update_after_the_iframe_viewport_changes() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("the same cached child element should observe the resized iframe viewport");
+    )
+    .expect("the same cached child element should observe the resized iframe viewport");
     assert_eq!(after, "100|100|80|10px|8px|13px|50px|10px|8px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(child_document),
@@ -5364,7 +5365,6 @@ fn cached_child_viewport_units_update_after_the_iframe_viewport_changes() {
 #[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
-    vm.force_fresh_layout_reads_for_test();
 
     let before = vm
         .eval(
@@ -5671,10 +5671,10 @@ fn child_document_mixed_style_observations_do_not_churn_the_retained_world() {
 #[test]
 fn layout_publishes_authoritative_iframe_viewport_without_style_world_ping_pong() {
     let mut vm = new_storage_test_vm("https://authoritative-child-style-viewport.test/");
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const frame = document.createElement('iframe');
   frame.id = 'authoritative-style-viewport-frame';
   frame.style.cssText = [
@@ -5699,14 +5699,15 @@ fn layout_publishes_authoritative_iframe_viewport_without_style_world_ping_pong(
   childDocument.close();
 
   const beforeLayout = childWindow.getComputedStyle(childDocument.body).color;
+yield; // Publish this scene before reading its geometry.
   const frameWidth = frame.getBoundingClientRect().width;
   const afterLayout = childWindow.getComputedStyle(childDocument.body).color;
   globalThis.__authoritativeStyleViewport = { frame, childWindow, childDocument };
   return [beforeLayout, frameWidth, childWindow.innerWidth, afterLayout].join('|');
 })()
 "#,
-        )
-        .expect("layout should publish an exact iframe content viewport");
+    )
+    .expect("layout should publish an exact iframe content viewport");
 
     assert_eq!(result, "rgb(200, 0, 0)|200|140|rgb(0, 140, 0)");
     let child_document =
@@ -5851,10 +5852,10 @@ fn nested_child_mixed_style_observations_keep_each_document_viewport() {
 fn child_window_and_mock_root_geometry_use_iframe_viewport() {
     let mut vm = new_storage_test_vm("https://child-window-viewport.test/");
 
-    let before = vm
-        .eval(
-            r#"
-(() => {
+    let before = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const frame = document.createElement('iframe');
   frame.id = 'viewport-frame';
   frame.style.width = '300px';
@@ -5879,11 +5880,12 @@ fn child_window_and_mock_root_geometry_use_iframe_viewport() {
       root.height
     ].join('|');
   };
+yield; // Publish this scene before reading its geometry.
   return snapshot();
 })()
 "#,
-        )
-        .expect("initial child Window viewport and root geometry should evaluate");
+    )
+    .expect("initial child Window viewport and root geometry should evaluate");
     assert_eq!(before, "300|65|true|300|65|300|65");
 
     vm.eval(
@@ -5897,7 +5899,7 @@ fn child_window_and_mock_root_geometry_use_iframe_viewport() {
 "#,
     )
     .expect("child frame resize should evaluate");
-    refresh_layout_for_test(&mut vm);
+    publish_layout_for_test(&mut vm);
     let after = vm
         .eval(
             r#"
@@ -6665,10 +6667,8 @@ fn computed_width_preserves_values_without_used_width() {
 fn box_metrics_use_computed_display_and_real_used_sizes() {
     let mut vm = new_storage_test_vm("https://box-metrics-computed-style.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const head = document.head || html.appendChild(document.createElement('head'));
   const body = document.body || html.appendChild(document.createElement('body'));
@@ -6689,7 +6689,13 @@ fn box_metrics_use_computed_display_and_real_used_sizes() {
   const hidden = document.getElementById('hidden');
   const matched = document.getElementById('matched');
   const unmatched = document.getElementById('unmatched');
-  return [
+"#,
+    )
+    .expect("prepare geometry fixture");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"[
     getComputedStyle(hidden).display,
     hidden.offsetWidth,
     hidden.offsetHeight,
@@ -6706,9 +6712,7 @@ fn box_metrics_use_computed_display_and_real_used_sizes() {
     getComputedStyle(unmatched).height,
     unmatched.offsetHeight,
     unmatched.getBoundingClientRect().width
-  ].join('|');
-})()
-"#,
+  ].join('|')"#,
         )
         .expect("box metrics should consume simple computed style facts");
 
@@ -6719,7 +6723,7 @@ fn box_metrics_use_computed_display_and_real_used_sizes() {
 }
 
 #[test]
-fn box_metric_materializes_one_style_world_update_for_nested_resolution() {
+fn box_metric_reads_published_nested_geometry_without_updating_styles() {
     let mut vm = new_storage_test_vm("https://box-metric-style-snapshot.test/");
 
     vm.eval(
@@ -6748,6 +6752,7 @@ fn box_metric_materializes_one_style_world_update_for_nested_resolution() {
 "#,
     )
     .expect("nested box-metric fixture should initialize");
+    publish_layout_for_test(&mut vm);
     let update_materializations_before = vm
         ._context_host
         .borrow()
@@ -6764,8 +6769,8 @@ fn box_metric_materializes_one_style_world_update_for_nested_resolution() {
         .style_world_update_materializations_for_test()
         .saturating_sub(update_materializations_before);
     assert_eq!(
-        update_materializations, 1,
-        "one synchronous box metric must materialize one style-world update"
+        update_materializations, 0,
+        "a geometry read must not materialize a style-world update"
     );
 }
 
@@ -6809,10 +6814,8 @@ body.appendChild(target);
 fn box_metrics_round_fractional_computed_px_values() {
     let mut vm = new_storage_test_vm("https://box-metrics-fractional-style.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const head = document.head || html.appendChild(document.createElement('head'));
   const body = document.body || html.appendChild(document.createElement('body'));
@@ -6823,7 +6826,13 @@ fn box_metrics_round_fractional_computed_px_values() {
   head.appendChild(style);
   body.innerHTML = `<div id="fractional"></div>`;
   const fractional = document.getElementById('fractional');
-  return [
+"#,
+    )
+    .expect("prepare geometry fixture");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"[
     fractional.offsetWidth,
     fractional.clientWidth,
     fractional.scrollWidth,
@@ -6832,9 +6841,7 @@ fn box_metrics_round_fractional_computed_px_values() {
     fractional.scrollHeight,
     fractional.getBoundingClientRect().width,
     fractional.getBoundingClientRect().height
-  ].join('|');
-})()
-"#,
+  ].join('|')"#,
         )
         .expect("box metrics should round fractional computed px values");
 
@@ -6872,13 +6879,15 @@ fn layout_resolves_a_deep_percentage_width_chain_to_zero() {
 fn document_open_replacement_clears_inline_style_state() {
     let mut vm = new_storage_test_vm("https://document-open-style-state.test/");
 
+    vm.eval("const fixtureRoot = document.documentElement || document.appendChild(document.createElement('html')); const fixtureBody = document.body || fixtureRoot.appendChild(document.createElement('body')); fixtureBody.innerHTML = '<div id=before style=display:block>before</div>'").expect("prepare replacement fixture");
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
 (() => {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
-  body.innerHTML = '<div id="before" style="display:none">before</div>';
+
   const before = document.getElementById('before');
   before.style.display = 'block';
   const beforeStyle = before.style;
@@ -6906,6 +6915,8 @@ fn isolated_document_open_replacement_clears_inline_style_state() {
         .create_isolated_world("playwright-utility-replacement", false)
         .expect("isolated world should be created");
 
+    vm.eval("const fixtureRoot = document.documentElement || document.appendChild(document.createElement('html')); const fixtureBody = document.body || fixtureRoot.appendChild(document.createElement('body')); fixtureBody.innerHTML = '<div id=before style=display:block>before</div>'").expect("prepare replacement fixture");
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval_in_isolated_context(
             context_id,
@@ -6913,7 +6924,7 @@ fn isolated_document_open_replacement_clears_inline_style_state() {
 (() => {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
-  body.innerHTML = '<div id="before" style="display:none">before</div>';
+
   const before = document.getElementById('before');
   before.style.display = 'block';
   const beforeStyle = before.style;
@@ -6955,6 +6966,7 @@ setTimeout(() => { document.getElementById('before').style.display = 'block'; },
         .await
         .expect("timer style mutation should drain");
 
+    publish_layout_for_test(&mut vm);
     let warmed = vm
         .eval(
             r#"
@@ -7541,10 +7553,8 @@ fn computed_insets_absolutize_font_relative_lengths() {
 fn computed_positioned_insets_resolve_percentages_against_containing_block() {
     let mut vm = new_storage_test_vm("https://computed-inset-percent.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'height: 20px; width: 40px; padding: 1px 2px';
   const target = document.createElement('div');
@@ -7552,10 +7562,12 @@ fn computed_positioned_insets_resolve_percentages_against_containing_block() {
   wrapper.appendChild(target);
   (document.body || document.documentElement || document).appendChild(wrapper);
   const computed = getComputedStyle(target);
-  return `${computed.top}|${computed.left}`;
-})()
 "#,
-        )
+    )
+    .expect("prepare geometry fixture");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(r#"`${computed.top}|${computed.left}`"#)
         .expect("computed positioned insets should resolve percentages");
 
     assert_eq!(result, "2px|8px");
@@ -7584,10 +7596,8 @@ fn computed_relative_auto_insets_resolve_against_opposite_side() {
 fn computed_absolute_auto_insets_resolve_against_containing_block() {
     let mut vm = new_storage_test_vm("https://computed-absolute-auto-inset.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position: relative; height: 20px; width: 40px';
   const target = document.createElement('div');
@@ -7595,10 +7605,12 @@ fn computed_absolute_auto_insets_resolve_against_containing_block() {
   wrapper.appendChild(target);
   (document.body || document.documentElement || document).appendChild(wrapper);
   const computed = getComputedStyle(target);
-  return `${computed.top}|${computed.right}|${computed.bottom}|${computed.left}`;
-})()
 "#,
-        )
+    )
+    .expect("prepare geometry fixture");
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(r#"`${computed.top}|${computed.right}|${computed.bottom}|${computed.left}`"#)
         .expect("computed absolute auto insets should resolve against the containing block");
 
     assert_eq!(result, "17px|4px|3px|36px");
@@ -10152,10 +10164,10 @@ fn shadow_styles_scope_and_inherit_host_font_size() {
 fn child_document_shadow_visibility_offsets_match_rendered_wpt_probe() {
     let mut vm = new_storage_test_vm("https://shadow-style-offset-wpt-probe.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -10191,6 +10203,7 @@ fn child_document_shadow_visibility_offsets_match_rendered_wpt_probe() {
   shadowHidden.className = 'shadow-only-hidden';
   shadowStyleRoot.appendChild(shadowHidden);
 
+yield; // Publish this scene before reading its geometry.
   return JSON.stringify({
     documentStyleDoesNotEnterShadow:
       frame.contentWindow.getComputedStyle(shadowVisible).display !== 'none',
@@ -10206,8 +10219,8 @@ fn child_document_shadow_visibility_offsets_match_rendered_wpt_probe() {
   });
 })()
 "#,
-        )
-        .expect("child document shadow style visibility offsets should evaluate");
+    )
+    .expect("child document shadow style visibility offsets should evaluate");
 
     assert_eq!(
         result,
@@ -10521,7 +10534,7 @@ fn tab_key_respects_reading_flow_display_contents_items() {
 #[tokio::test]
 async fn css_transition_state_uses_final_values_without_runtime_events() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://move-before-transition-state.test/",
         r#"<html><head></head><body></body></html>"#,
     );
@@ -10571,6 +10584,7 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
         .await
         .expect("transition timers should drain");
 
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -10605,7 +10619,7 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
 #[tokio::test]
 async fn invalid_move_before_does_not_run_plain_transition_runtime() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://move-before-invalid-transition.test/",
         r#"<html><head></head><body></body></html>"#,
     );
@@ -10637,6 +10651,7 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
         .await
         .expect("plain transition timers should drain");
 
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -10664,7 +10679,7 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
 #[tokio::test]
 async fn zero_duration_transform_transition_applies_final_layout_geometry() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://zero-duration-transform-transition.test/",
         r#"<html><head></head><body></body></html>"#,
     );
@@ -10698,6 +10713,7 @@ async fn zero_duration_transform_transition_applies_final_layout_geometry() {
         .await
         .expect("zero-duration transform transition timers should drain");
 
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -10758,6 +10774,7 @@ async fn child_content_document_created_elements_use_transition_final_state() {
         .await
         .expect("child document transition timers should drain");
 
+    publish_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -12799,16 +12816,14 @@ fn computed_style_serializes_animation_range_shorthand() {
 }
 #[test]
 fn mouse_event_offsets_follow_retargeted_shadow_targets() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://shadow-mouse-offset.test/",
         r#"<html><head></head><body></body></html>"#,
     );
-    vm.force_fresh_layout_reads_for_test();
 
-    let result = vm
-        .eval(
+    let result = eval_with_layout_publications(&mut vm,
             r#"
-(() => {
+(function* () {
   const pageStyle = document.createElement('style');
   pageStyle.textContent =
     'html, body { padding: 0; margin: 0; } ' +
@@ -12850,6 +12865,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
   light.innerHTML =
     '<style>' + shadowStyle + '</style><div id="container"><span id="target">Click</span></div>';
   const lightTarget = light.querySelector('#target');
+yield; // Publish this scene before reading its geometry.
   const lightTargetOffsetTop = lightTarget.offsetTop;
   const lightContainer = light.querySelector('#container');
   const lightLogs = attachLoggers([lightTarget, lightContainer, light, document.body], 'light-down');
@@ -12892,6 +12908,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
     '<style>' + shadowStyle + '</style><div id="container"><span id="target">Click</span></div>';
   const closedTarget = root.querySelector('#target');
   const closedContainer = root.querySelector('#container');
+yield; // Publish this scene before reading its geometry.
   const closedLogs = attachLoggers([closedTarget, closedContainer, root, closed, document.body], 'closed-down');
   closedTarget.dispatchEvent(new MouseEvent('closed-down', {
     clientX: 51.4,
@@ -12913,6 +12930,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
     '<style>' + shadowStyle + '</style><div id="target">Click</div>';
   const slottedTarget = slotted.querySelector('#target');
   const slottedContainer = slottedRoot.querySelector('#container');
+  yield; // Publish the slotted scene before dispatching geometry-dependent events.
   const slottedLogs = attachLoggers([
     slottedTarget,
     slottedContainer,

@@ -1376,6 +1376,11 @@ async def _nested_non_v8_main_receiver_matrix(
     if not isinstance(frame_id, str) or not frame_id:
         raise SmokeError(f"Page.getFrameTree returned no top frame id: {initial_tree}")
 
+    capture_id = await client.send("Page.captureScreenshot", session_id=page.attached_session_id)
+    capture, _ = await client.recv_until_id(capture_id, timeout=5)
+    if "error" in capture:
+        raise SmokeError(f"prepare paused geometry fixture: {capture}")
+
     paused_evaluate_id = await client.send(
         "Runtime.evaluate",
         {"expression": "debugger; 84", "returnByValue": True},

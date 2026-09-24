@@ -1167,6 +1167,7 @@ async fn mouse_input_completion_publishes_handler_navigation_once() {
             RendererTopLevelNavigationDispatch::DelegateToBrowser,
         )
         .await;
+        capture_screenshot_for_renderer_page(&page).await;
         let (snapshot, _) = page
             .run_async_command(RendererPageCommand::PageDiagnosticsSnapshot)
             .await
@@ -1308,6 +1309,7 @@ async fn mouse_input_completion_preserves_standalone_and_child_navigation_scope(
             mode,
         )
         .await;
+        capture_screenshot_for_renderer_page(&page).await;
         let hit_expression = if case == "standalone" {
             "document.elementFromPoint(30,30).id"
         } else {
@@ -12345,6 +12347,7 @@ addEventListener("wheel", event => {
     )))
     .await
     .expect("action-window viewport should update");
+    capture_screenshot_for_renderer_page(&page).await;
     let (observer_installed, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
             expression: r#"
@@ -12469,12 +12472,7 @@ addEventListener("wheel", event => {
     .await
     .expect("capture barrier viewport should update");
 
-    page.run_async_command(RendererPageCommand::EvaluateExpression {
-        expression: "document.elementFromPoint(0, 0); true".to_owned(),
-        await_promise: false,
-    })
-    .await
-    .expect("publish root geometry before mouse input");
+    capture_screenshot_for_renderer_page(&page).await;
 
     assert!(
         dispatch_wheel_for_action_window_test(&page, 10.0)
@@ -12556,12 +12554,7 @@ document.addEventListener("wheel", event => {
     )
     .await;
 
-    page.run_async_command(RendererPageCommand::EvaluateExpression {
-        expression: "document.elementFromPoint(0, 0); true".to_owned(),
-        await_promise: false,
-    })
-    .await
-    .expect("publish root geometry before mouse input");
+    capture_screenshot_for_renderer_page(&page).await;
 
     for delta_y in [10.0, 20.0, 30.0] {
         assert!(

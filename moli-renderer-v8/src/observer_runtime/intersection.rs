@@ -4,7 +4,7 @@ use std::{collections::HashMap, mem};
 
 use crate::{
     dom::native::{DomHost, NativeNodeId},
-    native_bridge::{JsContextHost, element::GeometryRead},
+    native_bridge::JsContextHost,
 };
 
 use super::{
@@ -92,7 +92,6 @@ pub(super) fn compute_intersection_check_batch(
     runtime: &JsContextHost,
     dom_host: &DomHost,
     batch: IntersectionCheckBatch,
-    read: GeometryRead,
 ) -> Result<CompletedIntersectionCheckBatch, moli_layout::LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
         return Ok(compute_mock_intersection_check_batch(
@@ -138,25 +137,15 @@ pub(super) fn compute_intersection_check_batch(
             })
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
-        let answers = match read {
-            GeometryRead::Demand(reason) => {
-                crate::native_bridge::element::observable_geometry_batch(
-                    runtime, document, reason, &queries,
-                )?
-                .answers
-            }
-            // Publication checks consume the completed projection, including
-            // absent/hidden frames; they must never start another layout pass.
-            GeometryRead::Snapshot => runtime
-                .with_latest_layout_tree_for_document(document, |tree| {
-                    queries
-                        .queries
-                        .iter()
-                        .map(|query| tree.answer_query(query))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        };
+        let answers: Vec<_> = runtime
+            .with_latest_layout_tree_for_document(document, |tree| {
+                queries
+                    .queries
+                    .iter()
+                    .map(|query| tree.answer_query(query))
+                    .collect()
+            })
+            .unwrap_or_default();
         for (index, answer) in indices.into_iter().zip(answers) {
             let moli_layout::LayoutQueryAnswer::IntersectionGeometry(geometry) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(

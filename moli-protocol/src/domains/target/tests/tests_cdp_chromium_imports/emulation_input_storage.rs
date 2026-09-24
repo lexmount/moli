@@ -61,6 +61,7 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_affect_layout_metrics
         "data:text/html,<body>metrics</body>".to_owned(),
     )
     .await;
+    ctx.capture_fixture_layout(Some(&attached.session_id)).await;
     ctx.process_async(json!({
         "id": 117_007,
         "method": "Page.getLayoutMetrics",
@@ -457,6 +458,7 @@ async fn rust_cdp_capability_input_dispatch_mouse_event_uses_layout_hit_testing(
         "data:text/html,<button id='btn' onclick='window.__clicked = true' style='position:absolute;left:0;top:0;width:100px;height:100px'>go</button>".to_owned(),
     )
     .await;
+    ctx.capture_fixture_layout(Some(&attached.session_id)).await;
     let geometry = evaluate_return_by_value(
         &mut ctx,
         &attached.session_id,

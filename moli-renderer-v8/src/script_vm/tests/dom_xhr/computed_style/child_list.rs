@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn removed_source_with_moved_old_neighbor_invalidates_remaining_target() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://moved-old-neighbor.test/",
         r#"<!doctype html><style>
           .target { color: blue; }
@@ -28,18 +28,18 @@ fn removed_source_with_moved_old_neighbor_invalidates_remaining_target() {
 
 #[test]
 fn sibling_move_between_shadow_roots_invalidates_both_style_scopes() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://cross-shadow-sibling-move.test/",
         "<!doctype html><div id=old></div><div id=new></div>",
     );
-    let result = vm
-        .eval(
-            r#"(() => {
+    let result = eval_with_layout_publications(&mut vm,
+            r#"(function* () {
               const oldRoot = document.getElementById('old').attachShadow({mode:'open'});
               const newRoot = document.getElementById('new').attachShadow({mode:'open'});
               const css = '<style>.target { color: blue; } .source ~ .target { color: red; }</style>';
               oldRoot.innerHTML = css + '<span class=source>A</span><span class=target>B</span>';
               newRoot.innerHTML = css + '<span class=target>C</span>';
+yield; // Publish this scene before reading its geometry.
               const oldTarget = oldRoot.querySelector('.target');
               const newTarget = newRoot.querySelector('.target');
               const oldStyle = getComputedStyle(oldTarget);
@@ -59,7 +59,7 @@ fn sibling_move_between_shadow_roots_invalidates_both_style_scopes() {
 
 #[test]
 fn detached_then_reinserted_sibling_does_not_reuse_queued_old_links() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://two-step-sibling-move.test/",
         r#"<!doctype html><style>
           .target { color: blue; }
@@ -85,7 +85,7 @@ fn detached_then_reinserted_sibling_does_not_reuse_queued_old_links() {
 
 #[test]
 fn inner_text_and_held_style_update_after_sibling_reorder() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://sibling-reorder.test/",
         r#"<!doctype html><style>
           .target { color: blue; }
@@ -112,7 +112,7 @@ fn inner_text_and_held_style_update_after_sibling_reorder() {
 
 #[test]
 fn relative_selector_updates_after_backward_sibling_reorder() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://backward-sibling-reorder.test/",
         r#"<!doctype html><style>
           .source { color: blue; }
@@ -139,7 +139,7 @@ fn relative_selector_updates_after_backward_sibling_reorder() {
 
 #[test]
 fn sibling_move_between_parents_invalidates_old_and_new_targets() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://cross-parent-sibling-move.test/",
         r#"<!doctype html><style>
           .target { color: blue; }
@@ -171,7 +171,7 @@ fn sibling_move_between_parents_invalidates_old_and_new_targets() {
 
 #[test]
 fn batched_sibling_reorders_update_adjacent_and_general_sibling_styles() {
-    let mut vm = new_parsed_test_vm(
+    let mut vm = new_rendered_test_vm(
         "https://batched-sibling-reorder.test/",
         r#"<!doctype html><style>
           .target { color: blue; background-color: white; }

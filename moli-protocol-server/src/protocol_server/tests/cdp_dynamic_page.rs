@@ -407,7 +407,12 @@ async fn websocket_cdp_mouse_wheel_scrolls_page_and_honors_prevent_default() {
         }),
     )
     .await;
-    let marker_before = response_by_id(&installed, 1)["result"]["result"]["value"]
+    assert!(response_by_id(&installed, 1).get("result").is_some());
+    let captured = send_cdp_command(&mut page, 90, "Page.captureScreenshot", None, json!({})).await;
+    assert!(response_by_id(&captured, 90).get("result").is_some());
+    let measured = send_cdp_command(&mut page, 91, "Runtime.evaluate", None,
+        json!({"expression": "document.getElementById('marker').getBoundingClientRect().top", "returnByValue": true})).await;
+    let marker_before = response_by_id(&measured, 91)["result"]["result"]["value"]
         .as_f64()
         .expect("initial marker top");
 

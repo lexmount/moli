@@ -2,7 +2,7 @@ use moli_page_types::DomScrollIntoViewRect;
 
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
-use super::provider::{GeometryRead, read_box_model, read_scroll_into_view_geometry};
+use super::provider::{read_box_model, read_scroll_into_view_geometry};
 use super::scroll::{
     apply_observable_window_scroll, resolve_scroll_target, set_node_scroll_position,
 };
@@ -19,7 +19,6 @@ pub(super) enum ScrollIntoViewAlignment {
 
 #[derive(Clone, Copy)]
 struct ScrollIntoViewParams {
-    geometry_read: GeometryRead,
     horizontal: ScrollIntoViewAlignment,
     vertical: ScrollIntoViewAlignment,
     center_if_fully_hidden: bool,
@@ -73,7 +72,6 @@ pub(crate) fn scroll_node_into_view_if_needed(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
-    geometry_read: GeometryRead,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
     scroll_node_into_view_with_params(
         scope,
@@ -81,7 +79,6 @@ pub(crate) fn scroll_node_into_view_if_needed(
         handle,
         relative_rect,
         ScrollIntoViewParams {
-            geometry_read,
             horizontal: ScrollIntoViewAlignment::Nearest,
             vertical: ScrollIntoViewAlignment::Nearest,
             center_if_fully_hidden: true,
@@ -103,7 +100,6 @@ pub(super) fn scroll_node_into_view(
         handle,
         relative_rect,
         ScrollIntoViewParams {
-            geometry_read: moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
             horizontal,
             vertical,
             center_if_fully_hidden: false,
@@ -122,8 +118,7 @@ fn scroll_node_into_view_with_params(
     let Some(target) = resolve_scroll_target(runtime, handle) else {
         return Ok(None);
     };
-    let Some(mut geometry) = read_scroll_into_view_geometry(runtime, target, params.geometry_read)?
-    else {
+    let Some(mut geometry) = read_scroll_into_view_geometry(runtime, target)? else {
         return Ok(None);
     };
     if let Some(relative) = relative_rect {
@@ -157,7 +152,6 @@ pub(crate) fn scroll_node_into_view_at_center(
         handle,
         None,
         ScrollIntoViewParams {
-            geometry_read: moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
             horizontal: ScrollIntoViewAlignment::Center,
             vertical: ScrollIntoViewAlignment::Center,
             center_if_fully_hidden: false,
@@ -176,7 +170,6 @@ pub(crate) fn scroll_node_into_view_at_start(
         handle,
         None,
         ScrollIntoViewParams {
-            geometry_read: GeometryRead::for_default_action(unsafe { &*runtime_ptr }),
             horizontal: ScrollIntoViewAlignment::Nearest,
             vertical: ScrollIntoViewAlignment::Start,
             center_if_fully_hidden: false,
@@ -302,9 +295,7 @@ fn perform_bubbling_scroll_into_view(
     let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) else {
         return Ok(changed);
     };
-    let Some(frame_content) =
-        read_box_model(runtime, frame, params.geometry_read)?.map(|model| model.content)
-    else {
+    let Some(frame_content) = read_box_model(runtime, frame)?.map(|model| model.content) else {
         return Ok(changed);
     };
     let Some(parent_target_rects) = convert_quads_to_parent_frame(
@@ -314,9 +305,7 @@ fn perform_bubbling_scroll_into_view(
     ) else {
         return Ok(changed);
     };
-    let Some(mut parent_geometry) =
-        read_scroll_into_view_geometry(runtime, frame, params.geometry_read)?
-    else {
+    let Some(mut parent_geometry) = read_scroll_into_view_geometry(runtime, frame)? else {
         return Ok(changed);
     };
     parent_geometry.target_rects = parent_target_rects;

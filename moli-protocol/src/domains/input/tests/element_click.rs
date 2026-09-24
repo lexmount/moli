@@ -53,6 +53,7 @@ async fn fixture() -> TestContext {
         for(const type of ['mousemove','mousedown','mouseup','click'])
             document.addEventListener(type,e=>events.push([type,e.target.id]));
         </script></body></html>"#).await;
+    ctx.capture_fixture_layout(None).await;
     ctx
 }
 

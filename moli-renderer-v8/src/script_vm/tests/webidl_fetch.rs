@@ -6484,15 +6484,16 @@ fn resize_observer_callbacks_apply_webidl_conversion() {
 fn resize_observer_entries_expose_box_size_arrays() {
     let mut vm = new_storage_test_vm("https://resize-observer-box-size.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
   const target = document.createElement('div');
   target.style.cssText = 'width: 41px; height: 23px';
   body.appendChild(target);
+yield; // Publish this scene before reading its geometry.
   const observer = new ResizeObserver(() => {});
   observer.observe(target, { box: 'border-box' });
   const first = observer.takeRecords()[0];
@@ -6514,8 +6515,8 @@ fn resize_observer_entries_expose_box_size_arrays() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("ResizeObserver box-size entries should evaluate");
+    )
+    .expect("ResizeObserver box-size entries should evaluate");
 
     assert_eq!(
         result,
@@ -6615,10 +6616,9 @@ fn resize_observer_declared_slots_ignore_prototype_spoofing() {
 fn resize_observer_observed_records_ignore_public_spoofing() {
     let mut vm = new_storage_test_vm("https://resize-observer-record-slots.test/");
 
-    let result = vm
-        .eval(
+    let result = eval_with_layout_publications(&mut vm,
             r#"
-(() => {
+(function* () {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
   const target = document.createElement('div');
@@ -6632,6 +6632,7 @@ fn resize_observer_observed_records_ignore_public_spoofing() {
   target.__moliResizeObserverRecordTarget = other;
   target.__moliResizeObserverRecordBox = 'border-box';
 
+yield; // Publish this scene before reading its geometry.
   const observer = new ResizeObserver(() => {});
   observer.observe(target, { box: 'content-box' });
   observer.observe(target, { box: 'border-box' });

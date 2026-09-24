@@ -3,6 +3,19 @@ use axum::http::{HeaderMap, header};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value};
 
+async fn classic_capture_layout(app: Router, session_id: &str) {
+    let captured = classic_request_json(
+        app,
+        Method::GET,
+        &format!("/session/{session_id}/screenshot"),
+    )
+    .await;
+    assert!(
+        captured["value"].is_string(),
+        "fixture screenshot: {captured}"
+    );
+}
+
 #[tokio::test]
 async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope() {
     let app = build_router(test_state());
@@ -329,6 +342,7 @@ async fn webdriver_classic_download_files_match_selenium_remote_extension() {
         json!({ "url": page_url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated["value"], Value::Null);
     let link_id = classic_find_css_element_id(app.clone(), session_id, "#dl").await;
     let clicked = classic_request_json(
@@ -1176,6 +1190,7 @@ async fn webdriver_classic_element_reference_owner_rejects_forged_and_stales_aft
         json!({ "url": first_url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
 
     let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
     assert!(
@@ -5299,6 +5314,7 @@ async fn webdriver_classic_element_user_prompt_behavior_matches_chromium_wpt() {
             .await,
             json!({ "value": null })
         );
+        classic_capture_layout(app.clone(), session_id).await;
 
         let foo_id = classic_find_css_element_id(app.clone(), session_id, "#foo").await;
         let text_id = classic_find_css_element_id(app.clone(), session_id, "#text").await;
@@ -5624,6 +5640,7 @@ async fn webdriver_classic_get_element_rect_cases_ported_from_chromium_wpt() {
         }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
@@ -6056,6 +6073,7 @@ async fn webdriver_classic_get_element_property_cases_ported_from_chromium_wpt()
     )
     .await;
     assert_eq!(seeded, json!({ "value": "seeded" }));
+    classic_capture_layout(app.clone(), session_id).await;
 
     for (property, expected) in [
         ("__string", json!("foobar")),
@@ -6973,6 +6991,7 @@ async fn webdriver_classic_shadow_root_link_text_edges_ported_from_chromium_wpt(
             json!({ "url": classic_data_url(&html) }),
         )
         .await;
+        classic_capture_layout(app.clone(), session_id).await;
         assert_eq!(navigated, json!({ "value": null }));
 
         let host_id = classic_find_css_element_id(app.clone(), session_id, "#host").await;
@@ -7354,7 +7373,7 @@ async fn webdriver_classic_shadow_root_owner_context_errors_ported_from_chromium
 }
 
 #[tokio::test]
-async fn webdriver_classic_screenshot_reports_unsupported_without_placeholder_payload() {
+async fn webdriver_classic_page_screenshot_publishes_layout_and_element_clip_remains_unsupported() {
     // Ported from Selenium py/test/selenium/webdriver/common/takes_screenshots_tests.py:
     // test_get_screenshot_as_base64, test_get_screenshot_as_png and
     // test_get_element_screenshot.
@@ -7385,15 +7404,13 @@ async fn webdriver_classic_screenshot_reports_unsupported_without_placeholder_pa
         &format!("/session/{session_id}/screenshot"),
     )
     .await;
-    assert_eq!(page_status, StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(
-        page_screenshot["value"]["error"],
-        json!("unsupported operation")
-    );
-    assert_eq!(
-        page_screenshot["value"]["message"],
-        json!("Page.captureScreenshot is not supported: renderer screenshots are not implemented.")
-    );
+    assert_eq!(page_status, StatusCode::OK);
+    let bytes = BASE64_STANDARD
+        .decode(page_screenshot["value"].as_str().expect("PNG base64"))
+        .expect("valid base64");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()) > 0);
+    assert!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()) > 0);
 
     let element = classic_request_json_with_body(
         app.clone(),
@@ -7582,6 +7599,7 @@ async fn webdriver_classic_displayed_cases_ported_from_selenium() {
         }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     for (selector, expected) in [
@@ -8297,6 +8315,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
         json!({ "url": first_url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(first_navigated, json!({ "value": null }));
 
     let navigated = classic_request_json_with_body(
@@ -8306,6 +8325,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
         json!({ "url": navigate_url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let current_url = classic_request_json(
@@ -10616,6 +10636,7 @@ async fn webdriver_classic_click_inside_frame_observes_removed_current_frame() {
         json!({ "url": page_url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let switched =
@@ -11151,6 +11172,9 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
             app.clone(), Method::POST, &format!("/session/{session_id}/url"),
             json!({"url": "data:text/html,<button id='target'>go</button><script>window.events=[];for(const type of ['pointerdown','mousedown','mouseup','click'])target.addEventListener(type,e=>events.push(e.type));</script>"}),
         ).await;
+        if policy.uses_real_layout() {
+            classic_capture_layout(app.clone(), session_id).await;
+        }
         assert_eq!(navigated, json!({"value": null}));
         let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
         let clicked = classic_request_json(
@@ -11176,6 +11200,9 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
             app.clone(), Method::POST, &format!("/session/{session_id}/url"),
             json!({"url": "data:text/html,<input id='origin'><input id='target'><script>document.getElementById('origin').focus();</script>"}),
         ).await;
+        if policy.uses_real_layout() {
+            classic_capture_layout(app.clone(), session_id).await;
+        }
         let target = classic_find_css_element_id(app.clone(), session_id, "#target").await;
         assert_eq!(
             classic_request_json(
@@ -11239,6 +11266,25 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
     let element_id = element["value"]["element-6066-11e4-a52e-4f735466cecf"]
         .as_str()
         .expect("element reference id");
+
+    let (cold_status, cold) = classic_request_status_and_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/element/{element_id}/click"),
+    )
+    .await;
+    assert_eq!(cold_status, StatusCode::INTERNAL_SERVER_ERROR);
+    for command in [
+        "Page.captureScreenshot",
+        "Page.printToPDF",
+        "Page.startScreencast",
+    ] {
+        assert!(
+            cold["value"]["message"].as_str().unwrap().contains(command),
+            "{cold}"
+        );
+    }
+    classic_capture_layout(app.clone(), session_id).await;
 
     let clicked = classic_request_json(
         app.clone(),
@@ -11372,8 +11418,21 @@ async fn webdriver_classic_click_pointer_focus_and_interactability_controls() {
             json!({"url":format!("data:text/html,{html}")}),
         )
         .await;
+        classic_capture_layout(app.clone(), session_id).await;
         assert_eq!(navigated, json!({"value":null}), "{name}");
         let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        if name == "scroll" {
+            let (status, blocked) = classic_request_status_and_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{element_id}/click"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+            assert_eq!(blocked["value"]["error"], "element not interactable");
+            // Click preparation scrolled live state; explicitly publish the new position.
+            classic_capture_layout(app.clone(), session_id).await;
+        }
         let (status, clicked) = classic_request_status_and_json(
             app.clone(),
             Method::POST,
@@ -11407,6 +11466,7 @@ async fn webdriver_classic_click_pointer_focus_and_interactability_controls() {
         &format!("/session/{session_id}/url"), json!({
             "url":"data:text/html,<input id='origin'><input id='target'><script>document.getElementById('origin').focus();</script>"
         })).await;
+    classic_capture_layout(app.clone(), session_id).await;
     let synthetic = classic_request_json_with_body(app.clone(), Method::POST,
         &format!("/session/{session_id}/execute/sync"), json!({
             "script":"let events=[];for(const type of ['pointerdown','mousedown','focus','mouseup','click'])target.addEventListener(type,e=>events.push([e.type,e.isTrusted]));target.click();return [document.activeElement.id,events];", "args":[]
@@ -11431,6 +11491,7 @@ async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offse
             json!({"url":format!("data:text/html,{html}")}),
         )
         .await;
+        classic_capture_layout(app.clone(), session_id).await;
         assert_eq!(
             classic_request_json_with_body(
                 app.clone(),
@@ -11646,6 +11707,7 @@ async fn webdriver_classic_click_mousedown_navigation_does_not_activate_successo
         json!({"url":source}),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
     let clicked = classic_request_json(
         app.clone(),
@@ -11666,6 +11728,7 @@ async fn webdriver_classic_click_mousedown_navigation_does_not_activate_successo
     )
     .await;
     assert_eq!(observed, json!({"value":0}));
+    classic_capture_layout(app.clone(), session_id).await;
     let successor_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
     assert_eq!(
         classic_request_json(
@@ -11718,6 +11781,8 @@ async fn webdriver_classic_anchor_target_blank_click_opens_window_handle() {
     )
     .await;
     assert_eq!(navigated, json!({ "value": null }));
+
+    classic_capture_layout(app.clone(), session_id).await;
 
     let link_id = classic_find_css_element_id(app.clone(), session_id, "#popup").await;
     let clicked = classic_request_json(
@@ -11786,6 +11851,7 @@ async fn webdriver_classic_window_open_self_click_waits_for_current_url() {
     )
     .await;
     assert_eq!(navigated, json!({ "value": null }));
+    classic_capture_layout(app.clone(), session_id).await;
     let handle_count = classic_request_json(app.clone(), Method::GET, &handles_path).await;
     let handle_count = handle_count["value"]
         .as_array()
@@ -11863,6 +11929,7 @@ async fn webdriver_classic_named_popup_reuse_navigates_existing_window() {
     )
     .await;
     assert_eq!(navigated, json!({ "value": null }));
+    classic_capture_layout(app.clone(), session_id).await;
 
     let first_button_id = classic_find_css_element_id(app.clone(), session_id, "#first").await;
     let clicked_first = classic_request_json(
@@ -12535,6 +12602,7 @@ async fn webdriver_classic_enter_inserts_newline_and_submits_through_both_key_ro
                     json!({"url": format!("data:text/html,{html}")}),
                 )
                 .await;
+                classic_capture_layout(app.clone(), session_id).await;
                 assert_eq!(navigated, json!({"value": null}));
                 let element_id =
                     classic_find_css_element_id(app.clone(), session_id, "#field").await;
@@ -12596,6 +12664,7 @@ async fn webdriver_classic_element_send_keys_uses_shared_input() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let element = classic_request_json_with_body(
@@ -12668,6 +12737,7 @@ async fn webdriver_classic_send_keys_form_control_cases_ported_from_chromium_wpt
         json!({ "url": page }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     async fn send_keys(app: Router, session_id: &str, selector: &str, text: &str) {
@@ -13080,6 +13150,7 @@ async fn webdriver_classic_actions_key_source_uses_shared_input() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let element = classic_request_json_with_body(
@@ -13212,6 +13283,7 @@ async fn webdriver_classic_actions_wheel_source_dispatches_with_real_geometry() 
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13278,6 +13350,7 @@ async fn webdriver_classic_actions_touch_pointer_dispatches_with_real_geometry()
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13348,6 +13421,7 @@ async fn webdriver_classic_actions_touch_pointer_capture_uses_real_geometry() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13421,6 +13495,7 @@ async fn webdriver_classic_actions_pen_pointer_preserves_pointer_properties() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13507,6 +13582,7 @@ async fn webdriver_classic_actions_cancelled_pointerdown_suppresses_compat_mouse
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13584,6 +13660,7 @@ async fn webdriver_classic_actions_pointer_capture_routes_real_coordinate_input(
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13657,6 +13734,7 @@ async fn webdriver_classic_actions_removed_capture_target_retargets_to_document(
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13727,6 +13805,7 @@ async fn webdriver_classic_actions_active_capture_move_handles_removed_target() 
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13800,6 +13879,7 @@ async fn webdriver_classic_coordinate_actions_dispatch_after_tick_delay() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (actions_status, actions) = classic_request_status_and_json_with_body(
@@ -13860,6 +13940,7 @@ async fn webdriver_classic_actions_element_origin_uses_real_geometry() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let button = classic_request_json_with_body(
@@ -13992,6 +14073,7 @@ async fn webdriver_classic_release_actions_clear_pressed_sources() {
         json!({ "url": url }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let element = classic_request_json_with_body(
@@ -14120,6 +14202,7 @@ async fn webdriver_classic_actions_reject_move_target_out_of_bounds() {
         json!({ "url": "data:text/html,<main>bounds</main>" }),
     )
     .await;
+    classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
     let (status, response) = classic_request_status_and_json_with_body(

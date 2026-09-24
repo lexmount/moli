@@ -140,6 +140,20 @@ pub(crate) fn real_layout_test_connection() -> CdpConnection {
 }
 
 impl TestContext {
+    /// Explicitly publish fixture geometry before geometry-dependent commands.
+    pub(crate) async fn capture_fixture_layout(&mut self, session_id: Option<&str>) {
+        let mut request = json!({"id":9_000_000,"method":"Page.captureScreenshot"});
+        if let Some(session_id) = session_id {
+            request["sessionId"] = json!(session_id);
+        }
+        self.process_async(request).await;
+        let response = self.take_response_by_id(9_000_000);
+        assert!(
+            response["result"]["data"].is_string(),
+            "fixture screenshot: {response}"
+        );
+    }
+
     /// Build the default CDP test harness used by older internal unit tests.
     ///
     /// Historically those tests treated `Target.targetCreated` as a baseline

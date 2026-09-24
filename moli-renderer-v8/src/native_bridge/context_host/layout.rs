@@ -1,12 +1,10 @@
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{
-    FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutFlushReason,
-    LayoutPassRequest, LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutViewport,
+    FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutPassRequest,
+    LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutViewport,
 };
 
 use super::JsContextHost;
-use super::layout_snapshot::LayoutEnvironment;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
@@ -222,7 +220,6 @@ impl JsContextHost {
             return Ok(None);
         };
         let pass_viewport = request.viewport;
-        let environment = self.layout_environment();
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
         let mut pass = {
             let mut state = self.document_layout_state.borrow_mut();
@@ -313,7 +310,7 @@ impl JsContextHost {
         let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            state.publish_latest_layout(document, tree, environment);
+            state.publish_latest_layout(document, tree);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
@@ -329,52 +326,24 @@ impl JsContextHost {
     pub(crate) fn answer_layout_for_document(
         &self,
         document: DomHandle,
-        reason: LayoutFlushReason,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        let viewport = self.layout_viewport_for_document(document);
-        self.answer_layout_at_viewport(document, reason, viewport, queries)
-    }
-
-    pub(crate) fn can_answer_layout_from_snapshot(
-        &self,
-        document: DomHandle,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
-    ) -> bool {
-        self.with_reusable_layout_tree_for_document(document, reason, viewport, |_| ())
-            .is_some()
-    }
-
-    fn layout_environment(&self) -> LayoutEnvironment {
-        LayoutEnvironment {
-            viewport: self.style_viewport(),
-            media: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
+        let answers = self
+            .with_latest_layout_tree_for_document(document, |tree| {
+                self.last_layout_pass_metrics.get().map(|metrics| {
+                    self.answer_layout_queries(tree, metrics, tree.viewport, queries)
+                })
+            })
+            .flatten();
+        if let Some(answers) = answers {
+            self.layout_snapshot_cache_hits
+                .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
+            Ok(answers)
+        } else {
+            self.layout_snapshot_cache_misses
+                .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
+            Err(LayoutError::NoLayoutSnapshot)
         }
-    }
-
-    fn with_reusable_layout_tree_for_document<T>(
-        &self,
-        document: DomHandle,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
-        inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>) -> T,
-    ) -> Option<T> {
-        #[cfg(test)]
-        if self.force_fresh_layout_reads_for_test {
-            return None;
-        }
-        if !self
-            .document_layout_state
-            .borrow()
-            .latest_layout_matches_environment(self.layout_environment())
-        {
-            return None;
-        }
-        self.with_latest_layout_tree_for_document(document, |tree| {
-            layout_tree_satisfies_request(tree, reason, viewport).then(|| inspect(tree))
-        })
-        .flatten()
     }
 
     /// Inspects the member tree for one exact Document in the single latest
@@ -397,62 +366,8 @@ impl JsContextHost {
         state
             .latest_layout(document)
             .or_else(|| root.and_then(|root| state.latest_layout_for_root(root)))
+            .filter(|tree| Some(tree.source_root()) == root)
             .map(inspect)
-    }
-
-    /// Ensures one exact-viewport tree exists without manufacturing a geometry
-    /// query. Hit-test demands additionally require the complete embedded-frame
-    /// projection owned by that same frozen tree.
-    pub(crate) fn ensure_layout_at_viewport(
-        &self,
-        document: DomHandle,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
-    ) -> Result<(), LayoutError> {
-        if self.can_answer_layout_from_snapshot(document, reason, viewport) {
-            self.layout_snapshot_cache_hits
-                .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
-            return Ok(());
-        }
-
-        self.layout_snapshot_cache_misses
-            .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
-        self.with_fresh_layout_pass_for_document(
-            document,
-            LayoutPassRequest::new(viewport, reason),
-            |_| Ok(()),
-        )?
-        .ok_or(LayoutError::NoLayoutRoot)
-    }
-
-    pub(crate) fn answer_layout_at_viewport(
-        &self,
-        document: DomHandle,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
-        queries: &LayoutQueryBatch<DomHandle>,
-    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        let cached = self
-            .with_reusable_layout_tree_for_document(document, reason, viewport, |tree| {
-                self.last_layout_pass_metrics
-                    .get()
-                    .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
-            })
-            .flatten();
-        if let Some(answers) = cached {
-            self.layout_snapshot_cache_hits
-                .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
-            return Ok(answers);
-        }
-
-        self.layout_snapshot_cache_misses
-            .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
-        self.with_fresh_layout_pass_for_document(
-            document,
-            LayoutPassRequest::new(viewport, reason),
-            |pass| Ok(self.answer_layout_queries(&pass.tree, pass.metrics, viewport, queries)),
-        )?
-        .ok_or(LayoutError::NoLayoutRoot)
     }
 
     fn answer_layout_queries(
@@ -467,8 +382,8 @@ impl JsContextHost {
             .iter()
             .map(|query| match query {
                 LayoutQuery::DocumentMetrics => {
-                    // The viewport comes from the current request; cached
-                    // geometry is reusable only for that same viewport.
+                    // Geometry and its coordinate environment come from the
+                    // same published frame, even after live viewport changes.
                     LayoutQueryAnswer::DocumentMetrics(moli_layout::LayoutDocumentMetrics {
                         viewport,
                         viewport_scroll: tree.viewport_scroll,
@@ -481,8 +396,7 @@ impl JsContextHost {
                         |candidate| self.offset_parent_candidate_is_exposed(*source, candidate),
                     ),
                 ),
-                // Layout preparation still runs, but an out-of-viewport point
-                // needs no fragment walk.
+                // An out-of-viewport point needs no fragment walk.
                 LayoutQuery::HitTest { point, .. } if !viewport.contains(*point) => {
                     LayoutQueryAnswer::HitTest(None)
                 }
@@ -541,7 +455,7 @@ impl JsContextHost {
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {
         self.clear_layout_rect_cache();
         // Interactions dirty future visual publication, while ordinary geometry
-        // and input keep consuming the latest compatible frozen snapshot.
+        // and input keep consuming the last published frozen snapshot.
         self.document_layout_state
             .borrow_mut()
             .mark_visual_state_dirty();
@@ -563,12 +477,6 @@ impl JsContextHost {
         self.document_layout_state
             .borrow_mut()
             .publish_web_font_resource_generation(generation);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_fresh_layout_reads_for_test(&mut self) {
-        self.force_fresh_layout_reads_for_test = true;
-        self.document_layout_state.get_mut().clear_latest_layout();
     }
 
     pub(crate) fn retain_document_web_font_slots<'a>(
@@ -632,28 +540,15 @@ impl JsContextHost {
     }
 }
 
-fn layout_tree_satisfies_request(
-    tree: &FrozenLayoutTree<DomHandle>,
-    reason: LayoutFlushReason,
-    viewport: LayoutViewport,
-) -> bool {
-    // A changed viewport can change reflow, viewport units, and clipping in
-    // either direction. Rebuild on the next geometry demand, not on resize.
-    tree.viewport == viewport
-        && (!matches!(reason, LayoutFlushReason::HitTest) || tree.embedded_frames_complete())
-}
-
 impl GeometryProvider for JsContextHost {
     type NodeId = DomHandle;
 
     fn answer(
         &mut self,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
         queries: &LayoutQueryBatch<Self::NodeId>,
     ) -> Result<LayoutAnswers<Self::NodeId>, LayoutError> {
         let document = self.document_handle();
-        self.answer_layout_at_viewport(document, reason, viewport, queries)
+        self.answer_layout_for_document(document, queries)
     }
 }
 

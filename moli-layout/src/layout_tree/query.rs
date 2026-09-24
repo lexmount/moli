@@ -10,7 +10,7 @@ use super::{
         LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
         LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
     },
-    pass_result::{LayoutFlushReason, LayoutPassMetrics},
+    pass_result::LayoutPassMetrics,
     tree::FrozenLayoutTree,
 };
 
@@ -188,13 +188,10 @@ pub trait GeometryProvider {
 
     /// Answers a batch from the provider's latest layout state.
     ///
-    /// The provider decides whether this requires a fresh pass or can reuse an
-    /// already-owned tree; callers must not assume that one call equals one
-    /// layout computation.
+    /// Reading never computes layout. Real-layout providers require a tree
+    /// published by a screenshot, screencast frame, or PDF output.
     fn answer(
         &mut self,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
         queries: &LayoutQueryBatch<Self::NodeId>,
     ) -> Result<LayoutAnswers<Self::NodeId>, LayoutError>;
 }

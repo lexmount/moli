@@ -1313,7 +1313,6 @@ fn mouse_event_offset_getter(
         unsafe { &*runtime_ptr },
         handle,
         moli_layout::LayoutPoint::new(client_x as f32, client_y as f32),
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
     ) {
         Ok(offset) => offset,
         Err(error) => {

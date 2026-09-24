@@ -191,6 +191,7 @@ async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_withou
             .is_some_and(|html| html.contains("data-route=\"background\""))
     );
 
+    ctx.capture_fixture_layout(Some("SID-background")).await;
     ctx.process_async(json!({
         "id": 349,
         "sessionId": "SID-background",
@@ -334,6 +335,7 @@ async fn dom_resolve_geometry_targets_inactive_loaded_owner_without_activation()
     .await;
     let owned_node_id = take_query_selector_node_id(&mut ctx, 362);
 
+    ctx.capture_fixture_layout(Some("SID-inactive")).await;
     ctx.process_async(json!({
         "id": 363,
         "sessionId": "SID-inactive",
@@ -377,6 +379,7 @@ async fn get_box_model() {
         "<!doctype html><html><body><p style='position:absolute;left:10px;top:10px;width:5px;height:5px;margin:0'>box</p></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 3, "method": "DOM.getDocument"}))
         .await;
@@ -415,6 +418,7 @@ async fn top_frame_geometry_non_element_waits_for_renderer_completion() {
         "<!doctype html><html><body>plain text</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -481,6 +485,7 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "<!doctype html><html><body><p id='target' style='position:absolute;left:10px;top:10px;width:5px;height:5px;margin:0'>box</p></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -724,6 +729,7 @@ async fn get_box_model_supports_backend_node_id() {
         "<!doctype html><html><body><p style='position:absolute;left:12px;top:8px;width:7px;height:6px;margin:0'>box</p></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -771,6 +777,7 @@ async fn get_box_model_supports_renderer_backend_node_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:3px;top:4px;width:9px;height:11px'>box</div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -847,6 +854,7 @@ async fn get_box_model_supports_object_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:3px;top:4px;width:9px;height:11px'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -873,7 +881,7 @@ async fn get_box_model_supports_object_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn object_id_geometry_reads_live_document_after_document_open_replacement() {
+async fn object_id_geometry_reads_captured_document_after_document_open_replacement() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     navigate_to_data_html_async(
@@ -882,6 +890,7 @@ async fn object_id_geometry_reads_live_document_after_document_open_replacement(
         "<!doctype html><html><body>old text node</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -916,6 +925,7 @@ async fn object_id_geometry_reads_live_document_after_document_open_replacement(
         .unwrap_or_else(|| panic!("replacement Runtime.evaluate should return objectId"))
         .to_owned();
 
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 13,
         "method": "DOM.getBoxModel",
@@ -947,6 +957,7 @@ async fn object_id_box_model_rejects_text_node_but_content_quads_accepts_it() {
         "<!doctype html><html><body>hello</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -990,6 +1001,7 @@ async fn get_box_model_rejects_non_element_nodes() {
         "<!doctype html><html><body>hello</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1051,6 +1063,7 @@ async fn get_content_quads_returns_single_quad_for_element() {
         "<!doctype html><html><body><p style='position:absolute;left:10px;top:10px;width:5px;height:5px;margin:0'>box</p></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1091,6 +1104,7 @@ async fn get_content_quads_supports_object_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:3px;top:4px;width:9px;height:11px'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1129,6 +1143,7 @@ async fn get_content_quads_supports_backend_node_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:6px;top:7px;width:8px;height:9px'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1176,6 +1191,7 @@ async fn get_content_quads_supports_renderer_backend_node_id() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:6px;top:7px;width:8px;height:9px'>box</div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1245,6 +1261,7 @@ async fn get_content_quads_accepts_connected_rendered_text_node() {
         "<!doctype html><html><body>hello</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1305,6 +1322,7 @@ async fn get_node_for_location_uses_real_layout_hit_testing() {
         "<!doctype html><html><body><div id='behind' style='position:absolute;left:10px;top:10px;width:60px;height:60px'></div><button id='front' style='position:absolute;left:20px;top:20px;width:20px;height:20px'>hit</button></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     let expected_backend_node_id = renderer_backend_node_id_for_live_expression(
         &mut ctx,
         2,
@@ -1367,6 +1385,7 @@ async fn get_node_for_location_negative_coordinates_report_no_hit() {
         "<!doctype html><html><body><div id='box' style='position:absolute;left:10px;top:10px;width:10px;height:10px'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({
         "id": 2,
@@ -1395,6 +1414,7 @@ async fn scroll_into_view_if_needed_accepts_element_node() {
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1442,6 +1462,7 @@ async fn scroll_into_view_if_needed_accepts_document_node() {
         "<!doctype html><html><body><div id='box'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1468,6 +1489,7 @@ async fn scroll_into_view_if_needed_accepts_connected_rendered_text_node() {
         "<!doctype html><html><body>hello</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -1550,6 +1572,7 @@ async fn scroll_into_view_if_needed_supports_object_id() {
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1599,6 +1622,7 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content
         "data:text/html,<!doctype html><body>{rows}<button id=contents style='display:contents'>target</button></body>"
     );
     navigate_to_url_and_wait_for_load_async(&mut ctx, 30, url).await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({
         "id": 31,
@@ -1641,6 +1665,7 @@ async fn scroll_into_view_if_needed_honors_stylesheet_display_and_visibility() {
         "data:text/html,<!doctype html><style>.contents{{display:contents}}.none{{display:none}}.invisible{{visibility:hidden}}</style><body>{rows}<button id=contents class=contents>contents text</button><div id=none class=none><span>suppressed child</span></div><button id=invisible class=invisible>invisible box</button></body>"
     );
     navigate_to_url_and_wait_for_load_async(&mut ctx, 60, url).await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({
         "id": 67,
@@ -1706,6 +1731,7 @@ async fn scroll_into_view_if_needed_rejects_hidden_input_like_chromium() {
         .as_str()
         .expect("hidden input object id")
         .to_owned();
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 36,
         "method": "DOM.scrollIntoViewIfNeeded",
@@ -1747,7 +1773,7 @@ async fn scroll_into_view_if_needed_distinguishes_detached_node_from_missing_geo
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling() {
+async fn scroll_into_view_if_needed_observes_style_change_after_explicit_capture() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     navigate_to_data_html_async(
@@ -1756,6 +1782,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling(
         "<!doctype html><body><div id=spacer style='height:24px'></div><div id=target></div></body>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 41,
         "method": "Runtime.evaluate",
@@ -1768,6 +1795,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling(
         .as_str()
         .expect("style-updated target object id")
         .to_owned();
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 42,
         "method": "DOM.scrollIntoViewIfNeeded",
@@ -1785,7 +1813,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling(
         take_response_by_id(&mut ctx, 43)["result"]["result"]["value"]
             .as_f64()
             .is_some_and(|scroll_y| scroll_y > 0.0),
-        "scroll geometry must observe the style mutation made immediately before the command"
+        "scroll geometry must observe the explicitly captured style mutation"
     );
 }
 
@@ -1796,6 +1824,7 @@ async fn scroll_into_view_if_needed_clamps_relative_rect_to_document_scroll_rang
     let rows = "<div>row</div>".repeat(60);
     let url = format!("data:text/html,<!doctype html><body>{rows}<div id=target></div></body>");
     navigate_to_url_and_wait_for_load_async(&mut ctx, 44, url).await;
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 45,
         "method": "Runtime.evaluate",
@@ -1854,6 +1883,7 @@ async fn scroll_into_view_if_needed_supports_document_object_id() {
         "<!doctype html><html><body><div id='box'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1879,8 +1909,8 @@ async fn scroll_into_view_if_needed_supports_document_object_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scroll_into_view_if_needed_object_id_reads_live_document_after_document_open_replacement()
-{
+async fn scroll_into_view_if_needed_object_id_reads_captured_document_after_document_open_replacement()
+ {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     navigate_to_data_html_async(
@@ -1889,6 +1919,7 @@ async fn scroll_into_view_if_needed_object_id_reads_live_document_after_document
         "<!doctype html><html><body>old text node</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1923,6 +1954,7 @@ async fn scroll_into_view_if_needed_object_id_reads_live_document_after_document
         .unwrap_or_else(|| panic!("replacement Runtime.evaluate should return objectId"))
         .to_owned();
 
+    ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 13,
         "method": "DOM.scrollIntoViewIfNeeded",
@@ -1942,6 +1974,7 @@ async fn scroll_into_view_if_needed_object_id_accepts_connected_rendered_text_no
         "<!doctype html><html><body>hello</body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();
@@ -1976,6 +2009,7 @@ async fn scroll_into_view_if_needed_supports_backend_node_id() {
         "<!doctype html><html><body><div id='box'></div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
         .await;
@@ -2025,6 +2059,7 @@ async fn scroll_into_view_if_needed_supports_renderer_backend_node_id() {
         "<!doctype html><html><body><div id='box'>box</div></body></html>",
     )
     .await;
+    ctx.capture_fixture_layout(None).await;
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 10).await;
     let _ = ctx.take_all();

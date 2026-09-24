@@ -6,7 +6,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
-from ..helpers import attach_cdp_event_collector
+from ..helpers import capture_layout, attach_cdp_event_collector
 
 
 def _assert_websocket_event_constraints(events: list[str], label: str) -> None:
@@ -86,7 +86,7 @@ async def run_core_group(state: SmokeState) -> None:
     # OnDemand layout intentionally reuses its latest sampled geometry across
     # DOM/style mutations. Reach the fixture's final DOM-only state before the
     # first explicit refresh so this smoke does not require snapshot invalidation.
-    await page.screenshot()
+    await capture_layout(page)
     await page.locator("#visible").wait_for(state="visible", timeout=5_000)
     assert_equal(await page.text_content("#visible", timeout=5_000), "visible ready", "locator visible text")
     await page.wait_for_selector("#hide-me", state="hidden", timeout=5_000)

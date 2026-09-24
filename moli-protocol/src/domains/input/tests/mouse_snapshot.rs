@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn cdp_mouse_requires_a_snapshot_then_consumes_geometry_and_screenshot_publications() {
+async fn cdp_geometry_and_mouse_require_explicit_layout_publication() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, r#"<html><body style='margin:0;min-height:100px'>
         <button id='target' style='position:absolute;left:0;top:0;width:100px;height:100px'>go</button>
@@ -27,7 +27,7 @@ async fn cdp_mouse_requires_a_snapshot_then_consumes_geometry_and_screenshot_pub
             response["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("coordinate input requires an existing layout snapshot"),
+                .contains("no published layout is available"),
             "{response}"
         );
     }
@@ -37,6 +37,29 @@ async fn cdp_mouse_requires_a_snapshot_then_consumes_geometry_and_screenshot_pub
     );
 
     let object_id = resolve_selector_object_id(&mut ctx, "#target", 710).await;
+    for (method, params) in [
+        ("DOM.getBoxModel", json!({"objectId": object_id})),
+        ("Page.getLayoutMetrics", json!({})),
+    ] {
+        ctx.process_async(json!({"id":720,"method":method,"params":params}))
+            .await;
+        let cold = ctx.take_response_by_id(720);
+        assert_eq!(cold["error"]["code"], -32000, "{cold}");
+        let message = cold["error"]["message"]
+            .as_str()
+            .expect("missing-layout error");
+        for command in [
+            "Page.captureScreenshot",
+            "Page.printToPDF",
+            "Page.startScreencast",
+            "wait for a frame",
+        ] {
+            assert!(message.contains(command), "{cold}");
+        }
+    }
+    ctx.process_async(json!({"id":719,"method":"Page.captureScreenshot"}))
+        .await;
+    assert!(ctx.take_response_by_id(719)["result"]["data"].is_string());
     ctx.process_async(json!({"id":720,"method":"DOM.getBoxModel","params":{"objectId":object_id}}))
         .await;
     assert!(ctx.take_response_by_id(720)["result"]["model"].is_object());
