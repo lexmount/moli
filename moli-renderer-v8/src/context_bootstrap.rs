@@ -196,7 +196,7 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    LocationNavigationKind, dispatch_top_level_form_navigation_event,
+    LocationNavigationKind,
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
     navigate_borrowed_location, navigate_child_meta_refresh,
     navigate_location_object_with_child_navigate_event,
