@@ -24,8 +24,9 @@ function retiredChannelProbe() {
           let calls = 0;
           port.addEventListener('probe', () => calls++);
           const event = new Event('probe');
-          check(port.dispatchEvent(event) === false && calls === 0, 'retired dispatch');
-          check(event.target === null && event.eventPhase === 0, 'retired event untouched');
+          check(port.dispatchEvent(event) === true && calls === 1, 'detached port dispatch');
+          check(event.target === port && event.currentTarget === null && event.eventPhase === 0,
+                'detached port event cleanup');
           try { structuredClone(port, {transfer:[port]}); failures.push('transferred born-detached port'); }
           catch (error) { check(error.name === 'DataCloneError', 'born-detached transfer error'); }
           port.start(); port.postMessage('ignored'); port.close(); port.close();
@@ -52,6 +53,8 @@ function retiredChannelProbe() {
 function retiredTargetProbe() {
   const failures = [], rows = [];
   const check = (value, label) => { if (!value) failures.push(label); };
+  // Synthetic dispatch follows each listener's realm lifetime, even when the
+  // retained target's own realm has been destroyed.
   for (const kind of ['EventTarget', 'MessagePort', 'FileReader', 'AbortSignal']) {
     for (const state of ['live', 'removed', 'reinserted']) {
       const frame = document.createElement('iframe');
@@ -65,32 +68,36 @@ function retiredTargetProbe() {
       const methods = [target.dispatchEvent];
       if (kind !== 'AbortSignal') methods.push(EventTarget.prototype.dispatchEvent);
       let calls = 0;
+      const childCalls = [];
+      const childListener = w.Function('calls', 'return function() { calls.push(true); };')(childCalls);
+      target.addEventListener('probe', childListener);
       target.addEventListener('probe', () => calls++);
       if (state !== 'live') frame.remove();
       if (state === 'reinserted') document.body.appendChild(frame);
       for (const [index, dispatch] of methods.entries()) {
         const label = kind + ':' + state + ':' + index;
-        const before = calls, event = new Event('probe');
+        const before = calls, childBefore = childCalls.length, event = new Event('probe');
         try {
           const returned = dispatch.call(target, event);
-          check(returned === (state === 'live'), label + ' return');
-          check(calls - before === (state === 'live' ? 1 : 0), label + ' listeners');
-          check(event.target === (state === 'live' ? target : null), label + ' event target');
+          check(returned === true, label + ' return');
+          check(calls - before === 1, label + ' live listener');
+          check(childCalls.length - childBefore === (state === 'live' ? 1 : 0), label + ' child listener lifetime');
+          check(event.target === target, label + ' event target');
           check(event.currentTarget === null && event.eventPhase === 0, label + ' event state');
           for (const value of [null, {}, new Proxy(event, {})]) {
             try { dispatch.call(target, value); failures.push(label + ' accepted invalid Event'); }
             catch (error) { check(error instanceof (index === 0 ? T : TypeError), label + ' error realm'); }
           }
           try { dispatch.call(target, document.createEvent('Event')); failures.push(label + ' uninitialized'); }
-          catch (error) { check(error.name === 'InvalidStateError', label + ' initialization before liveness'); }
+          catch (error) { check(error.name === 'InvalidStateError', label + ' event initialization'); }
           if (state !== 'live') {
             const active = new EventTarget(), reused = new Event('probe');
             active.dispatchEvent(reused);
-            check(dispatch.call(target, reused) === false && reused.target === active,
-                  label + ' preserve previous target');
+            check(dispatch.call(target, reused) === true && reused.target === target,
+                  label + ' update previous target');
             active.addEventListener('probe', event => {
               try { dispatch.call(target, event); failures.push(label + ' accepted dispatching Event'); }
-              catch (error) { check(error.name === 'InvalidStateError', label + ' dispatch flag before liveness'); }
+              catch (error) { check(error.name === 'InvalidStateError', label + ' active dispatch flag'); }
             });
             active.dispatchEvent(new Event('probe'));
             if (kind !== 'AbortSignal') {
