@@ -238,7 +238,7 @@ async fn popup_dom_content_loaded_waits_for_external_scripts_but_not_child_frame
                     "/popup.html" => (format!("{POPUP_READINESS_MARKUP}<script src='/blocking.js'></script><iframe src='/child.html'></iframe><script>opener.__popupReadyTrace.push('tail:' + document.readyState)</script>"), "text/html", None),
                     "/blocking.js" => {
                         script_seen.take().unwrap().send(()).unwrap();
-                        ("opener.__popupReadyTrace.push('external:' + document.readyState);".to_owned(), "text/javascript", script_released.take())
+                        ("opener.__popupReadyTrace.push('external:' + document.readyState); document.write('<p id=written>external write</p>');".to_owned(), "text/javascript", script_released.take())
                     }
                     "/child.html" => {
                         child_seen.take().unwrap().send(()).unwrap();
@@ -262,6 +262,8 @@ async fn popup_dom_content_loaded_waits_for_external_scripts_but_not_child_frame
         tokio::time::timeout(Duration::from_secs(5), script_requested)
             .await.expect("external script request must start")?;
         assert_eq!(page_vm.vm_mut().eval("__readyPopup.document.readyState")?, "loading");
+        assert_eq!(page_vm.vm_mut().eval("String(__readyPopup.document.querySelector('iframe'))")?, "null",
+            "the parser must suspend before constructing the tail");
         assert!(!page_vm.run_exact_selected_page_task_for_test(
             PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
         ).await?, "an unfinished parser-blocking script must hold DOMContentLoaded");
@@ -277,6 +279,7 @@ async fn popup_dom_content_loaded_waits_for_external_scripts_but_not_child_frame
             .await.expect("child request must start after its navigation task")?;
         assert_eq!(page_vm.vm_mut().eval("__popupReadyTrace.join('|')")?,
             "script:loading|script-reaction:loading|external:loading|tail:loading|state:interactive|state-reaction:interactive");
+        assert_eq!(page_vm.vm_mut().eval("__readyPopup.document.getElementById('written').textContent")?, "external write");
         assert!(page_vm.run_exact_selected_page_task_for_test(
             PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
         ).await?, "DOMContentLoaded must run while the child response remains gated");
