@@ -10,7 +10,7 @@ use super::{
     shared::{SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT},
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
-    simple_object_event_remove_listener_value_for_type, simple_object_event_set_ordered_handler,
+    simple_object_event_set_ordered_handler,
     worker_host::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
         materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
@@ -777,9 +777,13 @@ fn dispatch_shared_worker_error_event<'s>(
         SHARED_WORKER_LISTENERS_SLOT,
         "error",
     );
-    let mut once_listeners = Vec::new();
     let mut dispatched = false;
     for listener in listeners {
+        let Some(listener) =
+            listener.prepare_for_invocation(scope, worker, SHARED_WORKER_LISTENERS_SLOT, "error")
+        else {
+            continue;
+        };
         dispatched = true;
         let callback_result = invoke_simple_event_listener(
             scope,
@@ -801,20 +805,6 @@ fn dispatch_shared_worker_error_event<'s>(
                 v8::Boolean::new(scope, true).into(),
             );
         }
-        if listener.once {
-            once_listeners.push(listener.original);
-        }
-    }
-
-    for listener in once_listeners {
-        simple_object_event_remove_listener_value_for_type(
-            scope,
-            worker,
-            SHARED_WORKER_LISTENERS_SLOT,
-            "error",
-            listener,
-            false,
-        );
     }
 
     clear_event_dispatch_fields(scope, event);

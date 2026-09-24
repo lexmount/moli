@@ -8,7 +8,6 @@ use crate::context_bootstrap::{
     dispatch_simple_event_target_event,
     events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
     invoke_simple_event_listener, simple_object_event_listeners_snapshot,
-    simple_object_event_remove_listener_value_for_type,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::util::v8str;
@@ -252,8 +251,12 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
 
     let listeners =
         simple_object_event_listeners_snapshot(scope, worker, WORKER_LISTENERS_SLOT, "error");
-    let mut once_listeners = Vec::new();
     for listener in listeners {
+        let Some(listener) =
+            listener.prepare_for_invocation(scope, worker, WORKER_LISTENERS_SLOT, "error")
+        else {
+            continue;
+        };
         let callback_result = invoke_simple_event_listener(
             scope,
             "error",
@@ -274,20 +277,6 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
                 v8::Boolean::new(scope, true).into(),
             );
         }
-        if listener.once {
-            once_listeners.push(listener.original);
-        }
-    }
-
-    for listener in once_listeners {
-        simple_object_event_remove_listener_value_for_type(
-            scope,
-            worker,
-            WORKER_LISTENERS_SLOT,
-            "error",
-            listener,
-            false,
-        );
     }
 
     // Blink runs the microtasks queued by Worker error listeners before it

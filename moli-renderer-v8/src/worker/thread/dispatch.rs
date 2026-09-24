@@ -16,7 +16,6 @@ use crate::context_bootstrap::{
     dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
     event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
     set_event_internal_flag, simple_object_event_listeners_snapshot,
-    simple_object_event_remove_listener_value_for_type,
     structured_deserialize_value_for_message_event,
 };
 use crate::exception_reporting::{
@@ -849,6 +848,7 @@ fn dispatch_worker_promise_rejection_event<'s>(
             listener,
             global,
             event,
+            event_type,
             "WorkerGlobalScope promise rejection listener",
         ) {
             let (report, exception) = *error;
@@ -861,16 +861,6 @@ fn dispatch_worker_promise_rejection_event<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -987,8 +977,17 @@ fn invoke_worker_listener<'s>(
     listener: &SimpleObjectEventListenerSnapshot<'s>,
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
+    event_type: &str,
     callback_name: &str,
 ) -> Result<(), WorkerExceptionError> {
+    if event_stop_immediate_propagation(scope, event) {
+        return Ok(());
+    }
+    let Some(listener) =
+        listener.prepare_for_invocation(scope, target, WORKER_GLOBAL_LISTENERS_SLOT, event_type)
+    else {
+        return Ok(());
+    };
     let arguments = [event.into()];
     let invocation = listener.invocation(target.into(), &arguments, Some(event));
     match CallbackInvoker::invoke(
@@ -1079,6 +1078,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
             listener,
             global,
             event,
+            "error",
             "WorkerGlobalScope error listener",
         ) {
             let (nested_report, nested_exception) = *nested_report;
@@ -1088,16 +1088,6 @@ pub(super) fn dispatch_worker_error_event<'s>(
                 script_url,
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "error",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1323,6 +1313,7 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope lifecycle listener",
         ) {
             let (report, exception) = *error;
@@ -1335,16 +1326,6 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1449,6 +1430,7 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "fetch",
             "ServiceWorkerGlobalScope fetch listener",
         ) {
             let (report, exception) = *error;
@@ -1461,16 +1443,6 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "fetch",
-                listener.original,
-                listener.capture,
             );
         }
         if event_stop_immediate_propagation(scope, event_object) {
@@ -1540,6 +1512,7 @@ fn dispatch_service_worker_message_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope message listener",
         ) {
             let (report, exception) = *error;
@@ -1552,16 +1525,6 @@ fn dispatch_service_worker_message_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1627,6 +1590,7 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope notification listener",
         ) {
             let (report, exception) = *error;
@@ -1639,16 +1603,6 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1702,6 +1656,7 @@ fn dispatch_service_worker_push_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "push",
             "ServiceWorkerGlobalScope push listener",
         ) {
             let (report, exception) = *error;
@@ -1714,16 +1669,6 @@ fn dispatch_service_worker_push_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "push",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1781,6 +1726,7 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "sync",
             "ServiceWorkerGlobalScope sync listener",
         ) {
             let (report, exception) = *error;
@@ -1793,16 +1739,6 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "sync",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1864,6 +1800,7 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "periodicsync",
             "ServiceWorkerGlobalScope periodicsync listener",
         ) {
             let (report, exception) = *error;
@@ -1876,16 +1813,6 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "periodicsync",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -4381,6 +4308,7 @@ fn dispatch_worker_global_message_event<'s>(
             listener,
             global,
             event,
+            event_type,
             "WorkerGlobalScope message listener",
         ) {
             let (report, exception) = *error;
@@ -4393,16 +4321,6 @@ fn dispatch_worker_global_message_event<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -4498,6 +4416,7 @@ pub(super) fn dispatch_shared_worker_connect_event(
             listener,
             global,
             event,
+            "connect",
             "SharedWorkerGlobalScope connect listener",
         ) {
             let (report, exception) = *error;
@@ -4510,16 +4429,6 @@ pub(super) fn dispatch_shared_worker_connect_event(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "connect",
-                listener.original,
-                listener.capture,
             );
         }
     }
