@@ -139,6 +139,11 @@ impl WindowOpenFeatures {
         self.noopener
     }
 
+    /// Returns whether the parsed features suppress the navigation's referrer.
+    pub fn suppresses_referrer(&self) -> bool {
+        self.noreferrer
+    }
+
     /// Returns the normalized enabled features used by the popup runtime.
     pub fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();

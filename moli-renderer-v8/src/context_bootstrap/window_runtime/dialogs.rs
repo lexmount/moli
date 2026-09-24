@@ -239,11 +239,26 @@ pub(crate) fn window_open_callback<'s>(
         let host = unsafe { &*host_ptr };
         window_open_entered_policy_container(scope, host)
     };
-    creator_policy_container.document_referrer = if suppress_opener {
+    creator_policy_container.document_referrer = if parsed_features.suppresses_referrer() {
         String::new()
     } else {
         let host = unsafe { &*host_ptr };
-        window_open_entered_document_url(scope, host).to_string()
+        let entry_scope = window_open_entry_scope(scope, host);
+        if let Some(target) = url
+            .as_ref()
+            .filter(|url| !moli_url::is_about_blank(url) && url.scheme() != "javascript")
+        {
+            window_open_navigation_referrer(
+                host,
+                entry_scope,
+                target,
+                creator_policy_container.referrer_policy.as_deref(),
+            )
+        } else {
+            // Creating the initial about:blank Document does not perform a
+            // navigation fetch, so its creator referrer is not policy-filtered.
+            window_open_document_url(host, entry_scope).to_string()
+        }
     };
     if let Some(url) = &url
         && url.scheme() == "javascript"
@@ -408,14 +423,14 @@ fn window_open_receiver_child_handle<'s>(
         .and_then(|value| child_window_handle_from_marker_data(scope, value))
 }
 
-pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+fn window_open_entry_scope(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
-) -> Url {
+) -> OwnerDispatchScope {
     // The HTML entry settings object follows the context that entered the
     // script or microtask, not the borrowed Window method's native realm.
     let ambient_scope = host.entered_owner_dispatch_scope(scope);
-    let entry_scope = match ambient_scope {
+    match ambient_scope {
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
         crate::native_bridge::OwnerDispatchScope::Top
         | crate::native_bridge::OwnerDispatchScope::Child(_) => {
@@ -424,8 +439,14 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
                 .map(|identity| identity.dispatch_scope())
                 .unwrap_or(ambient_scope)
         }
-    };
-    match entry_scope {
+    }
+}
+
+pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &crate::native_bridge::JsContextHost,
+) -> Url {
+    match window_open_entry_scope(scope, host) {
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             if let Some(url) = host.child_browsing_context_base_url(handle) {
                 return url;
@@ -441,6 +462,48 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     host.dom_host()
         .document_base_url()
         .unwrap_or_else(|| host.document_url().clone())
+}
+
+fn window_open_document_url(
+    host: &crate::native_bridge::JsContextHost,
+    owner: OwnerDispatchScope,
+) -> Url {
+    match owner {
+        OwnerDispatchScope::Child(handle) => host
+            .child_browsing_context_current_url(handle)
+            .unwrap_or_else(|| host.document_url().clone()),
+        OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .lightweight_popup_document_url(popup_id)
+            .unwrap_or_else(|| host.document_url().clone()),
+        OwnerDispatchScope::Top => host.document_url().clone(),
+    }
+}
+
+fn window_open_navigation_referrer(
+    host: &crate::native_bridge::JsContextHost,
+    mut owner: OwnerDispatchScope,
+    target: &Url,
+    policy: Option<&str>,
+) -> String {
+    if host.window_document_origin(owner).as_deref() == Some("null") {
+        return String::new();
+    }
+    loop {
+        let source = window_open_document_url(host, owner);
+        if source.scheme() == "about" && source.path() == "srcdoc" {
+            // Referrer Policy follows srcdoc containers to their URL source,
+            // while retaining the entry Document's policy.
+            let OwnerDispatchScope::Child(handle) = owner else {
+                return String::new();
+            };
+            let Some(parent) = host.owner_dispatch_scope_for_node(handle) else {
+                return String::new();
+            };
+            owner = parent;
+        } else {
+            return moli_fetch::referrer_value(&source, target, None, policy).unwrap_or_default();
+        }
+    }
 }
 
 fn window_open_entered_document_url(
@@ -465,8 +528,24 @@ fn window_open_entered_policy_container(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> DocumentPolicyContainer {
-    host.document_policy_container_for_inheritance(host.entered_owner_dispatch_scope(scope))
-        .unwrap_or_else(|| host.document_policy_container().clone())
+    let entry_scope = window_open_entry_scope(scope, host);
+    let mut policy = host
+        .document_policy_container_for_inheritance(entry_scope)
+        .unwrap_or_else(|| host.document_policy_container().clone());
+    let document = match entry_scope {
+        OwnerDispatchScope::Top => Some(host.document_handle()),
+        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle),
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+    };
+    if let Some(document) = document {
+        policy.referrer_policy =
+            super::super::navigation_serialize::document_referrer_policy_for_native_document(
+                host, document,
+            );
+    }
+    policy
 }
 
 fn window_open_entered_window<'s>(
