@@ -535,14 +535,13 @@ impl JsContextHost {
                             .as_ref()
                             .map(|entry| entry.classic_script_document_state.clone())
                             .unwrap_or_default(),
-                        document_domain_override: if attribute_bootstrap_changed {
-                            Default::default()
-                        } else {
-                            existing
-                                .as_ref()
-                                .map(|entry| entry.document_domain_override.clone())
-                                .unwrap_or_default()
-                        },
+                        // Navigation attributes do not replace the current Document.
+                        // Keep its domain through unload or a cancelled navigation;
+                        // committing the new Document resets this state.
+                        document_domain_override: existing
+                            .as_ref()
+                            .map(|entry| entry.document_domain_override.clone())
+                            .unwrap_or_default(),
                         credentialless,
                         service_worker_client_id: existing
                             .as_ref()

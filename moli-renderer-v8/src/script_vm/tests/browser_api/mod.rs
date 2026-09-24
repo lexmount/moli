@@ -19,6 +19,7 @@ mod crypto_subtle_other;
 mod crypto_subtle_x25519;
 mod date_locale;
 mod details;
+mod document_domain_lifetime;
 mod document_open_navigation_abort;
 mod document_open_origin;
 mod event_handlers;

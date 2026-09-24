@@ -668,7 +668,8 @@ impl JsContextHost {
                 }
                 let host = unsafe { &mut *host_ptr };
                 if let Some(entry) = host.child_browsing_contexts.get_mut(&child_handle) {
-                    entry.clear_document_runtime_state();
+                    // document.open() reuses this Document and its mutable origin.
+                    entry.clear_script_execution_state();
                 }
                 host.request_child_frame_realm_materialization(child_handle);
                 host.install_empty_child_classic_script_runner_for_current_document(
