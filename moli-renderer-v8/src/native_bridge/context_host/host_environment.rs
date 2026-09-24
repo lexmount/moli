@@ -811,12 +811,25 @@ impl JsContextHost {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
-        if changed {
+        let previous_style_viewport = self.style_viewport();
+        let previous_emulated_view = self
+            .viewport_surface
+            .and_then(|surface| surface.emulated_view);
+        self.viewport_surface = viewport_surface;
+        if changed && previous_style_viewport != self.style_viewport() {
             self.style_engine
                 .bump_target_context_epoch_for_document(self.document_handle());
             self.mark_layout_input_dirty();
         }
-        self.viewport_surface = viewport_surface;
+        if previous_emulated_view
+            != self
+                .viewport_surface
+                .and_then(|surface| surface.emulated_view)
+        {
+            self.document_layout_state
+                .borrow_mut()
+                .mark_visual_state_dirty();
+        }
         changed
     }
 

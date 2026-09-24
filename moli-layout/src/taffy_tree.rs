@@ -2868,7 +2868,10 @@ where
                         parent_width: child_inputs.parent_size.width,
                     });
                     let line_y = state.line_y() as f32;
-                    slot = inline_float_slot(block_context, line_y, None, 0.0);
+                    // Preserve the edge slot for an empty inline boundary even
+                    // when the float consumes all available inline space. The
+                    // next nonempty line will search for a fitting slot below.
+                    slot = block_context.find_content_slot(line_y, Clear::None, None);
                     if slot.y > line_y {
                         clearance = clearance.max(slot.y);
                     }
