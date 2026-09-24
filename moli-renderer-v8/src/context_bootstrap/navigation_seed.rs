@@ -33,6 +33,7 @@ pub(super) fn history_entry_from_snapshot(
 ) -> HistoryEntryRef {
     HistoryEntry {
         url: snapshot.url.clone(),
+        document_origin: snapshot.document_origin.clone(),
         referrer_policy: snapshot.referrer_policy.clone(),
         history_state: snapshot.history_state.clone(),
         navigation_state: snapshot.navigation_state.clone(),
@@ -48,14 +49,24 @@ pub(super) fn history_entry_from_snapshot(
     .into_ref()
 }
 
-pub(super) fn build_history_entries_from_seed(
+pub(super) fn build_history_entries_from_seed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
     seed: &NavigationHistoryEntrySeed,
 ) -> Vec<HistoryEntryRef> {
     let mut snapshots: Vec<_> = seed.entries.iter().collect();
     snapshots.sort_by_key(|snapshot| snapshot.history_index);
     snapshots
         .into_iter()
-        .map(history_entry_from_snapshot)
+        .map(|snapshot| {
+            let entry = history_entry_from_snapshot(snapshot);
+            if seed.entries.iter().find(|entry| entry.history_index == seed.current_index)
+                .is_some_and(|current| current.document_id == snapshot.document_id)
+            {
+                entry.borrow_mut().document_origin = super::navigation_entry::navigation_document_origin(scope, owner, &snapshot.url);
+            }
+            entry
+        })
         .collect()
 }
 
@@ -69,11 +80,16 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         .entries
         .iter()
         .find(|entry| entry.history_index == seed.current_index)
-        .map(history_entry_from_snapshot)
+        .map(|snapshot| {
+            let entry = history_entry_from_snapshot(snapshot);
+            entry.borrow_mut().document_origin = super::navigation_entry::navigation_document_origin(scope, owner, &snapshot.url);
+            entry
+        })
         .unwrap_or_else(|| {
             let state = serialize_history_state(scope, fallback_state);
             HistoryEntry {
                 url: "about:blank".to_owned(),
+                document_origin: super::navigation_entry::navigation_document_origin(scope, owner, "about:blank"),
                 referrer_policy: None,
                 history_state: state.clone(),
                 navigation_state: state,

@@ -211,6 +211,11 @@ pub(super) fn track_cross_document_traversal_navigation<'s>(
     href: &str,
     results: &[crate::native_bridge::PendingNavigationResult],
 ) {
+    // A cross-origin classic-history traversal has neither a navigate event
+    // nor an API method result. It must not later manufacture navigateerror.
+    if signal.is_none() && results.is_empty() {
+        return;
+    }
     track_cross_document_location_navigation(scope, navigation, signal, href);
     let data = navigation_active_cross_document_pending(scope, navigation)
         .expect("new traversal must retain its pending navigation");

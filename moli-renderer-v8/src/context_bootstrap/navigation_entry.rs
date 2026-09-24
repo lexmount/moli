@@ -26,6 +26,7 @@ use moli_webapi_declare::WebApiObject;
 enum EntryStringField {
     Document,
     Url,
+    Origin,
     ReferrerPolicy,
     Id,
     Key,
@@ -128,6 +129,7 @@ pub(super) fn create_navigation_entry<'s>(
     let public_key = navigation_entry_public_token(key);
     let entry = HistoryEntry {
         url: url.to_owned(),
+        document_origin: navigation_document_origin(scope, owner, url),
         referrer_policy: referrer_policy.map(str::to_owned),
         history_state: None,
         navigation_state: None,
@@ -187,6 +189,50 @@ pub(super) fn navigation_entry_url_value<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
     navigation_entry_stored_string(scope, entry, EntryStringField::Url)
+}
+
+pub(super) fn navigation_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    url: &str,
+) -> String {
+    super::navigation_window::runtime_window_dispatch_scope(scope, owner)
+        .and_then(|dispatch_scope| {
+            crate::util::context_host_ptr_from_global_bridge(scope)
+                .and_then(|host| unsafe { &*host }.window_document_origin(dispatch_scope))
+        })
+        .or_else(|| url::Url::parse(url).ok().map(|url| url.origin().ascii_serialization()))
+        .unwrap_or_else(|| "null".to_owned())
+}
+
+pub(super) fn navigation_entry_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    navigation_entry_stored_string(scope, entry, EntryStringField::Origin)
+}
+
+pub(super) fn set_navigation_entry_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    origin: &str,
+) {
+    if let Some(entry) = native::entry(scope, entry) {
+        entry.borrow_mut().document_origin = origin.to_owned();
+    }
+}
+
+pub(super) fn navigation_entries_share_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    left: v8::Local<'s, v8::Object>,
+    right: v8::Local<'s, v8::Object>,
+) -> bool {
+    if navigation_entries_share_document(scope, left, right) {
+        return true;
+    }
+    navigation_entry_origin(scope, left)
+        .filter(|origin| origin != "null")
+        .is_some_and(|origin| navigation_entry_origin(scope, right).as_ref() == Some(&origin))
 }
 
 pub(super) fn navigation_entry_initial_index<'s>(
@@ -307,6 +353,7 @@ fn navigation_entry_stored_string<'s>(
     let record = record.borrow();
     match field {
         EntryStringField::Url => Some(record.url.clone()),
+        EntryStringField::Origin => Some(record.document_origin.clone()),
         EntryStringField::Id => Some(record.id.clone()),
         EntryStringField::Key => Some(record.key.as_str().to_owned()),
         EntryStringField::Document => Some(record.document.as_str().to_owned()),
