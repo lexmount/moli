@@ -885,7 +885,9 @@ globalThis.__tailAtScript = !!document.getElementById('parser-tail');
                     "<!doctype html><html><head><script>globalThis.__resumeEvents = ['outer'];</script>{blocked_html}</head><body><p id='parser-tail'>tail</p></body></html>",
                 ),
                 ParserResumeOwner::DocumentWrite => format!(
-                    "<!doctype html><html><head><script>globalThis.__resumeEvents = ['outer']; document.write(`{}`); __resumeEvents.push('outer-done');</script></head><body><p id='parser-tail'>tail</p></body></html>",
+                    // Nested inline scripts bypass the stylesheet wait. A body
+                    // stylesheet pauses the written input before its script.
+                    "<!doctype html><html><body><script>globalThis.__resumeEvents = ['outer']; document.write(`{}`); __resumeEvents.push('outer-done');</script><p id='parser-tail'>tail</p></body></html>",
                     blocked_html.replace("</script>", "<\\/script>"),
                 ),
             };
@@ -893,10 +895,20 @@ globalThis.__tailAtScript = !!document.getElementById('parser-tail');
                 PageId::new_for_testing(902), html, document_url,
             ).await;
             let suspended_state = pending.runtime.state.parser_session.run_state();
-            assert!(matches!(suspended_state, DocumentParserRunState::Suspended {
-                cause: ParserSuspensionCause::ParserClassicStylesheets { .. },
-                resume_owner: actual_owner, ..
-            } if actual_owner == resume_owner));
+            let DocumentParserRunState::Suspended {
+                cause, resume_owner: actual_owner, ..
+            } = suspended_state else {
+                panic!("stylesheet must suspend its parser owner: {suspended_state:?}");
+            };
+            assert_eq!(actual_owner, resume_owner);
+            match resume_owner {
+                ParserResumeOwner::ParserDriver => assert!(matches!(
+                    cause, ParserSuspensionCause::ParserClassicStylesheets { .. }
+                )),
+                ParserResumeOwner::DocumentWrite => assert!(matches!(
+                    cause, ParserSuspensionCause::ParserCreatedStylesheet { .. }
+                )),
+            }
             let (next_pending, result) = evaluate_pending_on_owner_local_task(
                 pending,
                 "JSON.stringify({events: __resumeEvents, tail: !!document.getElementById('parser-tail')})",
