@@ -8,6 +8,7 @@ async fn initial_about_blank_rebind_keeps_child_window_surfaces_lazy() {
         (() => {
           const frame = document.createElement("iframe");
           frame.id = "lazy-window-rebind-frame";
+          frame.srcdoc = "<p>pending initial load</p>";
           (document.body || document.documentElement || document).appendChild(frame);
           void frame.contentWindow;
         })()

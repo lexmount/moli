@@ -2,6 +2,7 @@ use super::*;
 
 mod child_history_traversal;
 mod hyperlink_navigation;
+mod navigation_window_reuse;
 mod popup_network_navigation;
 mod response_gate;
 mod stale_history_traversal;
