@@ -188,6 +188,13 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
         unsafe { &mut *runtime_ptr }
             .set_inert_document_execution_context(handle, execution_context);
     }
+    if let Some(source_document) = crate::util::node_wrapper_from_handle(scope, document_handle) {
+        crate::native_bridge::document::inherit_detached_document_origin(
+            scope,
+            obj,
+            source_document,
+        );
+    }
     rv.set(obj.into());
 }
 
