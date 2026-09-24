@@ -16,6 +16,7 @@ fn viewport_screencast_request(
 ) -> crate::runtime::RendererCaptureScreencastFrameRequest {
     crate::runtime::RendererCaptureScreencastFrameRequest {
         base_background_color: [255; 4],
+        vision_deficiency: Default::default(),
         format: crate::runtime::RendererScreenshotFormat::Png,
         quality: 100,
         optimize_for_speed: true,

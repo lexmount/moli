@@ -35,7 +35,9 @@ use chromiumoxide_cdp::cdp::browser_protocol::input::{
     DispatchTouchEventType as CdpDispatchTouchEventType,
     EmulateTouchFromMouseEventParams as CdpEmulateTouchFromMouseEventParams,
     EmulateTouchFromMouseEventType as CdpEmulateTouchFromMouseEventType,
-    MouseButton as CdpMouseButton, SynthesizeTapGestureParams as CdpSynthesizeTapGestureParams,
+    MouseButton as CdpMouseButton,
+    SynthesizeScrollGestureParams as CdpSynthesizeScrollGestureParams,
+    SynthesizeTapGestureParams as CdpSynthesizeTapGestureParams,
 };
 
 mod drag;
@@ -309,6 +311,7 @@ pub(crate) fn try_start_input_command_dispatch(
         InputAction::DispatchMouseEvent
         | InputAction::DispatchTouchEvent
         | InputAction::EmulateTouchFromMouseEvent
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SynthesizeTapGesture
         | InputAction::DispatchDragEvent => match validate_coordinate_input_params(cmd, action) {
             Ok(()) if conn.layout_policy() == moli_core::LayoutPolicy::Mock => {
@@ -492,6 +495,46 @@ fn validate_coordinate_input_params(
                 .then_some(())
                 .ok_or_else(PendingInputCommandStartError::invalid_params)
         }
+        InputAction::SynthesizeScrollGesture => {
+            let params = scroll_gesture_params(cmd)?;
+            if !optional_enum_param_matches(
+                cmd,
+                "gestureSourceType",
+                &["default", "mouse", "touch"],
+            ) || ![
+                params.x,
+                params.y,
+                params.x_distance.unwrap_or_default(),
+                params.y_distance.unwrap_or_default(),
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                || params.speed.is_some_and(|speed| speed <= 0)
+                || params.repeat_count.is_some_and(|count| count < 0)
+                || params.repeat_delay_ms.is_some_and(|delay| delay < 0)
+            {
+                return Err(PendingInputCommandStartError::invalid_params());
+            }
+            // Wheel gestures share the hit testing, cancellation and scroll-chain
+            // machinery of dispatched wheel input. Touch/fling and traced repeated
+            // gestures need a timed gesture source and are not silently approximated.
+            if matches!(
+                params.gesture_source_type,
+                Some(chromiumoxide_cdp::cdp::browser_protocol::input::GestureSourceType::Touch)
+            ) || params.repeat_count.unwrap_or_default() != 0
+                || params.x_overscroll.unwrap_or_default() != 0.0
+                || params.y_overscroll.unwrap_or_default() != 0.0
+                || params.interaction_marker_name.is_some()
+                || params.speed.is_some()
+                || params.repeat_delay_ms.is_some()
+                || params.prevent_fling == Some(false)
+            {
+                return Err(PendingInputCommandStartError::unsupported(
+                    "Timed, touch, fling, overscroll and repeated scroll gestures are not supported",
+                ));
+            }
+            Ok(())
+        }
         InputAction::SynthesizeTapGesture => {
             if !optional_enum_param_matches(
                 cmd,
@@ -538,6 +581,14 @@ fn validate_coordinate_input_params(
     }
 }
 
+fn scroll_gesture_params(
+    cmd: &Cmd<'_>,
+) -> Result<CdpSynthesizeScrollGestureParams, PendingInputCommandStartError> {
+    cmd.get_params::<CdpSynthesizeScrollGestureParams>()
+        .map_err(|_| PendingInputCommandStartError::invalid_params())?
+        .ok_or_else(PendingInputCommandStartError::invalid_params)
+}
+
 fn coordinate_input_unsupported_message(action: InputAction) -> &'static str {
     match action {
         InputAction::DispatchMouseEvent => DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE,
@@ -546,6 +597,7 @@ fn coordinate_input_unsupported_message(action: InputAction) -> &'static str {
             EMULATE_TOUCH_FROM_MOUSE_EVENT_UNSUPPORTED_MESSAGE
         }
         InputAction::SynthesizeTapGesture => SYNTHESIZE_TAP_GESTURE_UNSUPPORTED_MESSAGE,
+        InputAction::SynthesizeScrollGesture => DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE,
         InputAction::DispatchDragEvent => DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE,
         InputAction::CancelDragging
         | InputAction::DispatchKeyEvent
@@ -627,6 +679,7 @@ fn start_pending_input_command(
         InputAction::DispatchMouseEvent
         | InputAction::DispatchTouchEvent
         | InputAction::EmulateTouchFromMouseEvent
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SynthesizeTapGesture
         | InputAction::DispatchDragEvent => {
             if conn.layout_policy() == moli_core::LayoutPolicy::Mock {
@@ -851,6 +904,29 @@ fn build_cdp_coordinate_input_command(
                     context,
                     event_type,
                     touch_points,
+                },
+            ))
+        }
+        InputAction::SynthesizeScrollGesture => {
+            let params = scroll_gesture_params(cmd)?;
+            Ok(DevToolsCommand::DispatchMouseEvent(
+                DevToolsDispatchMouseEventCommand {
+                    context,
+                    event_type: DevToolsMouseEventType::Wheel,
+                    pointer_type: DevToolsPointerType::Mouse,
+                    x: params.x,
+                    y: params.y,
+                    button: -1,
+                    buttons: None,
+                    click_count: 0,
+                    delta_x: -params.x_distance.unwrap_or_default(),
+                    delta_y: -params.y_distance.unwrap_or_default(),
+                    force: 0.0,
+                    tangential_pressure: 0.0,
+                    tilt_x: 0.0,
+                    tilt_y: 0.0,
+                    twist: 0.0,
+                    modifiers: 0,
                 },
             ))
         }

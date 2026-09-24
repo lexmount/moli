@@ -261,7 +261,7 @@ pub use runtime::{
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererFrameToken,
     RendererGeometryQuad, RendererInputDispatchOutcome, RendererInspectorCommandEnvelope,
-    RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket, RendererInspectorOverlayCommand,
     RendererInspectorProtocolConfiguration, RendererInspectorProtocolConfigurationCommand,
     RendererInspectorSessionRestoreSnapshot, RendererJavaScriptDialogCompletion,
     RendererJavaScriptDialogId, RendererJavaScriptDialogResult, RendererJavaScriptDialogSource,
@@ -312,8 +312,8 @@ pub use runtime::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
+    RendererTouchPoint, RendererVisionDeficiency, RendererVisualStateToken,
+    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
 };
 pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,

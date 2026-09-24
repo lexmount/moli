@@ -236,6 +236,12 @@ pub(crate) fn try_start_emulation_command_dispatch(
             Some(start_user_agent_override_command(conn, cmd))
         }
         Some(EmulationAction::SetEmulatedMedia) => Some(start_emulated_media_command(conn, cmd)),
+        Some(EmulationAction::SetEmulatedOSTextScale) => {
+            Some(start_os_text_scale_command(conn, cmd))
+        }
+        Some(EmulationAction::SetEmulatedVisionDeficiency) => Some(
+            EmulationCommandTaskStep::Complete(vision_deficiency_command(conn, cmd)),
+        ),
         Some(EmulationAction::SetDefaultBackgroundColorOverride) => Some(
             EmulationCommandTaskStep::Complete(default_background_color_command(conn, cmd)),
         ),
@@ -822,19 +828,55 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
+    if let Err(error) =
+        page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
             state.set_emulated_media(overrides.clone());
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
+    }
+    start_style_environment_update(conn, cmd)
+}
+
+fn start_os_text_scale_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    #[derive(serde::Deserialize, Default)]
+    struct TextScaleParams {
+        scale: Option<f32>,
+    }
+    let params = match cmd.get_params::<TextScaleParams>() {
+        Ok(params) => params.unwrap_or_default(),
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, error));
         }
-    }) {
+    };
+    if params
+        .scale
+        .is_some_and(|scale| !scale.is_finite() || scale <= 0.0)
+    {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
+            -32602,
+            "Text scale must be finite and positive",
         ));
     }
-    let page_overrides: moli_core::page::EmulatedMediaOverrides = (&overrides).into();
+    if let Err(error) =
+        page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
+            state.set_preferred_text_scale(params.scale);
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
+    }
+    start_style_environment_update(conn, cmd)
+}
+
+fn start_style_environment_update(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        match start_context_emulated_media_page_commands(conn, &page_overrides) {
+        match start_context_emulated_media_page_commands(conn) {
             Ok(pending) => pending,
             Err(error) => {
                 return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
@@ -842,6 +884,9 @@ fn start_emulated_media_command(
         }
     } else {
         let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+        let page_overrides = conn
+            .navigation_load_inputs_for_owner(&owner_scope)
+            .emulated_media;
         let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
         };
@@ -2589,7 +2634,6 @@ fn emulation_command_is_context_wide(conn: &CdpConnection, session_id: Option<&s
 
 fn start_context_emulated_media_page_commands(
     conn: &mut CdpConnection,
-    overrides: &moli_core::page::EmulatedMediaOverrides,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
@@ -2598,6 +2642,7 @@ fn start_context_emulated_media_page_commands(
     let mut pending = Vec::new();
     for target in browser_context.page_targets.iter_mut() {
         let target_id = target.target_id().to_owned();
+        let overrides = (&target.effective_emulation_state.emulated_media).into();
         let Some(page) = target.loaded_page_mut() else {
             continue;
         };
@@ -2608,7 +2653,7 @@ fn start_context_emulated_media_page_commands(
             },
             operation: PendingEmulationPageOperation::SetEmulatedMedia,
             pending: page
-                .start_set_emulated_media(overrides)
+                .start_set_emulated_media(&overrides)
                 .map_err(|error| error.to_string())?,
             runtime_response_rx: None,
         });
@@ -2854,5 +2899,30 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetUserAgentLoader => {
             unreachable!("user agent loader rebuild finishes through the session owner")
         }
+    }
+}
+
+fn vision_deficiency_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    use chromiumoxide_cdp::cdp::browser_protocol::emulation::{
+        SetEmulatedVisionDeficiencyParams, SetEmulatedVisionDeficiencyType,
+    };
+    use moli_core::page::RendererVisionDeficiency as Vision;
+    let Ok(Some(params)) = cmd.get_params::<SetEmulatedVisionDeficiencyParams>() else {
+        return CommandOutputPlan::error(-32602, "Invalid vision deficiency");
+    };
+    let vision = match params.r#type {
+        SetEmulatedVisionDeficiencyType::None => Vision::None,
+        SetEmulatedVisionDeficiencyType::BlurredVision => Vision::BlurredVision,
+        SetEmulatedVisionDeficiencyType::ReducedContrast => Vision::ReducedContrast,
+        SetEmulatedVisionDeficiencyType::Achromatopsia => Vision::Achromatopsia,
+        SetEmulatedVisionDeficiencyType::Deuteranopia => Vision::Deuteranopia,
+        SetEmulatedVisionDeficiencyType::Protanopia => Vision::Protanopia,
+        SetEmulatedVisionDeficiencyType::Tritanopia => Vision::Tritanopia,
+    };
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_vision_deficiency(vision)
+    }) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(error) => CommandOutputPlan::error(-31998, error),
     }
 }

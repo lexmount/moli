@@ -7,6 +7,8 @@
 //! layout state is copied into this crate.
 
 mod raster;
+mod vision;
+pub use vision::VisionDeficiency;
 
 pub use moli_image::RgbaImage as RasterImage;
 pub use raster::{
