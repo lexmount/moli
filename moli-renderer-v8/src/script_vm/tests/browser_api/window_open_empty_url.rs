@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn named_popup_unload_reentry_does_not_publish_a_rejected_activation() {
+    for event in ["beforeunload", "pagehide"] {
+        let mut vm = new_storage_test_vm("https://popup-unload.test/opener");
+        vm.eval("globalThis.reentryPopup = open('about:blank', 'unloading-popup')")
+            .unwrap();
+        assert_eq!(vm.take_pending_popup_activations().len(), 1);
+        vm.eval(&format!(
+            r#"
+globalThis.reentryCalls = 0;
+reentryPopup.addEventListener({event:?}, () => {{
+  ++reentryCalls;
+  globalThis.reentryReturned = open('https://popup-unload.test/forbidden', 'unloading-popup');
+}});
+reentryPopup.location.href = 'about:blank?replacement';
+"#
+        ))
+        .unwrap();
+        assert_eq!(vm.eval("String(reentryCalls)").unwrap(), "1", "{event}");
+        assert_eq!(
+            vm.eval("String(reentryReturned === reentryPopup)").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            vm.eval("reentryPopup.location.href").unwrap(),
+            "about:blank?replacement"
+        );
+        assert!(vm.take_pending_popup_activations().is_empty(), "{event}");
+    }
+}
+
+#[test]
 fn window_open_empty_url_does_not_queue_special_target_navigation() {
     for target in ["_self", "_parent", "_top", "_SeLf", "_PaReNt", "_TOP"] {
         let mut vm = new_storage_test_vm("https://empty-open.test/current");
