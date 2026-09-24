@@ -101,6 +101,32 @@ pub struct EmulatedMediaOverrides {
     pub contrast: Option<String>,
 }
 
+impl EmulatedMediaOverrides {
+    pub(crate) fn overlaid_on(&self, defaults: &Self) -> Self {
+        Self {
+            preferred_text_scale: self.preferred_text_scale.or(defaults.preferred_text_scale),
+            media: self.media.clone().or_else(|| defaults.media.clone()),
+            color_scheme: self
+                .color_scheme
+                .clone()
+                .or_else(|| defaults.color_scheme.clone()),
+            reduced_motion: self
+                .reduced_motion
+                .clone()
+                .or_else(|| defaults.reduced_motion.clone()),
+            reduced_transparency: self
+                .reduced_transparency
+                .clone()
+                .or_else(|| defaults.reduced_transparency.clone()),
+            forced_colors: self
+                .forced_colors
+                .clone()
+                .or_else(|| defaults.forced_colors.clone()),
+            contrast: self.contrast.clone().or_else(|| defaults.contrast.clone()),
+        }
+    }
+}
+
 impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
     fn from(value: EmulatedMediaOverrides) -> Self {
         Self {
