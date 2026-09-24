@@ -225,6 +225,7 @@ pub(crate) struct ParserResumePermit {
 pub(crate) enum ParserStopReason {
     DocumentReplacement,
     MainResourceLoadFailure,
+    Stopped,
     OwnerDropped,
 }
 
@@ -716,6 +717,14 @@ impl DocumentParserSession {
         )
     }
 
+    pub(crate) fn start_main_text_document(document_url: Url, content_type: &str) -> Self {
+        Self::new_html(
+            HtmlParser::with_scripting_enabled(false)
+                .start_text_document(document_url, content_type),
+            DocumentParserLifetime::Finite,
+        )
+    }
+
     pub(crate) fn start_finite_live_document(
         document_url: Url,
         document_handle: NativeNodeId,
@@ -724,6 +733,21 @@ impl DocumentParserSession {
         Self::new_html(
             HtmlParser::with_scripting_enabled(scripting_enabled)
                 .start_live_document_root(document_url, document_handle),
+            DocumentParserLifetime::Finite,
+        )
+    }
+
+    pub(crate) fn start_finite_live_text_document(
+        document_url: Url,
+        document_handle: NativeNodeId,
+        owner: &mut impl LiveDocumentParserOwner,
+    ) -> Self {
+        Self::new_html(
+            HtmlParser::with_scripting_enabled(false).start_live_text_document_root(
+                document_url,
+                document_handle,
+                owner,
+            ),
             DocumentParserLifetime::Finite,
         )
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
+use crate::runtime::{RendererElementClickError, RendererElementClickTarget};
 
 #[test]
 fn native_element_click_cold_preparation_keeps_existing_layout_cost() {
@@ -35,84 +35,55 @@ fn native_element_click_cold_preparation_keeps_existing_layout_cost() {
 }
 
 #[test]
-fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
-    for mutation in [
-        "target.style.left='300px'",
-        "const veil=document.createElement('div');veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.appendChild(veil)",
-        "const style=document.createElement('style');document.head.appendChild(style);style.sheet.insertRule('button {pointer-events:none}')",
-    ] {
-        let mut reference = None;
-        for native_sequence in [false, true] {
-            let mut vm = new_parsed_test_vm(
-                "https://click-snapshot.test/",
-                r#"<!doctype html><html><head></head><body>
-            <button id='target' style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>
-            </body></html>"#,
-            );
-            vm.eval(
-                r#"window.clicks=0;window.events=[];
-            document.getElementById('target').onclick=()=>clicks++;
-            for(const type of ['mousemove','mousedown','mouseup','click'])
-                document.addEventListener(type,e=>events.push([type,e.target.id]));"#,
-            )
-            .expect("install click listener");
-            let target = vm.document_runtime.get_element_by_id("target").unwrap();
-            let before = vm.layout_pass_observability_for_test().1;
-            vm.eval("document.elementFromPoint(100,75)")
-                .expect("populate the existing hit-test snapshot");
-            assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
-            let RendererElementClickTarget::Pointer(first) =
-                vm.prepare_element_click(target).unwrap()
-            else {
-                panic!("real layout must prepare pointer input");
-            };
-            assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+fn native_element_click_uses_current_layout_after_dom_and_style_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://click-current-layout.test/",
+        r#"<!doctype html><html><head></head><body>
+        <button id='target' style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>
+        </body></html>"#,
+    );
+    vm.eval("window.clicks=0;document.getElementById('target').onclick=()=>clicks++")
+        .expect("install click listener");
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    let RendererElementClickTarget::Pointer(first) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("real layout must prepare pointer input");
+    };
 
-            vm.eval(&format!(
-                "(()=>{{const target=document.getElementById('target');{mutation}}})()"
-            ))
-            .expect("mutate live DOM/style without requesting a fresh snapshot");
-            let RendererElementClickTarget::Pointer(click) =
-                vm.prepare_element_click(target).unwrap()
-            else {
-                panic!("real layout must prepare pointer input");
-            };
-            assert_eq!((click.root_x, click.root_y), (first.root_x, first.root_y));
-            assert_eq!(
-                vm.layout_pass_observability_for_test().1,
-                before + 1,
-                "warm preparation must reuse the frozen tree: {mutation}"
-            );
-            if native_sequence {
-                vm.dispatch_prepared_element_click(click).unwrap();
-            } else {
-                // Compare to the existing independent pointer phases. Their hover
-                // transitions can invalidate layout; preparation must not add more.
-                for (event, buttons) in [("mousemove", 0), ("mousedown", 1), ("mouseup", 0)] {
-                    vm.dispatch_mouse_event_at_point_with_pointer(
-                        click.root_x,
-                        click.root_y,
-                        event,
-                        0,
-                        Some(buttons),
-                        i32::from(event != "mousemove"),
-                        0.0,
-                        0.0,
-                        RendererPointerEventProperties::default(),
-                    )
-                    .unwrap();
-                }
-            }
-            let passes = vm.layout_pass_observability_for_test().1 - before;
-            let events = vm.eval("JSON.stringify([clicks,events])").unwrap();
-            if let Some((existing_passes, existing_events)) = &reference {
-                assert!(passes <= *existing_passes, "extra layout for {mutation}");
-                assert_eq!(&events, existing_events, "{mutation}");
-            } else {
-                reference = Some((passes, events));
-            }
-        }
-    }
+    vm.eval("document.getElementById('target').style.left='300px'")
+        .expect("move target after initial layout");
+    let RendererElementClickTarget::Pointer(moved) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("moved target should remain clickable");
+    };
+    assert!(
+        moved.root_x > first.root_x,
+        "click must use the new position"
+    );
+    vm.dispatch_prepared_element_click(moved).unwrap();
+    assert_eq!(vm.eval("String(clicks)").unwrap(), "1");
+
+    vm.eval("const veil=document.createElement('div');veil.id='veil';veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.appendChild(veil)")
+        .expect("add overlay after a successful click");
+    assert!(
+        matches!(
+            vm.prepare_element_click(target),
+            Err(RendererElementClickError::Obscured)
+        ),
+        "an overlay introduced after layout must block click preparation"
+    );
+    assert_eq!(vm.eval("String(clicks)").unwrap(), "1");
+
+    vm.eval("document.getElementById('veil').remove();const style=document.createElement('style');document.head.appendChild(style);style.sheet.insertRule('button {pointer-events:none}')")
+        .expect("disable pointer events through a new stylesheet");
+    assert!(
+        matches!(
+            vm.prepare_element_click(target),
+            Err(RendererElementClickError::Obscured)
+        ),
+        "a live stylesheet must make the target unclickable"
+    );
+    assert_eq!(vm.eval("String(clicks)").unwrap(), "1");
 }
 
 #[test]

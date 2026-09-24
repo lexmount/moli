@@ -6,13 +6,13 @@ use crate::native_bridge::element::forms::{
 };
 
 pub(super) fn install_form_control_template_accessors<'s, 'i>(
-    scope: &mut v8::PinScope<'s, 'i, ()>,
+    _scope: &mut v8::PinScope<'s, 'i, ()>,
     template: v8::Local<'s, v8::ObjectTemplate>,
     installer: SpecializedTemplateInstaller,
 ) -> bool {
     match installer {
         SpecializedTemplateInstaller::HtmlFormElement => {
-            install_form_accessors(scope, template);
+            install_form_property_handlers(template);
             true
         }
         SpecializedTemplateInstaller::HtmlButtonElement
@@ -29,9 +29,8 @@ pub(super) fn install_form_control_template_accessors<'s, 'i>(
     }
 }
 
-fn install_form_accessors<'s, 'i>(
-    _scope: &mut v8::PinScope<'s, 'i, ()>,
-    template: v8::Local<'s, v8::ObjectTemplate>,
+pub(in crate::native_bridge) fn install_form_property_handlers(
+    template: v8::Local<'_, v8::ObjectTemplate>,
 ) {
     template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()

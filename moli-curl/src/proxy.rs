@@ -579,21 +579,21 @@ mod tests {
                 assert!(connected_port == origin_port || connected_port == proxy_port);
                 let curl_uses_proxy = connected_port == proxy_port;
                 let listener = if curl_uses_proxy { &proxy } else { &origin };
-                // A completed client connect can precede the listener's
-                // accept readiness on macOS. Bound that handoff explicitly.
+                // Client connect completion does not guarantee the server's
+                // nonblocking accept queue is observable in the same turn.
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let _connection = loop {
                     match listener.accept() {
                         Ok(connection) => break connection,
                         Err(error)
-                            if error.kind() == std::io::ErrorKind::WouldBlock
-                                && Instant::now() < deadline =>
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                            ) && Instant::now() < deadline =>
                         {
-                            std::thread::sleep(Duration::from_millis(1));
+                            std::thread::sleep(Duration::from_millis(5));
                         }
-                        Err(error) => {
-                            panic!("accept {host} with NO_PROXY={no_proxy:?}: {error}")
-                        }
+                        Err(error) => panic!("libcurl's selected endpoint did not accept: {error}"),
                     }
                 };
 

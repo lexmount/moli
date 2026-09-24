@@ -25,6 +25,102 @@ fn unexpected_legacy_encoding_detector(
 }
 
 #[test]
+fn json_text_document_defaults_to_utf8_across_every_chunk_split() {
+    let input = "{\"name\":\"Gülçek\"}";
+    for split in 0..=input.len() {
+        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+            &[],
+            "https://example.test/",
+            unexpected_legacy_encoding_detector,
+            true,
+        );
+        let mut output = decoder.push(&input.as_bytes()[..split]).join("");
+        output.push_str(&decoder.push(&input.as_bytes()[split..]).join(""));
+        output.push_str(&decoder.finish().unwrap_or_default());
+        assert_eq!(output, input, "split {split}");
+        assert_eq!(decoder.selected_encoding_name(), Some("UTF-8"));
+    }
+}
+
+#[test]
+fn plain_text_document_honors_transport_charset() {
+    let headers = [(
+        "Content-Type".to_owned(),
+        b"text/plain; charset=gbk".to_vec(),
+    )];
+    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        &headers,
+        "https://example.test/",
+        unexpected_legacy_encoding_detector,
+        false,
+    );
+    let mut output = decoder.push(&gbk_bytes("<b>家居</b>")).join("");
+    output.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(output, "<b>家居</b>");
+    assert_eq!(decoder.selected_encoding_name(), Some("GBK"));
+}
+
+#[test]
+fn text_document_bom_precedes_transport_charset() {
+    let headers = [(
+        "Content-Type".to_owned(),
+        b"text/plain; charset=gbk".to_vec(),
+    )];
+    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        &headers,
+        "https://example.test/",
+        unexpected_legacy_encoding_detector,
+        false,
+    );
+    assert_eq!(decoder.document_encoding_name(), "GBK");
+    assert_eq!(decoder.selected_encoding_name(), None);
+    assert!(decoder.push(&[0xef]).is_empty());
+    assert!(decoder.push(&[0xbb]).is_empty());
+    let mut tail = vec![0xbf];
+    tail.extend_from_slice("Gülçek".as_bytes());
+    let mut output = decoder.push(&tail).join("");
+    output.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(output, "Gülçek");
+    assert_eq!(decoder.selected_encoding_name(), Some("UTF-8"));
+    assert_eq!(decoder.document_encoding_name(), "UTF-8");
+}
+
+#[test]
+fn plain_text_document_retains_legacy_detection_without_a_charset() {
+    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        &[],
+        "https://legacy.example/",
+        test_legacy_encoding_detector,
+        false,
+    );
+    let mut output = decoder.push(&[0x80]).join("");
+    output.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(output, "А");
+    assert_eq!(decoder.selected_encoding_name(), Some("IBM866"));
+}
+
+#[test]
+fn plain_text_document_ignores_literal_encoding_declarations() {
+    for prefix in [
+        "<meta charset=utf-8>",
+        "<?xml version='1.0' encoding='utf-8'?>",
+    ] {
+        let mut input = prefix.as_bytes().to_vec();
+        input.push(0xe9);
+        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+            &[],
+            "https://example.test/",
+            test_legacy_encoding_detector,
+            false,
+        );
+        let mut output = decoder.push(&input).join("");
+        output.push_str(&decoder.finish().unwrap_or_default());
+        assert_eq!(output, format!("{prefix}é"));
+        assert_eq!(decoder.selected_encoding_name(), Some("windows-1252"));
+    }
+}
+
+#[test]
 fn content_type_charset_is_selected() {
     let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),

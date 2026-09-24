@@ -790,3 +790,25 @@ fn script_like_mime_type_block_matches_fetch_response_rule() {
     ));
     assert!(!should_script_like_response_be_blocked_due_to_mime_type(&[]));
 }
+#[test]
+fn document_text_classification_excludes_html_and_xml() {
+    for mime in [
+        "text/plain",
+        "Text/Css; charset=utf-8",
+        "application/json",
+        "application/ld+json",
+        "application/javascript",
+    ] {
+        assert!(crate::is_text_document_mime(mime), "{mime}");
+    }
+    for mime in [
+        "text/html",
+        "text/xml",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "image/png",
+        "application/octet-stream",
+    ] {
+        assert!(!crate::is_text_document_mime(mime), "{mime}");
+    }
+}
