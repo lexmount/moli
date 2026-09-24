@@ -66,17 +66,22 @@ missing trailing cells in short rows; the converter does not allocate a padded g
 
 Tables with `role="presentation"` or `role="none"` retain ordinary block expansion,
 in DOM order with blank lines between cells, even when structurally simple. Role
-matching ignores ASCII case and surrounding HTML whitespace. The same fallback
-applies to complex tables: non-unit spans, multiple `thead` rows, rows wider than
+matching ignores ASCII case and surrounding HTML whitespace. Complex tables use
+content-only HTML: non-unit spans, multiple `thead` rows, rows wider than
 an explicit header, or cells containing nested tables, lists, headings, quotes
-or preformatted blocks. Inner simple tables can still produce GFM when their
-containing layout table is expanded. Other roles, borders and CSS do not select
-another conversion path. Complex layouts remain readable blocks instead of raw
-HTML tables.
+or preformatted blocks. This retains header, cell and nested-table associations
+that Markdown pipe tables cannot express. Inner simple tables can still produce
+GFM when an explicitly presentational containing table is expanded. Scripts,
+styles and event handlers are omitted from HTML table output.
 
 Supported output includes headings, paragraphs, emphasis, strikethrough, links,
-images, lists, blockquotes, hard breaks, and fenced code. Inline HTML is used when
+images, lists, blockquotes, hard breaks, media source links, separated form choices,
+and fenced code. Inline HTML is used when
 Markdown delimiters cannot express an emphasis boundary.
+Superscripts and subscripts retain their HTML markers. Complete author-supplied
+TeX spans retain their commands and indices. Native MathML retains mathematical
+markup and presentation attributes, with alternate annotations omitted, so
+fractions, roots, matrices and powers do not collapse into ambiguous plain text.
 Script/style/head/noscript/template subtrees are omitted.
 
 `max_depth` counts the supplied root as depth zero; nodes at or beyond the limit
@@ -89,8 +94,11 @@ spaces and blank lines. Empty blocks still separate surrounding text.
 
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
-stylesheets, layout, or JavaScript, and cannot preserve all HTML presentation (for example, arbitrary
-ordered-list numbering or table spanning). DOM snapshots used by Moli's optional
+stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
+through the optional DOM query. Moli's page exporter additionally filters current
+CSS-hidden UI while retaining explicitly linked disclosure content. The converter
+cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
+DOM snapshots used by Moli's optional
 strip/base/frame transformations remain the responsibility of the caller.
 
 ## Verification
