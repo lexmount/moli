@@ -741,6 +741,8 @@ impl JsContextHost {
         };
         self.popup_nested_histories
             .remove(&OwnerDispatchScope::LightweightPopup(popup_id));
+        self.history_update_limits
+            .remove(OwnerDispatchScope::LightweightPopup(popup_id));
         let window = self.lightweight_popup_window(scope, popup_id);
         self.unregister_service_worker_popup_client(popup_id);
         self.cancel_lightweight_popup_document_loads(popup_id);
