@@ -175,18 +175,24 @@ function abortSignalLifetimeProbe() {
   const signal = controller.signal;
   const methods = [EventTarget.prototype.dispatchEvent, realm.EventTarget.prototype.dispatchEvent];
   let calls = 0;
+  const retiredCalls = [];
+  const retiredCallback = realm.Function('calls', 'return function() { calls.push(true); };')(retiredCalls);
+  signal.addEventListener('x', retiredCallback);
   signal.addEventListener('x', () => ++calls);
   frame.remove();
   for (const method of methods) {
     const event = new Event('x');
     try {
-      if (method.call(signal, event) !== false || event.target !== null) failures.push('retired dispatch result');
+      if (method.call(signal, event) !== true || event.target !== signal) failures.push('retained dispatch result');
+      if (event.currentTarget !== null || event.eventPhase !== Event.NONE || event.isTrusted)
+        failures.push('retained dispatch cleanup');
     } catch (error) { failures.push('retired dispatch: ' + error.name); }
     for (const [value, expected] of [[null, 'TypeError'], [{}, 'TypeError'], [document.createEvent('Event'), 'InvalidStateError']]) {
       try { method.call(signal, value); failures.push('accepted invalid event'); }
       catch (error) { if (error.name !== expected) failures.push('wrong retired error: ' + error.name); }
     }
   }
-  if (calls) failures.push('retired callback invoked');
+  if (calls !== 2) failures.push('live callback skipped');
+  if (retiredCalls.length) failures.push('retired callback invoked');
   return {calls, failures};
 }

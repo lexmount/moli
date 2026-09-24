@@ -47,8 +47,8 @@ fn abort_signal_generated_receiver_checks_use_callee_realm_before_conversion() {
 }
 
 #[test]
-fn abort_signal_inherited_dispatch_preserves_retired_target_validation() {
+fn abort_signal_retained_target_dispatch_uses_callback_realm_lifetime() {
     let result = run_probe("abortSignalLifetimeProbe()");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["calls"], 0);
+    assert_eq!(result["calls"], 2);
 }

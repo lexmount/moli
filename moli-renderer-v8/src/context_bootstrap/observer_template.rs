@@ -1,7 +1,5 @@
 use super::media_queries::{
-    media_query_list_add_event_listener_callback, media_query_list_add_listener_callback,
-    media_query_list_dispatch_event_callback, media_query_list_remove_event_listener_callback,
-    media_query_list_remove_listener_callback,
+    media_query_list_add_listener_callback, media_query_list_remove_listener_callback,
 };
 use super::performance_runtime::{
     performance_entry_list_get_entries_by_name_callback,
@@ -71,21 +69,8 @@ struct IntersectionObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaQueryList, enumerable)]
+#[webapi(interface = web_api_interfaces::MediaQueryList, enumerable, receiver)]
 struct MediaQueryListTemplateMethodsDeclaration {
-    #[webapi(method, length = 2, callback = media_query_list_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        length = 2,
-        callback = media_query_list_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, length = 1, callback = media_query_list_dispatch_event_callback)]
-    dispatch_event: (),
-
     #[webapi(method, length = 1, callback = media_query_list_add_listener_callback)]
     add_listener: (),
 

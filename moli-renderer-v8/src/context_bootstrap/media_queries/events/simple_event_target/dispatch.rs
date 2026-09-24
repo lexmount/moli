@@ -28,7 +28,6 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
     let Some((event, event_type)) =
         crate::context_bootstrap::event_target_dispatch::prepare_script_dispatch(
             scope,
-            args.this(),
             args.get(0),
         )
     else {

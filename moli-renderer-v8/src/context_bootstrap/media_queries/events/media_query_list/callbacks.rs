@@ -1,22 +1,6 @@
 use super::*;
 use crate::webidl;
 
-pub(in crate::context_bootstrap) fn media_query_list_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_object_event_target_add_listener(scope, &args, MEDIA_QUERY_LIST_LISTENERS_SLOT);
-}
-
-pub(in crate::context_bootstrap) fn media_query_list_remove_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_object_event_target_remove_listener(scope, &args, MEDIA_QUERY_LIST_LISTENERS_SLOT);
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "MediaQueryList.addListener")]
 struct MediaQueryListAddListenerArgs {

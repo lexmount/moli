@@ -65,3 +65,184 @@ function mediaQueryListEventConstructorProbe() {
   } finally { frame.remove(); }
   return {checks, failures};
 }
+
+function mediaQueryListEventTargetProbe() {
+  const failures = [];
+  const rows = [];
+  const check = (value, label) => { if (!value) failures.push(label); };
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  try {
+    for (const [name, realm, methods] of [
+      ["main", window, frame.contentWindow.EventTarget.prototype],
+      ["child", frame.contentWindow, EventTarget.prototype],
+    ]) {
+      const target = realm.matchMedia("all");
+      const calls = [];
+      check(target instanceof realm.EventTarget, name + ":brand inheritance");
+      check(Object.getPrototypeOf(realm.MediaQueryList.prototype) === realm.EventTarget.prototype,
+        name + ":prototype inheritance");
+      for (const method of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+        check(!Object.hasOwn(realm.MediaQueryList.prototype, method), name + ":inherited " + method);
+        check(target[method] === realm.EventTarget.prototype[method], name + ":shared " + method);
+      }
+      const legacy = {handleEvent(event) {
+        check(this === legacy && event.target === target && event.currentTarget === target,
+          name + ":callback receiver");
+        check(event.eventPhase === Event.AT_TARGET && window.event === event,
+          name + ":callback dispatch state");
+        calls.push("legacy");
+      }};
+      target.addListener(legacy);
+      methods.addEventListener.call(target, "change", legacy, {once: true});
+      target.onchange = () => calls.push("old-handler");
+      methods.addEventListener.call(target, "change", () => calls.push("modern"));
+      target.onchange = () => { calls.push("handler"); return false; };
+      methods.addEventListener.call(target, "change", () => calls.push("capture"), true);
+      const event = new Event("change", {cancelable: true});
+      check(methods.dispatchEvent.call(target, event) === false, name + ":cancellation");
+      check(calls.join() === "capture,legacy,handler,modern", name + ":handler order " + calls);
+      check(event.currentTarget === null && event.eventPhase === 0 && event.target === target,
+        name + ":dispatch cleanup");
+      target.onchange = null;
+      target.onchange = () => calls.push("last-handler");
+      calls.length = 0;
+      target.dispatchEvent(new Event("change"));
+      check(calls.join() === "capture,legacy,modern,last-handler", name + ":handler re-add " + calls);
+      methods.removeEventListener.call(target, "change", legacy);
+      target.onchange = 12;
+      check(target.onchange === null, name + ":handler conversion");
+      calls.length = 0;
+      target.dispatchEvent(new Event("change"));
+      check(calls.join() === "capture,modern", name + ":legacy removal " + calls);
+      let once = 0;
+      const controller = new AbortController();
+      methods.addEventListener.call(target, "probe", () => ++once, {once: true});
+      methods.addEventListener.call(target, "probe", () => failures.push(name + ":aborted listener"),
+        {signal: controller.signal});
+      controller.abort();
+      target.dispatchEvent(new Event("probe"));
+      target.dispatchEvent(new Event("probe"));
+      check(once === 1, name + ":once");
+      rows.push(name);
+    }
+  } finally { frame.remove(); }
+  return {rows, failures};
+}
+
+function mediaQueryListReceiverProbe() {
+  const failures = [];
+  let checks = 0;
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  try {
+    for (const [name, realm] of [["main", window], ["child", frame.contentWindow]]) {
+      const target = realm.matchMedia("all");
+      const revoked = Proxy.revocable(target, {});
+      revoked.revoke();
+      const invalid = [{}, Object.create(realm.MediaQueryList.prototype), Object.create(target),
+        new Proxy(target, {}), revoked.proxy];
+      let conversions = 0;
+      const type = {toString() { ++conversions; return "probe"; }};
+      const methods = realm.EventTarget.prototype;
+      const prototype = realm.MediaQueryList.prototype;
+      const operations = [
+        value => methods.addEventListener.call(value, type, () => {}),
+        value => methods.removeEventListener.call(value, type, () => {}),
+        value => methods.dispatchEvent.call(value, new Event("probe")),
+        value => prototype.addListener.call(value, () => {}),
+        value => prototype.removeListener.call(value, () => {}),
+        ...["media", "matches", "onchange"].map(property =>
+          value => Object.getOwnPropertyDescriptor(prototype, property).get.call(value)),
+        value => Object.getOwnPropertyDescriptor(prototype, "onchange").set.call(value, () => {}),
+      ];
+      for (const [index, operation] of operations.entries()) for (const value of invalid) {
+        ++checks;
+        try { operation(value); failures.push(name + ":accepted receiver " + index); }
+        catch (error) {
+          if (!(error instanceof realm.TypeError)) failures.push(name + ":wrong exception realm " + index);
+        }
+      }
+      if (conversions !== 0) failures.push(name + ":converted before receiver check");
+      let reads = 0;
+      const fake = {get type() { ++reads; return "probe"; }};
+      try { methods.dispatchEvent.call(target, fake); failures.push(name + ":accepted fake event"); }
+      catch (error) { if (!(error instanceof realm.TypeError)) failures.push(name + ":fake event error"); }
+      if (reads !== 0) failures.push(name + ":read unbranded event");
+      target.addEventListener("probe", event => {
+        try { methods.dispatchEvent.call(target, event); failures.push(name + ":redispatched active event"); }
+        catch (error) { if (error.name !== "InvalidStateError") failures.push(name + ":active event error"); }
+      });
+      target.dispatchEvent(new Event("probe"));
+    }
+  } finally { frame.remove(); }
+  return {checks, failures};
+}
+
+function retainedEventTargetLifetimeProbe(mediaQueryList) {
+  const failures = [];
+  const check = (value, message) => { if (!value) failures.push(message); };
+  const frame = document.createElement("iframe");
+  frame.width = "200";
+  document.body.appendChild(frame);
+  const realm = frame.contentWindow;
+  const target = mediaQueryList ? realm.matchMedia("(max-width: 200px)") : new realm.EventTarget();
+  if (mediaQueryList) {
+    const parentMatches = Object.getOwnPropertyDescriptor(MediaQueryList.prototype, "matches").get;
+    check(target.matches && parentMatches.call(target), "borrowed matches used caller viewport");
+    const childMatches = Object.getOwnPropertyDescriptor(realm.MediaQueryList.prototype, "matches").get;
+    check(!childMatches.call(matchMedia("(max-width: 200px)")), "child getter used child viewport for parent");
+  }
+  const calls = [];
+  const retiredCalls = [];
+  const retiredCallback = realm.Function("calls", "return function() { calls.push('retired'); };")(retiredCalls);
+  target.addEventListener("change", retiredCallback, true);
+  target.addEventListener("retired-only", retiredCallback);
+  const listener = function(event) {
+    calls.push("listener");
+    check(this === target && event.target === target && event.currentTarget === target,
+      "retained target dispatch receivers");
+    check(event.eventPhase === Event.AT_TARGET && window.event === event && !event.isTrusted,
+      "retained target dispatch state");
+    check(event.composedPath().length === 1 && event.composedPath()[0] === target,
+      "retained target dispatch path");
+    try { target.dispatchEvent(event); failures.push("redispatched active event"); }
+    catch (error) { check(error.name === "InvalidStateError", "active event validation"); }
+    event.preventDefault();
+  };
+  if (mediaQueryList) {
+    target.addListener(listener);
+    target.onchange = retiredCallback;
+  } else {
+    target.addEventListener("change", listener);
+  }
+  target.addEventListener("change", () => calls.push("modern"));
+  target.addEventListener("change", () => calls.push("once"), {once: true});
+  const dispatchers = [EventTarget.prototype.dispatchEvent, realm.EventTarget.prototype.dispatchEvent];
+  frame.remove();
+  let dispatches = 0;
+  for (const dispatch of dispatchers) {
+    const retiredOnly = new Event("retired-only");
+    check(dispatch.call(target, retiredOnly) === true && retiredOnly.target === target,
+      "dispatch with only retired callbacks");
+    for (const cancelable of [false, true]) {
+      const event = new Event("change", {cancelable});
+      const before = calls.length;
+      try {
+        check(dispatch.call(target, event) === !cancelable, "retained target cancellation result");
+        check(event.defaultPrevented === cancelable, "retained target canceled flag");
+        check(event.target === target && event.currentTarget === null && event.eventPhase === Event.NONE,
+          "retained target dispatch cleanup");
+        check(event.composedPath().length === 0 && !event.isTrusted, "retained target path cleanup");
+        check(calls.slice(before).join() === (dispatches ? "listener,modern" : "listener,modern,once"),
+          "retained target listener order and once");
+        ++dispatches;
+      } catch (error) { failures.push("retained dispatch: " + error.name); }
+    }
+    for (const [value, expected] of [[null, "TypeError"], [{}, "TypeError"],
+      [document.createEvent("Event"), "InvalidStateError"]]) {
+      try { dispatch.call(target, value); failures.push("retired target accepted invalid event"); }
+      catch (error) { if (error.name !== expected) failures.push("retired argument validation: " + error.name); }
+    }
+  }
+  check(retiredCalls.length === 0, "invoked a retired callback realm");
+  return {calls: calls.length, dispatches, retiredCalls: retiredCalls.length, failures};
+}

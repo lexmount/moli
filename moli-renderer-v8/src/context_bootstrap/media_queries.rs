@@ -22,13 +22,11 @@ pub(crate) use self::events::{
     simple_object_event_target_remove_listener,
 };
 pub(super) use self::events::{
-    media_query_list_add_event_listener_callback, media_query_list_add_listener_callback,
-    media_query_list_dispatch_event_callback, media_query_list_remove_event_listener_callback,
-    media_query_list_remove_listener_callback,
+    media_query_list_add_listener_callback, media_query_list_remove_listener_callback,
 };
 
 use super::{
     MEDIA_QUERY_LIST_LISTENERS_SLOT, SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT,
     SIMPLE_EVENT_TARGET_SLOT, object_bool_property, object_property_as_array,
-    object_string_property_defined, throw_type_error, v8_string, v8str,
+    object_string_property_defined, v8_string, v8str,
 };
