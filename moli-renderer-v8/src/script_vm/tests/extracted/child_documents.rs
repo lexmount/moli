@@ -42,9 +42,9 @@ async fn child_navigation_retires_runtime_binding_context_and_stale_function() {
         &vm,
         "committed child Runtime binding document",
     );
-    assert_eq!(
+    assert_ne!(
         committed_owner.local_window_id, initial_owner.local_window_id,
-        "the first secure commit must reuse the initial-empty LocalWindow"
+        "navigation after the initial blank load must replace the LocalWindow"
     );
     assert_ne!(committed_owner.document_id, initial_owner.document_id);
     let initial_context_id = vm
@@ -131,6 +131,7 @@ async fn inherited_opaque_srcdoc_reuses_initial_empty_child_local_window() {
   const body = document.body || root.appendChild(document.createElement("body"));
   const frame = document.createElement("iframe");
   frame.id = "inherited-opaque-frame";
+  frame.srcdoc = "<p>pending initial load</p>";
   body.appendChild(frame);
   void frame.contentWindow;
 })()
@@ -196,9 +197,9 @@ async fn child_navigation_retires_local_window_owned_xhr() {
     run_child_navigation_commit_and_host_load_for_test(&mut vm, "first child XHR document").await;
     let committed_owner =
         current_single_child_document_owner_for_test(&vm, "committed child XHR document");
-    assert_eq!(
+    assert_ne!(
         committed_owner.local_window_id, initial_owner.local_window_id,
-        "the first secure commit must reuse the initial-empty LocalWindow"
+        "navigation after the initial blank load must replace the LocalWindow"
     );
     assert_ne!(committed_owner.document_id, initial_owner.document_id);
     let child_context_id = vm
@@ -344,9 +345,9 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     run_child_navigation_commit_and_host_load_for_test(&mut vm, "first child Fetch document").await;
     let committed_owner =
         current_single_child_document_owner_for_test(&vm, "committed child Fetch document");
-    assert_eq!(
+    assert_ne!(
         committed_owner.local_window_id, initial_owner.local_window_id,
-        "the first secure commit must reuse the initial-empty LocalWindow"
+        "navigation after the initial blank load must replace the LocalWindow"
     );
     assert_ne!(committed_owner.document_id, initial_owner.document_id);
     let child_context_id = vm
@@ -535,9 +536,9 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         .await;
     let committed_owner =
         current_single_child_document_owner_for_test(&vm, "committed child Beacon document");
-    assert_eq!(
+    assert_ne!(
         committed_owner.local_window_id, initial_owner.local_window_id,
-        "the first secure commit must reuse the initial-empty LocalWindow"
+        "navigation after the initial blank load must replace the LocalWindow"
     );
     assert_ne!(committed_owner.document_id, initial_owner.document_id);
     let child_context_id = vm

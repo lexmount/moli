@@ -1323,6 +1323,7 @@ async fn initial_empty_child_isolated_world_rebinds_committed_document() {
   const body = document.body || root.appendChild(document.createElement("body"));
   const frame = document.createElement("iframe");
   frame.id = "initial-empty-isolated-frame";
+  frame.srcdoc = "<p>pending initial load</p>";
   body.appendChild(frame);
   void frame.contentWindow;
 })()

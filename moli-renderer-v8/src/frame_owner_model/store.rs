@@ -796,7 +796,10 @@ impl FrameOwnerStore {
         };
         let old_policy = &snapshot.settings.document_policy_container;
         FrameDocumentLocalWindowTransition::for_document_commit(
-            document.creation_kind.is_initial_empty(),
+            // A delivered initial about:blank load consumes the transient
+            // Window, independently of initial history-entry replacement.
+            document.creation_kind.is_initial_empty()
+                && !document.lifecycle_progress.child_load_event_has_started(),
             security_origin_allows_reuse,
             old_policy,
             new_document_policy,
