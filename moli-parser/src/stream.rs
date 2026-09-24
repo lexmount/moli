@@ -660,7 +660,7 @@ impl HtmlTreeSinkStream {
                     )))
                 }
                 RawParserStep::BlockingStylesheet(node_id) => {
-                    assert_eq!(self.pop_pending_blocking_stylesheet_pause(), Some(node_id));
+                    assert_eq!(claimed_stylesheet_pause, Some(node_id));
                     ParserPumpStep::Yield(ParserYield::BlockingStylesheet(
                         ParserBlockingStylesheetPause { node_id },
                     ))
