@@ -104,6 +104,18 @@ function agentTarget({ chrome = false, failure = false }) {
   };
 }
 
+function webMainBenchSummary(overrides = {}) {
+  return {
+    schema_version: 1,
+    expected_cases: 545,
+    completed: 545,
+    counts: { success: 544, expected_failure: 1 },
+    passed: true,
+    issues: [],
+    ...overrides,
+  };
+}
+
 function createArtifacts(root) {
   const releaseRoot = path.join(root, 'release');
   writeJson(releaseRoot, 'base-startup/startup/summary.json', startupSummary(0));
@@ -190,10 +202,13 @@ function createArtifacts(root) {
     ],
   });
 
-  return { releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRoot };
+  const webmainbenchRoot = path.join(root, 'webmainbench');
+  writeJson(webmainbenchRoot, 'summary.json', webMainBenchSummary());
+
+  return { releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRoot, webmainbenchRoot };
 }
 
-test('renders all five trusted artifact sections into one bounded report', (t) => {
+test('renders all six trusted artifact sections into one bounded report', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-report-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roots = createArtifacts(root);
@@ -204,7 +219,7 @@ test('renders all five trusted artifact sections into one bounded report', (t) =
   });
 
   assert.ok(report.startsWith(COMMENT_MARKER));
-  assert.match(report, /artifacts: `5\/5`/);
+  assert.match(report, /artifacts: `6\/6`/);
   assert.match(report, /Raw binary \| 100 B \| 110 B \| \+10 B \| \+10\.000000%/);
   assert.match(report, /Frontend differential/);
   assert.match(report, /1 Chromium reference recoveries/);
@@ -218,6 +233,10 @@ test('renders all five trusted artifact sections into one bounded report', (t) =
   assert.match(report, /PSS partial/);
   assert.match(report, /Runtime and CDP session contracts/);
   assert.match(report, /`bad\\\|group&lt;`/);
+  assert.match(report, /\| WebMainBench \| ✅ \| 545\/545 completed; 0 unexpected failures \|/);
+  assert.match(report, /\| 545\/545 \| 544 \| 1 \| 0 \| 0 \| 0 \| 0 \| 0 \|/);
+  assert.match(report, /\[Source run and artifacts\]\(https:\/\/github\.com\/lexmount\/moli\/actions\/runs\/123\)/);
+  assert.match(report, /Diagnostics: `webmainbench-results`/);
   assert.ok(Buffer.byteLength(report, 'utf8') < 32 * 1024);
 });
 
@@ -227,8 +246,8 @@ test('renders missing artifacts as unavailable without throwing', () => {
     conclusion: 'timed_out',
   });
 
-  assert.match(report, /artifacts: `0\/5`/);
-  assert.equal((report.match(/Artifact unavailable or invalid\./g) || []).length, 5);
+  assert.match(report, /artifacts: `0\/6`/);
+  assert.equal((report.match(/Artifact unavailable or invalid\./g) || []).length, 6);
   assert.doesNotMatch(report, /\]\(not-a-trusted-url\)/);
 });
 
@@ -246,5 +265,84 @@ test('rejects an unbounded frontend result list as unavailable', (t) => {
   });
 
   const report = renderReport({ frontendRoot, conclusion: 'failure' });
-  assert.match(report, /artifacts: `0\/5`/);
+  assert.match(report, /artifacts: `0\/6`/);
+});
+
+test('shows WebMainBench failures and escapes issue text', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-webmainbench-failures-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeJson(root, 'summary.json', webMainBenchSummary({
+    passed: false,
+    counts: { success: 540, expected_failure: 1, panic: 1, crash: 1, timeout: 1, empty_output: 1 },
+    issues: ['first-case: panic', 'second-case: timeout', 'bad|case<`\n<img src=x>: empty_output'],
+  }));
+
+  const report = renderReport({ webmainbenchRoot: root, conclusion: 'failure' });
+
+  assert.match(report, /\| WebMainBench \| ❌ \| 545\/545 completed; 4 unexpected failures \|/);
+  assert.match(report, /\| 545\/545 \| 540 \| 1 \| 4 \| 1 \| 1 \| 1 \| 1 \|/);
+  assert.match(report, /`first-case: panic`/);
+  assert.match(report, /bad\\\|case&lt;' &lt;img src=x&gt;/);
+  assert.doesNotMatch(report, /<img src=x>/);
+});
+
+test('does not display a green WebMainBench result for incomplete or failed evidence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-webmainbench-incomplete-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const summary of [
+    webMainBenchSummary({ completed: 200, counts: { success: 200 } }),
+    webMainBenchSummary({ passed: false }),
+    webMainBenchSummary({ issues: ['Infrastructure error: fixture failed'] }),
+  ]) {
+    writeJson(root, 'summary.json', summary);
+    const report = renderReport({ webmainbenchRoot: root, conclusion: 'success' });
+    assert.match(report, /artifacts: `1\/6`/);
+    assert.match(report, /\| WebMainBench \| ❌ \|/);
+    assert.doesNotMatch(report, /\| WebMainBench \| ✅ \|/);
+  }
+});
+
+test('rejects malformed WebMainBench counts and oversized issue lists', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-webmainbench-invalid-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const overrides of [
+    { schema_version: 2 },
+    { expected_cases: 1 },
+    { completed: 546 },
+    { counts: { success: '544', expected_failure: 1 } },
+    { counts: { success: -1 } },
+    { counts: { success: 544, unknown_status: 1 } },
+    { counts: { success: 543, expected_failure: 2 } },
+    { counts: {} },
+    { issues: [{}] },
+    { issues: Array.from({ length: 548 }, () => 'failure') },
+  ]) {
+    writeJson(root, 'summary.json', webMainBenchSummary(overrides));
+    const report = renderReport({ webmainbenchRoot: root, conclusion: 'success' });
+    assert.match(report, /artifacts: `0\/6`/, JSON.stringify(overrides));
+    assert.match(report, /\| WebMainBench \| ⚪ \| artifact unavailable or invalid \|/);
+  }
+});
+
+test('bounds WebMainBench issue details and does not use an untrusted diagnostics URL', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-webmainbench-bounded-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeJson(root, 'summary.json', webMainBenchSummary({
+    counts: { failure: 545 },
+    passed: false,
+    issues: Array.from({ length: 545 }, (_, index) => `case-${index}: ${'x'.repeat(1_000)}`),
+    diagnostics_url: 'https://attacker.example/report',
+  }));
+
+  const report = renderReport({
+    webmainbenchRoot: root,
+    runUrl: 'javascript:alert(1)',
+    conclusion: 'failure',
+  });
+
+  assert.match(report, /535 more issues in the artifact/);
+  assert.match(report, /`case-9:/);
+  assert.doesNotMatch(report, /`case-10:/);
+  assert.doesNotMatch(report, /attacker\.example|javascript:|\[Source run and artifacts\]/);
+  assert.ok(Buffer.byteLength(report, 'utf8') < 32 * 1024);
 });

@@ -88,7 +88,14 @@ Use a new output directory for each run. On systems that disallow unprivileged
 user namespaces, use `sudo unshare --net -- env PYTHONPATH="$PYTHONPATH" python3 ...`
 as the CI job does. The runner refuses to run against an ordinary network.
 
-The job summary reports the verdict and failure IDs.
+The job summary and the existing PR `CI Regression Report` comment report the
+verdict, completion/success counts, expected DNS failures, unexpected failures,
+panics, crashes, timeouts, and empty outputs. The comment includes bounded
+failure details and a link to the source run and artifacts. Missing or malformed
+reports remain visibly unavailable. As with the other aggregate checks, comments
+are updated for same-repository PRs by the trusted default-branch workflow;
+this integration takes effect after these workflow and renderer changes reach
+the default branch.
 
 The `webmainbench-results` artifact retains every page's Markdown, stderr, exit
 status, elapsed time, and HTML/output hashes for seven days, including when the

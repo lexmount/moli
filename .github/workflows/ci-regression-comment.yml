@@ -37,7 +37,7 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           ARTIFACT_NAMES: >-
-            ["release-regression-results","frontend-differential-results","agent-episode-results","runtime-contract-results","cdp-smoke-diagnostics"]
+            ["release-regression-results","frontend-differential-results","agent-episode-results","runtime-contract-results","cdp-smoke-diagnostics","webmainbench-results"]
         with:
           retries: 3
           script: |
@@ -99,6 +99,16 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
 
+      - name: Download WebMainBench evidence
+        if: contains(fromJSON(steps.wait.outputs.available_artifacts), 'webmainbench-results')
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: webmainbench-results
+          path: ci-regression-artifacts/webmainbench
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
       - name: Install Node.js
         if: steps.wait.outputs.conclusion != 'cancelled'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -117,6 +127,7 @@ jobs:
           --agent ci-regression-artifacts/agent
           --runtime ci-regression-artifacts/runtime
           --cdp ci-regression-artifacts/cdp
+          --webmainbench ci-regression-artifacts/webmainbench
           --run-url "$RUN_URL"
           --conclusion "$CONCLUSION"
           --output ci-regression-comment.md

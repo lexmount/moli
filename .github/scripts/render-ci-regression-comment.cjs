@@ -10,6 +10,8 @@ const MAX_RESULT_ROWS = 2_000;
 const MAX_DETAIL_ROWS = 10;
 const MAX_MATRIX_ROWS = 5_000;
 const MAX_CDP_GROUPS = 100;
+const WEBMAINBENCH_CASES = 545;
+const WEBMAINBENCH_STATUSES = ['success', 'expected_failure', 'failure', 'panic', 'crash', 'timeout', 'empty_output'];
 const MIB = 1024 * 1024;
 
 function isObject(value) {
@@ -639,6 +641,79 @@ function renderCdp(section) {
   return lines;
 }
 
+function loadWebMainBench(root) {
+  const summary = readJson(root, 'summary.json');
+  if (
+    !isObject(summary) ||
+    summary.schema_version !== 1 ||
+    summary.expected_cases !== WEBMAINBENCH_CASES ||
+    count(summary.completed) === null ||
+    summary.completed > WEBMAINBENCH_CASES ||
+    typeof summary.passed !== 'boolean' ||
+    !isObject(summary.counts) ||
+    !Array.isArray(summary.issues) ||
+    summary.issues.length > WEBMAINBENCH_CASES + 2 ||
+    summary.issues.some((issue) => typeof issue !== 'string') ||
+    Object.entries(summary.counts).some(([status, value]) =>
+      !WEBMAINBENCH_STATUSES.includes(status) || count(value) === null || value > WEBMAINBENCH_CASES
+    )
+  ) {
+    throw new Error('invalid WebMainBench artifact');
+  }
+  const counts = Object.fromEntries(WEBMAINBENCH_STATUSES.map((status) => [status, summary.counts[status] ?? 0]));
+  if (sum(Object.values(counts)) !== summary.completed || counts.expected_failure > 1) {
+    throw new Error('inconsistent WebMainBench counts');
+  }
+  return { ...summary, counts };
+}
+
+function webMainBenchOverview(section) {
+  if (!section.available) {
+    return { status: '⚪', signal: 'artifact unavailable or invalid' };
+  }
+  const { completed, counts, passed, issues } = section.data;
+  const unexpected = completed - counts.success - counts.expected_failure;
+  const ok = passed && completed === WEBMAINBENCH_CASES && unexpected === 0 && issues.length === 0;
+  return {
+    status: ok ? '✅' : '❌',
+    signal: `${formatInteger(completed)}/${WEBMAINBENCH_CASES} completed; ${formatInteger(unexpected)} unexpected failures`,
+  };
+}
+
+function renderWebMainBench(section, runLink) {
+  const overview = webMainBenchOverview(section);
+  const lines = [`<details><summary><strong>WebMainBench · 545 pages</strong> — ${overview.status} ${overview.signal}</summary>`, ''];
+  if (!section.available) {
+    lines.push('Artifact unavailable or invalid. See the source CI run for infrastructure details.', '', '</details>');
+    return lines;
+  }
+  const { completed, counts, issues } = section.data;
+  const unexpected = completed - counts.success - counts.expected_failure;
+  lines.push(
+    '| Completed | Successful | Expected DNS failure | Unexpected failures | Panics | Crashes | Timeouts | Empty output |',
+    '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${formatInteger(completed)}/${WEBMAINBENCH_CASES} | ${formatInteger(counts.success)} | ${formatInteger(counts.expected_failure)} | ${formatInteger(unexpected)} | ${formatInteger(counts.panic)} | ${formatInteger(counts.crash)} | ${formatInteger(counts.timeout)} | ${formatInteger(counts.empty_output)} |`,
+    '',
+    'Frozen HTML · Linux · `--wait done` · 45 seconds per page · no retries. Content quality is evaluated separately.'
+  );
+  if (issues.length !== 0) {
+    lines.push('', '**Failures and incomplete evidence**', '');
+    for (const issue of issues.slice(0, MAX_DETAIL_ROWS)) {
+      lines.push(`- ${code(issue, 200)}`);
+    }
+    if (issues.length > MAX_DETAIL_ROWS) {
+      lines.push(`- ${formatInteger(issues.length - MAX_DETAIL_ROWS)} more issues in the artifact.`);
+    }
+  }
+  lines.push(
+    '',
+    `Diagnostics: \`webmainbench-results\` — every page's Markdown, stderr, and exit status.${runLink ? ` [Source run and artifacts](${runLink})` : ''}`,
+    '',
+    '</details>'
+  );
+  return lines;
+}
+
 function trustedRunUrl(value) {
   try {
     const url = new URL(value);
@@ -651,13 +726,14 @@ function trustedRunUrl(value) {
   return null;
 }
 
-function renderReport({ releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRoot, runUrl, conclusion }) {
+function renderReport({ releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRoot, webmainbenchRoot, runUrl, conclusion }) {
   const sections = {
     release: loadSection(() => loadRelease(releaseRoot)),
     frontend: loadSection(() => loadFrontend(frontendRoot)),
     agent: loadSection(() => loadAgent(agentRoot)),
     runtime: loadSection(() => loadRuntime(runtimeRoot)),
     cdp: loadSection(() => loadCdp(cdpRoot)),
+    webmainbench: loadSection(() => loadWebMainBench(webmainbenchRoot)),
   };
   const overviews = [
     ['Release regression', releaseOverview(sections.release)],
@@ -665,6 +741,7 @@ function renderReport({ releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRo
     ['Agent episodes', agentOverview(sections.agent)],
     ['Runtime/CDP contracts', runtimeOverview(sections.runtime)],
     ['CDP smoke', cdpOverview(sections.cdp)],
+    ['WebMainBench', webMainBenchOverview(sections.webmainbench)],
   ];
   const available = Object.values(sections).filter((section) => section.available).length;
   const sourceConclusion = ['success', 'failure', 'cancelled', 'timed_out', 'in_progress'].includes(conclusion)
@@ -675,7 +752,7 @@ function renderReport({ releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRo
     COMMENT_MARKER,
     '## CI Regression Report',
     '',
-    `${link ? `[Source CI run](${link})` : 'Source CI run'} · source state at render: \`${sourceConclusion}\` · artifacts: \`${available}/5\``,
+    `${link ? `[Source CI run](${link})` : 'Source CI run'} · source state at render: \`${sourceConclusion}\` · artifacts: \`${available}/${overviews.length}\``,
     '',
     '| Check | Status | Signal |',
     '| --- | :---: | --- |',
@@ -694,6 +771,8 @@ function renderReport({ releaseRoot, frontendRoot, agentRoot, runtimeRoot, cdpRo
     ...renderRuntime(sections.runtime),
     '',
     ...renderCdp(sections.cdp),
+    '',
+    ...renderWebMainBench(sections.webmainbench, link),
     '',
     '_All artifact fields are parsed by the trusted default-branch renderer; missing or invalid inputs remain visible as unavailable._',
     ''
@@ -729,6 +808,7 @@ function main(argv = process.argv.slice(2)) {
     agentRoot: args.agent,
     runtimeRoot: args.runtime,
     cdpRoot: args.cdp,
+    webmainbenchRoot: args.webmainbench,
     runUrl: args['run-url'],
     conclusion: args.conclusion,
   });
