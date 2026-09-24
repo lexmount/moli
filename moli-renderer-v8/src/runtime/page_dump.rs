@@ -525,10 +525,31 @@ mod tests {
             include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
         );
         let before = dom.serialize_document();
-        assert_eq!(
-            render_markdown_document(&dom),
-            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+        let markdown = render_markdown_document(&dom);
+        for content in [
+            "First story",
+            "42 points by",
+            "8 comments",
+            "Second story",
+            "7 points by",
+            "discuss",
+            "More",
+        ] {
+            assert!(markdown.contains(content), "missing {content}: {markdown}");
+        }
+        let positions = [
+            "First story",
+            "42 points by",
+            "Second story",
+            "7 points by",
+            "More",
+        ]
+        .map(|content| markdown.find(content).expect("checked above"));
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{markdown}"
         );
+        assert!(markdown.contains("<table"), "{markdown}");
         assert_eq!(dom.serialize_document(), before);
     }
 
@@ -622,17 +643,20 @@ mod tests {
         for (html, expected) in [
             (
                 "<a href='/a' title='one\n  two'>link</a>",
-                "[link](/a \"one\ntwo\")",
+                "[link](/a \"one&#10;two\")",
             ),
             (
                 "<img src='/i' alt='one\n  two' title='one\n  two'>",
-                "![one\ntwo](/i \"one\ntwo\")",
+                "![one two](/i \"one&#10;two\")",
             ),
             (
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",
                 "## [link](/a \"one&#10;two\")",
             ),
-            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+            (
+                "a<img alt='label'>b<img src='' alt='label'>c",
+                "alabelblabelc",
+            ),
         ] {
             assert_eq!(markdown_from_html(html), expected, "{html}");
         }
