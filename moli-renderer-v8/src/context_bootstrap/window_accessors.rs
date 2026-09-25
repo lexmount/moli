@@ -40,7 +40,8 @@ pub(super) use interceptors::{
     window_named_property_query,
 };
 pub(crate) use surface::{
-    window_closed_getter, window_opener_getter, window_parent_getter, window_top_getter,
+    window_closed_getter, window_opener_getter, window_parent_getter, window_parent_or_top,
+    window_top_getter,
 };
 pub(super) use surface::{
     window_custom_elements_getter, window_device_pixel_ratio_getter, window_frames_getter,
