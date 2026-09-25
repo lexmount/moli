@@ -2,11 +2,13 @@ use super::*;
 
 mod composed;
 mod dispatch;
+mod focus;
 mod text;
 mod values;
 
 pub(super) use composed::selection_composed_boundary_order;
 pub(super) use dispatch::{boundary_order, selection_dispatch_change};
+pub(crate) use focus::focus_text_control_selection;
 pub(super) use text::{first_text_descendant, last_text_descendant, text_length};
 pub(super) use values::{
     SelectionRangeUpdateState, new_selection_runtime_object, selection_anchor_node,
