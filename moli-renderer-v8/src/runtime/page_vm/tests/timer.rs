@@ -35,6 +35,163 @@ async fn run_timer_through_selected_dispatcher(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn animation_frame_wake_publishes_one_rendering_batch_after_autofocus() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/animation-frame-batch")?,
+            );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.frameOrder = [];
+globalThis.frameTimes = [];
+requestAnimationFrame(timestamp => {
+  frameOrder.push('first');
+  frameTimes.push(timestamp);
+  queueMicrotask(() => {
+    frameOrder.push('first-microtask');
+    cancelAnimationFrame(cancelledFrame);
+  });
+  requestAnimationFrame(next => {
+    frameOrder.push('next-frame');
+    frameTimes.push(next);
+  });
+});
+const cancelledFrame = requestAnimationFrame(() => frameOrder.push('cancelled'));
+"queued"
+"#,
+        )?;
+        // A frame deadline can expire while a parser script still owns the
+        // thread. Its later insertion must be considered before any callback.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        page_vm.vm_mut().eval(
+            r#"
+requestAnimationFrame(timestamp => {
+  frameOrder.push('late');
+  frameTimes.push(timestamp);
+});
+const candidate = document.createElement('input');
+candidate.autofocus = true;
+candidate.addEventListener('focus', () => {
+  frameOrder.push('focus');
+  queueMicrotask(() => frameOrder.push('focus-microtask'));
+  requestAnimationFrame(timestamp => {
+    frameOrder.push('from-focus');
+    frameTimes.push(timestamp);
+  });
+});
+document.body.append(candidate);
+"inserted"
+"#,
+        )?;
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("frameOrder.join('|')")?,
+            "",
+            "the deadline only publishes rendering work"
+        );
+        let claimed = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("frame wake should publish a rendering task");
+        assert_eq!(
+            claimed.rendering_update_owner_and_kind().unwrap().1,
+            crate::page_task_queue::RendererPageRenderingUpdateTaskKind::AnimationFrameCallbacks
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("frameOrder.join('|')")?,
+            "focus|focus-microtask|first|first-microtask|late|from-focus"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("frameTimes.length === 3 && frameTimes.every(t => t === frameTimes[0])")?,
+            "true"
+        );
+        assert!(
+            page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .is_none(),
+            "callbacks registered during the batch await another frame"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                    &loader,
+                )
+                .await?
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("frameOrder.at(-1) === 'next-frame' && frameTimes[3] > frameTimes[0]")?,
+            "true"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("animation frame rendering batch should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn animation_frame_republishes_after_document_open_without_retargeting_a_claim() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/animation-frame-document-open")?,
+            );
+        page_vm.vm_mut().eval(
+            "globalThis.frameRan = false; requestAnimationFrame(() => { frameRan = true; })",
+        )?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        let claimed = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("frame should publish before replacement");
+        let old_owner = claimed.rendering_update_owner_and_kind().unwrap().0;
+        page_vm.vm_mut().eval(
+            "document.open(); document.write('<!doctype html><body>replacement'); document.close()",
+        )?;
+        page_vm
+            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("String(frameRan)")?,
+            "false",
+            "stale rendering authority must not execute against the replacement incarnation"
+        );
+        let replacement = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("surviving Window callbacks must acquire a new Document task");
+        assert_ne!(
+            replacement.rendering_update_owner_and_kind().unwrap().0,
+            old_owner
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(replacement, &loader)
+            .await?;
+        assert_eq!(page_vm.vm_mut().eval("String(frameRan)")?, "true");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("animation callbacks should survive document.open");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn page_timer_turn_consumes_exactly_one_due_timer() {
     run_page_vm_async_test(async move {
         let loader =
