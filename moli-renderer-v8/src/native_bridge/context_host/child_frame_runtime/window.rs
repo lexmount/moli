@@ -1217,12 +1217,12 @@ impl JsContextHost {
         retain_window_cross_origin_access_surface(scope, window_proxy, surface);
     }
 
-    pub(crate) fn child_browsing_context_window_proxy_for_top<'s>(
+    pub(crate) fn child_browsing_context_window_proxy_for_current_realm<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        if self.child_browsing_context_is_same_origin_with_top(handle) {
+        if self.current_realm_can_access_child_window(scope, handle) {
             return self.child_browsing_context_window_wrapper(scope, handle);
         }
         if let Some(proxy) = self.child_window_proxy_records.live_window(scope, handle) {
@@ -1358,7 +1358,7 @@ impl JsContextHost {
         if self
             .child_window_proxy_records
             .has_cross_origin_proxy(handle)
-            && !self.child_browsing_context_is_same_origin_with_top(handle)
+            && !self.current_realm_can_access_child_window(scope, handle)
         {
             return (
                 self.child_window_proxy_records
@@ -2763,7 +2763,7 @@ fn child_window_cross_origin_named_child_value<'s>(
     let child_handle = unsafe { &*host_ptr }
         .child_browsing_context_named_child_handle(parent_handle, &key_name)?;
     unsafe { &mut *host_ptr }
-        .child_browsing_context_window_proxy_for_top(scope, child_handle)
+        .child_browsing_context_window_proxy_for_current_realm(scope, child_handle)
         .map(Into::into)
 }
 
@@ -2794,7 +2794,7 @@ fn child_window_cross_origin_indexed_value<'s>(
     let document = cross_origin_window_child_document(scope, host, surface)?;
     let child_handle =
         host.child_browsing_context_handle_by_index_for_document(document, index as usize)?;
-    host.child_browsing_context_window_proxy_for_top(scope, child_handle)
+    host.child_browsing_context_window_proxy_for_current_realm(scope, child_handle)
         .map(Into::into)
 }
 

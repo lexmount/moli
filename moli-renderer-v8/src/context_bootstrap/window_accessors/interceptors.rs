@@ -1,7 +1,4 @@
-use super::helpers::{
-    window_child_context_handle, window_document_handle, window_host_ptr,
-    window_owner_dispatch_scope,
-};
+use super::helpers::{window_child_context_handle, window_document_handle, window_host_ptr};
 use crate::native_bridge::named_access::{
     build_window_named_items_collection, window_named_item_handles,
 };
@@ -19,29 +16,14 @@ fn window_indexed_child_handle<'s>(
 ) -> Option<(
     *mut crate::native_bridge::JsContextHost,
     crate::document_runtime::DomHandle,
-    crate::native_bridge::OwnerDispatchScope,
 )> {
     let host_ptr = window_host_ptr(scope, receiver)?;
     let host = unsafe { &mut *host_ptr };
-    let owner_scope = window_owner_dispatch_scope(scope, receiver)?;
     let document = window_document_handle(scope, receiver, host)?;
     host.sync_child_browsing_context_subtree(scope, document);
     let handle =
         host.child_browsing_context_handle_by_index_for_document(document, index as usize)?;
-    Some((host_ptr, handle, owner_scope))
-}
-
-fn window_child_projection_for_owner<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-    owner_scope: crate::native_bridge::OwnerDispatchScope,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if owner_scope == crate::native_bridge::OwnerDispatchScope::Top {
-        host.child_browsing_context_window_proxy_for_top(scope, handle)
-    } else {
-        host.child_browsing_context_window_wrapper(scope, handle)
-    }
+    Some((host_ptr, handle))
 }
 
 pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
@@ -50,13 +32,11 @@ pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Some((host_ptr, handle, owner_scope)) =
-        window_indexed_child_handle(scope, args.holder(), index)
-    else {
+    let Some((host_ptr, handle)) = window_indexed_child_handle(scope, args.holder(), index) else {
         return v8::Intercepted::kNo;
     };
     let host = unsafe { &mut *host_ptr };
-    let window = window_child_projection_for_owner(scope, host, handle, owner_scope);
+    let window = host.child_browsing_context_window_proxy_for_current_realm(scope, handle);
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };
@@ -140,13 +120,11 @@ pub(in crate::context_bootstrap) fn window_indexed_property_descriptor<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Some((host_ptr, handle, owner_scope)) =
-        window_indexed_child_handle(scope, args.holder(), index)
-    else {
+    let Some((host_ptr, handle)) = window_indexed_child_handle(scope, args.holder(), index) else {
         return v8::Intercepted::kNo;
     };
     let host = unsafe { &mut *host_ptr };
-    let window = window_child_projection_for_owner(scope, host, handle, owner_scope);
+    let window = host.child_browsing_context_window_proxy_for_current_realm(scope, handle);
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };

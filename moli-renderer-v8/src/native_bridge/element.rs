@@ -3432,21 +3432,18 @@ fn frame_owner_content_document_getter_function<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.refresh_child_browsing_context(scope, handle);
-    if !runtime.child_browsing_context_is_same_origin_with_top(handle) {
+    // Like Blink's CheckSecurity=ReturnValue binding, authorize the returned
+    // Document against this getter's realm. A nested container's accessor is
+    // not necessarily running in the top-level Window's realm.
+    if !runtime.current_realm_can_access_child_window(scope, handle) {
         rv.set_null();
         return;
     }
+    // Once admitted, materialize the child realm and retrieve its native
+    // Document without performing an extra script-visible property lookup.
     let window = runtime.child_browsing_context_window_wrapper(scope, handle);
     if let Some(window) = window {
         runtime.set_cached_detached_iframe_content_window(scope, handle, window);
-        if let Some(document) = window
-            .get(scope, v8str(scope, "document").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            runtime.set_cached_detached_iframe_content_document(scope, handle, document);
-            rv.set(document.into());
-            return;
-        }
     }
     match runtime.child_browsing_context_document_wrapper(scope, handle) {
         Some(document) => {

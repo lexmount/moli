@@ -43,6 +43,7 @@ mod message_port_lifecycle;
 mod misc;
 mod navigation;
 mod navigation_recursion;
+mod nested_frame_access;
 mod performance;
 mod performance_memory;
 mod platform_identity;

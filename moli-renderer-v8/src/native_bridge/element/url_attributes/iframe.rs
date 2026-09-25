@@ -136,9 +136,8 @@ pub(in crate::native_bridge) fn live_frame_owner_content_window_for_handle<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.refresh_child_browsing_context(scope, handle);
-    let exposes_same_origin_wrapper =
-        runtime.child_browsing_context_is_same_origin_with_top(handle);
-    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
+    let exposes_same_origin_wrapper = runtime.current_realm_can_access_child_window(scope, handle);
+    let window = runtime.child_browsing_context_window_proxy_for_current_realm(scope, handle);
     if window.is_some() {
         runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
     }
