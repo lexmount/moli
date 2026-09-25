@@ -168,7 +168,7 @@ fn bind_window_name(
     name: &str,
 ) {
     if let Some(name) = v8_string(scope, name) {
-        set_object_slot(scope, global, WINDOW_NAME_SLOT, name.into());
+        set_private_value(scope, global, WINDOW_NAME_SLOT, name.into());
     }
 }
 
