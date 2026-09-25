@@ -16,7 +16,7 @@ pub(super) struct WindowMembers {
     self_window: (),
     #[webapi(accessor_property, getter = location::window_location, setter = location::set_window_location)]
     location: (),
-    #[webapi(method, callback = context_bootstrap::window_close_callback)]
+    #[webapi(method, callback = cross_origin_window_close_callback)]
     close: (),
     #[webapi(accessor_property, getter = closed_value)]
     closed: (),
@@ -80,6 +80,7 @@ struct WindowTarget<'s> {
     context: v8::Local<'s, v8::Context>,
     host: *mut JsContextHost,
     child: Option<DomHandle>,
+    popup: Option<u64>,
     closed: bool,
 }
 
@@ -91,6 +92,9 @@ impl<'s> WindowTarget<'s> {
         let context = receiver.get_creation_context(scope)?;
         let host = crate::util::context_host_ptr_from_context_slot(context)?;
         let owner = unsafe { &*host };
+        if let Some(popup) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver) {
+            return Some(Self { window: receiver, context, host, child: None, popup: Some(popup), closed: !owner.lightweight_popup_is_open(popup) });
+        }
         let identity = owner.window_execution_context_identity_for_access_check(context);
         let current = identity
             .filter(|identity| owner.window_execution_context_identity_is_current(*identity));
@@ -121,15 +125,20 @@ impl<'s> WindowTarget<'s> {
             context,
             host,
             child,
+            popup: None,
             closed,
         })
     }
 
     fn sync_children(&self, scope: &mut v8::PinScope<'s, '_>) {
         let host = unsafe { &mut *self.host };
-        let document = match self.child {
-            Some(handle) => host.child_browsing_context_document_handle(handle),
-            None => Some(host.document_handle()),
+        let document = if let Some(popup) = self.popup {
+            host.lightweight_popup_document_handle(popup)
+        } else {
+            match self.child {
+                Some(handle) => host.child_browsing_context_document_handle(handle),
+                None => Some(host.document_handle()),
+            }
         };
         let scope = &mut v8::ContextScope::new(scope, self.context);
         if let Some(document) = document {
@@ -143,6 +152,11 @@ impl<'s> WindowTarget<'s> {
         }
         self.sync_children(scope);
         let host = unsafe { &*self.host };
+        if let Some(popup) = self.popup {
+            return host.lightweight_popup_document_handle(popup)
+                .map(|document| host.window_child_browsing_context_handles_for_document(document))
+                .unwrap_or_default();
+        }
         match self.child {
             Some(handle) => host
                 .child_browsing_context_direct_host_handles(handle)
@@ -173,7 +187,11 @@ impl<'s> WindowTarget<'s> {
         }
         self.sync_children(scope);
         let host = unsafe { &mut *self.host };
-        let handle = host.child_browsing_context_named_child_handle(self.child, name)?;
+        let handle = if let Some(popup) = self.popup {
+            host.child_browsing_context_named_child_handle_for_scope(super::super::super::OwnerDispatchScope::LightweightPopup(popup), name)?
+        } else {
+            host.child_browsing_context_named_child_handle(self.child, name)?
+        };
         host.child_browsing_context_window_proxy_for_accessing_context(scope, handle)
     }
 }
