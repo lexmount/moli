@@ -129,7 +129,7 @@ use super::document::{
 pub(crate) use activation::perform_clipboard_key_default_action;
 pub(crate) use activation::{
     NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    navigate_iframe_target,
 };
 pub(crate) use activation::{
     activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,
