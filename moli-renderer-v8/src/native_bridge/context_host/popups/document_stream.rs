@@ -163,7 +163,11 @@ impl JsContextHost {
             return;
         };
         let entry_document = self.document_open_entry_document(scope);
-        self.dispatch_document_open_descendant_frame_unload_lifecycle(scope, document_handle);
+        Self::dispatch_document_open_descendant_frame_unload_lifecycle(
+            scope,
+            host_ptr,
+            document_handle,
+        );
         if !self.lightweight_popup_document_owner_is_current(owner) {
             return;
         }
