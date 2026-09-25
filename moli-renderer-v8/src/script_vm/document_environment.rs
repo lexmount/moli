@@ -121,37 +121,31 @@ impl ScriptVm {
         &mut self,
         policy: crate::document_runtime::DocumentPolicyContainer,
     ) {
-        let was_opaque = self
-            .document_runtime
-            .document_sandbox_policy()
-            .forces_opaque_origin;
         self.document_runtime
             .set_main_navigation_policy_container(policy);
-        // A deferred Context reads the policy at bootstrap; update only an existing token.
-        let _ = self.with_current_main_world_scope(|scope, host_ptr| {
-            let key = unsafe { &*host_ptr }.main_default_world_security_token_key();
-            let context = scope.get_current_context();
-            if !crate::native_bridge::set_window_security_token(scope, context, key.as_deref()) {
-                tracing::warn!(
-                    "failed to refresh main Window security token; using unique context token"
-                );
-            }
+        self.refresh_main_document_origin_after_policy_change()
+            .expect("main Window origin must reflect the navigation policy container");
+    }
+
+    fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
+        // Deferred realms read the updated native policy during bootstrap.
+        self.with_current_main_world_scope(|scope, host_ptr| {
             let host = unsafe { &*host_ptr };
-            let is_opaque = host.document_sandbox_policy().forces_opaque_origin;
-            if was_opaque != is_opaque {
-                let origin = if is_opaque {
-                    "null".into()
-                } else {
-                    moli_url::origin_ascii_serialization(host.document_url())
-                };
-                crate::context_bootstrap::set_window_origin_runtime_state(
-                    scope,
-                    context.global(scope),
-                    &origin,
-                )?;
+            let origin = host
+                .window_document_origin(crate::native_bridge::OwnerDispatchScope::Top)
+                .ok_or_else(|| anyhow!("main Window has no origin"))?;
+            let context = scope.get_current_context();
+            if !host.refresh_main_default_world_security_origin(scope, context) {
+                return Err(anyhow!("failed to update the main Window security token"));
             }
-            Ok(())
-        });
+            crate::context_bootstrap::refresh_global_location_security_origin(scope);
+            crate::context_bootstrap::set_window_origin_runtime_state(
+                scope,
+                context.global(scope),
+                &origin,
+            )
+        })
+        .map(|_| ())
     }
 
     pub(crate) fn document_content_security_policies(&self) -> Vec<ContentSecurityPolicy> {
