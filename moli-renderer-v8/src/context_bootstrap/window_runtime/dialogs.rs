@@ -411,6 +411,7 @@ pub(crate) fn window_open_callback<'s>(
             host_ptr,
             opener,
             opener_child_handle,
+            Some(source_scope),
             &parsed.target_name,
             if parsed.raw_url.is_empty() { "" } else { &url },
             entered_base_url,
