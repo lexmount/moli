@@ -1534,3 +1534,5 @@ mod strict_script_mime;
 mod network;
 mod postmessage;
 mod tls;
+
+mod xhr_failure;
