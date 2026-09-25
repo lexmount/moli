@@ -247,7 +247,7 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
     if expected_popup_origin_prefix == "null" {
         assert_eq!(
             result,
-            r#"[{"origin":"null","data":{"origin":"null"},"sourceIsFrame":true}]"#
+            r#"[{"origin":"null","data":{"origin":"null","initialPopupAccessible":false},"sourceIsFrame":true}]"#
         );
     } else {
         assert!(
@@ -257,6 +257,10 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
         assert!(
             result.contains(expected_popup_origin_prefix),
             "escaped popup should report non-opaque opener event origin: {result}"
+        );
+        assert!(
+            result.contains(r#""initialPopupAccessible":true"#),
+            "escaped popup's initial about:blank should retain its opener's origin: {result}"
         );
     }
 }
@@ -921,10 +925,15 @@ async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle
     opener.postMessage(undefined, "*");
     self.close();
   } else {
+    var initialPopupAccessible = false;
     onmessage = function (e) {
-      parent.postMessage({ data: e.data, origin: e.origin }, "*");
+      parent.postMessage({ data: e.data, origin: e.origin, initialPopupAccessible }, "*");
     };
     var popupWin = window.open();
+    try {
+      popupWin.origin;
+      initialPopupAccessible = true;
+    } catch (_) {}
     popupWin.location.href = location.href;
   }
 </script>"#;
