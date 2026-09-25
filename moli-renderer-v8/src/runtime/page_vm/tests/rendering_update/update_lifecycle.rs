@@ -76,47 +76,53 @@ defaultFocus.addEventListener("focus", () => {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn domcontentloaded_microtask_focus_prevents_autofocus_task_admission() {
+async fn domcontentloaded_microtask_focus_is_resolved_when_autofocus_runs() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let document_url = Url::parse("https://example.com/manual-focus-before-autofocus").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
-            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-
-        page_vm.vm_mut().eval(
-            r#"
-document.body.innerHTML = `
-  <input id="defaultFocus" autofocus>
-  <input id="manualFocus">
-`;
+        for blur_before_rendering in [false, true] {
+            let document_url =
+                Url::parse("https://example.com/manual-focus-before-autofocus").unwrap();
+            let (mut page_vm, _resource_source, _owner_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+            page_vm.vm_mut().eval(
+                r#"
+document.body.innerHTML = '<input id="defaultFocus" autofocus><input id="manualFocus">';
 document.addEventListener("DOMContentLoaded", () => {
   Promise.resolve().then(() => manualFocus.focus());
 });
 "installed"
 "#,
-        )?;
-        dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
-
-        assert_eq!(
-            page_vm
-                .vm_mut()
-                .eval("document.activeElement === manualFocus")?,
-            "true",
-            "DOMContentLoaded's checkpoint must settle manual focus before admission"
-        );
-        assert!(
-            page_vm
+            )?;
+            dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+            assert_eq!(
+                page_vm.vm_mut().eval("document.activeElement.id")?,
+                "manualFocus"
+            );
+            let claimed = page_vm
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::RenderingUpdate,
                 )
-                .is_none(),
-            "a Document that acquired focus must not publish redundant autofocus work"
-        );
+                .expect("candidate should be considered during rendering");
+            if blur_before_rendering {
+                page_vm.vm_mut().eval("manualFocus.blur()")?;
+            }
+            page_vm
+                .run_claimed_selected_page_task_for_test(claimed, &loader)
+                .await?;
+            assert_eq!(
+                page_vm.vm_mut().eval("document.activeElement.id")?,
+                if blur_before_rendering {
+                    "defaultFocus"
+                } else {
+                    "manualFocus"
+                },
+            );
+        }
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("manual focus admission test should run");
+    .expect("autofocus evaluates current focus at its rendering opportunity");
 }
 
 #[tokio::test(flavor = "current_thread")]
