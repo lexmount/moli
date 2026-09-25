@@ -26,7 +26,7 @@ fn viewport_screencast_request(
     }
 }
 
-async fn dispatch_main_document_domcontentloaded_for_rendering_test(
+pub(super) async fn dispatch_main_document_domcontentloaded_for_rendering_test(
     page_vm: &mut PageVm,
 ) -> anyhow::Result<crate::frame_owner_model::FrameDocumentTaskOwner> {
     let owner = page_vm

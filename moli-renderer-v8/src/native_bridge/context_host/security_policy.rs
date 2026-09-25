@@ -84,6 +84,29 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
+    pub(crate) fn document_allows_autofocus(&self, document: DomHandle) -> bool {
+        let Some(endpoint) = self.window_endpoint_for_document(document) else {
+            return false;
+        };
+        let dispatch_scope = endpoint.dispatch_scope();
+        let allows = |policy: &DocumentPolicyContainer| {
+            policy.sandbox.allows_scripts
+                && (policy
+                    .permissions_policy
+                    .focus_without_user_activation_enabled()
+                    || self.window_has_transient_user_activation(dispatch_scope))
+        };
+        match dispatch_scope {
+            OwnerDispatchScope::Top => allows(self.document_policy_container()),
+            OwnerDispatchScope::LightweightPopup(popup_id) => self
+                .lightweight_popup_policy_container(popup_id)
+                .is_some_and(allows),
+            OwnerDispatchScope::Child(handle) => self
+                .child_browsing_context_policy_container_snapshot(handle)
+                .is_some_and(|policy| allows(&policy)),
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn preload_link_csp_check(
         &self,
         link: DomHandle,
