@@ -303,7 +303,6 @@ fn import_meta_resolve_callback(
         return;
     };
     let Some(specifier) = callback_arg_string(scope, &args, 0) else {
-        throw_type_error(scope, "Module specifier must be a string.");
         return;
     };
     let Some(base_url) = v8::Local::<v8::String>::try_from(args.data())

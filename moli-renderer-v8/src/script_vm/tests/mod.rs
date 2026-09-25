@@ -15151,6 +15151,7 @@ mod dom_elements;
 mod dom_xhr;
 mod element_click;
 mod http_fixture;
+mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
 mod lazy_storage;
