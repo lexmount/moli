@@ -380,3 +380,17 @@ pub(crate) fn window_closed_getter<'s>(
         rv.set(value);
     }
 }
+
+/// Resolve native Window relationships without consulting replaceable author properties.
+pub(crate) fn window_parent_or_top<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    top: bool,
+) -> v8::Local<'s, v8::Value> {
+    let value = if top {
+        super::values::window_top_value(scope, receiver)
+    } else {
+        super::values::window_parent_value(scope, receiver)
+    };
+    value.unwrap_or_else(|| v8::null(scope).into())
+}

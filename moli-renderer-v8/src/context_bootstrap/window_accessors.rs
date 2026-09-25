@@ -49,7 +49,8 @@ pub(super) use surface::{
     window_visual_viewport_getter, window_window_getter,
 };
 pub(crate) use surface::{
-    window_closed_getter, window_opener_getter, window_parent_getter, window_top_getter,
+    window_closed_getter, window_opener_getter, window_parent_getter, window_parent_or_top,
+    window_top_getter,
 };
 pub(crate) use values::{
     window_closed_value, window_frames_value, window_length_value, window_opener_value,
