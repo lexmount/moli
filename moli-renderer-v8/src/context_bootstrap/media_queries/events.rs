@@ -1,7 +1,7 @@
 use super::{
     MEDIA_QUERY_LIST_LISTENERS_SLOT, SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT,
-    SIMPLE_EVENT_TARGET_SLOT, object_bool_property, object_property_as_array,
-    object_string_property_defined, v8_string, v8str,
+    SIMPLE_EVENT_TARGET_SLOT, object_property_as_array, object_string_property_defined, v8_string,
+    v8str,
 };
 const SIMPLE_EVENT_TARGET_HANDLER_SLOT_FIELD: &str = "handlerSlot";
 

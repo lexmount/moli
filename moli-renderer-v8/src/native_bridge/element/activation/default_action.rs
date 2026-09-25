@@ -7,7 +7,7 @@ use crate::dom::{
     native::{Element, Node, SelectedFile},
 };
 use crate::util::{
-    call_object_method, node_wrapper_from_handle, object_bool_property, object_number_property,
+    call_object_method, node_wrapper_from_handle, object_number_property,
     object_property_as_object, utf16_len, v8_string, v8str,
 };
 use crate::{
@@ -144,7 +144,7 @@ fn event_default_prevented(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> bool {
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "defaultPrevented").into())
         .is_some_and(|value| value.boolean_value(scope))
 }
@@ -1266,9 +1266,15 @@ pub(crate) fn perform_click_default_action_for_dispatched_event(
     if is_disabled_form_control(runtime, handle) {
         return;
     }
-    let x = object_number_property(scope, event, "clientX").unwrap_or(0.0);
-    let y = object_number_property(scope, event, "clientY").unwrap_or(0.0);
-    let button = object_number_property(scope, event, "button").unwrap_or(0.0) as i32;
+    let x = crate::context_bootstrap::event_attribute(scope, event, "clientX")
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
+    let y = crate::context_bootstrap::event_attribute(scope, event, "clientY")
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
+    let button = crate::context_bootstrap::event_attribute(scope, event, "button")
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0) as i32;
     let modifiers = mouse_event_modifier_bits(scope, event);
     let _ = perform_click_default_action(
         scope,
@@ -1423,16 +1429,16 @@ fn mouse_event_modifier_bits(
     event: v8::Local<'_, v8::Object>,
 ) -> u8 {
     let mut modifiers = 0;
-    if object_bool_property(scope, event, "altKey").unwrap_or(false) {
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "altKey") {
         modifiers |= 1;
     }
-    if object_bool_property(scope, event, "ctrlKey").unwrap_or(false) {
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "ctrlKey") {
         modifiers |= 2;
     }
-    if object_bool_property(scope, event, "metaKey").unwrap_or(false) {
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "metaKey") {
         modifiers |= 4;
     }
-    if object_bool_property(scope, event, "shiftKey").unwrap_or(false) {
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "shiftKey") {
         modifiers |= 8;
     }
     modifiers

@@ -5,8 +5,7 @@ use super::storage::{
 use super::*;
 use crate::context_bootstrap::events::initialize_event_object;
 use crate::util::{
-    callback_data_index_value, callback_data_item, get_private_value, global_constructor_prototype,
-    set_private_value,
+    callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -166,8 +165,12 @@ fn font_face_set_load_event_fontfaces_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT)
-        .unwrap_or_else(|| v8::undefined(scope).into());
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        args.this(),
+        FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
+    )
+    .unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
 }
 
@@ -239,14 +242,11 @@ fn dispatched_font_face_set_load_event<'s>(
     event_type: &str,
     fontfaces: Option<v8::Local<'s, v8::Array>>,
 ) -> v8::Local<'s, v8::Object> {
-    let event = v8::Object::new(scope);
+    let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, event_type, false, false);
     web_api_interfaces::FontFaceSetLoadEvent::DESCRIPTOR
         .initialize(scope, event)
         .expect("font loading events should carry their native interface brand");
-    if let Some(prototype) = global_constructor_prototype(scope, "FontFaceSetLoadEvent") {
-        let _ = event.set_prototype(scope, prototype.into());
-    }
     let mut values = Vec::new();
     if let Some(fontfaces) = fontfaces {
         for index in 0..fontfaces.length() {
@@ -262,7 +262,7 @@ fn dispatched_font_face_set_load_event<'s>(
         FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
         fontfaces.into(),
     );
-    event
+    crate::context_bootstrap::new_event_wrapper(scope, event).expect("FontFaceSetLoadEvent wrapper")
 }
 
 pub(super) fn dispatch_font_face_set_event<'s>(

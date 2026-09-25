@@ -1,6 +1,319 @@
 use super::*;
 
 #[test]
+fn history_worlds_slot_backed_platform_fields_keep_local_wrappers() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        document.body.innerHTML = '<button id="submitter"></button>';
+        globalThis.data = new FormData();
+        data.set('value', 'original');
+        data.pageOnly = true;
+        data.get = () => 'page override';
+        globalThis.formEvent = new FormDataEvent('form-probe', {formData: data});
+        globalThis.submitEvent = new SubmitEvent('submit-probe', {submitter: document.getElementById('submitter')});
+        submitEvent.submitter.pageOnly = true;
+        globalThis.getterCalls = 0;
+        Object.defineProperty(formEvent, 'formData', {get() { getterCalls++; throw new Error('shadow'); }});
+        Object.defineProperty(submitEvent, 'submitter', {get() { getterCalls++; throw new Error('shadow'); }});
+        'ready'
+    "#).unwrap();
+    let isolated = vm.create_isolated_world("slot-fields", false).unwrap();
+    vm.eval_in_isolated_context(isolated, r#"
+        globalThis.facts = [];
+        navigation.addEventListener('form-probe', event => {
+            facts.push(event instanceof FormDataEvent, event.formData instanceof FormData,
+                event.formData.pageOnly === undefined, event.formData.get('value'));
+            event.formData.set('value', 'updated');
+        }, {once: true});
+        navigation.addEventListener('submit-probe', event => {
+            facts.push(event instanceof SubmitEvent, event.submitter instanceof HTMLButtonElement,
+                event.submitter === document.getElementById('submitter'), event.submitter.pageOnly === undefined);
+        }, {once: true});
+        'ready'
+    "#).unwrap();
+    vm.eval("navigation.dispatchEvent(formEvent); navigation.dispatchEvent(submitEvent); 'sent'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap(),
+        r#"[true,true,true,"original",true,true,true,true]"#
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify([getterCalls, FormData.prototype.get.call(data, 'value')])")
+            .unwrap(),
+        r#"[0,"updated"]"#
+    );
+}
+
+#[test]
+fn history_worlds_event_backing_collects_cycles_and_releases_replaced_values() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.payloadForGc = {value: 7};
+        globalThis.eventForGc = new CustomEvent('gc-probe', {detail: payloadForGc});
+        payloadForGc.event = eventForGc;
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("event-backing-gc", false).unwrap();
+    vm.eval_in_isolated_context(isolated, r#"
+        globalThis.foreignEventForGc = null;
+        navigation.addEventListener('gc-probe', event => { foreignEventForGc = event; }, {once: true});
+        'ready'
+    "#).unwrap();
+    vm.eval("navigation.dispatchEvent(eventForGc); 'dispatched'")
+        .unwrap();
+    let context_ptr = &vm
+        .page_isolated_world_contexts
+        .context(isolated)
+        .unwrap()
+        .context as *const _;
+    let weak_values = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let event = global
+                .get(scope, crate::util::v8str(scope, "foreignEventForGc").into())
+                .unwrap();
+            let event = v8::Local::<v8::Object>::try_from(event).unwrap();
+            let payload = event
+                .get(scope, crate::util::v8str(scope, "detail").into())
+                .unwrap();
+            let payload = v8::Local::<v8::Object>::try_from(payload).unwrap();
+            Ok([v8::Weak::new(scope, event), v8::Weak::new(scope, payload)])
+        })
+        .unwrap();
+    // The foreign view owns the same private state after the source globals go away.
+    vm.eval("eventForGc = payloadForGc = null; 'released'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "String(foreignEventForGc.detail.value)")
+            .unwrap(),
+        "7"
+    );
+    vm.eval_in_isolated_context(
+        isolated,
+        "foreignEventForGc.initCustomEvent('reused', false, false, '\\ud800'); 'replaced'",
+    )
+    .unwrap();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        assert!(weak_values[0].to_local(scope).is_some());
+        assert!(
+            weak_values[1].to_local(scope).is_none(),
+            "replacing a backing field must release the previous cyclic payload"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "String(foreignEventForGc.detail.charCodeAt(0))")
+            .unwrap(),
+        "55296"
+    );
+    // Create a cycle again, then drop its final root. A native strong Global
+    // would keep this graph alive; the private V8 backing must not.
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        foreignEventForGc.initCustomEvent('cycle', false, false, {event: foreignEventForGc});
+        foreignEventForGc = null;
+        'released'
+    "#,
+    )
+    .unwrap();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        assert!(
+            weak_values[0].to_local(scope).is_none(),
+            "event/backing/payload cycles must be collectible"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn history_worlds_toggle_events_share_fields_without_reconstructing_the_event() {
+    for isolated_source in [false, true] {
+        let mut vm = new_storage_test_vm("https://example.com/base");
+        let isolated = vm.create_isolated_world("toggle-fields", false).unwrap();
+        let listener = r#"
+            globalThis.facts = [];
+            navigation.addEventListener('toggle-probe', event => {
+                facts.push(event instanceof ToggleEvent, event instanceof Event,
+                    event.oldState, event.newState, event.source === null,
+                    event.target === navigation, event.currentTarget === navigation,
+                    event.expando === undefined);
+            }, {once: true});
+            'ready'
+        "#;
+        if isolated_source {
+            vm.eval(listener).unwrap();
+        } else {
+            vm.eval_in_isolated_context(isolated, listener).unwrap();
+        }
+        let dispatch = r#"
+            const original = new ToggleEvent('toggle-probe', {oldState: 'closed', newState: 'open'});
+            original.expando = 'source-only';
+            let sameObject = false;
+            navigation.addEventListener('toggle-probe', event => { sameObject = event === original; }, {once: true});
+            JSON.stringify([navigation.dispatchEvent(original), sameObject, original.oldState, original.newState])
+        "#;
+        let source = if isolated_source {
+            vm.eval_in_isolated_context(isolated, dispatch)
+        } else {
+            vm.eval(dispatch)
+        }
+        .unwrap();
+        assert_eq!(source, r#"[true,true,"closed","open"]"#);
+        let foreign = if isolated_source {
+            vm.eval("JSON.stringify(facts)")
+        } else {
+            vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+        }
+        .unwrap();
+        assert_eq!(
+            foreign,
+            r#"[true,true,"closed","open",true,true,true,true]"#
+        );
+    }
+}
+
+#[test]
+fn history_worlds_event_fields_ignore_public_shadows_and_getters() {
+    for isolated_source in [false, true] {
+        let mut vm = new_storage_test_vm("https://example.com/base");
+        let isolated = vm
+            .create_isolated_world("internal-event-fields", false)
+            .unwrap();
+        let listener = r#"
+            globalThis.facts = [];
+            globalThis.previousEvent = null;
+            navigation.addEventListener('field-probe', event => {
+                facts.push([event instanceof CustomEvent, event.detail, event.type,
+                    event.cancelable, event.bubbles, event.target === navigation,
+                    event.composedPath()[0] === navigation, event.expando === undefined]);
+                previousEvent = event;
+                event.preventDefault();
+            });
+            navigation.addEventListener('reinitialized', event => {
+                facts.push([event === previousEvent, event.detail, event.type,
+                    event.target === navigation]);
+            });
+            'ready'
+        "#;
+        if isolated_source {
+            vm.eval(listener).unwrap();
+        } else {
+            vm.eval_in_isolated_context(isolated, listener).unwrap();
+        }
+        let dispatch = r#"
+            globalThis.getterCalls = 0;
+            globalThis.sourceFacts = [];
+            for (const getter of [false, true]) {
+                const original = new CustomEvent('field-probe', {detail: 7, cancelable: true, bubbles: true});
+                original.expando = true;
+                Object.defineProperty(original, 'detail', getter
+                    ? {get() { getterCalls++; return 99; }, configurable: true}
+                    : {value: 99, configurable: true});
+                for (const property of ['type', 'cancelable', 'bubbles', 'target']) {
+                    Object.defineProperty(original, property, {get() { getterCalls++; return 'shadow'; }, configurable: true});
+                }
+                let sameObject = false;
+                navigation.addEventListener('field-probe', event => { sameObject = event === original; }, {once: true});
+                sourceFacts.push(navigation.dispatchEvent(original), sameObject, original.defaultPrevented);
+                original.initCustomEvent('reinitialized', false, false, 9);
+                sourceFacts.push(navigation.dispatchEvent(original), original.defaultPrevented, getterCalls);
+                if (!getter) sourceFacts.push(original.detail);
+            }
+            JSON.stringify(sourceFacts)
+        "#;
+        let source = if isolated_source {
+            vm.eval_in_isolated_context(isolated, dispatch)
+        } else {
+            vm.eval(dispatch)
+        }
+        .unwrap();
+        assert_eq!(
+            source,
+            "[false,true,true,true,false,0,99,false,true,true,true,false,0]"
+        );
+        let foreign = if isolated_source {
+            vm.eval("JSON.stringify(facts)")
+        } else {
+            vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+        }
+        .unwrap();
+        assert_eq!(
+            foreign,
+            r#"[[true,7,"field-probe",true,true,true,true,true],[true,9,"reinitialized",true],[true,7,"field-probe",true,true,true,true,true],[true,9,"reinitialized",true]]"#
+        );
+    }
+}
+
+#[test]
+fn history_worlds_custom_event_detail_keeps_the_original_js_value() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.payload = {value: 7};
+        globalThis.original = new CustomEvent('object-detail', {detail: payload});
+        Object.defineProperty(original, 'detail', {value: {value: 99}});
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("object-detail", false).unwrap();
+    vm.eval_in_isolated_context(isolated, r#"
+        navigation.addEventListener('object-detail', event => { event.detail.value = 8; }, {once: true});
+        'ready'
+    "#).unwrap();
+    assert_eq!(vm.eval("navigation.dispatchEvent(original); JSON.stringify([payload.value, original.detail.value])").unwrap(), "[8,99]");
+}
+
+#[test]
+fn history_worlds_event_prototype_getters_are_not_used_as_internal_state() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(r#"
+        globalThis.getterCalls = 0;
+        Object.defineProperty(CustomEvent.prototype, 'detail', {get() { getterCalls++; return 99; }, configurable: true});
+        globalThis.original = new CustomEvent('prototype-probe', {detail: 7});
+        delete original.detail;
+        'ready'
+    "#).unwrap();
+    let isolated = vm.create_isolated_world("prototype-fields", false).unwrap();
+    vm.eval_in_isolated_context(isolated, r#"
+        globalThis.detail = null;
+        navigation.addEventListener('prototype-probe', event => { detail = event.detail; }, {once: true});
+        'ready'
+    "#).unwrap();
+    assert_eq!(
+        vm.eval("navigation.dispatchEvent(original); String(getterCalls)")
+            .unwrap(),
+        "0"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "String(detail)")
+            .unwrap(),
+        "7"
+    );
+}
+
+#[test]
 fn history_worlds_retained_page_event_does_not_retain_unobserved_foreign_views() {
     let mut vm = new_storage_test_vm("https://example.com/base");
     vm.eval("navigation.addEventListener('navigate', event => { globalThis.keptEvent = event; }, {once: true}); 'ready'")

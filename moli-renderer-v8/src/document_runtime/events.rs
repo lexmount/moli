@@ -450,7 +450,7 @@ impl DocumentRuntime {
         event: v8::Local<'s, v8::Object>,
     ) -> std::result::Result<PublicEventDispatchResult, String> {
         let event_type = public_event_type(scope, event);
-        let composed = event
+        let composed = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "composed").into())
             .is_some_and(|value| value.boolean_value(scope));
         let mut path = if let Some(source_target) =
@@ -481,7 +481,7 @@ impl DocumentRuntime {
         event: v8::Local<'s, v8::Object>,
     ) -> std::result::Result<PublicEventDispatchResult, String> {
         let event_type = public_event_type(scope, event);
-        let composed = event
+        let composed = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "composed").into())
             .is_some_and(|value| value.boolean_value(scope));
         let mut path = self.build_propagation_path(dispatch_target, composed);
@@ -687,7 +687,9 @@ fn public_event_type(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<String> {
-    object_string_property(scope, event, "type")
+    crate::context_bootstrap::event_attribute(scope, event, "type")
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
 }
 
 fn trim_window_from_subresource_load_path(
@@ -711,7 +713,7 @@ fn source_target_for_reference_event(
     host_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let event_type = event
+    let event_type = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "type").into())?
         .to_string(scope)?
         .to_rust_string_lossy(scope);
@@ -720,7 +722,8 @@ fn source_target_for_reference_event(
         "submit" => "submitter",
         _ => return None,
     };
-    let source = event.get(scope, v8str(scope, source_property).into())?;
+    let source = crate::context_bootstrap::event_backing(scope, event)
+        .get(scope, v8str(scope, source_property).into())?;
     if source.is_null_or_undefined() || !source.is_object() {
         return None;
     }

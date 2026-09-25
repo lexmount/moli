@@ -7,6 +7,7 @@ mod init;
 mod kind;
 mod methods;
 mod subclasses;
+mod wrappers;
 
 const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
@@ -70,6 +71,8 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
     if event.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
+    let wrapper = event;
+    let event = new_event_state(scope);
     base::initialize_event_object(scope, event, "", false, false);
     if !subclasses::initialize_text_event(scope, event, None) {
         return None;
@@ -81,7 +84,9 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
         v8::Integer::new(scope, EventSubclassKind::TextEvent as i32).into(),
     );
     base::set_event_initialized(scope, event, false);
-    Some(event)
+    web_api_interfaces::initialize(scope, event, "TextEvent").ok()?;
+    initialize_event_wrapper(scope, wrapper, event)?;
+    Some(wrapper)
 }
 
 pub(crate) fn construct_original_page_transition_event<'s>(
@@ -178,6 +183,7 @@ pub(in crate::context_bootstrap) fn define_storage_event_properties_utf16<'s>(
     url: &str,
     storage_area: Option<v8::Local<'s, v8::Value>>,
 ) {
+    let event = event_backing(scope, event);
     let key_value = storage_event_nullable_string_value_utf16(scope, key);
     let old_value = storage_event_nullable_string_value_utf16(scope, old_value);
     let new_value = storage_event_nullable_string_value_utf16(scope, new_value);
@@ -224,18 +230,16 @@ fn storage_event_nullable_string_value_utf16<'s>(
 
 pub(crate) use base::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_initialized,
-    event_internal_bool_flag, event_is_dispatching, initialize_event_object, mark_event_trusted,
-    set_event_composed_path, set_event_internal_flag, set_event_trusted,
+    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, define_event_property, event_backing,
+    event_initialized, event_internal_bool_flag, event_is_dispatching, initialize_event_object,
+    mark_event_trusted, set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
-pub(in crate::context_bootstrap) use base::{
-    bind_event_attribute, bind_event_backing, event_backing, event_trusted,
-};
+
 fn event_subclass_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<EventSubclassKind> {
-    get_private_value(scope, event, EVENT_SUBCLASS_KIND_SLOT)
+    crate::context_bootstrap::event_private_value(scope, event, EVENT_SUBCLASS_KIND_SLOT)
         .and_then(|value| v8::Local::<v8::Integer>::try_from(value).ok())
         .and_then(|value| i32::try_from(value.value()).ok())
         .and_then(EventSubclassKind::from_i32)
@@ -303,10 +307,7 @@ fn event_related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
-    event
-        .get_own_property_descriptor(scope, v8str(scope, "relatedTarget").into())
-        .and_then(|descriptor| v8::Local::<v8::Object>::try_from(descriptor).ok())
-        .and_then(|descriptor| descriptor.get(scope, v8str(scope, "value").into()))
+    wrappers::event_attribute_in_wrapper(scope, event, "relatedTarget")
         .unwrap_or_else(|| v8::null(scope).into())
 }
 
@@ -381,8 +382,12 @@ pub(super) fn close_event_was_clean_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), CLOSE_EVENT_WAS_CLEAN_SLOT)
-        .unwrap_or_else(|| v8::Boolean::new(scope, false).into());
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        args.this(),
+        CLOSE_EVENT_WAS_CLEAN_SLOT,
+    )
+    .unwrap_or_else(|| v8::Boolean::new(scope, false).into());
     rv.set(value);
 }
 
@@ -391,8 +396,9 @@ pub(super) fn close_event_code_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), CLOSE_EVENT_CODE_SLOT)
-        .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
+    let value =
+        crate::context_bootstrap::event_private_value(scope, args.this(), CLOSE_EVENT_CODE_SLOT)
+            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
     rv.set(value);
 }
 
@@ -401,8 +407,9 @@ pub(super) fn close_event_reason_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), CLOSE_EVENT_REASON_SLOT)
-        .unwrap_or_else(|| v8str(scope, "").into());
+    let value =
+        crate::context_bootstrap::event_private_value(scope, args.this(), CLOSE_EVENT_REASON_SLOT)
+            .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
 }
 
@@ -411,9 +418,18 @@ pub(super) fn submit_event_submitter_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), SUBMIT_EVENT_SUBMITTER_SLOT)
-        .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(value);
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        args.this(),
+        SUBMIT_EVENT_SUBMITTER_SLOT,
+    )
+    .unwrap_or_else(|| v8::null(scope).into());
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    if let Some(value) = super::platform_object_worlds::in_realm(scope, value, context) {
+        rv.set(value);
+    }
 }
 
 pub(super) fn form_data_event_form_data_getter_function<'s>(
@@ -421,9 +437,18 @@ pub(super) fn form_data_event_form_data_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), FORM_DATA_EVENT_FORM_DATA_SLOT)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    rv.set(value);
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        args.this(),
+        FORM_DATA_EVENT_FORM_DATA_SLOT,
+    )
+    .unwrap_or_else(|| v8::undefined(scope).into());
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    if let Some(value) = super::platform_object_worlds::in_realm(scope, value, context) {
+        rv.set(value);
+    }
 }
 
 pub(super) fn track_event_track_getter_function<'s>(
@@ -431,7 +456,13 @@ pub(super) fn track_event_track_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = get_private_value(scope, args.this(), TRACK_EVENT_TRACK_SLOT)
-        .unwrap_or_else(|| v8::null(scope).into());
+    let value =
+        crate::context_bootstrap::event_private_value(scope, args.this(), TRACK_EVENT_TRACK_SLOT)
+            .unwrap_or_else(|| v8::null(scope).into());
     rv.set(value);
 }
+
+pub(crate) use wrappers::{
+    event_attribute, event_bool_attribute, event_private_value, initialize_event_wrapper,
+    new_event_state, new_event_wrapper, set_event_private_value,
+};

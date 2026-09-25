@@ -44,7 +44,8 @@ pub(in crate::context_bootstrap) fn idb_version_change_event_constructor_callbac
     else {
         return;
     };
-    let event = args.this();
+    let wrapper = args.this();
+    let event = events::new_event_state(scope);
     events::initialize_event_object(scope, event, &parsed.event_type, false, false);
     IdbVersionChangeEventFieldsDeclaration::new(
         parsed.init.old_version,
@@ -52,7 +53,11 @@ pub(in crate::context_bootstrap) fn idb_version_change_event_constructor_callbac
     )
     .initialize(scope, event)
     .expect("IDBVersionChangeEvent fields declaration should initialize");
-    rv.set(event.into());
+    crate::web_api_interfaces::initialize(scope, event, "IDBVersionChangeEvent")
+        .expect("IDBVersionChangeEvent brand");
+    if events::initialize_event_wrapper(scope, wrapper, event).is_some() {
+        rv.set(wrapper.into());
+    }
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s>(
@@ -62,32 +67,19 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     old_version: u64,
     new_version: Option<u64>,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "IDBVersionChangeEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return dispatch_idb_named_event(scope, target, event_type, |scope, event| {
-            IdbVersionChangeEventFieldsDeclaration::new(
-                old_version,
-                version_change_nullable_version_value(scope, new_version),
-            )
-            .initialize(scope, event)
-            .expect("IDBVersionChangeEvent fallback fields declaration should initialize");
-        });
-    };
-    let Some(event_type) = v8_string(scope, event_type) else {
-        return true;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
-        return true;
-    };
+    let state = events::new_event_state(scope);
+    events::initialize_event_object(scope, state, event_type, false, false);
     IdbVersionChangeEventFieldsDeclaration::new(
         old_version,
         version_change_nullable_version_value(scope, new_version),
     )
-    .initialize(scope, event)
-    .expect("IDBVersionChangeEvent dispatched fields declaration should initialize");
+    .initialize(scope, state)
+    .expect("IDBVersionChangeEvent state");
+    crate::web_api_interfaces::initialize(scope, state, "IDBVersionChangeEvent")
+        .expect("IDBVersionChangeEvent brand");
+    let Some(event) = events::new_event_wrapper(scope, state) else {
+        return true;
+    };
     dispatch_idb_event_object(scope, target, event)
 }
 

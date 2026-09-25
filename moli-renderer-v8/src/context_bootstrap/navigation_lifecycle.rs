@@ -221,13 +221,21 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
         return;
     }
     if let Some(event) = active_event {
-        if get_private_value(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT)
-            .is_some_and(|value| value.is_true())
+        if crate::context_bootstrap::event_private_value(
+            scope,
+            event,
+            NAVIGATE_EVENT_SCROLL_CALLED_SLOT,
+        )
+        .is_some_and(|value| value.is_true())
         {
             return;
         }
-        if get_private_value(scope, event, NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT)
-            .is_some_and(|value| !value.is_true())
+        if crate::context_bootstrap::event_private_value(
+            scope,
+            event,
+            NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT,
+        )
+        .is_some_and(|value| !value.is_true())
         {
             return;
         }
@@ -235,7 +243,11 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
             return;
         };
         let owner = super::navigation_window::runtime_window_owner(scope, navigation);
-        if object_string_property(scope, event, "navigationType").as_deref() == Some("traverse")
+        if crate::context_bootstrap::event_attribute(scope, event, "navigationType")
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .as_deref()
+            == Some("traverse")
             && super::navigation_entry::restore_current_navigation_entry_scroll_position(
                 scope, owner,
             )

@@ -234,10 +234,11 @@ pub(crate) fn create_security_policy_violation_event<'s>(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let declaration = security_policy_violation_event_declaration(scope, fields)?;
-    let event = declaration.bind(scope).ok()?;
+    let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "securitypolicyviolation", true, false);
+    declaration.initialize(scope, event).ok()?;
     mark_event_trusted(scope, event);
-    Some(event)
+    crate::context_bootstrap::new_event_wrapper(scope, event)
 }
 
 pub(crate) fn initialize_security_policy_violation_event<'s>(
@@ -245,6 +246,7 @@ pub(crate) fn initialize_security_policy_violation_event<'s>(
     event: v8::Local<'s, v8::Object>,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> bool {
+    let event = crate::context_bootstrap::event_backing(scope, event);
     security_policy_violation_event_declaration(scope, fields)
         .and_then(|declaration| declaration.initialize(scope, event).ok())
         .is_some()

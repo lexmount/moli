@@ -19,10 +19,7 @@
 
 use super::*;
 use crate::{
-    util::{
-        context_host_ptr_from_global_bridge, get_private_value, serialize_v8_iter_array,
-        set_private_value,
-    },
+    util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array, set_private_value},
     window_webidl_callback::{
         PreparedWindowWebIdlCallbackFunctionOutcome, V8TracedWindowWebIdlCallbackFunction,
     },
@@ -56,12 +53,11 @@ pub(in crate::context_bootstrap) fn push_navigation_handler<'s>(
 ) -> Result<(), NavigationHandlerResidenceFailure> {
     let callback = V8TracedWindowWebIdlCallbackFunction::new(scope, callback).into_object();
     set_private_value(scope, callback, HANDLER_EVENT_VIEW_SLOT, event.into());
-    let event = super::events::event_backing(scope, event);
-    let handlers = get_private_value(scope, event, slot)
+    let handlers = crate::context_bootstrap::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
         .unwrap_or_else(|| {
             let handlers = v8::Array::new(scope, 0);
-            set_private_value(scope, event, slot, handlers.into());
+            crate::context_bootstrap::set_event_private_value(scope, event, slot, handlers.into());
             handlers
         });
     let result = navigation_handler_residence_write_result(handlers.set_index(
@@ -96,7 +92,7 @@ pub(in crate::context_bootstrap) fn navigation_handler_array_is_empty<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> bool {
-    get_private_value(scope, event, slot)
+    crate::context_bootstrap::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
         .is_none_or(|handlers| handlers.length() == 0)
 }
@@ -163,9 +159,14 @@ fn take_navigation_handler_array<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let handlers = get_private_value(scope, event, slot)
+    let handlers = crate::context_bootstrap::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())?;
-    set_private_value(scope, event, slot, v8::undefined(scope).into());
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        slot,
+        v8::undefined(scope).into(),
+    );
     (handlers.length() > 0).then_some(handlers)
 }
 

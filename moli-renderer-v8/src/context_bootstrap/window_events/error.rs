@@ -20,16 +20,6 @@ struct ErrorEventInitDeclaration<'scope> {
     error: v8::Local<'scope, v8::Value>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ErrorEventDetailsDeclaration<'scope> {
-    message: v8::Local<'scope, v8::Value>,
-    filename: v8::Local<'scope, v8::Value>,
-    lineno: u32,
-    colno: u32,
-    error: v8::Local<'scope, v8::Value>,
-}
-
 const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
 
 pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinScope<'_, '_>) {
@@ -146,7 +136,6 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     colno: u32,
     error_value: Option<v8::Local<'s, v8::Value>>,
 ) -> std::result::Result<(), String> {
-    let global = scope.get_current_context().global(scope);
     ensure_window_reflecting_body_onerror_handler(scope);
     let error_value = error_value.unwrap_or_else(|| v8::null(scope).into());
 
@@ -162,22 +151,12 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
             .expect("ErrorEvent init declaration should bind");
 
     let event_type = v8str(scope, "error");
-    let event = global
-        .get(scope, v8str(scope, "ErrorEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .and_then(|ctor| ctor.new_instance(scope, &[event_type.into(), init.into()]))
-        .or_else(|| {
-            let event_ctor = global
-                .get(scope, v8str(scope, "Event").into())
-                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-            let event = event_ctor.new_instance(scope, &[event_type.into(), init.into()])?;
-            let details =
-                ErrorEventDetailsDeclaration::new(message, filename, lineno, colno, error_value);
-            if details.initialize(scope, event).is_err() {
-                return None;
-            }
-            Some(event)
-        });
+    let event = super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(
+        scope,
+        "ErrorEvent",
+    )
+    .ok()
+    .and_then(|ctor| ctor.new_instance(scope, &[event_type.into(), init.into()]));
     let Some(event) = event else {
         return Ok(());
     };
@@ -192,9 +171,18 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     }
     runtime.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)?;
 
+    let global = scope.get_current_context().global(scope);
     let global_value: v8::Local<'_, v8::Value> = global.into();
-    let _ = event.set(scope, v8str(scope, "target").into(), global_value);
-    let _ = event.set(scope, v8str(scope, "currentTarget").into(), global_value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "target").into(),
+        global_value,
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "currentTarget").into(),
+        global_value,
+    );
     Ok(())
 }
 

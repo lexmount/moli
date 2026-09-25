@@ -2134,9 +2134,21 @@ pub(crate) fn create_content_security_policy_violation_event<'s>(
         &ContentSecurityPolicyViolationEventFields::from(violation),
     )
     .ok_or_else(|| anyhow::anyhow!("failed to create CSP violation event"))?;
-    let _ = event.set(scope, v8str(scope, "target").into(), target);
-    let _ = event.set(scope, v8str(scope, "srcElement").into(), target);
-    let _ = event.set(scope, v8str(scope, "currentTarget").into(), current_target);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "target").into(),
+        target,
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "srcElement").into(),
+        target,
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "currentTarget").into(),
+        current_target,
+    );
     Ok(event)
 }
 

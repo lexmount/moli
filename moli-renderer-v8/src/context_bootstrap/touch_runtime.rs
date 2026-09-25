@@ -255,7 +255,7 @@ fn touch_event_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = args.this();
+    let receiver = crate::context_bootstrap::event_backing(scope, args.this());
     match get_private_value(scope, receiver, slot) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),

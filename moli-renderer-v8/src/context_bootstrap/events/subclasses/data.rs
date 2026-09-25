@@ -779,9 +779,7 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_navigate_even
     .initialize(scope, event)
     .expect("NavigateEvent init declaration should initialize");
     define_navigate_event_internal_flag(scope, event, true);
-    NavigateEventMethodsDeclaration::default()
-        .initialize(scope, event)
-        .expect("NavigateEvent methods declaration should initialize");
+
     true
 }
 
@@ -790,7 +788,7 @@ fn define_navigate_event_internal_flag(
     event: v8::Local<'_, v8::Object>,
     synthetic: bool,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_SYNTHETIC_SLOT,
@@ -803,7 +801,8 @@ fn navigate_event_private_value<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, event, slot).filter(|value| !value.is_undefined())
+    crate::context_bootstrap::event_private_value(scope, event, slot)
+        .filter(|value| !value.is_undefined())
 }
 
 fn navigate_event_private_bool<'s>(
@@ -823,7 +822,12 @@ fn set_navigate_event_private_bool<'s>(
     slot: &'static str,
     value: bool,
 ) {
-    set_private_value(scope, event, slot, v8::Boolean::new(scope, value).into());
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        slot,
+        v8::Boolean::new(scope, value).into(),
+    );
 }
 
 fn navigate_event_can_use_navigation_api<'s>(
@@ -831,7 +835,8 @@ fn navigate_event_can_use_navigation_api<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     let synthetic = navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, true);
-    let can_intercept = object_bool_property(scope, event, "canIntercept").unwrap_or(false);
+    let can_intercept =
+        crate::context_bootstrap::event_bool_attribute(scope, event, "canIntercept");
     !synthetic && can_intercept
 }
 
@@ -864,7 +869,7 @@ fn navigate_event_target_is_connected(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> bool {
-    let Some(target) = event
+    let Some(target) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "target").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -890,7 +895,7 @@ fn navigate_event_can_intercept_now<'s>(
     if !navigate_event_is_dispatching(scope, event) {
         return false;
     }
-    if object_bool_property(scope, event, "defaultPrevented").unwrap_or(false) {
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented") {
         return false;
     }
     navigate_event_target_is_connected(scope, event)
@@ -928,7 +933,7 @@ fn navigate_event_intercept_callback<'s>(
         return;
     }
     if options.precommit_handler.is_some()
-        && !object_bool_property(scope, event, "cancelable").unwrap_or(false)
+        && !crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable")
     {
         navigate_event_throw_invalid_state(scope);
         return;
@@ -1003,7 +1008,7 @@ fn install_navigate_event_precommit_transition<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if get_private_value(
+    if crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT,
@@ -1012,7 +1017,7 @@ fn install_navigate_event_precommit_transition<'s>(
     {
         return;
     }
-    let Some(navigation) = get_private_value(
+    let Some(navigation) = crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,
@@ -1020,22 +1025,28 @@ fn install_navigate_event_precommit_transition<'s>(
     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
         return;
     };
-    let Some(from) = get_private_value(scope, event, NAVIGATE_EVENT_PRECOMMIT_TRANSITION_FROM_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(from) = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_TRANSITION_FROM_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
         return;
     };
-    let destination = get_private_value(
+    let destination = crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_DESTINATION_SLOT,
     )
     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-    let navigation_type =
-        get_private_value(scope, event, NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT)
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| "push".to_owned());
+    let navigation_type = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT,
+    )
+    .and_then(|value| value.to_string(scope))
+    .map(|value| value.to_rust_string_lossy(scope))
+    .unwrap_or_else(|| "push".to_owned());
     let navigation_type = match navigation_type.as_str() {
         "replace" => "replace",
         "reload" => "reload",
@@ -1047,7 +1058,7 @@ fn install_navigate_event_precommit_transition<'s>(
     else {
         return;
     };
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT,
@@ -1158,8 +1169,7 @@ fn precommit_controller_redirect_callback<'s>(
     let Some(event) = precommit_controller_event(scope, args.data()) else {
         return;
     };
-    let event = crate::context_bootstrap::events::event_backing(scope, event);
-    let navigation_type = event
+    let navigation_type = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "navigationType").into())
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
@@ -1168,7 +1178,7 @@ fn precommit_controller_redirect_callback<'s>(
         navigate_event_throw_invalid_state(scope);
         return;
     }
-    let Some(destination) = event
+    let Some(destination) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -1254,7 +1264,7 @@ fn apply_precommit_redirect_options<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .filter(|value| matches!(value.as_str(), "push" | "replace"))
     {
-        set_private_value(
+        crate::context_bootstrap::set_event_private_value(
             scope,
             event,
             NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT,
@@ -1273,7 +1283,6 @@ fn navigate_event_defer_page_swap_callback<'s>(
         navigate_event_throw_synthetic_security_error(scope);
         return;
     };
-    let event = crate::context_bootstrap::events::event_backing(scope, event);
     if !navigate_event_can_use_navigation_api(scope, event) {
         navigate_event_throw_synthetic_security_error(scope);
         return;
@@ -1292,17 +1301,17 @@ fn navigate_event_scroll_callback<'s>(
         navigate_event_throw_synthetic_security_error(scope);
         return;
     };
-    let event = crate::context_bootstrap::events::event_backing(scope, event);
     if !navigate_event_can_use_navigation_api(scope, event) {
         navigate_event_throw_synthetic_security_error(scope);
         return;
     }
     let intercepted =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_INTERCEPTED_SLOT, false);
-    let default_prevented = object_bool_property(scope, event, "defaultPrevented").unwrap_or(false);
+    let default_prevented =
+        crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
     let already_scrolled =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, false);
-    let active = event
+    let active = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "target").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .is_some_and(|navigation| navigation_scroll_event_is_active(scope, navigation, event));
@@ -1316,7 +1325,7 @@ fn navigate_event_scroll_callback<'s>(
         return;
     }
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, true);
-    let Some(target_url) = event
+    let Some(target_url) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .and_then(|destination| destination.get(scope, v8str(scope, "url").into()))
@@ -1348,19 +1357,24 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_close_event<'
     let code = init_number_property(scope, init, "code", 0.0);
     let reason = init_string_property(scope, init, "reason", "");
     let reason_value = v8_string(scope, &reason).unwrap().into();
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         CLOSE_EVENT_WAS_CLEAN_SLOT,
         v8::Boolean::new(scope, was_clean).into(),
     );
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         CLOSE_EVENT_CODE_SLOT,
         v8::Number::new(scope, code).into(),
     );
-    set_private_value(scope, event, CLOSE_EVENT_REASON_SLOT, reason_value);
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        CLOSE_EVENT_REASON_SLOT,
+        reason_value,
+    );
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<'s>(
@@ -1371,7 +1385,12 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<
     let Some(submitter) = submit_event_submitter(scope, init) else {
         return false;
     };
-    set_private_value(scope, event, SUBMIT_EVENT_SUBMITTER_SLOT, submitter);
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        SUBMIT_EVENT_SUBMITTER_SLOT,
+        submitter,
+    );
     true
 }
 
@@ -1408,7 +1427,12 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_form_data_eve
         );
         return false;
     }
-    set_private_value(scope, event, FORM_DATA_EVENT_FORM_DATA_SLOT, form_data);
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        FORM_DATA_EVENT_FORM_DATA_SLOT,
+        form_data,
+    );
     true
 }
 
@@ -1429,7 +1453,7 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_track_event<'
     init: Option<v8::Local<'s, v8::Object>>,
 ) {
     let track = init_value_property(scope, init, "track").unwrap_or_else(|| v8::null(scope).into());
-    set_private_value(scope, event, TRACK_EVENT_TRACK_SLOT, track);
+    crate::context_bootstrap::set_event_private_value(scope, event, TRACK_EVENT_TRACK_SLOT, track);
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_interest_event<'s>(
@@ -1489,4 +1513,13 @@ fn submitter_is_html_element(
         .dom_host()
         .node(handle)
         .is_some_and(|node| node.is_element())
+}
+
+pub(in crate::context_bootstrap::events) fn initialize_navigate_event_methods<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    NavigateEventMethodsDeclaration::default()
+        .initialize(scope, event)
+        .expect("NavigateEvent methods declaration should initialize");
 }

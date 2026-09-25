@@ -134,7 +134,6 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                         scope,
                         target,
                         event,
-                        event_type,
                         listener.relevant_context(),
                     )
                 else {
@@ -172,7 +171,8 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     }
 
     crate::context_bootstrap::event_target_dispatch::finish_dispatch(scope, event);
-    let default_prevented = object_bool_property(scope, event, "defaultPrevented").unwrap_or(false);
+    let default_prevented =
+        crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
     SimpleEventDispatchResult {
         uncanceled: !default_prevented,
         dispatched,
@@ -351,7 +351,7 @@ fn apply_handler_return_value<'s>(
     returned: v8::Local<'s, v8::Value>,
 ) {
     if returned.is_false()
-        && object_bool_property(scope, event, "cancelable").unwrap_or(false)
+        && crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable")
         && !event_internal_bool_flag(scope, event, EVENT_PASSIVE_SLOT)
     {
         set_event_default_prevented(scope, event);

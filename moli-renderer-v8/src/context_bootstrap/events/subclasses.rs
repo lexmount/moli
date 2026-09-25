@@ -20,3 +20,5 @@ pub(in crate::context_bootstrap) use data::{
 pub(in crate::context_bootstrap) use pointer::{
     pointer_event_get_coalesced_events_callback, pointer_event_get_predicted_events_callback,
 };
+
+pub(in crate::context_bootstrap::events) use data::initialize_navigate_event_methods;

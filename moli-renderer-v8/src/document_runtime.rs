@@ -47,7 +47,7 @@ use super::{
     stylesheet_blocking::{
         DocumentBlockingStylesheetSignature, StylesheetBlockingState, StylesheetBlockingStatus,
     },
-    util::{object_string_property, v8str},
+    util::v8str,
 };
 #[cfg(test)]
 use crate::dom::native::ShadowRootBindingSnapshot;

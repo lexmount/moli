@@ -322,7 +322,7 @@ fn pointer_event_sequence_copy<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> v8::Local<'s, v8::Array> {
-    let Some(stored) = get_private_value(scope, event, slot)
+    let Some(stored) = crate::context_bootstrap::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
     else {
         return v8::Array::new(scope, 0);

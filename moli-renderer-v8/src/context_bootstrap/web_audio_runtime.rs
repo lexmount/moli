@@ -800,7 +800,11 @@ fn audio_worklet_worker_error_callback<'s>(
     };
     let message = v8::Local::<v8::Object>::try_from(args.get(0))
         .ok()
-        .and_then(|event| object_string_property(scope, event, "message"))
+        .and_then(|event| {
+            crate::context_bootstrap::event_attribute(scope, event, "message")
+                .and_then(|value| value.to_string(scope))
+                .map(|value| value.to_rust_string_lossy(scope))
+        })
         .unwrap_or_else(|| "AudioWorklet module failed.".to_owned());
     let error = error_value(scope, &message).unwrap_or_else(|| v8::undefined(scope).into());
     fail_audio_worklet_module(scope, module_state, error);

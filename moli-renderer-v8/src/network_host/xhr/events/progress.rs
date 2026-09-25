@@ -32,8 +32,9 @@ pub(crate) fn make_progress_event<'s>(
             .bind(scope)
             .expect("XHR progress event target declaration should bind"),
     };
+    let state = crate::context_bootstrap::event_backing(scope, event);
     ProgressEventTargetDeclaration::new(target, target)
-        .initialize(scope, event)
+        .initialize(scope, state)
         .expect("XHR progress event target declaration should initialize");
     event
 }

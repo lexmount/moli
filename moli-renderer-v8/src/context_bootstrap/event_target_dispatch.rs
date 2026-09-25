@@ -29,7 +29,7 @@ pub(crate) fn prepare_script_dispatch<'s>(
     // Retaining a target keeps synthetic dispatch available. Each listener's
     // relevant realm is checked separately by CallbackInvoker before invocation.
     set_event_trusted(scope, event, false);
-    let event_type = event
+    let event_type = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "type").into())?
         .to_string(scope)?
         .to_rust_string_lossy(scope);

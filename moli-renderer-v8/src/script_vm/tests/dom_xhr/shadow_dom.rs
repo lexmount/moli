@@ -169,14 +169,10 @@ fn detached_iframe_open_shadow_host_receives_related_target_events() {
     });
   }
 
-  const event = new Event('x-related', {
+  const event = new FocusEvent('x-related', {
     bubbles: true,
-    composed: true
-  });
-  Object.defineProperty(event, 'relatedTarget', {
-    value: two,
-    writable: true,
-    configurable: true
+    composed: true,
+    relatedTarget: two
   });
   one.dispatchEvent(event);
 
@@ -188,6 +184,34 @@ fn detached_iframe_open_shadow_host_receives_related_target_events() {
 
     assert_eq!(result, "one:one:two:one,shadow|shadow:one:two:one,shadow");
 }
+
+#[test]
+fn event_related_target_expando_does_not_change_the_dispatch_path() {
+    let mut vm = new_storage_test_vm("https://event-private-state.test/");
+    let result = vm
+        .eval(
+            r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const shadow = host.attachShadow({mode: 'open'});
+        const one = document.createElement('button');
+        const two = document.createElement('button');
+        shadow.append(one, two);
+        let calls = 0;
+        let getterCalls = 0;
+        host.addEventListener('probe', () => calls++);
+        const event = new Event('probe', {bubbles: true, composed: true});
+        Object.defineProperty(event, 'relatedTarget', {get() { getterCalls++; return two; }});
+        one.dispatchEvent(event);
+        JSON.stringify([calls, getterCalls])
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "[1,0]");
+}
+
 #[test]
 fn detached_iframe_shadow_focus_events_retarget_and_trim_paths() {
     let mut vm = new_storage_test_vm("https://detached-shadow-focus-events.test/");

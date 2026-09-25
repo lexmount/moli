@@ -5,7 +5,7 @@ use crate::{
         mark_event_trusted, set_event_composed_path,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
-    util::{get_private_object, get_private_value, serialize_v8_iter_array, set_private_value},
+    util::{get_private_object, get_private_value, serialize_v8_iter_array},
 };
 use moli_webapi_declare::WebApiObject;
 use std::collections::HashSet;
@@ -292,19 +292,19 @@ fn invoke_event_handler_property<'s>(
         && event_type == "error"
         && event_is_error_event(scope, event)
     {
-        let message = event
+        let message = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "message").into())
             .unwrap_or_else(|| v8::undefined(scope).into());
-        let source = event
+        let source = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "filename").into())
             .unwrap_or_else(|| v8::undefined(scope).into());
-        let lineno = event
+        let lineno = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "lineno").into())
             .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let colno = event
+        let colno = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "colno").into())
             .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let error = event
+        let error = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "error").into())
             .unwrap_or_else(|| v8::null(scope).into());
 
@@ -325,7 +325,7 @@ fn invoke_event_handler_property<'s>(
         if let Some(returned) = returned {
             let returned = v8::Local::new(scope, returned);
             if returned.boolean_value(scope) {
-                let _ = event.set(
+                let _ = crate::context_bootstrap::event_backing(scope, event).set(
                     scope,
                     v8str(scope, "defaultPrevented").into(),
                     v8::Boolean::new(scope, true).into(),
@@ -362,7 +362,7 @@ fn invoke_event_handler_property<'s>(
     if let Some(returned) = returned {
         let returned = v8::Local::new(scope, returned);
         if returned.is_boolean() && !returned.boolean_value(scope) {
-            let _ = event.set(
+            let _ = crate::context_bootstrap::event_backing(scope, event).set(
                 scope,
                 v8str(scope, "defaultPrevented").into(),
                 v8::Boolean::new(scope, true).into(),
@@ -1631,7 +1631,11 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
     set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT, false);
     set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
     let current_target_key = v8str(scope, "currentTarget");
-    let _ = event.set(scope, current_target_key.into(), v8::null(scope).into());
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        current_target_key.into(),
+        v8::null(scope).into(),
+    );
     clear_event_composed_path(scope, event);
     Ok(PublicEventDispatchResult {
         default_prevented: event_default_prevented(scope, event),
@@ -1690,7 +1694,11 @@ pub(crate) fn dispatch_host_event(
         event_type,
         event,
     );
-    let _ = event.set(scope, current_target_key.into(), v8::null(scope).into());
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        current_target_key.into(),
+        v8::null(scope).into(),
+    );
     dispatch_result
 }
 
@@ -1746,7 +1754,7 @@ fn set_event_current_target(
     value: v8::Local<'_, v8::Value>,
 ) {
     let key = v8str(scope, "currentTarget");
-    let _ = event.set(scope, key.into(), value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(scope, key.into(), value);
 }
 
 fn set_event_target(
@@ -1755,14 +1763,18 @@ fn set_event_target(
     value: v8::Local<'_, v8::Value>,
 ) {
     let key = v8str(scope, "target");
-    let _ = event.set(scope, key.into(), value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(scope, key.into(), value);
     let src_element_key = v8str(scope, "srcElement");
-    let _ = event.set(scope, src_element_key.into(), value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        src_element_key.into(),
+        value,
+    );
 }
 
 fn set_event_phase(scope: &mut v8::PinScope<'_, '_>, event: v8::Local<'_, v8::Object>, phase: u32) {
     let key = v8str(scope, "eventPhase");
-    let _ = event.set(
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         key.into(),
         v8::Integer::new_from_unsigned(scope, phase).into(),
@@ -1775,7 +1787,12 @@ fn set_event_internal_flag(
     key: &str,
     value: bool,
 ) {
-    set_private_value(scope, event, key, v8::Boolean::new(scope, value).into());
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        key,
+        v8::Boolean::new(scope, value).into(),
+    );
 }
 
 fn event_internal_bool_flag<'s>(
@@ -1783,7 +1800,8 @@ fn event_internal_bool_flag<'s>(
     event: v8::Local<'s, v8::Object>,
     key: &str,
 ) -> bool {
-    get_private_value(scope, event, key).is_some_and(|value| value.boolean_value(scope))
+    crate::context_bootstrap::event_private_value(scope, event, key)
+        .is_some_and(|value| value.boolean_value(scope))
 }
 
 pub(crate) fn event_dispatch_status<'s>(
@@ -1865,7 +1883,7 @@ fn normalize_public_event_record<'s>(
     let target_key = v8str(scope, "target");
     let current_target_key = v8str(scope, "currentTarget");
 
-    let event_type_value = event
+    let event_type_value = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, type_key.into())
         .ok_or_else(|| "Failed to execute 'dispatchEvent': event type is required.".to_owned())?;
     if event_type_value.is_null_or_undefined() {
@@ -1876,12 +1894,25 @@ fn normalize_public_event_record<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let target_value = event.get(scope, target_key.into());
+    let target_value =
+        crate::context_bootstrap::event_backing(scope, event).get(scope, target_key.into());
     if target_value.is_none() || target_value.is_some_and(|value| value.is_null_or_undefined()) {
-        let _ = event.set(scope, target_key.into(), default_target);
-        let _ = event.set(scope, v8str(scope, "srcElement").into(), default_target);
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            target_key.into(),
+            default_target,
+        );
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "srcElement").into(),
+            default_target,
+        );
     }
-    let _ = event.set(scope, current_target_key.into(), default_target);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        current_target_key.into(),
+        default_target,
+    );
     // `dispatchEvent()` brand-checks the initialized Event private slot before
     // reaching this function. Its methods and legacy accessors therefore come
     // from the intrinsic Event prototype and must not be shadowed here.
@@ -1895,7 +1926,7 @@ fn event_default_prevented(
     event: v8::Local<'_, v8::Object>,
 ) -> bool {
     let default_prevented_key = v8str(scope, "defaultPrevented");
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, default_prevented_key.into())
         .is_some_and(|value| value.boolean_value(scope))
 }
@@ -1950,7 +1981,7 @@ fn event_target_receiver<'s>(
             .unwrap_or_else(|| v8::undefined(scope).into()),
         EventTargetHandle::Node(_) => {
             let key = v8str(scope, "currentTarget");
-            event
+            crate::context_bootstrap::event_backing(scope, event)
                 .get(scope, key.into())
                 .unwrap_or_else(|| v8::undefined(scope).into())
         }
@@ -1982,7 +2013,11 @@ fn set_event_related_target_for_current_target<'s>(
     };
     let related_target = retarget_event_target(host_ptr, original_related_target, current_target);
     let related_value = event_target_value(scope, host_ptr, related_target)?;
-    let _ = event.set(scope, v8str(scope, "relatedTarget").into(), related_value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "relatedTarget").into(),
+        related_value,
+    );
     Ok(())
 }
 
@@ -1998,7 +2033,11 @@ fn set_event_source_for_current_target<'s>(
     };
     let source = retarget_event_target(host_ptr, original_source_target, current_target);
     let source_value = event_target_value(scope, host_ptr, source)?;
-    let _ = event.set(scope, v8str(scope, "source").into(), source_value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "source").into(),
+        source_value,
+    );
     Ok(())
 }
 
@@ -2088,7 +2127,11 @@ fn set_event_post_dispatch_targets<'s>(
             Some(related_target) => event_target_value(scope, host_ptr, related_target)?,
             None => v8::null(scope).into(),
         };
-        let _ = event.set(scope, v8str(scope, "relatedTarget").into(), related_value);
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "relatedTarget").into(),
+            related_value,
+        );
     }
 
     Ok(())
@@ -2104,7 +2147,11 @@ fn set_event_post_dispatch_source<'s>(
         return Ok(());
     };
     let source_value = event_target_value(scope, host_ptr, source_target)?;
-    let _ = event.set(scope, v8str(scope, "source").into(), source_value);
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "source").into(),
+        source_value,
+    );
     Ok(())
 }
 
@@ -2145,7 +2192,8 @@ fn event_related_target_handle(
     host_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let value = event.get(scope, v8str(scope, "relatedTarget").into())?;
+    let value = crate::context_bootstrap::event_backing(scope, event)
+        .get(scope, v8str(scope, "relatedTarget").into())?;
     if value.is_null_or_undefined() || !value.is_object() {
         return None;
     }
@@ -2165,7 +2213,8 @@ fn event_source_target_handle(
     host_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let value = event.get(scope, v8str(scope, "source").into())?;
+    let value = crate::context_bootstrap::event_backing(scope, event)
+        .get(scope, v8str(scope, "source").into())?;
     if value.is_null_or_undefined() || !value.is_object() {
         return None;
     }
@@ -2341,7 +2390,7 @@ fn event_bool_property(
     let Some(key) = v8_string(scope, key) else {
         return false;
     };
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, key.into())
         .is_some_and(|value| value.boolean_value(scope))
 }

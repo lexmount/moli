@@ -68,7 +68,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
 
     clear_event_dispatch_fields(scope, event);
     owner_scope.defer_restore(scope, previous_owner);
-    !object_bool_property(scope, event, "defaultPrevented").unwrap_or(false)
+    !crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented")
 }
 
 fn idb_event_target_owner_scope<'s>(

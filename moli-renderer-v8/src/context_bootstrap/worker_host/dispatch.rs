@@ -271,7 +271,7 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
             && let Some(returned) = callback_result
             && v8::Local::new(scope, &returned).boolean_value(scope)
         {
-            let _ = event.set(
+            let _ = crate::context_bootstrap::event_backing(scope, event).set(
                 scope,
                 v8str(scope, "defaultPrevented").into(),
                 v8::Boolean::new(scope, true).into(),
@@ -287,7 +287,7 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
 
     clear_event_dispatch_fields(scope, event);
-    let default_prevented = event
+    let default_prevented = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "defaultPrevented").into())
         .is_some_and(|value| value.boolean_value(scope));
     !default_prevented

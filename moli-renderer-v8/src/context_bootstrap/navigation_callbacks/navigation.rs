@@ -1085,7 +1085,7 @@ fn precommit_transition_resolver_from_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    get_private_value(
+    crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT,
@@ -1230,9 +1230,7 @@ fn precommit_commit_fulfilled_callback<'s>(
         proceed: true,
         intercepted: true,
         signal: data.signal,
-        destination: data
-            .event
-            .get(scope, v8str(scope, "destination").into())
+        destination: crate::context_bootstrap::event_attribute(scope, data.event, "destination")
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()),
         redirected_url: None,
         redirected_history: None,

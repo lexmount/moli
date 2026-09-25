@@ -433,7 +433,7 @@ pub(crate) fn align_event_constructor_function_realm_with_constructor<'s>(
     };
     event_constructor.set_name(v8str(scope, "Event"));
     let _ = event_constructor.set(scope, v8str(scope, "prototype").into(), event_prototype);
-    if !event
+    if !crate::context_bootstrap::event_backing(scope, event)
         .define_own_property(
             scope,
             v8str(scope, "constructor").into(),
@@ -442,7 +442,7 @@ pub(crate) fn align_event_constructor_function_realm_with_constructor<'s>(
         )
         .unwrap_or(false)
     {
-        let _ = event.set(
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
             scope,
             v8str(scope, "constructor").into(),
             event_constructor.into(),

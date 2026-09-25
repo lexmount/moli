@@ -29,7 +29,8 @@ fn event_subclass_constructor_callback<'s>(
         return;
     }
 
-    let event = args.this();
+    let wrapper = args.this();
+    let event = new_event_state(scope);
     let Some(event_type) = event_type_argument(scope, &args, kind.constructor_name()) else {
         return;
     };
@@ -177,7 +178,9 @@ fn event_subclass_constructor_callback<'s>(
         EVENT_SUBCLASS_KIND_SLOT,
         v8::Integer::new(scope, kind as i32).into(),
     );
-    rv.set(event.into());
+    if initialize_event_wrapper(scope, wrapper, event).is_some() {
+        rv.set(wrapper.into());
+    }
 }
 
 pub(in crate::context_bootstrap) fn build_event_subclass_template<'s>(

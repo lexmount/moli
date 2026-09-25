@@ -106,13 +106,6 @@ struct HashChangeEventStateDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct PageTransitionEventStateDeclaration {
-    #[webapi(data_property)]
-    persisted: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
 struct NavigateEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     navigation_type: v8::Local<'scope, v8::Value>,
@@ -232,7 +225,7 @@ pub(super) fn mark_navigation_outcome_default_prevented<'s>(
     let Some(event) = outcome.precommit_event else {
         return;
     };
-    let _ = event.define_own_property(
+    let _ = crate::context_bootstrap::event_backing(scope, event).define_own_property(
         scope,
         v8str(scope, "defaultPrevented").into(),
         v8::Boolean::new(scope, true).into(),
@@ -358,7 +351,11 @@ pub(in crate::context_bootstrap) fn navigation_scroll_event_is_active<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     get_private_value(scope, navigation, NAVIGATION_ACTIVE_SCROLL_EVENT_SLOT)
-        .is_some_and(|active| active.strict_equals(event.into()))
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .is_some_and(|active| {
+            let active = event_backing(scope, active);
+            active.strict_equals(event_backing(scope, event).into())
+        })
 }
 
 fn navigation_active_navigate_event<'s>(
@@ -477,7 +474,8 @@ fn navigate_event_private_value<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, event, slot).filter(|value| !value.is_undefined())
+    crate::context_bootstrap::event_private_value(scope, event, slot)
+        .filter(|value| !value.is_undefined())
 }
 
 fn navigate_event_private_bool<'s>(
@@ -497,7 +495,12 @@ fn set_navigate_event_private_bool<'s>(
     slot: &'static str,
     value: bool,
 ) {
-    set_private_value(scope, event, slot, v8::Boolean::new(scope, value).into());
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        slot,
+        v8::Boolean::new(scope, value).into(),
+    );
 }
 
 fn install_precommit_transition_seed<'s>(
@@ -511,19 +514,19 @@ fn install_precommit_transition_seed<'s>(
     let Some(from) = navigation_current_entry(scope, owner) else {
         return;
     };
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,
         navigation.into(),
     );
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_FROM_SLOT,
         from.into(),
     );
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_DESTINATION_SLOT,
@@ -532,7 +535,7 @@ fn install_precommit_transition_seed<'s>(
     let navigation_type = v8_string(scope, navigation_type)
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::String::empty(scope).into());
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT,
@@ -554,8 +557,8 @@ pub(super) fn cancel_active_navigation_event<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
     clear_navigation_active_navigate_event(scope, navigation);
-    if object_bool_property(scope, event, "cancelable").unwrap_or(false) {
-        let _ = event.define_own_property(
+    if crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable") {
+        let _ = crate::context_bootstrap::event_backing(scope, event).define_own_property(
             scope,
             v8str(scope, "defaultPrevented").into(),
             v8::Boolean::new(scope, true).into(),
@@ -563,7 +566,12 @@ pub(super) fn cancel_active_navigation_event<'s>(
         );
     }
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    set_private_value(scope, event, NAVIGATE_EVENT_ABORT_ERROR_SLOT, error);
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_ABORT_ERROR_SLOT,
+        error,
+    );
     if let Some(signal) = signal {
         crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
@@ -577,17 +585,19 @@ pub(super) fn dispatch_popstate_event<'s>(
     child_handle: Option<crate::document_runtime::DomHandle>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let event_state = new_event_state(scope);
+    initialize_event_object(scope, event_state, "popstate", false, false);
+    let _ = PopStateEventStateDeclaration::new(state).initialize(scope, event_state);
+    super::events::define_event_property(
+        scope,
+        event_state,
+        "hasUAVisualTransition",
+        v8::Boolean::new(scope, false).into(),
+    );
+    let _ = web_api_interfaces::initialize(scope, event_state, "PopStateEvent");
+    let Some(event) = new_event_wrapper(scope, event_state) else {
         return;
     };
-    let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "popstate").into()]) else {
-        return;
-    };
-    let _ = PopStateEventStateDeclaration::new(state).initialize(scope, event);
     let runtime = unsafe { &mut *host_ptr };
     if let Some(child_handle) = child_handle {
         runtime.dispatch_child_window_event(scope, child_handle, "popstate", event);
@@ -607,14 +617,13 @@ pub(crate) fn construct_original_hash_change_event<'s>(
     old_url: &str,
     new_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let event_ctor = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let event = event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into()])?;
-    let _ = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
-        .initialize(scope, event);
-    Some(event)
+    let state = new_event_state(scope);
+    initialize_event_object(scope, state, "hashchange", false, false);
+    HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
+        .initialize(scope, state)
+        .ok()?;
+    web_api_interfaces::initialize(scope, state, "HashChangeEvent").ok()?;
+    new_event_wrapper(scope, state)
 }
 
 pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
@@ -641,10 +650,11 @@ pub(crate) fn dispatch_pagehide_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) = construct_original_event(scope, "pagehide") else {
+    let Some(event) =
+        super::events::construct_original_page_transition_event(scope, "pagehide", false)
+    else {
         return;
     };
-    let _ = PageTransitionEventStateDeclaration::new(false).initialize(scope, event);
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "pagehide", event);
 }
 

@@ -15,96 +15,14 @@ const EVENT_INITIALIZED_SLOT: &str = "__moliEventInitialized";
 const EVENT_TRUSTED_PRIVATE_SLOT: &str = "__moliEventTrusted";
 const EVENT_TIMESTAMP_PRIVATE_SLOT: &str = "__moliEventTimeStamp";
 const EVENT_IS_TRUSTED_GETTER_FUNCTION_SLOT: &str = "__moliEventIsTrustedGetterFunction";
-const EVENT_BACKING_SLOT: &str = "__moliEventBacking";
+pub(super) const EVENT_BACKING_SLOT: &str = "__moliEventBacking";
 
-pub(in crate::context_bootstrap) fn event_backing<'s>(
+pub(crate) fn event_backing<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     let event = v8::Local::new(scope, event);
     crate::util::get_private_object(scope, event, EVENT_BACKING_SLOT).unwrap_or(event)
-}
-
-/// A projected Event has its own prototype and expandos, but all its views
-/// observe the same dispatch, cancellation and propagation flags.
-pub(in crate::context_bootstrap) fn bind_event_backing<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    wrapper: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-) {
-    set_private_value(scope, wrapper, EVENT_BACKING_SLOT, event.into());
-    for property in [
-        "type",
-        "target",
-        "srcElement",
-        "currentTarget",
-        "eventPhase",
-        "bubbles",
-        "cancelable",
-        "defaultPrevented",
-        "composed",
-        "info",
-    ] {
-        if property == "info"
-            && event.has_own_property(scope, v8str(scope, property).into()) != Some(true)
-        {
-            continue;
-        }
-        bind_event_attribute(scope, wrapper, property);
-    }
-}
-
-pub(in crate::context_bootstrap) fn bind_event_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    wrapper: v8::Local<'s, v8::Object>,
-    property: &'static str,
-) {
-    let getter = v8::Function::builder(shared_event_attribute_getter)
-        .data(v8str(scope, property).into())
-        .build(scope)
-        .expect("event attribute getter");
-    crate::definitions::define_get_set_property(
-        scope,
-        wrapper,
-        v8str(scope, property).into(),
-        getter.into(),
-        v8::undefined(scope).into(),
-        v8::PropertyAttribute::NONE,
-        "shared Event attribute",
-    )
-    .expect("shared Event attribute");
-}
-
-fn shared_event_attribute_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let wrapper = args.this();
-    let property = args.data().to_rust_string_lossy(scope);
-    let value = shared_event_attribute_value(scope, wrapper, &property);
-    rv.set(value.unwrap_or_else(|| v8::undefined(scope).into()));
-}
-
-fn shared_event_attribute_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    wrapper: v8::Local<'s, v8::Object>,
-    property: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let event = event_backing(scope, wrapper);
-    let key = v8_string(scope, property)?;
-    let value = event.get(scope, key.into())?;
-    if matches!(property, "target" | "srcElement" | "currentTarget")
-        && let Ok(target) = v8::Local::<v8::Object>::try_from(value)
-        && let Some(context) = wrapper.get_creation_context(scope)
-    {
-        return Some(
-            crate::context_bootstrap::shared_event_targets::target_in_realm(scope, target, context)
-                .into(),
-        );
-    }
-    let context = wrapper.get_creation_context(scope)?;
-    super::super::navigation_event_worlds::attribute_in_realm(scope, property, value, context)
 }
 
 #[derive(WebApiObject)]
@@ -194,12 +112,13 @@ pub(in crate::context_bootstrap) fn event_type_argument<'s>(
     )
 }
 
-pub(in crate::context_bootstrap) fn define_event_property(
+pub(crate) fn define_event_property(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
     key: &'static str,
     value: v8::Local<'_, v8::Value>,
 ) {
+    let event = event_backing(scope, event);
     let _ = event.set(scope, v8str(scope, key).into(), value);
 }
 
@@ -231,6 +150,7 @@ pub(in crate::context_bootstrap) fn set_event_initialized(
     event: v8::Local<'_, v8::Object>,
     initialized: bool,
 ) {
+    let event = event_backing(scope, event);
     set_private_value(
         scope,
         event,
@@ -298,16 +218,28 @@ pub(crate) fn event_composed_path_value<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
     let backing = event_backing(scope, event);
-    if !backing.strict_equals(event.into()) {
-        let target = event.get(scope, v8str(scope, "target").into());
-        return if event_is_dispatching(scope, backing) {
-            v8::Array::new_with_elements(scope, &target.into_iter().collect::<Vec<_>>()).into()
-        } else {
-            v8::Array::new(scope, 0).into()
-        };
+    let path = get_private_value(scope, backing, EVENT_COMPOSED_PATH_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok());
+    let context = event.get_creation_context(scope);
+    let mut values = Vec::new();
+    if let Some(path) = path {
+        for index in 0..path.length() {
+            if let Some(value) = path.get_index(scope, index) {
+                let value = if let (Ok(target), Some(context)) =
+                    (v8::Local::<v8::Object>::try_from(value), context)
+                {
+                    crate::context_bootstrap::shared_event_targets::target_in_realm(
+                        scope, target, context,
+                    )
+                    .into()
+                } else {
+                    value
+                };
+                values.push(value);
+            }
+        }
     }
-    get_private_value(scope, event, EVENT_COMPOSED_PATH_SLOT)
-        .unwrap_or_else(|| v8::Array::new(scope, 0).into())
+    v8::Array::new_with_elements(scope, &values).into()
 }
 
 pub(crate) fn set_event_composed_path<'s>(
@@ -399,6 +331,7 @@ pub(crate) fn initialize_event_object<'s>(
     bubbles: bool,
     cancelable: bool,
 ) {
+    let event = event_backing(scope, event);
     initialize_event_declaration(scope, event, event_type, bubbles, cancelable);
 }
 
@@ -432,7 +365,7 @@ fn initialize_event_after_header<'s>(
         .expect("initialized event tail declaration should initialize");
 }
 
-fn define_event_is_trusted_accessor<'s>(
+pub(super) fn define_event_is_trusted_accessor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) {
@@ -488,20 +421,9 @@ fn event_core_attribute_getter<'s>(
         return;
     }
 
-    let backing = event_backing(scope, receiver);
-    if !backing.strict_equals(receiver.into()) {
-        let value = shared_event_attribute_value(scope, receiver, key);
-        rv.set(value.unwrap_or_else(|| v8::undefined(scope).into()));
-        return;
+    if let Some(value) = super::wrappers::event_attribute_in_wrapper(scope, receiver, key) {
+        rv.set(value);
     }
-
-    let key = v8str(scope, key);
-    let value = receiver
-        .get_own_property_descriptor(scope, key.into())
-        .and_then(|descriptor| v8::Local::<v8::Object>::try_from(descriptor).ok())
-        .and_then(|descriptor| descriptor.get(scope, v8str(scope, "value").into()))
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    rv.set(value);
 }
 
 macro_rules! define_event_core_attribute_getter {
@@ -554,7 +476,8 @@ pub(in crate::context_bootstrap) fn event_constructor_callback<'s>(
         return;
     }
 
-    let event = args.this();
+    let wrapper = args.this();
+    let event = new_event_state(scope);
     let Some(event_type) = event_type_argument(scope, &args, "Event") else {
         return;
     };
@@ -568,5 +491,7 @@ pub(in crate::context_bootstrap) fn event_constructor_callback<'s>(
         v8::Boolean::new(scope, composed).into(),
     );
 
-    rv.set(event.into());
+    if initialize_event_wrapper(scope, wrapper, event).is_some() {
+        rv.set(wrapper.into());
+    }
 }

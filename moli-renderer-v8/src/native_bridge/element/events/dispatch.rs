@@ -77,7 +77,7 @@ fn event_default_prevented(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> bool {
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "defaultPrevented").into())
         .is_some_and(|value| value.boolean_value(scope))
 }

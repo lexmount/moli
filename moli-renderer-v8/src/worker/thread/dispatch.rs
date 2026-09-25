@@ -625,7 +625,7 @@ pub(super) fn event_bool_property(
     key: &str,
 ) -> bool {
     let key = v8::String::new(scope, key).unwrap();
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, key.into())
         .is_some_and(|value| value.is_true())
 }
@@ -651,15 +651,27 @@ fn set_event_dispatch_fields<'s>(
     event: v8::Local<'s, v8::Object>,
 ) {
     mark_event_trusted(scope, event);
-    let _ = event.set(scope, v8str(scope, "target").into(), target.into());
-    let _ = event.set(scope, v8str(scope, "srcElement").into(), target.into());
-    let _ = event.set(scope, v8str(scope, "currentTarget").into(), target.into());
-    let _ = event.set(
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "target").into(),
+        target.into(),
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "srcElement").into(),
+        target.into(),
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
+        scope,
+        v8str(scope, "currentTarget").into(),
+        target.into(),
+    );
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "eventPhase").into(),
         v8::Integer::new_from_unsigned(scope, 2).into(),
     );
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         EVENT_DISPATCHING_SLOT,
@@ -668,17 +680,17 @@ fn set_event_dispatch_fields<'s>(
 }
 
 fn clear_event_dispatch_fields(scope: &mut v8::PinScope<'_, '_>, event: v8::Local<'_, v8::Object>) {
-    let _ = event.set(
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "currentTarget").into(),
         v8::null(scope).into(),
     );
-    let _ = event.set(
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "eventPhase").into(),
         v8::Integer::new_from_unsigned(scope, 0).into(),
     );
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         EVENT_DISPATCHING_SLOT,
@@ -692,7 +704,7 @@ fn worker_event_prevent_default_callback(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = args.this();
-    let _ = event.set(
+    let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "defaultPrevented").into(),
         v8::Boolean::new(scope, true).into(),
@@ -1048,7 +1060,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
         ) {
             Ok(returned) => {
                 if v8::Local::new(scope, &returned).is_true() {
-                    let _ = event.set(
+                    let _ = crate::context_bootstrap::event_backing(scope, event).set(
                         scope,
                         v8str(scope, "defaultPrevented").into(),
                         v8::Boolean::new(scope, true).into(),
@@ -2311,7 +2323,7 @@ fn set_service_worker_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_LIFECYCLE_EVENT_ID_SLOT,
@@ -2323,7 +2335,11 @@ fn service_worker_lifecycle_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_LIFECYCLE_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_LIFECYCLE_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2333,7 +2349,7 @@ fn set_service_worker_fetch_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_FETCH_EVENT_ID_SLOT,
@@ -2345,7 +2361,11 @@ fn service_worker_fetch_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_FETCH_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_FETCH_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2355,7 +2375,7 @@ fn set_service_worker_message_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_MESSAGE_EVENT_ID_SLOT,
@@ -2367,7 +2387,11 @@ fn service_worker_message_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_MESSAGE_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_MESSAGE_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2377,7 +2401,7 @@ fn set_service_worker_notification_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_NOTIFICATION_EVENT_ID_SLOT,
@@ -2389,7 +2413,11 @@ fn service_worker_notification_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_NOTIFICATION_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_NOTIFICATION_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2399,7 +2427,7 @@ fn set_service_worker_push_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_PUSH_EVENT_ID_SLOT,
@@ -2411,7 +2439,11 @@ fn service_worker_push_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_PUSH_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_PUSH_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2421,7 +2453,7 @@ fn set_service_worker_sync_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_SYNC_EVENT_ID_SLOT,
@@ -2433,7 +2465,11 @@ fn service_worker_sync_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_SYNC_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_SYNC_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }
@@ -2443,7 +2479,7 @@ fn set_service_worker_periodic_sync_event_id<'s>(
     event: v8::Local<'s, v8::Object>,
     event_id: ServiceWorkerEventId,
 ) {
-    set_private_value(
+    crate::context_bootstrap::set_event_private_value(
         scope,
         event,
         SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT,
@@ -2455,7 +2491,11 @@ fn service_worker_periodic_sync_event_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<ServiceWorkerEventId> {
-    let value = get_private_value(scope, event, SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT)?;
+    let value = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT,
+    )?;
     let id = service_worker_event_id_value(scope, value)?;
     Some(ServiceWorkerEventId::from_u64_for_worker(id))
 }

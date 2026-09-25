@@ -41,9 +41,9 @@ use super::{
     util::{
         context_host_from_global_bridge, context_host_ptr_from_global_bridge,
         context_host_ptr_from_window_object, define_non_enumerable_static_bool_property,
-        get_private_value, object_bool_property, object_number_property,
-        script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
-        set_private_value, throw_type_error, v8_string, v8str,
+        get_private_value, script_base_url_from_continuation_data,
+        script_base_url_from_host_defined_options, set_private_value, throw_type_error, v8_string,
+        v8str,
     },
     webidl,
 };
@@ -382,7 +382,11 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     if let Some(handle) = child_window_target {
         let event_type = event_type.as_deref().unwrap_or_default();
         host.dispatch_child_window_event(scope, handle, event_type, event);
-        rv.set_bool(!object_bool_property(scope, event, "defaultPrevented").unwrap_or(false));
+        rv.set_bool(!crate::context_bootstrap::event_bool_attribute(
+            scope,
+            event,
+            "defaultPrevented",
+        ));
         return;
     }
     let Some(target) = target else {
@@ -396,8 +400,8 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         dispatched_click_activation_target(
             host,
             handle,
-            object_bool_property(scope, event, "bubbles").unwrap_or(false),
-            object_bool_property(scope, event, "composed").unwrap_or(false),
+            crate::context_bootstrap::event_bool_attribute(scope, event, "bubbles"),
+            crate::context_bootstrap::event_bool_attribute(scope, event, "composed"),
         )
     } else {
         None
@@ -431,7 +435,7 @@ fn event_type_string(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<String> {
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "type").into())
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
@@ -1292,10 +1296,14 @@ fn mouse_event_offset_getter(
     event: v8::Local<'_, v8::Object>,
     horizontal: bool,
 ) -> Option<f64> {
-    let client_x = object_number_property(scope, event, "clientX").unwrap_or(0.0);
-    let client_y = object_number_property(scope, event, "clientY").unwrap_or(0.0);
+    let client_x = crate::context_bootstrap::event_attribute(scope, event, "clientX")
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
+    let client_y = crate::context_bootstrap::event_attribute(scope, event, "clientY")
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
     let coordinate = if horizontal { client_x } else { client_y };
-    let Some(target) = event
+    let Some(target) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "target").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {

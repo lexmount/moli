@@ -1,6 +1,6 @@
 use crate::{
     context_bootstrap::events::{initialize_event_object, mark_event_trusted},
-    util::{get_private_value, throw_type_error, v8str},
+    util::{throw_type_error, v8str},
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -98,7 +98,8 @@ fn constructor<'s>(
             return;
         }
     };
-    let event = args.this();
+    let wrapper = args.this();
+    let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "", init.bubbles, init.cancelable);
     let _ = event.set(scope, v8str(scope, "type").into(), event_type.into());
     let _ = event.set(
@@ -109,7 +110,11 @@ fn constructor<'s>(
     MediaQueryListEventState::new(init.media, init.matches)
         .initialize(scope, event)
         .expect("MediaQueryListEvent state should initialize");
-    rv.set(event.into());
+    web_api_interfaces::initialize(scope, event, "MediaQueryListEvent")
+        .expect("MediaQueryListEvent brand");
+    if crate::context_bootstrap::initialize_event_wrapper(scope, wrapper, event).is_some() {
+        rv.set(wrapper.into());
+    }
 }
 
 pub(in crate::context_bootstrap) fn build_media_query_list_event_template<'s>(
@@ -132,12 +137,13 @@ pub(super) fn create_media_query_list_event<'s>(
     matches: bool,
 ) -> v8::Local<'s, v8::Object> {
     let media = v8::String::new(scope, media).expect("media query string");
-    let event = MediaQueryListEventState::new(media, matches)
-        .bind(scope)
-        .expect("MediaQueryListEvent should bind");
+    let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "change", false, false);
+    MediaQueryListEventState::new(media, matches)
+        .initialize(scope, event)
+        .expect("MediaQueryListEvent state");
     mark_event_trusted(scope, event);
-    event
+    crate::context_bootstrap::new_event_wrapper(scope, event).expect("MediaQueryListEvent wrapper")
 }
 
 fn media_getter<'s>(
@@ -145,7 +151,9 @@ fn media_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(value) = get_private_value(scope, args.this(), MEDIA_SLOT) {
+    if let Some(value) =
+        crate::context_bootstrap::event_private_value(scope, args.this(), MEDIA_SLOT)
+    {
         rv.set(value);
     }
 }
@@ -155,7 +163,9 @@ fn matches_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(value) = get_private_value(scope, args.this(), MATCHES_SLOT) {
+    if let Some(value) =
+        crate::context_bootstrap::event_private_value(scope, args.this(), MATCHES_SLOT)
+    {
         rv.set(value);
     }
 }

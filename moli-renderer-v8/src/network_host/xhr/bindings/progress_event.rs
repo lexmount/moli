@@ -1,5 +1,4 @@
 use super::*;
-use crate::util::get_private_value;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -72,7 +71,8 @@ pub(crate) fn progress_event_constructor_callback<'s>(
         );
         return;
     }
-    let obj = args.this();
+    let wrapper = args.this();
+    let obj = crate::context_bootstrap::new_event_state(scope);
     let Some(parsed) = webidl::parse_args::<ProgressEventConstructorArgs>(scope, &args) else {
         return;
     };
@@ -90,7 +90,10 @@ pub(crate) fn progress_event_constructor_callback<'s>(
     )
     .initialize(scope, obj)
     .expect("ProgressEvent state declaration should initialize");
-    rv.set(obj.into());
+    web_api_interfaces::initialize(scope, obj, "ProgressEvent").expect("ProgressEvent brand");
+    if crate::context_bootstrap::initialize_event_wrapper(scope, wrapper, obj).is_some() {
+        rv.set(wrapper.into());
+    }
 }
 
 fn progress_event_slot_getter<'s>(
@@ -99,8 +102,8 @@ fn progress_event_slot_getter<'s>(
     slot: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value =
-        get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into());
+    let value = crate::context_bootstrap::event_private_value(scope, receiver, slot)
+        .unwrap_or_else(|| v8::undefined(scope).into());
     if value.is_undefined() {
         throw_type_error(scope, "Illegal invocation");
         return;

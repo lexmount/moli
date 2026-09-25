@@ -237,7 +237,69 @@ async def run_history_worlds_group(
         await evaluate("FormData.prototype.set.call(probeData, 'value', 'updated')")
         assert_equal(await evaluate("probeFormData.get('value')", isolated),
                      "updated", "FormData views remain live")
+        event_fields = []
+        for source, receiver in [(isolated, None), (None, isolated)]:
+            await evaluate("""
+                globalThis.eventFieldObservations = [];
+                navigation.addEventListener('backing-fields-probe', event => {
+                    eventFieldObservations.push([event instanceof CustomEvent,
+                        event.detail, event.type, event.target === navigation]);
+                    event.preventDefault();
+                }, {once: true});
+                navigation.addEventListener('backing-toggle-probe', event => {
+                    eventFieldObservations.push([event instanceof ToggleEvent,
+                        event.oldState, event.newState, event.source === null,
+                        event.target === navigation, event.expando === undefined]);
+                }, {once: true});
+            """, receiver)
+            source_facts = await evaluate("""
+                (() => {
+                    let getterCalls = 0;
+                    const original = new CustomEvent('backing-fields-probe', {detail: 7, cancelable: true});
+                    Object.defineProperty(original, 'detail', {
+                        get() { getterCalls++; return 99; }, configurable: true,
+                    });
+                    let sameObject = false;
+                    navigation.addEventListener('backing-fields-probe', event => {
+                        sameObject = event === original;
+                    }, {once: true});
+                    const dispatched = navigation.dispatchEvent(original);
+                    const toggle = new ToggleEvent('backing-toggle-probe', {oldState: 'closed', newState: 'open'});
+                    toggle.expando = 'source';
+                    return [dispatched, sameObject, getterCalls, original.defaultPrevented,
+                        navigation.dispatchEvent(toggle)];
+                })()
+            """, source)
+            observed = await evaluate("eventFieldObservations", receiver)
+            assert_equal(source_facts, [False, True, 0, True, True],
+                         "internal fields preserve source identity and do not invoke shadow getters")
+            assert_equal(observed, [[True, 7, "backing-fields-probe", True],
+                                    [True, "closed", "open", True, True, True]],
+                         "CustomEvent and ToggleEvent use internal fields in the receiving world")
+            event_fields.append({"source": source_facts, "receiver": observed})
+
+        dispatch_path = await evaluate("""
+            (() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const shadow = host.attachShadow({mode: 'open'});
+                const one = document.createElement('button');
+                const two = document.createElement('button');
+                shadow.append(one, two);
+                let calls = 0, getterCalls = 0;
+                host.addEventListener('path-probe', () => calls++);
+                const event = new Event('path-probe', {bubbles: true, composed: true});
+                Object.defineProperty(event, 'relatedTarget', {get() { getterCalls++; return two; }});
+                one.dispatchEvent(event);
+                one.dispatchEvent(new FocusEvent('path-probe', {bubbles: true, composed: true, relatedTarget: two}));
+                host.remove();
+                return [calls, getterCalls];
+            })()
+        """)
+        assert_equal(dispatch_path, [1, 0], "dispatch uses internal relatedTarget, not author expandos")
+
         record(results, "raw_cdp_history_world_boundaries", {
+            "event_fields": event_fields, "dispatch_path": dispatch_path,
             "wrappers": wrappers, "changes": changes, "cancellation": cancellation,
             "errors": errors, "state": state,
             "signal_views": signal_views, "original_identity": original_identity,
