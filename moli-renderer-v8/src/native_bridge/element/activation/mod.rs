@@ -15,7 +15,9 @@ pub(crate) use text_input::perform_text_input;
 #[cfg(feature = "devtools")]
 pub(crate) use clipboard::perform_clipboard_key_default_action;
 
-pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
+pub(in crate::native_bridge) use click::{
+    input_show_picker_callback, node_click_callback, select_show_picker_callback,
+};
 #[cfg(feature = "ace-protocol")]
 pub(crate) use default_action::activate_handle_via_click_with_detail_and_modifiers;
 pub(super) use default_action::dispatch_click_event;
