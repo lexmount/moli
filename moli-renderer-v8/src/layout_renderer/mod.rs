@@ -105,7 +105,13 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             .dom()
             .document_element_handle_for_document(document)
         else {
-            return Ok(None);
+            return Ok(Some(moli_layout::EmbeddedFrameSnapshot::new(
+                moli_layout::FrozenLayoutTree::empty_viewport(document, viewport),
+                self.capture_paint.then(|| {
+                    moli_layout::PaintSnapshot::new(viewport, moli_layout::PaintColor::TRANSPARENT)
+                }),
+                Vec::new(),
+            )));
         };
         let mut services = self
             .embedded_document_services

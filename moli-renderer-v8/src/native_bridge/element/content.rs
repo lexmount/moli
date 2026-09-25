@@ -13,7 +13,7 @@ use super::super::{
     JsContextHost, document::set_detached_text_replacement_value,
     node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
-use super::geometry::observable_client_rects;
+use super::geometry::read_client_rects;
 use super::{
     html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
     property_string_value,
@@ -835,12 +835,7 @@ fn node_inner_text(
         && rendered_state
             .target_style()
             .is_some_and(|style| style.display != ComputedDisplayKind::Contents)
-        && observable_client_rects(
-            runtime,
-            handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
-        .is_empty()
+        && read_client_rects(runtime, handle)?.is_empty()
     {
         return Ok(node.text_content(runtime.dom_host().dom()));
     }
