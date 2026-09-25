@@ -3154,3 +3154,17 @@ async fn lightweight_popup_external_script_redirect_final_url_obeys_csp() {
         format!("{final_script_url}|script-src-elem|enforce|true||load:true")
     );
 }
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_inherits_sandbox() {
+    assert_sandbox_child_hyperlink_popup_origin("allow-scripts allow-popups", false).await;
+}
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_escapes_when_allowed() {
+    assert_sandbox_child_hyperlink_popup_origin(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+        true,
+    )
+    .await;
+}
