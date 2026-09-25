@@ -2254,6 +2254,7 @@ mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;
 mod hyperlink_null_url_protocol;
+mod iframe_reinsertion;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
