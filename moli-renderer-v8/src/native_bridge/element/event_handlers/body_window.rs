@@ -110,3 +110,53 @@ fn compile_body_onmessageerror_attribute<'s>(
         &[],
     )
 }
+
+/// Only attributes accepted by this parser merge can invalidate an IDL handler.
+pub(crate) struct ParserAddedBodyWindowHandlers {
+    handle: crate::document_runtime::DomHandle,
+    names: Vec<&'static str>,
+}
+
+impl ParserAddedBodyWindowHandlers {
+    pub(crate) fn capture(
+        dom_host: &crate::dom::native::DomHost,
+        handle: crate::document_runtime::DomHandle,
+        attrs: &[crate::dom::native::Attribute],
+    ) -> Option<Self> {
+        if !dom_host.node(handle).is_some_and(|node| {
+            node.is_html_element_named("body") || node.is_html_element_named("frameset")
+        }) {
+            return None;
+        }
+        let names = crate::context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES
+            .iter()
+            .copied()
+            .filter(|name| {
+                name.strip_prefix("on")
+                    .is_some_and(super::body_or_frameset_reflects_window_event_type)
+            })
+            .filter(|name| {
+                dom_host.get_attribute(handle, name).is_none()
+                    && attrs
+                        .iter()
+                        .any(|attr| attr.namespace().is_empty() && attr.local_name() == *name)
+            })
+            .collect::<Vec<_>>();
+        (!names.is_empty()).then_some(Self { handle, names })
+    }
+
+    pub(crate) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut crate::native_bridge::PageScriptHost,
+    ) {
+        for name in self.names {
+            super::invalidate_event_handler_content_attribute(
+                scope,
+                runtime_ptr,
+                self.handle,
+                name,
+            );
+        }
+    }
+}
