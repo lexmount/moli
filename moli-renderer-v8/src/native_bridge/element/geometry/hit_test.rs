@@ -1,6 +1,7 @@
 use moli_layout::{
     FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit, LayoutPaintedSurfaceHit,
-    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D, LayoutViewport,
+    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D,
+    LayoutViewport,
 };
 
 #[cfg(test)]
@@ -114,11 +115,9 @@ pub(crate) fn observable_scrollbar_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, true).map(|hit| {
-        match hit.control {
-            Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
-            Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
-        }
+    input_surface_hit_test(runtime, document, point, false, true).map(|hit| match hit.control {
+        Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
+        Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
     })
 }
 
@@ -165,13 +164,7 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    let hit = input_surface_hit_test(
-        runtime,
-        document,
-        point,
-        ignore_pointer_events_none,
-        false,
-    )?;
+    let hit = input_surface_hit_test(runtime, document, point, ignore_pointer_events_none, false)?;
     Ok(hit.document_or_element().map(|input| input.handle))
 }
 
@@ -322,7 +315,8 @@ fn input_surface_hit_test_in_tree(
         .dom_host()
         .dom()
         .document_element_handle_for_document(child_document)
-        != Some(child_tree.source_root())
+        .unwrap_or(child_document)
+        != child_tree.source_root()
     {
         return Err(LayoutError::NoLayoutSnapshot);
     }
