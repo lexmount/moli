@@ -2342,6 +2342,7 @@ mod import_meta;
 mod indexed_db;
 mod indexed_db_gc;
 mod inspector_unwrap;
+mod javascript_url_origin;
 mod joint_history;
 mod lazy_storage;
 

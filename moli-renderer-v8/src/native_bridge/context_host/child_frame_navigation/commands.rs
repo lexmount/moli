@@ -13,6 +13,7 @@ impl JsContextHost {
         request: ChildBrowsingContextNavigationRequest,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         mutation: NavigationHistoryMutation,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         let Some(entry) = self.child_browsing_contexts.get(&handle) else {
             return false;
@@ -22,6 +23,7 @@ impl JsContextHost {
                 handle,
                 request.url.as_str(),
                 None,
+                initiator,
             );
         }
         let entry_seed = entry_seed.unwrap_or_else(|| {
@@ -63,6 +65,7 @@ impl JsContextHost {
                 ChildBrowsingContextBootstrap::Request(request),
                 None,
                 false,
+                None,
             )
             .is_none()
         {
@@ -97,7 +100,11 @@ impl JsContextHost {
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        self.queue_child_browsing_context_navigation_to_url(handle, &url, None)
+        let context = scope
+            .get_incumbent_context()
+            .unwrap_or_else(|| scope.get_current_context());
+        let initiator = self.window_dispatch_scope_for_context(scope, context);
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator)
     }
 
     pub(crate) fn navigate_child_browsing_context_with_request(
@@ -126,6 +133,7 @@ impl JsContextHost {
         handle: DomHandle,
         resolved_url: &str,
         replace_current: bool,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -140,7 +148,7 @@ impl JsContextHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
         }
-        self.queue_child_browsing_context_navigation_to_url(handle, &url, None)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator)
     }
 
     pub(crate) fn queue_child_browsing_context_navigation_without_seed_update(
@@ -148,6 +156,7 @@ impl JsContextHost {
         handle: DomHandle,
         resolved_url: &str,
         initiator_url: Option<Url>,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -155,7 +164,7 @@ impl JsContextHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url, initiator)
     }
 
     pub(crate) fn queue_deferred_child_browsing_context_navigation_from_entry_seed(
@@ -184,7 +193,13 @@ impl JsContextHost {
             entry.replace_navigation_entry_seed(entry_seed);
         }
         if self
-            .set_child_browsing_context_pending_navigation(handle, bootstrap, initiator_url, false)
+            .set_child_browsing_context_pending_navigation(
+                handle,
+                bootstrap,
+                initiator_url,
+                false,
+                None,
+            )
             .is_none()
         {
             return false;

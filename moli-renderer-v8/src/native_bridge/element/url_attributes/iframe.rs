@@ -27,6 +27,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     // Writing the same src still starts a navigation, including from the
     // child Window's or owner element's load callback.
     let navigation_target = iframe_navigation_target(runtime, handle);
+    let initiator = runtime.owner_dispatch_scope_for_node(handle);
     if let Some(previous_seed_snapshot) = previous_seed_snapshot
         && !previous_seed_snapshot.pending_attribute_bootstrap_commit
     {
@@ -44,6 +45,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
             handle,
             &navigation_target,
             replace_current,
+            initiator,
         ) {
             return;
         }
@@ -53,6 +55,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         handle,
         &navigation_target,
         true,
+        initiator,
     ) {
         return;
     }
