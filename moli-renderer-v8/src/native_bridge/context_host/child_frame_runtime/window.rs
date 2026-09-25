@@ -1311,6 +1311,29 @@ impl JsContextHost {
             .set_browsing_context_opener(scope, handle, endpoint, opener);
     }
 
+    pub(crate) fn set_top_window_opener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        endpoint: PendingWindowMessageEndpoint,
+        opener: v8::Local<'_, v8::Object>,
+    ) {
+        self.top_window_opener = Some((endpoint, v8::Global::new(scope, opener)));
+    }
+
+    pub(crate) fn top_window_opener<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let (endpoint, opener) = self.top_window_opener.as_ref()?;
+        let opener = v8::Local::new(scope, opener);
+        self.window_opener_endpoint_is_live(scope, *endpoint, opener)
+            .then_some(opener)
+    }
+
+    pub(crate) fn clear_top_window_opener(&mut self) {
+        self.top_window_opener = None;
+    }
+
     pub(crate) fn clear_child_browsing_context_opener(&mut self, handle: DomHandle) {
         self.child_window_proxy_records
             .clear_browsing_context_opener(handle);
