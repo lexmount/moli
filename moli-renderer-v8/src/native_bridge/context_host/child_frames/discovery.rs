@@ -225,7 +225,9 @@ impl JsContextHost {
             // Blink also defaults an unclassified plug-in element URL to a frame.
             return true;
         };
-        if moli_web_mime::is_image_mime(&mime) {
+        // SVG is an XML document when embedded by object/embed, even though
+        // its MIME type is also in the image family.
+        if moli_web_mime::is_image_mime(&mime) && !moli_web_mime::is_svg_image_mime(&mime) {
             return false;
         }
         moli_web_mime::is_html_document_mime(&mime)

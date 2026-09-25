@@ -5749,6 +5749,7 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
   const append = (tag, id, attribute, value, type = "") => {
     const element = document.createElement(tag);
     element.id = id;
+    if (id === "svg-embed") element.name = "svg_child";
     if (type) element.type = type;
     element[attribute] = value;
     root.appendChild(element);
@@ -5757,6 +5758,9 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
   append("frame", "accepted-frame", "src", "/child.html?frame");
   append("embed", "accepted-embed", "src", "/child.html?embed");
   append("object", "accepted-object", "data", "/child.html?object");
+  append("embed", "svg-embed", "src", "/graphic.svg", "image/svg+xml");
+  append("embed", "inferred-svg-embed", "src", "/graphic.svg");
+  append("object", "svg-object", "data", "/graphic.svg", "image/svg+xml");
   append("embed", "image-embed", "src", "/image.png");
   append("object", "image-object", "data", "/image.png", "image/png");
   append("object", "plugin-object", "data", "/child.html", "application/x-test-plugin");
@@ -5784,12 +5788,15 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
     );
 
     let host = vm._context_host.borrow();
-    assert_eq!(host.child_browsing_context_count(), 4);
+    assert_eq!(host.child_browsing_context_count(), 7);
     for id in [
         "accepted-iframe",
         "accepted-frame",
         "accepted-embed",
         "accepted-object",
+        "svg-embed",
+        "inferred-svg-embed",
+        "svg-object",
     ] {
         let handle = host
             .dom_host()
@@ -5826,6 +5833,22 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
         vm.eval(
             r#"
 (() => {
+  const embed = document.getElementById("svg-embed");
+  return [
+    window.length,
+    window.svg_child.frameElement === embed
+  ].join("|");
+})()
+"#,
+        )
+        .expect("SVG embedded document should expose a named child window"),
+        "7|true"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
   const object = document.getElementById("accepted-object");
   const contentDocument = object.contentDocument;
   const contentWindow = object.contentWindow;
@@ -5856,7 +5879,7 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
     );
     assert_eq!(
         vm._context_host.borrow().child_browsing_context_count(),
-        2,
+        5,
         "switching accepted embedded content to image content must retire both child contexts"
     );
 
@@ -5875,7 +5898,7 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
     );
     assert_eq!(
         vm._context_host.borrow().child_browsing_context_count(),
-        4,
+        7,
         "switching back to document content must create fresh child contexts"
     );
 }
