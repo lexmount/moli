@@ -27,7 +27,8 @@ use moli_core::page::{
     RendererDocumentSourcedTopLevelLocationNavigation, RendererLayoutMetrics,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
-    RendererScreenshotRegion, RendererSetDocumentContentResult, RendererVisualStateToken,
+    RendererScreenshotRegion, RendererSetDocumentContentResult, RendererVisionDeficiency,
+    RendererVisualStateToken,
 };
 use moli_core::{RendererDocumentTitleChanged, RendererRuntimeCommandCausalIdentity};
 use serde::Deserialize;
@@ -6538,6 +6539,7 @@ fn devtools_target_info_for_target_id(
 fn renderer_screenshot_request(
     command: &DevToolsCaptureScreenshotCommand,
     base_background_color: [u8; 4],
+    vision_deficiency: RendererVisionDeficiency,
 ) -> Result<RendererCaptureScreenshotRequest, DevToolsError> {
     let format = match command.format.as_deref() {
         None | Some("png") => RendererScreenshotFormat::Png,
@@ -6573,6 +6575,7 @@ fn renderer_screenshot_request(
     Ok(RendererCaptureScreenshotRequest {
         purpose: RendererScreenshotPurpose::Screenshot,
         base_background_color,
+        vision_deficiency,
         format,
         quality: command.quality.unwrap_or(80),
         region,
@@ -6601,8 +6604,11 @@ async fn execute_devtools_capture_screenshot_command(
             return Err(devtools_capture_screenshot_error(&command));
         }
         let owner = page_command_owner(conn, &command.context)?;
-        let request =
-            renderer_screenshot_request(&command, conn.default_background_color_for_owner(&owner))?;
+        let request = renderer_screenshot_request(
+            &command,
+            conn.default_background_color_for_owner(&owner),
+            conn.vision_deficiency_for_owner(&owner),
+        )?;
         let capture_error =
             |message| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
         let page = conn
@@ -6980,12 +6986,15 @@ fn start_devtools_capture_screenshot_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let request = match renderer_screenshot_request(&command, base_background_color) {
-        Ok(request) => request,
-        Err(error) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
-        }
-    };
+    let request =
+        match renderer_screenshot_request(&command, base_background_color, vision_deficiency) {
+            Ok(request) => request,
+            Err(error) => {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+                    error,
+                ));
+            }
+        };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,

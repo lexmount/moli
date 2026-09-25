@@ -260,6 +260,7 @@ async fn inspector_domain_state_survives_navigation_and_cleanup_without_document
 async fn scroll_gesture_uses_hit_target_and_honors_wheel_cancellation() {
     let mut ctx = page().await;
     evaluate(&mut ctx,r#"document.body.innerHTML='<div id="scroller" style="width:80px;height:80px;overflow:scroll"><div style="width:500px;height:500px"></div></div>';window.events=[];scroller.addEventListener('wheel',e=>events.push([e.deltaX,e.deltaY,e.isTrusted]));undefined"#).await;
+    let _ = screenshot(&mut ctx).await;
     command(
         &mut ctx,
         "Input.synthesizeScrollGesture",
