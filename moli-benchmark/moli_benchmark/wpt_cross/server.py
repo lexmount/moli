@@ -83,6 +83,7 @@ MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
 PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
 XHR_DOCUMENT_FIXTURES = {
@@ -1681,6 +1682,8 @@ def _make_handler(
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
                 if path == COMMON_ECHO_PATH:
                     return self._serve_common_echo_resource
+                if path == IFRAME_STASH_PATH:
+                    return self._serve_iframe_stash_resource
                 if path == PRELOAD_COUNT_PATH:
                     return self._serve_preload_count_resource
                 if path == FETCH_EMPTY_LOCATION_PATH:
@@ -1710,6 +1713,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_preload_count_resource():
@@ -1750,6 +1755,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_preload_count_resource():
@@ -1831,6 +1838,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_preload_count_resource():
@@ -1880,6 +1889,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_preload_count_resource():
@@ -2069,6 +2080,34 @@ def _make_handler(
             )
             return True
 
+        def _serve_iframe_stash_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != IFRAME_STASH_PATH:
+                return False
+            # Only POST reads the body. Other methods take the result without
+            # waiting for an unused upload, including HEAD and custom methods.
+            self.close_connection = True
+            # wptserve defaults the stash namespace to the request URL path.
+            stash_path = parsed.path
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                key = params["id"][0]
+                if self.command == "POST":
+                    # wptserve's request.body is bounded by Content-Length,
+                    # even when the request also has Transfer-Encoding.
+                    value = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if value is None:
+                        return True
+                    fetch_stash.put(key, value, path=stash_path)
+                    body = b""
+                else:
+                    body = fetch_stash.take(key, path=stash_path)
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(IFRAME_STASH_PATH, parsed.query, body)
+            return True
+
         def _serve_common_echo_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != COMMON_ECHO_PATH:
@@ -2081,9 +2120,25 @@ def _make_handler(
                 # wptserve's Request.GET preserves percent-decoded bytes and
                 # MultiDict.first selects the first value, including an empty one.
                 body = params["content"][0].encode("latin-1")
-                headers = [("Content-Type", "text/html"), ("X-XSS-Protection", "0")]
-                status, delay, auto_content_length = 200, 0.0, True
-                for name, args in parse_pipe_commands(parsed.query):
+            except KeyError:
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(
+                COMMON_ECHO_PATH, parsed.query, body,
+                headers=[("Content-Type", "text/html"), ("X-XSS-Protection", "0")],
+            )
+            return True
+
+        def _send_python_handler_response(
+            self, path: str, query: str, body: bytes | None,
+            *, headers: list[tuple[str, str]] | None = None,
+        ) -> None:
+            # FunctionHandler only applies pipes when main() returns a value.
+            # In particular, an empty stash (None) differs from stored b"".
+            headers = list(headers or [])
+            status, delay, auto_content_length = 200, 0.0, body is not None
+            try:
+                for name, args in parse_pipe_commands(query) if body is not None else ():
                     if name == "header":
                         header_name, value = args[:2]
                         value = value.replace("\r", " ").replace("\n", " ")
@@ -2096,7 +2151,7 @@ def _make_handler(
                         status = int(args[0])
                     elif name == "sub":
                         body = self._substitute_response_template(
-                            body, COMMON_ECHO_PATH, parsed.query,
+                            body, path, query,
                             escape_type=args[0] if args else "html",
                         )
                     elif name == "trickle":
@@ -2111,18 +2166,17 @@ def _make_handler(
                         match = _TRICKLE_DELAY_RE.fullmatch(args[0])
                         if match is not None:
                             delay = max(delay, float(match.group(1)))
-            except (KeyError, WptPipeError):
+            except WptPipeError:
                 self.send_error(500)
-                return True
+                return
             if delay:
                 time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
             self._send_bytes(
-                None, body, emit_body=self.command != "HEAD",
+                None, body if body is not None else b"", emit_body=self.command != "HEAD",
                 extra_headers=[*headers, ("Connection", "close")],
                 status_code=status, cache_control=None,
                 auto_content_length=auto_content_length,
             )
-            return True
 
         def _serve(self, *, emit_body: bool) -> None:
             try:
@@ -2131,6 +2185,8 @@ def _make_handler(
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_preload_count_resource():
