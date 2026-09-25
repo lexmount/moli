@@ -300,7 +300,7 @@ impl PageScriptHost {
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
     ) {
-        self.cancel_planned_form_navigation_to(OwnerDispatchScope::Top);
+        self.cancel_planned_form_navigation_for_url(OwnerDispatchScope::Top, Some(&url));
         self.clear_pending_top_level_navigation();
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
         let reserved_service_worker_client =
