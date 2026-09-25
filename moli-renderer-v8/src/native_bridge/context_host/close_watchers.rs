@@ -165,6 +165,16 @@ impl JsContextHost {
         self.window_user_activation_state(source).0
     }
 
+    pub(crate) fn consume_window_user_activation(&mut self, source: OwnerDispatchScope) {
+        for target in self.close_watcher_scopes_in_tree(source) {
+            if let Some(owner) = self.current_window_execution_context_owner(target)
+                && let Some(manager) = self.close_watcher_managers.get(&owner)
+            {
+                manager.user_activation.consume();
+            }
+        }
+    }
+
     pub(crate) fn window_user_activation_state(&self, source: OwnerDispatchScope) -> (bool, bool) {
         self.current_window_execution_context_owner(source)
             .and_then(|owner| self.close_watcher_managers.get(&owner))

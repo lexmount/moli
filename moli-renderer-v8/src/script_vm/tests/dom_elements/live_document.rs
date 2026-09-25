@@ -67,6 +67,88 @@ fn input_show_picker_enforces_brand_without_rejecting_inherited_child_origin() {
 }
 
 #[test]
+fn select_show_picker_checks_receiver_state_and_consumes_activation() {
+    let mut vm = new_storage_test_vm("https://select-show-picker.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  if (!document.documentElement) document.appendChild(document.createElement('html'));
+  if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+  globalThis.picker = document.createElement('select');
+  document.body.append(picker);
+  globalThis.pickerError = callback => {
+    try { callback(); return 'ok'; } catch (error) { return error.name; }
+  };
+  const disabled = document.createElement('select');
+  disabled.disabled = true;
+  document.body.append(disabled);
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+  const fieldsetSelect = document.createElement('select');
+  fieldset.append(fieldsetSelect);
+  document.body.append(fieldset);
+  return JSON.stringify({
+    metadata: HTMLSelectElement.prototype.showPicker.length === 0,
+    disabled: pickerError(() => disabled.showPicker()),
+    disabledFieldset: pickerError(() => fieldsetSelect.showPicker()),
+    noActivation: pickerError(() => picker.showPicker()),
+    wrongElement: pickerError(() => HTMLSelectElement.prototype.showPicker.call(document.body)),
+    authorProxy: pickerError(() => HTMLSelectElement.prototype.showPicker.call(new Proxy(picker, {})))
+  });
+})()
+"#,
+        )
+        .unwrap(),
+        r#"{"metadata":true,"disabled":"InvalidStateError","disabledFieldset":"InvalidStateError","noActivation":"NotAllowedError","wrongElement":"TypeError","authorProxy":"TypeError"}"#
+    );
+
+    vm._context_host
+        .borrow_mut()
+        .notify_close_watcher_user_activation(crate::native_bridge::OwnerDispatchScope::Top);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  picker.style.display = 'none';
+  const hidden = pickerError(() => picker.showPicker());
+  const stillActive = navigator.userActivation.isActive;
+  picker.style.display = '';
+  const shown = pickerError(() => picker.showPicker());
+  const consumed = !navigator.userActivation.isActive && navigator.userActivation.hasBeenActive;
+  return JSON.stringify({hidden, stillActive, shown, consumed,
+    secondCall: pickerError(() => picker.showPicker())});
+})()
+"#,
+        )
+        .unwrap(),
+        r#"{"hidden":"NotSupportedError","stillActive":true,"shown":"ok","consumed":true,"secondCall":"NotAllowedError"}"#
+    );
+
+    vm._context_host
+        .borrow_mut()
+        .notify_close_watcher_user_activation(crate::native_bridge::OwnerDispatchScope::Top);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const container = document.createElement('div');
+  container.style.contentVisibility = 'hidden';
+  picker.replaceWith(container);
+  container.append(picker);
+  const hidden = pickerError(() => picker.showPicker());
+  const stillActive = navigator.userActivation.isActive;
+  container.style.contentVisibility = 'visible';
+  return JSON.stringify({hidden, stillActive, shown: pickerError(() => picker.showPicker())});
+})()
+"#,
+        )
+        .unwrap(),
+        r#"{"hidden":"NotSupportedError","stillActive":true,"shown":"ok"}"#
+    );
+}
+
+#[test]
 fn document_visibility_and_default_view_follow_receiver_across_realms() {
     let mut vm = new_storage_test_vm("https://document-visibility-realms.test/");
 
@@ -3877,7 +3959,8 @@ fn specialized_element_methods_live_on_owner_prototypes() {
                 ["add", 1],
                 ["item", 1],
                 ["namedItem", 1],
-                ["remove", 0]
+                ["remove", 0],
+                ["showPicker", 0]
               ]) {
                 method(HTMLSelectElement.prototype, name, length);
               }
@@ -3952,7 +4035,7 @@ fn specialized_element_methods_live_on_owner_prototypes() {
                 [textarea, ["setSelectionRange", "setRangeText", "select", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
                 [meter, ["labels"]],
                 [progress, ["labels"]],
-                [select, ["add", "item", "namedItem", "remove", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
+                [select, ["add", "item", "namedItem", "remove", "showPicker", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
                 [tbody, ["insertRow", "deleteRow"]],
                 [row, ["insertCell", "deleteCell"]],
                 [image, ["decode"]],

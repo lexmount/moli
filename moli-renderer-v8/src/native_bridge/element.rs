@@ -142,7 +142,9 @@ pub(crate) use activation::{
     select_contenteditable_contents,
 };
 pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
-pub(super) use activation::{input_show_picker_callback, node_click_callback};
+pub(super) use activation::{
+    input_show_picker_callback, node_click_callback, select_show_picker_callback,
+};
 pub(super) use anchors::{
     anchor_text_getter_function, anchor_text_setter_function, anchor_to_string_callback,
     area_to_string_callback,
@@ -6182,6 +6184,8 @@ struct HtmlSelectElementPrototypeMethodsDeclaration {
     named_item: (),
     #[webapi(method, length = 0, callback = select_remove_callback)]
     remove: (),
+    #[webapi(method, length = 0, callback = select_show_picker_callback)]
+    show_picker: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
