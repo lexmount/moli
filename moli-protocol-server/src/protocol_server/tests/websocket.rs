@@ -2727,6 +2727,130 @@ async fn websocket_cdp_replacement_retires_hanging_precommit_navigation() {
 }
 
 #[tokio::test]
+async fn websocket_cdp_renderer_navigation_replaces_pending_response_without_client_commands() {
+    let hanging_request_received = Arc::new(tokio::sync::Notify::new());
+    let request_received_for_route = Arc::clone(&hanging_request_received);
+    let fixture_app = Router::new()
+        .route(
+            "/source",
+            get(|| async { axum::response::Html("<!doctype html><title>source</title>") }),
+        )
+        .route(
+            "/hang",
+            get(move || {
+                let received = Arc::clone(&request_received_for_route);
+                async move {
+                    received.notify_one();
+                    std::future::pending::<()>().await;
+                    axum::response::Html("unreachable")
+                }
+            }),
+        )
+        .route(
+            "/ready",
+            get(move || {
+                let received = Arc::clone(&hanging_request_received);
+                async move {
+                    received.notified().await;
+                    "ready"
+                }
+            }),
+        )
+        .route(
+            "/replacement",
+            get(|| async { axum::response::Html("<!doctype html><title>replacement</title>") }),
+        );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "renderer-precommit-replacement");
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let _ = send_cdp_command(
+        &mut socket,
+        4,
+        "Page.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
+    let source_url = format!("http://{fixture_addr}/source");
+    let replacement_url = format!("http://{fixture_addr}/replacement");
+    cdp_navigate_and_wait_for_load(&mut socket, 5, &session.session_id, &source_url).await;
+
+    // The response to /ready proves the first navigation reached the server.
+    // Both navigations run outside the Runtime command, and no further client
+    // command may be needed to publish or execute the replacement action.
+    let mut messages = send_cdp_command(
+        &mut socket,
+        6,
+        "Runtime.evaluate",
+        Some(&session.session_id),
+        json!({
+            "expression": r#"
+                setTimeout(async () => {
+                    location.href = '/hang';
+                    await fetch('/ready');
+                    console.log('replacing pending navigation');
+                    location.href = '/replacement';
+                }, 0);
+                'scheduled'
+            "#,
+            "returnByValue": true
+        }),
+    )
+    .await;
+    timeout(Duration::from_secs(3), async {
+        while !messages.iter().any(|message| {
+            message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
+        }) {
+            messages.push(recv_ws_json(&mut socket).await);
+        }
+    })
+    .await
+    .expect("replacement must load while the first response is still pending");
+    let committed_urls = messages
+        .iter()
+        .filter(|message| {
+            message["sessionId"] == session.session_id && message["method"] == "Page.frameNavigated"
+        })
+        .map(|message| message["params"]["frame"]["url"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(committed_urls, [replacement_url.as_str()]);
+    let history = send_cdp_command(
+        &mut socket,
+        7,
+        "Page.getNavigationHistory",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
+    let history = history
+        .iter()
+        .find(|message| message["id"] == 7)
+        .expect("navigation history response");
+    let entries = history["result"]["entries"]
+        .as_array()
+        .expect("browser-owned history entries");
+    let urls = entries
+        .iter()
+        .map(|entry| entry["url"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        urls,
+        ["about:blank", source_url.as_str(), replacement_url.as_str()]
+    );
+    assert_eq!(history["result"]["currentIndex"], json!(2));
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
 async fn websocket_cdp_runtime_evaluate_after_dcl_is_not_blocked_by_pending_load_stylesheet() {
     async fn page() -> impl IntoResponse {
         (
