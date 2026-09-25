@@ -2464,9 +2464,10 @@ impl JsContextHost {
         target_url: Url,
         document_target: LightweightPopupNavigationDocumentTarget,
     ) -> Option<LightweightPopupNavigationTaskToken> {
-        self.cancel_planned_form_navigation_to(super::OwnerDispatchScope::LightweightPopup(
-            popup_id,
-        ));
+        self.cancel_planned_form_navigation_for_url(
+            super::OwnerDispatchScope::LightweightPopup(popup_id),
+            Some(&target_url),
+        );
         let current_owner = self.current_lightweight_popup_document_owner(popup_id)?;
         let document_owner = match document_target {
             LightweightPopupNavigationDocumentTarget::CurrentDocument => current_owner,

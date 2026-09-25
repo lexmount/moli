@@ -144,6 +144,18 @@ impl JsContextHost {
         }
     }
 
+    pub(super) fn cancel_planned_form_navigation_for_url(
+        &mut self,
+        destination: OwnerDispatchScope,
+        url: Option<&url::Url>,
+    ) {
+        // A queued javascript URL does not supersede a pending submission.
+        // The form task can navigate first and invalidate the script task.
+        if url.is_none_or(|url| url.scheme() != "javascript") {
+            self.cancel_planned_form_navigation_to(destination);
+        }
+    }
+
     pub(crate) fn has_planned_form_navigation_to(&self, destination: OwnerDispatchScope) -> bool {
         self.form_navigations
             .by_form

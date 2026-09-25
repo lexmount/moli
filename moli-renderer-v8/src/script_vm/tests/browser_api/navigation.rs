@@ -1,6 +1,73 @@
 use super::*;
 
 #[tokio::test]
+async fn planned_form_navigation_survives_later_javascript_links() {
+    for popup in [false, true] {
+        let source = if popup { "opener" } else { "parent" };
+        for code in [
+            "void(0)".to_owned(),
+            format!("{source}.jsRan++; void 0"),
+            format!("{source}.jsRan++; throw new Error('unexpected script')"),
+            format!("{source}.jsRan++; '<p>replacement</p>'"),
+        ] {
+            let server =
+                StaticHttpServer::spawn_with_bodies(vec!["<!doctype html><body>submitted".into()])
+                    .await;
+            let base = server.base_url().origin().ascii_serialization();
+            let loader = static_http_loader([]);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                &format!("{base}/source"),
+                &loader,
+            );
+            vm.eval(&format!(
+                r#"
+                globalThis.target = null;
+                globalThis.jsRan = 0;
+                if ({popup}) {{
+                    target = open('about:blank', 'form-target');
+                }} else {{
+                    const frame = document.createElement('iframe'); frame.name = 'form-target';
+                    document.body.append(frame); target = frame.contentWindow;
+                }}
+            "#
+            ))
+            .unwrap();
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                .await
+                .unwrap();
+            vm.eval(&format!(
+                r#"
+                const form = document.createElement('form'); form.target = 'form-target';
+                form.action = '/submitted'; form.innerHTML = '<input name=q value=submitted>';
+                document.body.append(form);
+                const link = document.createElement('a'); link.target = 'form-target';
+                link.href = 'javascript:' + {code:?}; link.onclick = () => form.submit();
+                document.body.append(link); link.click();
+            "#
+            ))
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(target.document.body && target.document.body.textContent === 'submitted')",
+                "true",
+                &format!("popup={popup}: {code}"),
+            )
+            .await;
+            assert_eq!(vm.eval("jsRan").unwrap(), "0", "popup={popup}: {code}");
+            if popup {
+                vm.eval("target.close()").unwrap();
+            }
+            assert_eq!(
+                server.finish_targets().await,
+                ["/submitted?q=submitted"],
+                "popup={popup}: {code}",
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn form_action_scheme_selects_query_mutation_or_post_resource() {
     for action in [
         "http://form-action.test/target?original=1#fragment",
