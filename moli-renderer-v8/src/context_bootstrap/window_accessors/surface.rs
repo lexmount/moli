@@ -136,10 +136,11 @@ fn set_receiver_related_window_alias<'s>(
         rv.set_null();
         return;
     }
-    rv.set(
-        window_hidden_value(scope, receiver, slot)
-            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
-    );
+    let value = window_hidden_value(scope, receiver, slot)
+        .unwrap_or_else(|| scope.get_current_context().global(scope).into());
+    rv.set(CrossOriginWindowAccessor::project_related_window(
+        scope, value,
+    ));
 }
 
 pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
