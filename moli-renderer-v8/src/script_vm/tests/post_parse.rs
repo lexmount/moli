@@ -4006,7 +4006,7 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
             r#"
             (() => {
               const methods = [
-                [IDBFactory.prototype, "open", 2],
+                [IDBFactory.prototype, "open", 1],
                 [IDBFactory.prototype, "deleteDatabase", 1],
                 [IDBFactory.prototype, "databases", 0],
                 [IDBFactory.prototype, "cmp", 2],

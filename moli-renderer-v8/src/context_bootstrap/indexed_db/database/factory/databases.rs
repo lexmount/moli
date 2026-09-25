@@ -6,6 +6,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_databases_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    // The binding validates the receiver in the callee realm. Once it is valid,
+    // keep the promise and settlement task in the factory's owning realm, just
+    // like open/delete requests, including when a foreign method is borrowed.
+    let Some(relevant_context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
