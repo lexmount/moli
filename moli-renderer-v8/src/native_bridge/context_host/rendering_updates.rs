@@ -13,6 +13,7 @@ pub(super) enum PendingRenderingUpdatePayload {
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
+    AnimationFrameCallbacks(super::WindowExecutionContextOwner),
     EnvironmentChange(PendingEnvironmentChange),
     NonLayoutEnvironmentChange(PendingEnvironmentChange),
 }
@@ -225,7 +226,7 @@ impl PageScriptHost {
         }
     }
 
-    fn queue_rendering_update(
+    pub(super) fn queue_rendering_update(
         &mut self,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
@@ -322,6 +323,9 @@ impl PageScriptHost {
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
+            PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => {
+                self.dispatch_authorized_animation_frame_callbacks(scope, host_ptr, target, owner)
+            }
             PendingRenderingUpdatePayload::EnvironmentChange(change) => {
                 self.dispatch_authorized_environment_change(scope, host_ptr, target, change, true)
             }
@@ -338,7 +342,18 @@ impl PageScriptHost {
         if matches!(task_id, RendererPageRenderingUpdateTaskId::Frame(_)) {
             return self.discard_realtime_rendering_opportunity(task_id);
         }
-        self.rendering_updates.remove(task_id).is_some()
+        let Some(pending) = self.rendering_updates.remove(task_id) else {
+            return false;
+        };
+        if let PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) =
+            pending.into_payload()
+        {
+            // document.open() rotates the parser/lifecycle incarnation without
+            // replacing the Window's animation callback map. Retire the stale
+            // rendering entry and admit a new exact-Document entry explicitly.
+            self.publish_animation_frame_rendering_update(owner);
+        }
+        true
     }
 
     pub(super) fn dispatch_authorized_animation_start_scan(

@@ -394,15 +394,28 @@ fn legacy_raf_keeps_its_timer_registration_and_cancellation_routes() {
             );
             page.vm_mut().set_layout_policy(policy);
             page.vm_mut()
-                .eval("window.raf=requestAnimationFrame(()=>{})")
+                .eval("window.calls=0;window.raf=requestAnimationFrame(()=>calls++)")
                 .unwrap();
-            assert!(page.vm().next_timeout_deadline().is_some());
+            let deadline = page
+                .vm()
+                .next_timeout_deadline()
+                .expect("legacy frame wake");
             assert!(
                 page.next_rendering_opportunity_deadline_for_test()
                     .is_none()
             );
             page.vm_mut().eval("cancelAnimationFrame(raf)").unwrap();
+            finish_initial_document_reveals_for_rendering_test(&mut page, &loader)
+                .await
+                .unwrap();
+            tokio::time::sleep_until(deadline.into()).await;
+            assert!(
+                page.run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                    .await
+                    .unwrap()
+            );
             assert!(page.vm().next_timeout_deadline().is_none());
+            assert_eq!(page.vm_mut().eval("calls").unwrap(), "0");
         }
     });
 }

@@ -38,6 +38,7 @@ pub(crate) enum RendererPageRenderingUpdateTaskKind {
     DocumentScrollEvents,
     AnimationStartScan,
     PostParseAutofocus,
+    AnimationFrameCallbacks,
     EnvironmentChange,
     FrameLifecycle,
 }

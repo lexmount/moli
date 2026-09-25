@@ -564,6 +564,7 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_execution_context_owner(owner);
         self.retire_realtime_animation_frame_owner(owner);
         self.retire_realtime_media_query_owner(owner);
+        self.animation_frames.retire_owner(owner);
         self.storage_event_recipients.remove(&owner);
         self.retire_event_callbacks_for_execution_context(owner);
         self.close_watcher_managers.remove(&owner);
@@ -607,6 +608,7 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_context_token(context_token);
         self.retire_realtime_animation_frame_realm(context_token);
         self.retire_realtime_media_query_realm(context_token);
+        self.animation_frames.retire_realm(context_token);
         // A host whose bootstrap failed may not have a resource owner yet.
         // Still retire its registries without revoking another host's URLs.
         let revoked_blob_object_url_count = resource_owner_id
@@ -626,6 +628,7 @@ impl PageScriptHost {
             self.local_storage_areas.remove(&owner);
             self.retire_realtime_animation_frame_owner(owner);
             crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
+            self.animation_frames.retire_owner(owner);
             self.storage_event_recipients.remove(&owner);
             self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
@@ -670,6 +673,7 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_context_token(context_token);
         self.retire_realtime_animation_frame_realm(context_token);
         self.retire_realtime_media_query_realm(context_token);
+        self.animation_frames.retire_realm(context_token);
         self.retire_close_watcher_realm(context_token);
         let revoked_blob_object_url_count =
             crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
