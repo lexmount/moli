@@ -1127,20 +1127,45 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
-    let value: v8::Local<'_, v8::Value> = if let Some(host_ptr) =
-        context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let owner = service_worker_container_owner_scope(scope, args.this());
-        let state = host
-            .service_worker_window_request_context(owner)
-            .and_then(|request_context| {
-                service_worker_client_url(request_context.document_url(), &parsed.client_url)
-                    .and_then(|client_url| {
-                        host.service_worker_registration_for_client(&request_context, &client_url)
-                    })
-            });
-        if let Some(state) = state {
+    let promise = resolver.get_promise(scope);
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let owner = service_worker_container_owner_scope(scope, args.this());
+    let Some(request_context) = host.service_worker_window_request_context(owner) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let client_url =
+        match service_worker_client_url(request_context.document_url(), &parsed.client_url) {
+            Ok(client_url) => client_url,
+            Err(ServiceWorkerClientUrlError::Invalid) => {
+                reject_service_worker_promise_with_type_error(
+                    scope,
+                    resolver,
+                    "Failed to parse the client URL.",
+                );
+                rv.set(promise.into());
+                return;
+            }
+            Err(ServiceWorkerClientUrlError::CrossOrigin) => {
+                reject_service_worker_promise_with_dom_exception(
+                    scope,
+                    resolver,
+                    "The client URL must have the same origin as the document.",
+                    "SecurityError",
+                );
+                rv.set(promise.into());
+                return;
+            }
+        };
+    let value: v8::Local<'_, v8::Value> = host
+        .service_worker_registration_for_client(&request_context, &client_url)
+        .map(|state| {
             build_service_worker_registration_object_for_container(
                 scope,
                 args.this(),
@@ -1149,14 +1174,10 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
                 ServiceWorkerRegistrationPhase::Snapshot(&state),
             )
             .into()
-        } else {
-            v8::undefined(scope).into()
-        }
-    } else {
-        v8::undefined(scope).into()
-    };
+        })
+        .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.resolve(scope, value);
-    rv.set(resolver.get_promise(scope).into());
+    rv.set(promise.into());
 }
 
 pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_callback<'s>(
@@ -2178,10 +2199,24 @@ fn service_worker_scope_url(
     Some(scope_url)
 }
 
-fn service_worker_client_url(document_url: &url::Url, client: &str) -> Option<url::Url> {
-    let mut client_url = document_url.join(client).ok()?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceWorkerClientUrlError {
+    Invalid,
+    CrossOrigin,
+}
+
+fn service_worker_client_url(
+    document_url: &url::Url,
+    client: &str,
+) -> Result<url::Url, ServiceWorkerClientUrlError> {
+    let mut client_url = document_url
+        .join(client)
+        .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
+    if !moli_url::same_origin(document_url, &client_url) {
+        return Err(ServiceWorkerClientUrlError::CrossOrigin);
+    }
     client_url.set_fragment(None);
-    Some(client_url)
+    Ok(client_url)
 }
 
 fn default_service_worker_scope_url(script_url: &url::Url) -> url::Url {

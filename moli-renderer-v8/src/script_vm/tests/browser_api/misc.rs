@@ -29000,3 +29000,90 @@ fn blob_url_revocation_respects_browser_partitions_and_allows_same_origin_realms
         assert!(crate::blob::object_url_body_and_type(&url).is_none());
     }
 }
+
+#[tokio::test]
+async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules() {
+    let (base_url, server) =
+        spawn_service_worker_script_server(vec!["/worker.js", "/resources/worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              const sw = navigator.serviceWorker;
+              const rejectionName = promise => promise.then(
+                () => "resolved",
+                error => error && error.name
+              );
+              globalThis.__serviceWorkerUrlArgumentProbe = { state: "pending" };
+              (async () => {
+                const registration = await sw.register("/worker.js", { scope: "null" });
+                const nullClientMatches = await sw.getRegistration(null) === registration;
+                const crossOrigin = await rejectionName(
+                  sw.getRegistration("http://example.com/")
+                );
+                const invalidClientUrl = await rejectionName(
+                  sw.getRegistration("https://[")
+                );
+                const nullScope = await rejectionName(
+                  sw.register("/resources/worker.js", { scope: null })
+                );
+                const nullType = await rejectionName(
+                  sw.register("/worker.js", { type: null })
+                );
+                const nullUpdateViaCache = await rejectionName(
+                  sw.register("/worker.js", { updateViaCache: null })
+                );
+                const primitiveOptions = await rejectionName(
+                  sw.register("/worker.js", 1)
+                );
+                const symbolClient = await rejectionName(
+                  sw.getRegistration(Symbol("client"))
+                );
+                const unregistered = await registration.unregister();
+                globalThis.__serviceWorkerUrlArgumentProbe = {
+                  state: "done",
+                  nullClientMatches,
+                  crossOrigin,
+                  invalidClientUrl,
+                  nullScope,
+                  nullType,
+                  nullUpdateViaCache,
+                  primitiveOptions,
+                  symbolClient,
+                  unregistered
+                };
+              })().catch(error => {
+                globalThis.__serviceWorkerUrlArgumentProbe = {
+                  state: "error",
+                  error: String(error)
+                };
+              });
+            })()
+            "#,
+    )
+    .expect("service worker URL argument probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerUrlArgumentProbe.state !== 'pending')",
+        "true",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__serviceWorkerUrlArgumentProbe)")
+            .expect("service worker URL argument result should evaluate"),
+        r#"{"state":"done","nullClientMatches":true,"crossOrigin":"SecurityError","invalidClientUrl":"TypeError","nullScope":"SecurityError","nullType":"TypeError","nullUpdateViaCache":"TypeError","primitiveOptions":"TypeError","symbolClient":"TypeError","unregistered":true}"#
+    );
+    server
+        .await
+        .expect("service worker URL argument script server should finish");
+}
