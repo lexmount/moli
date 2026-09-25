@@ -154,13 +154,13 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_report_error_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     report_error: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_to: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_by: (),
 
     #[webapi(

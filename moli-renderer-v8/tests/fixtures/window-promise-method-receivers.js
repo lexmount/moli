@@ -15,7 +15,9 @@ async function probeWindowPromiseMethodReceivers({sameURL, crossURL}) {
   };
   const localFrame = await frame(sameURL), remoteFrame = await frame(crossURL);
   const local = localFrame.contentWindow, remote = remoteFrame.contentWindow;
-  const methods = ['fetch', 'createImageBitmap'];
+  const scrolling = new Set(['scroll', 'scrollTo', 'scrollBy']);
+  const scrollOptions = {get behavior() { conversions++; throw sentinel; }};
+  const methods = ['fetch', 'createImageBitmap', 'scroll', 'scrollTo', 'scrollBy'];
   const realms = [['parent', window], ['child', local]].map(([label, realm]) => ({
     label, realm, Promise:realm.Promise, TypeError:realm.TypeError, DOMException:realm.DOMException,
     functions:Object.fromEntries(methods.map(name => [name, realm[name]]))
@@ -36,7 +38,7 @@ async function probeWindowPromiseMethodReceivers({sameURL, crossURL}) {
     ['bridge getter', {get __moliNativeBridge() { traps++; throw new Error('unexpected bridge getter'); }}],
     ['document', document], ['primitive', 1]
   ];
-  const argsFor = name => name === 'fetch'
+  const argsFor = name => scrolling.has(name) ? [[], [scrollOptions], [input, input]] : name === 'fetch'
     ? [[], [input], ['data:text/plain,blocked', init]]
     : [[], [Symbol('source')], [image, options], [image, 0, 0, 0, 1, options]];
   const describe = (error, context) => error === sentinel ? 'sentinel' : [
@@ -97,8 +99,9 @@ async function probeWindowPromiseMethodReceivers({sameURL, crossURL}) {
     for (const receiver of [window, local, null, undefined]) {
       for (const name of methods) {
         equal(await observe(() => context.functions[name].call(receiver), context),
-          rejection(['TypeError', true, false]), context.label + ' borrowed ' + name + ' missing argument');
-        const args = name === 'fetch' ? [input] : [image, options];
+          scrolling.has(name) ? {kind:'fulfilled', promiseRealm:(receiver ?? context.realm) === context.realm} : rejection(['TypeError', true, false]),
+          context.label + ' borrowed ' + name + ' argument defaults');
+        const args = scrolling.has(name) ? [scrollOptions] : name === 'fetch' ? [input] : [image, options];
         equal(await observe(() => context.functions[name].apply(receiver, args), context),
           rejection('sentinel'), context.label + ' borrowed ' + name + ' preserves conversion exception identity');
       }
@@ -113,7 +116,7 @@ async function probeWindowPromiseMethodReceivers({sameURL, crossURL}) {
       }
     }
   }
-  equal(conversions, 16, 'only valid receivers reach the throwing conversions');
+  equal(conversions, 40, 'only valid receivers reach the throwing conversions');
   equal(traps, 0, 'discarded receiver checks do not run Proxy traps');
   localFrame.remove();
   return {checks, failures};
