@@ -15,7 +15,6 @@ fn viewport_input_vm() -> StandaloneScriptVmHarness {
         ..Default::default()
     }))
     .unwrap();
-    vm.force_fresh_layout_reads_for_test();
     vm.eval(
         r#"
         if (!document.documentElement) document.appendChild(document.createElement('html'));
@@ -37,6 +36,7 @@ fn viewport_input_vm() -> StandaloneScriptVmHarness {
 }
 
 fn click_viewport(vm: &mut StandaloneScriptVmHarness, x: f64, y: f64) {
+    vm.publish_layout_for_test().unwrap();
     for (event, button, buttons) in [("mousemove", -1, 0), ("mousedown", 0, 1), ("mouseup", 0, 0)] {
         vm.dispatch_mouse_event_at_point(x, y, event, button, Some(buttons), 0.0, 0.0)
             .unwrap();
@@ -240,6 +240,7 @@ fn viewport_root_input_wheel_keeps_child_target_and_chains_at_boundaries() {
         )
         .unwrap();
         vm.eval(setup).unwrap();
+        vm.publish_layout_for_test().unwrap();
         vm.dispatch_mouse_event_at_point(80.0, 80.0, "wheel", -1, Some(0), 0.0, 120.0)
             .unwrap();
         let actual = vm
@@ -255,4 +256,47 @@ fn viewport_root_input_wheel_keeps_child_target_and_chains_at_boundaries() {
             "wheel setup: {setup}"
         );
     }
+}
+
+#[test]
+fn viewport_root_input_requires_republication_when_an_empty_child_gains_a_root() {
+    let mut vm = viewport_input_vm();
+    vm.eval(
+        r#"
+        globalThis.frame = document.createElement('iframe');
+        frame.style.cssText = 'position:fixed;left:40px;top:40px;width:200px;height:50px;border:4px solid black';
+        document.body.appendChild(frame);
+        frame.contentDocument.documentElement.remove();
+        recordViewportClicks(frame.contentWindow, 'child');
+        "#,
+    )
+    .unwrap();
+    click_viewport(&mut vm, 80.0, 80.0);
+    assert_eq!(vm.eval("viewportClicks.length").unwrap(), "0");
+
+    vm.eval(
+        r#"
+        const child = frame.contentDocument;
+        const root = child.createElement('html');
+        root.style.cssText = 'margin:0;padding:0;height:0';
+        child.appendChild(root);
+        "#,
+    )
+    .unwrap();
+    let before = vm.layout_pass_observability_for_test().1;
+    let error = vm
+        .dispatch_mouse_event_at_point(80.0, 80.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<moli_layout::LayoutError>(),
+        Some(&moli_layout::LayoutError::NoLayoutSnapshot)
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    assert_eq!(vm.pressed_mouse_buttons, 0);
+    assert!(vm.pending_mouse_press.is_none());
+    click_viewport(&mut vm, 80.0, 80.0);
+    assert_eq!(
+        vm.eval("JSON.stringify(viewportClicks)").unwrap(),
+        r#"[["child","HTML",36,36,true]]"#
+    );
 }
