@@ -126,7 +126,7 @@ fn user_activation_isolated_realm_shares_the_window_state() {
 #[test]
 fn user_activation_popup_navigation_keeps_retained_state_separate_from_new_window() {
     let mut vm = activation_vm();
-    vm.eval("globalThis.popup = open('about:blank'); globalThis.savedNavigator = popup.navigator; globalThis.savedActivation = savedNavigator.userActivation").unwrap();
+    vm.eval("globalThis.popup = open('about:blank'); popup.location.href = 'about:blank?committed'; globalThis.savedNavigator = popup.navigator; globalThis.savedActivation = savedNavigator.userActivation").unwrap();
     assert_eq!(vm.eval("typeof popup.UserActivation === 'function' && Object.getPrototypeOf(savedActivation) === popup.UserActivation.prototype").unwrap(), "true");
     let popup_id = vm._context_host.borrow().open_lightweight_popup_ids()[0];
     vm._context_host

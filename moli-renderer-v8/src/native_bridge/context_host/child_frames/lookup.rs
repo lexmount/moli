@@ -295,7 +295,7 @@ impl JsContextHost {
             Some(parent) => self.child_browsing_context_direct_host_handles(parent),
             None => self.top_level_child_browsing_context_handles_in_document_order(),
         };
-        let first = handles.into_iter().find(|handle| {
+        handles.into_iter().find(|handle| {
             self.dom_host()
                 .node(*handle)
                 .is_some_and(|node| node.flags().in_document_tree())
@@ -303,14 +303,27 @@ impl JsContextHost {
                     .child_browsing_contexts
                     .get(handle)
                     .is_some_and(|entry| entry.matches_browsing_context_name(key))
+        })
+    }
+
+    pub(crate) fn child_browsing_context_named_child_handle_for_scope(
+        &self,
+        parent: OwnerDispatchScope,
+        key: &str,
+    ) -> Option<DomHandle> {
+        if key.is_empty() { return None; }
+        let handles = match parent {
+            OwnerDispatchScope::Child(parent) => self.child_browsing_context_direct_host_handles(parent),
+            OwnerDispatchScope::Top => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
+            OwnerDispatchScope::LightweightPopup(id) => self.window_child_browsing_context_handles_for_document(
+                self.lightweight_popup_document_handle(id)?,
+            ),
+        };
+        let first = handles.into_iter().find(|handle| {
+            self.dom_host().node(*handle).is_some_and(|node| node.flags().in_document_tree())
+                && self.child_browsing_contexts.get(handle).is_some_and(|entry| entry.matches_browsing_context_name(key))
         })?;
-        // The target-name property set selects the first child for each name
-        // before filtering by origin. A cross-origin first match must not
-        // expose a later same-origin duplicate, and document.domain does not
-        // relax this same-origin check.
-        let parent_scope = parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
-        self.window_scopes_have_same_origin(parent_scope, OwnerDispatchScope::Child(first))
-            .then_some(first)
+        self.window_scopes_have_same_origin(parent, OwnerDispatchScope::Child(first)).then_some(first)
     }
 
     fn child_browsing_context_handle_by_name_in_document_order_from_document(

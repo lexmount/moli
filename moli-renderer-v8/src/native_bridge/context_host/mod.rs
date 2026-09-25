@@ -83,6 +83,9 @@ mod child_frame_runtime;
 mod child_runtime_script_order;
 mod document_parser_owner;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
+pub(crate) use child_frame_runtime::{
+    install_synthetic_window_access_check_handlers, synthetic_window_context_can_access,
+};
 mod child_frame_snapshots;
 mod child_frames;
 mod close_watchers;
