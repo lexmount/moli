@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
     context_bootstrap::{
-        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path, event_is_error_event,
-        mark_event_trusted, set_event_composed_path,
+        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType, apply_event_handler_return_value,
+        clear_event_composed_path, event_is_error_event, mark_event_trusted,
+        set_event_composed_path,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array, set_private_value},
@@ -324,13 +325,12 @@ fn invoke_event_handler_property<'s>(
         }
         if let Some(returned) = returned {
             let returned = v8::Local::new(scope, returned);
-            if returned.boolean_value(scope) {
-                let _ = event.set(
-                    scope,
-                    v8str(scope, "defaultPrevented").into(),
-                    v8::Boolean::new(scope, true).into(),
-                );
-            }
+            apply_event_handler_return_value(
+                scope,
+                event,
+                returned,
+                EventHandlerType::OnErrorEventHandler,
+            );
         }
         if let Some(timing_started) = timing_started {
             tracing::info!(
@@ -361,13 +361,7 @@ fn invoke_event_handler_property<'s>(
     }
     if let Some(returned) = returned {
         let returned = v8::Local::new(scope, returned);
-        if returned.is_boolean() && !returned.boolean_value(scope) {
-            let _ = event.set(
-                scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
-            );
-        }
+        apply_event_handler_return_value(scope, event, returned, EventHandlerType::EventHandler);
     }
     if let Some(timing_started) = timing_started {
         tracing::info!(
