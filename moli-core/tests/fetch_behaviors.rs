@@ -192,8 +192,17 @@ async fn child_classic_script_resource_inherits_child_document_encoding() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/encoding/child-shift-jis-classic-script-parent"))
+        .await?;
+    // Load completion does not wait for the child's queued message task.
+    // Observe its delivery before asserting the decoded script contents.
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "document.body.hasAttribute('data-child-script-text')",
+            Duration::from_secs(5),
+        )
         .await?;
     let html = page.serialize_html_async().await.unwrap();
 
