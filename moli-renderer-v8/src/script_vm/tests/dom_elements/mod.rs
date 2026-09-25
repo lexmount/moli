@@ -1,5 +1,6 @@
 use super::*;
 
+mod attribute_lookup;
 mod custom_elements;
 mod detached;
 mod dom_surface;
