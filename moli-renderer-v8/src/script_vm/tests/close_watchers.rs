@@ -338,6 +338,7 @@ fn close_watcher_mouse_and_touch_activate_at_their_respective_input_phases() {
         setup_close_watcher_input_document(&mut vm);
         vm.eval("record('first').oncancel = e => e.preventDefault()")
             .unwrap();
+        vm.publish_layout_for_test().unwrap();
         if touch {
             vm.dispatch_touch_event_at_point(10.0, 11.0, "touchstart", false)
                 .unwrap();

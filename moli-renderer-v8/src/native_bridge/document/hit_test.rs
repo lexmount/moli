@@ -558,7 +558,6 @@ fn element_at_point(
             document,
             moli_layout::LayoutPoint::new(x as f32, y as f32),
             false,
-            moli_layout::LayoutFlushReason::HitTest,
         )?;
         if let Some(element) = hits.into_iter().find_map(|hit| {
             let element = element_for_hit_source(runtime, hit.source)?;

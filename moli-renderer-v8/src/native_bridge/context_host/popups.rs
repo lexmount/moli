@@ -5896,12 +5896,7 @@ fn lightweight_popup_window_opener_getter<'s>(
         return;
     };
     match unsafe { &*host_ptr }.lightweight_popup_opener_window(scope, popup_id) {
-        Some(opener) => rv.set(
-            super::child_frame_runtime::CrossOriginWindowAccessor::project_related_window(
-                scope,
-                opener.into(),
-            ),
-        ),
+        Some(opener) => rv.set(opener.into()),
         None => rv.set_null(),
     }
 }
