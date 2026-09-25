@@ -28768,7 +28768,7 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
     sandbox: &str,
     expected_popup_origin_prefix: &str,
 ) {
-    let (helper_url, server) = spawn_sandbox_popup_helper_server().await;
+    let (helper_url, server) = spawn_sandbox_popup_helper_server(false).await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let helper_url_parsed = Url::parse(&helper_url).expect("helper url");
     let document_url = format!(
@@ -28837,6 +28837,78 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
             "escaped popup's initial about:blank should retain its opener's origin: {result}"
         );
     }
+}
+
+async fn assert_sandbox_child_hyperlink_popup_origin(sandbox: &str, escapes_sandbox: bool) {
+    let (helper_url, server) = spawn_sandbox_popup_helper_server(true).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let helper_url_parsed = Url::parse(&helper_url).expect("helper URL");
+    let expected_popup_origin = if escapes_sandbox {
+        helper_url_parsed.origin().ascii_serialization()
+    } else {
+        "null".to_owned()
+    };
+    let document_url = format!(
+        "http://127.0.0.1:{}/parent.html",
+        helper_url_parsed.port().expect("helper URL port")
+    );
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(&document_url, &loader);
+    let helper_url_literal = serde_json::to_string(&helper_url).expect("serialize helper URL");
+    let sandbox_literal = serde_json::to_string(sandbox).expect("serialize sandbox");
+
+    assert_eq!(
+        vm.eval(&format!(
+            r#"
+(() => {{
+  globalThis.__hyperlinkSandboxPopupMessages = [];
+  addEventListener("message", event => {{
+    __hyperlinkSandboxPopupMessages.push({{
+      origin: event.origin,
+      popupOrigin: event.data.origin
+    }});
+  }});
+  const frame = document.createElement("iframe");
+  frame.sandbox = {sandbox_literal};
+  frame.src = {helper_url_literal};
+  (document.body || document.documentElement || document).appendChild(frame);
+  return "queued";
+}})()
+"#
+        ))
+        .expect("sandboxed hyperlink popup setup"),
+        "queued"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__hyperlinkSandboxPopupMessages.length",
+        "1",
+        "sandboxed hyperlink popup message",
+    )
+    .await;
+    server.await.expect("sandboxed hyperlink popup server");
+
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__hyperlinkSandboxPopupMessages)")
+            .expect("sandboxed hyperlink popup results"),
+    )
+    .expect("popup message JSON");
+    assert_eq!(result[0]["origin"], "null");
+    assert_eq!(result[0]["popupOrigin"], expected_popup_origin);
+}
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_inherits_sandbox() {
+    assert_sandbox_child_hyperlink_popup_origin("allow-scripts allow-popups", false).await;
+}
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_escapes_when_allowed() {
+    assert_sandbox_child_hyperlink_popup_origin(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+        true,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -30845,7 +30917,9 @@ navigator.storageBuckets.delete("opaque-origin-bucket")
     (format!("http://{addr}/popup.html"), server)
 }
 
-async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle<()>) {
+async fn spawn_sandbox_popup_helper_server(
+    open_via_hyperlink: bool,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind sandbox popup helper server");
@@ -30865,7 +30939,25 @@ async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle
                 .read(&mut buffer)
                 .await
                 .expect("read sandbox popup helper request");
-            let body = r#"<!doctype html>
+            let body = if open_via_hyperlink {
+                r#"<!doctype html>
+<body>
+<script>
+  if (opener) {
+    opener.postMessage(undefined, "*");
+    self.close();
+  } else {
+    onmessage = event => parent.postMessage({ origin: event.origin }, "*");
+    const link = document.createElement("a");
+    link.href = location.href;
+    link.target = "_blank";
+    link.rel = "opener";
+    document.body.appendChild(link);
+    link.click();
+  }
+</script>"#
+            } else {
+                r#"<!doctype html>
 <script>
   if (opener) {
     opener.postMessage(undefined, "*");
@@ -30882,7 +30974,8 @@ async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle
     } catch (_) {}
     popupWin.location.href = location.href;
   }
-</script>"#;
+</script>"#
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
