@@ -1835,6 +1835,16 @@ impl DomHost {
             .map(|state| state.handle)
     }
 
+    pub fn has_shadow_root_in_subtree(&self, root: DomHandle) -> bool {
+        let Some(root_node) = self.node(root) else {
+            return false;
+        };
+        self.shadow_roots_by_host
+            .borrow()
+            .keys()
+            .any(|host| root_node.contains(&self.dom, *host))
+    }
+
     pub(super) fn sync_shadow_tree_scopes_for_inserted_subtrees(
         &mut self,
         inserted_roots: &[DomHandle],

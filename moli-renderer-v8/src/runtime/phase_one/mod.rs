@@ -8040,6 +8040,78 @@ document.getElementById('js-replace-track-video').replaceChild(
     }
 
     #[test]
+    fn parser_reinsertion_recreates_child_windows_between_connected_parents() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = new_phase_one_page_vm_for_test();
+            let (body, destination, iframe) = {
+                let body = create_connected_html_body_for_test(&mut page_vm);
+                let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
+                let destination = dom_host.create_parser_element_without_attributes(
+                    "div".to_owned(),
+                    "http://www.w3.org/1999/xhtml".to_owned(),
+                    None,
+                );
+                let iframe = dom_host.create_parser_element_without_attributes(
+                    "iframe".to_owned(),
+                    "http://www.w3.org/1999/xhtml".to_owned(),
+                    None,
+                );
+                (body, destination, iframe)
+            };
+            for child in [destination, iframe] {
+                apply_parser_dom_mutation_for_test(
+                    &mut page_vm,
+                    ParserDomMutation::AppendChild {
+                        parent: body,
+                        child,
+                    },
+                    "parser setup should insert connected nodes",
+                );
+            }
+
+            for mutation in [
+                ParserDomMutation::AppendChild {
+                    parent: destination,
+                    child: iframe,
+                },
+                ParserDomMutation::InsertBefore {
+                    parent: body,
+                    child: iframe,
+                    reference_child: Some(destination),
+                },
+            ] {
+                page_vm
+                    .evaluate_expression(
+                        "window.retiredChild = document.querySelector('iframe').contentWindow; \
+                         window.retiredDocument = retiredChild.document; true",
+                    )
+                    .expect("retain the child before parser reinsertion");
+                apply_parser_dom_mutation_and_run_post_step_work_for_test(
+                    &mut page_vm,
+                    mutation,
+                    "parser reinsertion should apply",
+                    "parser reinsertion followups should dispatch",
+                );
+                let result = page_vm
+                    .evaluate_expression(
+                        "document.querySelector('iframe').contentWindow !== retiredChild && \
+                         document.querySelector('iframe').contentDocument !== retiredDocument && \
+                         retiredChild.document === retiredDocument && \
+                         retiredChild.parent === null && retiredChild.top === null && \
+                         retiredChild.frameElement === null",
+                    )
+                    .expect("parser reinsertion identities should evaluate");
+                assert_eq!(result.get("value"), Some(&serde_json::Value::Bool(true)));
+            }
+        }));
+    }
+
+    #[test]
     fn parser_insert_nested_custom_element_to_connected_parent_matches_js_order() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

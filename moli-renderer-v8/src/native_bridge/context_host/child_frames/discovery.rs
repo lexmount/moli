@@ -341,7 +341,7 @@ impl JsContextHost {
         root: DomHandle,
         out: &mut Vec<DomHandle>,
     ) {
-        if self.dom_host().is_connected(root) {
+        if self.dom_host().is_connected(root) && !self.dom_host().has_shadow_root_in_subtree(root) {
             out.extend(
                 self.dom_host()
                     .child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
@@ -353,8 +353,9 @@ impl JsContextHost {
         if self.is_child_browsing_context_host_handle(root) {
             out.push(root);
         }
-        // Disconnected hosts no longer use the connected-tree candidate index.
-        // Their shadow trees still contain browsing contexts to unload and retire.
+        // The connected-tree index excludes shadow descendants. Walk their
+        // hosts as well as disconnected subtrees so every child context is
+        // discovered on insertion and retired on removal/reinsertion.
         if let Some(shadow_root) = self.dom_host().shadow_root_handle(root) {
             self.collect_child_browsing_context_host_handles(shadow_root, out);
         }
