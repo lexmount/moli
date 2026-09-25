@@ -395,6 +395,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
+        if self
+            .document_policy_container()
+            .sandbox
+            .forces_opaque_origin
+        {
+            return None;
+        }
         let origin = moli_url::origin_ascii_serialization(self.document_url());
         if self.document_domain_override.get().is_some() {
             return None;
@@ -420,6 +427,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn main_isolated_world_security_token_key(&self) -> Option<String> {
+        if self
+            .document_policy_container()
+            .sandbox
+            .forces_opaque_origin
+        {
+            return None;
+        }
         window_isolated_world_security_token_key(
             moli_url::origin_ascii_serialization(self.document_url()),
             self.document_domain_override.get().is_some(),
@@ -520,6 +534,24 @@ impl JsContextHost {
             context,
             self.child_default_world_security_token_key(handle)
                 .as_deref(),
+        )
+    }
+
+    pub(crate) fn refresh_main_default_world_security_origin(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        context: v8::Local<'_, v8::Context>,
+    ) -> bool {
+        self.install_window_context_security_origin(
+            scope,
+            context,
+            OwnerDispatchScope::Top,
+            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+        );
+        set_window_security_token(
+            scope,
+            context,
+            self.main_default_world_security_token_key().as_deref(),
         )
     }
 
@@ -698,7 +730,12 @@ impl JsContextHost {
 
     fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
         let serialized_origin = moli_url::origin_ascii_serialization(self.document_url());
-        if serialized_origin == "null" {
+        if serialized_origin == "null"
+            || self
+                .document_policy_container()
+                .sandbox
+                .forces_opaque_origin
+        {
             return Some(WindowAccessOrigin::opaque(
                 self.current_window_execution_context_owner(OwnerDispatchScope::Top)?,
             ));

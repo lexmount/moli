@@ -107,6 +107,8 @@ impl ScriptVm {
     pub(crate) fn set_response_content_security_policies(&mut self, policies: &[String]) {
         self.document_runtime
             .set_response_content_security_policies(policies);
+        self.refresh_main_document_origin_after_policy_change()
+            .expect("main Window origin must reflect the response CSP");
     }
 
     pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
