@@ -68,3 +68,20 @@ pub(crate) fn invalidate_event_handler_content_attribute(
     generic::invalidate_event_attribute_handler(scope, runtime, handle, name);
     body_onload::invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
 }
+
+/// Only an attribute added by the parser can replace the current load handler.
+pub(crate) fn parser_merges_body_load_handler(
+    dom: &crate::dom::native::DomHost,
+    handle: crate::document_runtime::DomHandle,
+    attributes: &[crate::dom::native::Attribute],
+) -> bool {
+    dom.is_connected(handle)
+        && dom.owner_document_handle(handle) == Some(dom.document_handle())
+        && dom
+            .node(handle)
+            .is_some_and(|node| node.is_html_element_named("body"))
+        && dom.get_attribute(handle, "onload").is_none()
+        && attributes
+            .iter()
+            .any(|attribute| attribute.namespace().is_empty() && attribute.local_name() == "onload")
+}

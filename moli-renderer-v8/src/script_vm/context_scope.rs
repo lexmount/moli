@@ -239,3 +239,17 @@ impl ScriptVm {
         })
     }
 }
+
+impl ScriptVm {
+    pub(crate) fn synchronize_parser_merged_body_load_handler(
+        &mut self,
+        handle: crate::document_runtime::DomHandle,
+    ) -> anyhow::Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            crate::native_bridge::element::invalidate_event_handler_content_attribute(
+                scope, host_ptr, handle, "onload",
+            );
+            Ok(())
+        })
+    }
+}
