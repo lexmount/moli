@@ -194,10 +194,11 @@ impl JsContextHost {
         let mut invoked = false;
 
         // HTML flushes autofocus before taking the animation callback snapshot.
-        // Use the top Document's own realm even when a child requested the frame.
-        if !matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_))
-            && let Some(top) =
-                self.current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top)
+        // Use its top-level Document's realm, including an independent popup.
+        if let Some(document) = self.top_level_document_for_document(resolved.document_handle)
+            && let Some(endpoint) = self.window_endpoint_for_document(document)
+            && let Some(top) = self
+                .current_window_document_task_target_for_dispatch_scope(endpoint.dispatch_scope())
         {
             invoked |= self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, top);
         }
