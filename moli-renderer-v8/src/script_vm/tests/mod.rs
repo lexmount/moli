@@ -2236,6 +2236,7 @@ mod media_owner_playback_interfaces;
 mod svg_animation_interfaces;
 
 mod audio_event_interfaces;
+mod iframe_reinsertion;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
