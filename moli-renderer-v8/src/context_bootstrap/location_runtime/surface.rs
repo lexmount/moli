@@ -146,6 +146,8 @@ pub(crate) fn window_location_href<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    // Native document synchronization must not invoke the checked public
+    // getter while initializing a popup in its cross-origin opener's realm.
     let location =
         v8::Local::<v8::Object>::try_from(window_location_slot_value(scope, window)?).ok()?;
     super::slots::location_href_slot(scope, location)

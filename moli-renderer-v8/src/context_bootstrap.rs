@@ -471,7 +471,7 @@ pub(crate) use self::microtask_checkpoint::{
 };
 pub(crate) use self::navigation_bootstrap::{
     install_window_location_history_navigation_runtime_state,
-    reset_window_location_history_navigation_runtime_state,
+    reset_window_location_history_navigation_runtime_state, reset_window_location_runtime_state,
 };
 pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navigate_event_for_window;
 pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_event_for_window;
