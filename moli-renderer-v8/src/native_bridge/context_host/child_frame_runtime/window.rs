@@ -63,6 +63,38 @@ pub(crate) struct CrossOriginWindowAccessor<'s> {
 }
 
 impl<'s> CrossOriginWindowAccessor<'s> {
+    pub(crate) fn project_related_window(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> v8::Local<'s, v8::Value> {
+        let Ok(window) = v8::Local::<v8::Object>::try_from(value) else {
+            return value;
+        };
+        let Some(popup_id) = cross_origin_lightweight_popup_id(scope, window)
+            .or_else(|| crate::native_bridge::lightweight_popup_id_from_window(scope, window))
+        else {
+            return value;
+        };
+        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+            return value;
+        };
+        let host = unsafe { &mut *host_ptr };
+        let Some(super::super::OwnerDispatchScope::Child(handle)) = host
+            .window_execution_context_identity_for_access_check(cross_origin_accessing_context(
+                scope,
+            ))
+            .filter(|identity| host.window_execution_context_identity_is_current(*identity))
+            .map(|identity| identity.dispatch_scope())
+        else {
+            return value;
+        };
+        // A parent's cached top belongs to the parent's access realm. Resolve
+        // it for the caller so parent.top and top share identity and access.
+        host.popup_window_for_child_realm(scope, handle, popup_id)
+            .map(v8::Local::<v8::Value>::from)
+            .unwrap_or(value)
+    }
+
     pub(crate) fn for_receiver(
         scope: &mut v8::PinScope<'s, '_>,
         receiver: v8::Local<'s, v8::Object>,
@@ -1494,7 +1526,8 @@ impl JsContextHost {
             .filter(|top| !is_cross_origin_window_proxy(scope, *top))
             .unwrap_or_else(|| self.child_browsing_context_root_window(scope, handle, global));
         let popup_owner = self.child_browsing_context_popup_owner_window_for_realm(scope, handle);
-        let top = if let Some(window) = popup_owner {
+        let popup_root = self.child_browsing_context_popup_root_window_for_realm(scope, handle);
+        let top = if let Some(window) = popup_root {
             window
         } else if same_origin_with_top {
             root
@@ -1547,6 +1580,10 @@ impl JsContextHost {
         handle: DomHandle,
         global: v8::Local<'s, v8::Object>,
     ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
+        if let Some(top) = self.child_browsing_context_popup_root_window_for_realm(scope, handle) {
+            let parent = self.child_browsing_context_parent_window(scope, handle, top);
+            return (parent, top);
+        }
         let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             let top = self
@@ -1559,12 +1596,6 @@ impl JsContextHost {
                 .unwrap_or_else(|| self.child_browsing_context_parent_window(scope, handle, top));
             return (parent, top);
         };
-
-        if let Some(popup_owner) =
-            self.child_browsing_context_popup_owner_window_for_realm(scope, handle)
-        {
-            return (popup_owner, popup_owner);
-        }
 
         if self.child_browsing_context_is_same_origin_with_top(handle) {
             let top = self
@@ -1613,8 +1644,7 @@ impl JsContextHost {
         handle: DomHandle,
         fallback: v8::Local<'s, v8::Object>,
     ) -> v8::Local<'s, v8::Object> {
-        if let Some(window) =
-            self.child_browsing_context_popup_owner_window_for_realm(scope, handle)
+        if let Some(window) = self.child_browsing_context_popup_root_window_for_realm(scope, handle)
         {
             return window;
         }
@@ -1641,6 +1671,30 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         let popup_id = self.child_browsing_context_popup_owner_id(handle)?;
+        self.popup_window_for_child_realm(scope, handle, popup_id)
+    }
+
+    fn child_browsing_context_popup_root_window_for_realm<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        // The root can be a popup even when the immediate parent is a child
+        // frame. Project it for the accessing child, not for its parent.
+        let super::super::OwnerDispatchScope::LightweightPopup(popup_id) =
+            self.child_browsing_context_root_scope(handle)?
+        else {
+            return None;
+        };
+        self.popup_window_for_child_realm(scope, handle, popup_id)
+    }
+
+    fn popup_window_for_child_realm<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        popup_id: u64,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         if self.child_window_can_access_lightweight_popup(handle, popup_id) {
             return self.lightweight_popup_window(scope, popup_id);
         }
@@ -3003,6 +3057,16 @@ fn cross_origin_window_stored_value_getter<'s>(
     slot: &str,
 ) {
     if let Some(value) = cross_origin_window_backing_value(scope, args.data(), slot) {
+        let value = if matches!(
+            slot,
+            CROSS_ORIGIN_WINDOW_TOP_SLOT
+                | CROSS_ORIGIN_WINDOW_PARENT_SLOT
+                | CROSS_ORIGIN_WINDOW_OPENER_SLOT
+        ) {
+            CrossOriginWindowAccessor::project_related_window(scope, value)
+        } else {
+            value
+        };
         rv.set(value);
     } else {
         throw_cross_origin_illegal_invocation(scope);
