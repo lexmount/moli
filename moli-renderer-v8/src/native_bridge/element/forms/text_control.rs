@@ -6,6 +6,7 @@ mod value;
 
 pub(crate) use events::{
     dispatch_text_control_event, queue_text_control_document_selection_change_event,
+    queue_text_control_selection_change_event,
 };
 pub(crate) use selection::{
     replace_text_control_selection, text_control_set_selection_range_internal,
