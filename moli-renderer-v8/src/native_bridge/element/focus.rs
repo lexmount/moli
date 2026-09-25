@@ -327,26 +327,16 @@ fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<
 }
 
 fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
-    let mut stack = runtime
-        .dom_host()
-        .child_handles(runtime.document_handle())
-        .collect::<Vec<_>>();
-    stack.reverse();
-    while let Some(handle) = stack.pop() {
-        let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-            let mut children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
-            children.reverse();
-            stack.extend(children);
-            continue;
-        };
-        if element.has_attribute("autofocus") && is_focusable(runtime, handle) {
-            return Some(handle);
-        }
-        let mut children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
-        children.reverse();
-        stack.extend(children);
-    }
-    None
+    runtime
+        .autofocus_candidates()
+        .iter()
+        .copied()
+        .find(|handle| {
+            runtime.dom_host().is_connected(*handle)
+                && runtime.dom_host().owner_document_handle(*handle)
+                    == Some(runtime.document_handle())
+                && is_focusable(runtime, *handle)
+        })
 }
 
 /// Whether the current Document has post-parse autofocus work worth

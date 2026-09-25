@@ -818,8 +818,36 @@ impl DocumentRuntime {
         self.autofocus_processed
     }
 
+    pub(crate) fn autofocus_candidates(&self) -> &[DomHandle] {
+        &self.autofocus_candidates
+    }
+
+    pub(crate) fn queue_autofocus_candidates_in_subtrees(&mut self, roots: &[DomHandle]) {
+        if self.autofocus_processed {
+            return;
+        }
+        let document = self.dom_host.document_handle();
+        let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
+        while let Some(handle) = pending.pop() {
+            if self.dom_host.is_connected(handle)
+                && self.dom_host.owner_document_handle(handle) == Some(document)
+                && self
+                    .dom_host
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.has_attribute("autofocus"))
+            {
+                self.autofocus_candidates
+                    .retain(|candidate| *candidate != handle);
+                self.autofocus_candidates.push(handle);
+            }
+            pending.extend(self.dom_host.child_handles_reversed(handle));
+        }
+    }
+
     pub(crate) fn mark_autofocus_processed(&mut self) {
         self.autofocus_processed = true;
+        self.autofocus_candidates.clear();
     }
 
     pub(crate) fn document_focus_fallback_handle(&self) -> Option<DomHandle> {

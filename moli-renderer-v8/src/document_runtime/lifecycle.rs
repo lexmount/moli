@@ -282,6 +282,7 @@ impl DocumentRuntime {
         self.post_parse_schedule_invalidated = true;
         self.dom_content_loaded_dispatched = false;
         self.autofocus_processed = false;
+        self.autofocus_candidates.clear();
         self.pending_inspector_issues.clear();
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;

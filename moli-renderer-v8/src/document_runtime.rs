@@ -794,6 +794,7 @@ pub(super) struct DocumentRuntime {
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
     autofocus_processed: bool,
+    autofocus_candidates: Vec<DomHandle>,
     document_incarnation: DocumentRuntimeIncarnationIdentity,
     document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,

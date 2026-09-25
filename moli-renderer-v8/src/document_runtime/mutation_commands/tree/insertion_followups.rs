@@ -19,6 +19,7 @@ impl DocumentRuntime {
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
+        self.queue_autofocus_candidates_in_subtrees(insertion_plan.insertion_roots);
         let attribute_reaction_policy = match profile.reaction_policy {
             TreeReactionDispatchPolicy::DispatchNow => AttributeChangedReactionPolicy::DispatchNow,
             TreeReactionDispatchPolicy::AppendToCurrentQueue => {
