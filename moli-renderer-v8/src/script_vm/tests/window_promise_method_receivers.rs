@@ -13,11 +13,13 @@ globalThis.__nativePromiseReceiversResult = 'pending';
   const input = {toString() { conversions++; throw marker; }};
   const options = {get imageOrientation() { conversions++; throw marker; }};
   const image = new ImageData(1, 1);
+  const scrollOptions = {get behavior() { conversions++; throw marker; }};
   const handler = new Proxy({}, {get() { traps++; throw marker; }});
   const revoked = Proxy.revocable(native, {});
   revoked.revoke();
   const receivers = [new Proxy(native, handler), Object.create(native), {__moliNativeBridge}, revoked.proxy];
-  for (const [name, args] of [['fetch', [input]], ['createImageBitmap', [image, options]]]) {
+  for (const [name, args] of [['fetch', [input]], ['createImageBitmap', [image, options]],
+    ...['scroll', 'scrollTo', 'scrollBy'].map(name => [name, [scrollOptions]])]) {
     for (const receiver of [...receivers, native]) {
       let promise;
       try { promise = window[name].apply(receiver, args); }
@@ -31,7 +33,7 @@ globalThis.__nativePromiseReceiversResult = 'pending';
       }
     }
   }
-  return conversions === 2 && traps === 0 ? 'ok' : 'brand checks ran author code';
+  return conversions === 5 && traps === 0 ? 'ok' : 'brand checks ran author code';
 })().then(
   result => { __nativePromiseReceiversResult = result; },
   error => { __nativePromiseReceiversResult = String(error); }
@@ -93,7 +95,7 @@ globalThis.__promiseMethodReceiversResult = null;
             .expect("Window Promise method receiver observations"),
     )
     .unwrap();
-    assert_eq!(result["checks"], 230, "{result}");
+    assert_eq!(result["checks"], 530, "{result}");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     assert_eq!(
         server.finish_targets().await,
