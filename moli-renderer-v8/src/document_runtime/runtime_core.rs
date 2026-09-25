@@ -66,7 +66,7 @@ impl DocumentRuntime {
         let document_handle = dom_host.document_handle();
         dom_host.set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         let parser_boundary_lifecycle_tx = page_task_parser_boundary_injection_tx.clone();
-        Self {
+        let mut runtime = Self {
             dom_host,
             parser_reentry: ParserReentryState::default(),
             pending_parser_post_step_runtime_work: ParserPostStepRuntimeWork::default(),
@@ -125,6 +125,7 @@ impl DocumentRuntime {
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,
             autofocus_processed: false,
+            autofocus_candidates: Vec::new(),
             document_incarnation,
             document_input_stream_opened: false,
             next_document_write_external_script_load_id: 0,
@@ -132,7 +133,9 @@ impl DocumentRuntime {
             main_document_script_preloads: Default::default(),
             document_write_script_preloads: HashMap::new(),
             pending_parser_blocking_work: None,
-        }
+        };
+        runtime.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+        runtime
     }
 
     #[cfg(test)]
@@ -252,6 +255,7 @@ impl DocumentRuntime {
             structural_mutation_depth: _,
             dom_content_loaded_dispatched: _,
             autofocus_processed: _,
+            autofocus_candidates: _,
             document_incarnation: _,
             document_input_stream_opened: _,
             next_document_write_external_script_load_id: _,
