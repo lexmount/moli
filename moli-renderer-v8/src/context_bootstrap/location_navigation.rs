@@ -413,7 +413,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     if matches!(kind, LocationNavigationKind::Reload)
         && matches!(
             navigation_reload_admission(scope, owner),
-            NavigationReloadAdmission::NoCommittedHistoryItem
+            NavigationReloadAdmission::PendingInitialAttributeNavigation
         )
     {
         return;

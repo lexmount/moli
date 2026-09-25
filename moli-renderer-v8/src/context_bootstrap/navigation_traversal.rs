@@ -268,10 +268,10 @@ pub(super) fn navigation_reload_callback<'s>(
     }
     if matches!(
         navigation_reload_admission(scope, owner),
-        NavigationReloadAdmission::NoCommittedHistoryItem
+        NavigationReloadAdmission::PendingInitialAttributeNavigation
     ) {
-        // Navigation API methods on an initial-empty Document return a
-        // correctly-shaped result whose promises intentionally never settle.
+        // Reloading the initial empty Document must not replace a deferred
+        // iframe attribute navigation. Its result promises remain pending.
         rv.set(navigation_pending_result(scope).into());
         return;
     }

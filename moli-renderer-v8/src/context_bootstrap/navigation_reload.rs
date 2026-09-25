@@ -1,15 +1,13 @@
 use super::navigation_window::child_browsing_context_handle_for_runtime_owner;
 use super::*;
 
-/// Whether the current Document owns a committed session-history item that
-/// can be used as the source of a reload.
-///
-/// An initial-empty child Document is installed synchronously before its first
-/// real navigation and deliberately has no committed history item. Reloading
-/// it must therefore leave any deferred iframe attribute navigation alone.
+/// A deferred iframe attribute navigation still belongs to the initial empty
+/// Document. Reloading that Document must leave the pending attribute load
+/// alone; an ordinary initial about:blank iframe has an active history entry
+/// and can be reloaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NavigationReloadAdmission {
-    NoCommittedHistoryItem,
+    PendingInitialAttributeNavigation,
     Admitted,
 }
 
@@ -23,8 +21,8 @@ pub(super) fn navigation_reload_admission<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return NavigationReloadAdmission::Admitted;
     };
-    if unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle) {
-        NavigationReloadAdmission::NoCommittedHistoryItem
+    if unsafe { &*host_ptr }.child_initial_empty_has_pending_attribute_navigation(handle) {
+        NavigationReloadAdmission::PendingInitialAttributeNavigation
     } else {
         NavigationReloadAdmission::Admitted
     }

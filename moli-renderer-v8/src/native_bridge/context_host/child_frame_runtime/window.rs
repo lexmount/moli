@@ -1022,6 +1022,17 @@ impl JsContextHost {
             .is_some_and(crate::frame_owner_model::DocumentCreationKind::is_initial_empty)
     }
 
+    pub(crate) fn child_initial_empty_has_pending_attribute_navigation(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        self.child_current_document_is_initial_empty(handle)
+            && self
+                .child_browsing_contexts
+                .get(&handle)
+                .is_some_and(|entry| entry.pending_attribute_bootstrap_commit())
+    }
+
     pub(crate) fn child_has_committed_navigation(&self, handle: DomHandle) -> bool {
         self.frame_owner_store
             .child_has_committed_navigation(handle)
