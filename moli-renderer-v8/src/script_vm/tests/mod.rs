@@ -2285,4 +2285,5 @@ mod media_device_interfaces;
 mod window_promise_method_receivers;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
+mod window_scroll_methods;
 mod window_sync_method_receivers;
