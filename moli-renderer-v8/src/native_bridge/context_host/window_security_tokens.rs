@@ -596,6 +596,20 @@ impl JsContextHost {
         accessing_origin.can_access(&accessed_origin)
     }
 
+    pub(crate) fn current_realm_can_access_child_window(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) -> bool {
+        self.current_runtime_window_execution_context_identity(scope)
+            .is_some_and(|accessing| {
+                self.window_execution_context_can_access_dispatch_scope(
+                    accessing,
+                    OwnerDispatchScope::Child(handle),
+                )
+            })
+    }
+
     fn window_access_origin(
         &self,
         identity: WindowExecutionContextIdentity,

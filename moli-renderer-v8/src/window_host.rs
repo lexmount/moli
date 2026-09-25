@@ -1845,7 +1845,7 @@ fn child_window_message_source<'s>(
     host: &mut JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    host.child_browsing_context_window_proxy_for_top(scope, handle)
+    host.child_browsing_context_window_proxy_for_current_realm(scope, handle)
 }
 
 fn collect_timer_extra_args(
