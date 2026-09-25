@@ -135,28 +135,26 @@ impl NativeDom {
         {
             return FocusSupport::Blocked;
         }
-        if element.explicit_tab_index().is_some()
-            || element.hyperlink_href().is_some()
-            || matches!(
-                (element.namespace(), element.local_name()),
-                (
-                    HTML_NS,
-                    "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog"
-                )
-            )
-            || (element.is_html_element("summary")
-                && self
-                    .parent_node(node_id)
-                    .and_then(|parent| self.main_summary_child(parent))
-                    == Some(node_id))
-            || (element.content_editable_state().is_editable()
-                && self
-                    .parent_node(node_id)
-                    .is_none_or(|parent| !self.is_content_editable(parent)))
-        {
+        if element.explicit_tab_index().is_some() || self.has_default_focus_behavior(node_id) {
             return FocusSupport::Supported;
         }
         FocusSupport::LayoutDependent
+    }
+
+    pub fn has_default_focus_behavior(&self, node_id: NativeNodeId) -> bool {
+        let Some(element) = self.node(node_id).and_then(Node::as_element) else {
+            return false;
+        };
+        let native_behavior = match (element.namespace(), element.local_name()) {
+            (HTML_NS, "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog" | "object") => true,
+            (HTML_NS, "audio" | "video") => element.has_attribute_ns("", "controls"),
+            (HTML_NS, "summary") => self.parent_node(node_id)
+                .and_then(|parent| self.main_summary_child(parent)) == Some(node_id),
+            ("http://www.w3.org/1998/Math/MathML", "a") => element.has_attribute_ns("", "href"),
+            _ => element.hyperlink_href().is_some(),
+        };
+        native_behavior || (element.content_editable_state().is_editable()
+            && self.parent_node(node_id).is_none_or(|parent| !self.is_content_editable(parent)))
     }
 
     /// Native disabled state. Form-associated custom elements use the same

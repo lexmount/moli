@@ -183,10 +183,7 @@ fn html_area_has_associated_image_map(runtime: &PageScriptHost, handle: DomHandl
     let Some(area) = dom.node(handle).and_then(Node::as_element) else {
         return false;
     };
-    if area.namespace() != document::XHTML_NS
-        || area.local_name() != "area"
-        || !area.has_attribute("href")
-    {
+    if !area.is_html_element("area") {
         return false;
     }
 
@@ -254,6 +251,32 @@ pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool 
     }
 }
 
+fn svg_element_is_non_renderable(element: &Element) -> bool {
+    // Only directly renderable SVG elements can receive focus. Definitions,
+    // effects, animation and unknown elements cannot opt in with display or
+    // tabindex. Source <symbol> elements are not <use> shadow-tree instances.
+    element.namespace() == document::SVG_NS
+        && !matches!(
+            element.local_name(),
+            "a" | "circle"
+                | "ellipse"
+                | "foreignObject"
+                | "g"
+                | "image"
+                | "line"
+                | "path"
+                | "polygon"
+                | "polyline"
+                | "rect"
+                | "svg"
+                | "switch"
+                | "text"
+                | "textPath"
+                | "tspan"
+                | "use"
+        )
+}
+
 fn element_focus_is_suppressed(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let visibility = style_property_value(runtime, handle, StyleMode::Computed, "visibility");
     if matches!(
@@ -271,6 +294,7 @@ fn element_focus_is_suppressed(runtime: &PageScriptHost, handle: DomHandle) -> b
             .and_then(Node::as_element)
             && (element.has_attribute("inert")
                 || element.has_attribute("hidden")
+                || svg_element_is_non_renderable(element)
                 || computed_display(runtime, candidate) == "none")
         {
             return true;
@@ -1629,17 +1653,13 @@ fn is_interactive_sequential_focusable_descendant(
     runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    if is_disabled_form_control(runtime, handle) {
+    if !is_focusable(runtime, handle) {
         return false;
     }
-    let is_interactive_element = matches!(
-        element.local_name(),
-        "a" | "button" | "input" | "select" | "textarea"
-    );
-    let has_non_negative_tab_index = element.explicit_tab_index().is_some_and(|value| value >= 0);
+    let dom = runtime.dom_host().dom();
+    let is_interactive_element = dom.has_default_focus_behavior(handle);
+    let has_non_negative_tab_index = dom.node(handle).and_then(Node::as_element)
+        .and_then(Element::explicit_tab_index).is_some_and(|value| value >= 0);
     (is_interactive_element || has_non_negative_tab_index)
         && sequential_tab_index_without_scroll_descendant_check(runtime, handle).is_some()
 }
@@ -1657,13 +1677,12 @@ fn default_sequential_tab_index(runtime: &PageScriptHost, handle: DomHandle) -> 
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
-    if element.namespace() != "http://www.w3.org/1999/xhtml" {
-        return -1;
-    }
-    match element.local_name() {
-        "a" | "button" | "input" | "select" | "textarea" => 0,
-        _ if element_is_scrollable(runtime, handle) => 0,
-        _ => -1,
+    if (runtime.dom_host().dom().has_default_focus_behavior(handle) && !element.is_html_element("dialog"))
+        || element_is_scrollable(runtime, handle)
+    {
+        0
+    } else {
+        -1
     }
 }
 
