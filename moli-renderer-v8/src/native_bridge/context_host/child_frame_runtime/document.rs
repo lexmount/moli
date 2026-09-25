@@ -386,7 +386,7 @@ impl PageScriptHost {
                     return;
                 }
                 let entry_document = host.document_open_entry_document(scope);
-                let Some(context) = host.begin_child_document_stream_replacement(
+                let Some(context) = Self::begin_child_document_stream_replacement(
                     scope,
                     host_ptr,
                     child_handle,

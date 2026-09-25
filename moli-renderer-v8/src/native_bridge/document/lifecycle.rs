@@ -490,11 +490,7 @@ impl PageScriptHost {
             // Entry-change listeners can synchronously change the URL again.
             // Publish this change first so their later handoffs remain last.
             if url_changed {
-                unsafe { &mut *host_ptr }.record_same_document_navigation(
-                    &url,
-                    "historyApi",
-                    moli_page_types::SameDocumentHistoryUpdate::Replace,
-                );
+                unsafe { &mut *host_ptr }.record_same_document_navigation(&url, "historyApi");
             }
             crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
         }
