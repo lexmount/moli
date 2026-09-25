@@ -226,10 +226,18 @@ pub(super) fn queue_same_document_navigation_success<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
     signal: Option<v8::Local<'s, v8::Object>>,
-    href: &str,
+    fallback_scroll_href: Option<&str>,
 ) {
     queue_same_document_navigation_finished(
-        scope, navigation, signal, None, None, None, None, None, href,
+        scope,
+        navigation,
+        signal,
+        None,
+        None,
+        None,
+        None,
+        None,
+        fallback_scroll_href.unwrap_or_default(),
     );
 }
 

@@ -298,11 +298,13 @@ fn mutate_history_object<'s>(
                 dispatch_navigation_success(scope, navigation);
             }
         } else {
+            // History API updates preserve scroll, even when the new URL has a
+            // fragment. Only queue completion, without a fragment/top fallback.
             queue_same_document_navigation_success(
                 scope,
                 navigation,
                 navigate_outcome.as_ref().and_then(|outcome| outcome.signal),
-                url.as_str(),
+                None,
             );
         }
     }

@@ -3454,6 +3454,51 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
 }
+
+#[test]
+fn history_api_url_updates_preserve_scroll_and_focus() {
+    for method in ["pushState", "replaceState"] {
+        for destination in ["/more?month=8", "#destination"] {
+            let mut vm = new_parsed_test_vm(
+                "https://example.com/profile",
+                r#"<!doctype html><body style="margin:0;width:3000px;height:5000px">
+                <input id="focused">
+                <div id="destination" style="position:absolute;top:3500px">month</div>"#,
+            );
+            refresh_layout_for_test(&mut vm);
+            vm.eval(
+                r#"focused.focus({preventScroll:true}); scrollTo(120,900);
+                window.events=[];
+                for (const type of ['navigate','currententrychange','navigatesuccess'])
+                    navigation.addEventListener(type,()=>events.push(type));
+                window.position=()=>[scrollX,scrollY,document.scrollingElement.scrollLeft,
+                    document.scrollingElement.scrollTop,document.activeElement.id].join('|');"#,
+            )
+            .unwrap();
+            refresh_layout_for_test(&mut vm);
+            let layouts = vm.layout_pass_observability_for_test().1;
+            assert_eq!(
+                vm.eval(&format!(
+                    "history.{method}({{month:8}},'',{destination:?}); position()+'|'+events.join(',')"
+                ))
+                .unwrap(),
+                "120|900|120|900|focused|navigate,currententrychange",
+                "{method}({destination}) before completion"
+            );
+            // History API completion still emits navigatesuccess, but must not
+            // apply the fragment/top scrolling used by an actual navigation.
+            assert_eq!(
+                vm.eval("position()+'|'+events.join(',')").unwrap(),
+                "120|900|120|900|focused|navigate,currententrychange,navigatesuccess",
+                "{method}({destination}) after completion"
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, layouts);
+            refresh_layout_for_test(&mut vm);
+            assert_eq!(vm.eval("position()").unwrap(), "120|900|120|900|focused");
+        }
+    }
+}
+
 #[test]
 fn same_document_navigation_dispatches_navigatesuccess() {
     let mut vm = new_storage_test_vm("https://example.com/base");

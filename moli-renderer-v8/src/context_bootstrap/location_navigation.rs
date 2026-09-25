@@ -447,7 +447,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     scope,
                     navigation,
                     navigate_outcome.as_ref().and_then(|outcome| outcome.signal),
-                    resolved.as_str(),
+                    Some(resolved.as_str()),
                 );
             }
         }
