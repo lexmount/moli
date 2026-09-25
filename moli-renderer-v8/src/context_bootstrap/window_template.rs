@@ -121,13 +121,13 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_report_error_callback)]
     report_error: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise)]
     scroll_to: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, returns_promise)]
     scroll: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, returns_promise)]
     scroll_by: (),
 
     #[webapi(
