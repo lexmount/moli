@@ -5,57 +5,7 @@ use crate::{
 
 use super::dom_manipulation::{RendererPageDomManipulationRoute, RendererPageDomManipulationTask};
 
-/// Data captured from one successful Web Storage mutation.
-///
-/// Storage-area matching and source exclusion happen synchronously at the
-/// producer boundary. A copy of this immutable event data is then queued for
-/// each exact recipient LocalDOMWindow.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RendererPageStorageEventData {
-    url: String,
-    is_session: bool,
-    key: Option<Vec<u16>>,
-    old_value: Option<Vec<u16>>,
-    new_value: Option<Vec<u16>>,
-}
-
-impl RendererPageStorageEventData {
-    pub(crate) fn new(
-        url: String,
-        is_session: bool,
-        key: Option<Vec<u16>>,
-        old_value: Option<Vec<u16>>,
-        new_value: Option<Vec<u16>>,
-    ) -> Self {
-        Self {
-            url,
-            is_session,
-            key,
-            old_value,
-            new_value,
-        }
-    }
-
-    pub(crate) fn url(&self) -> &str {
-        &self.url
-    }
-
-    pub(crate) const fn is_session(&self) -> bool {
-        self.is_session
-    }
-
-    pub(crate) fn key(&self) -> Option<&[u16]> {
-        self.key.as_deref()
-    }
-
-    pub(crate) fn old_value(&self) -> Option<&[u16]> {
-        self.old_value.as_deref()
-    }
-
-    pub(crate) fn new_value(&self) -> Option<&[u16]> {
-        self.new_value.as_deref()
-    }
-}
+pub(crate) use moli_web_storage::WebStorageEventData as RendererPageStorageEventData;
 
 /// PageVm namespace plus the exact LocalDOMWindow that was eligible when the
 /// storage mutation occurred.
@@ -129,6 +79,10 @@ pub(crate) struct RendererPageStorageEventDeliverySender {
 }
 
 impl RendererPageStorageEventDeliverySender {
+    pub(crate) fn event_source(&self) -> moli_web_storage::WebStorageEventSource {
+        self.route.storage_event_source()
+    }
+
     pub(super) fn new(
         route: RendererPageDomManipulationRoute,
         root_document: RendererDocumentToken,

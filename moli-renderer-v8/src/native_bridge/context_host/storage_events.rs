@@ -7,6 +7,63 @@ use crate::{
 };
 
 impl PageScriptHost {
+    pub(super) fn refresh_storage_event_recipients(&mut self) {
+        let windows = self
+            .window_execution_contexts
+            .iter()
+            .map(|(owner, binding)| (*owner, binding.dispatch_scope()))
+            .collect::<Vec<_>>();
+        for (owner, dispatch_scope) in windows {
+            self.register_storage_event_recipient(owner, dispatch_scope);
+        }
+    }
+
+    pub(super) fn register_storage_event_recipient(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+        dispatch_scope: OwnerDispatchScope,
+    ) {
+        // Bootstrap registers the first realm before Page task capabilities
+        // are installed. Installation refreshes that realm before script runs.
+        if self.page_task_capabilities.get().is_none()
+            || !self.window_execution_context_owner_is_current(owner, dispatch_scope)
+        {
+            return;
+        }
+        let storage = match dispatch_scope {
+            OwnerDispatchScope::Top => Some(self.top_document_storage_context()),
+            OwnerDispatchScope::Child(handle) => {
+                self.storage_context_for_child_browsing_context(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                self.storage_context_for_lightweight_popup(id)
+            }
+        };
+        let Some(storage) = storage else {
+            self.storage_event_recipients.remove(&owner);
+            return;
+        };
+        let (origin, area_key) = storage.into_origin_and_area_key();
+        let target = WindowTaskTarget::new(dispatch_scope, owner);
+        if self
+            .storage_event_recipients
+            .get(&owner)
+            .is_some_and(|entry| entry.matches(&origin, &area_key, target))
+        {
+            return;
+        }
+        let recipient =
+            std::sync::Arc::new(crate::context_bootstrap::WebStorageEventRecipient::new(
+                origin,
+                area_key,
+                target,
+                self.page_storage_event_delivery_sender(),
+            ));
+        self.web_storage_store
+            .register_event_recipient(recipient.clone());
+        self.storage_event_recipients.insert(owner, recipient);
+    }
+
     /// Capture one DOM-manipulation task per exact recipient LocalDOMWindow.
     ///
     /// The Web Storage mutation, storage-area match and source exclusion are
@@ -19,36 +76,15 @@ impl PageScriptHost {
         area_key: &str,
         data: RendererPageStorageEventData,
     ) -> usize {
-        let mut queued = self.queue_storage_event_deliveries_in_page(
+        // The shared store already captures every other Page's registered
+        // recipients once. Walking related hosts would duplicate their events
+        // and let that second fan-out send the mutation back to its source.
+        self.queue_storage_event_deliveries_in_page(
             Some(source.dispatch_scope()),
             origin,
             area_key,
             &data,
-        );
-        if !data.is_session()
-            && let Some(environment) = self.page_script_environment()
-        {
-            for related in environment.related_document_hosts() {
-                let related_ptr = related.as_ptr();
-                if std::ptr::eq(related_ptr, self) {
-                    continue;
-                }
-                // Related Pages share the owner thread. Capture native task
-                // recipients here; no other Page's JavaScript is entered.
-                let related_host = unsafe { &mut *related_ptr };
-                if related_host.page_script_environment().is_none()
-                    || !std::sync::Arc::ptr_eq(
-                        &self.web_storage_store,
-                        &related_host.web_storage_store,
-                    )
-                {
-                    continue;
-                }
-                queued += related_host
-                    .queue_storage_event_deliveries_in_page(None, origin, area_key, &data);
-            }
-        }
-        queued
+        )
     }
 
     fn queue_storage_event_deliveries_in_page(
@@ -74,6 +110,14 @@ impl PageScriptHost {
                     break;
                 }
             }
+        }
+        if !data.is_session() {
+            queued += self.web_storage_store.queue_remote_storage_events(
+                &sender.event_source(),
+                origin,
+                area_key,
+                data,
+            );
         }
         queued
     }

@@ -376,6 +376,10 @@ impl RendererPageDomManipulationRoute {
         self.task_route.same_route_as(&other.task_route)
     }
 
+    pub(super) fn storage_event_source(&self) -> moli_web_storage::WebStorageEventSource {
+        moli_web_storage::WebStorageEventSource::new(self.task_route.shared_identity())
+    }
+
     fn same_source_as(&self, source: &RendererPageDomManipulationSource) -> bool {
         self.task_route.same_source_as(&source.source)
     }

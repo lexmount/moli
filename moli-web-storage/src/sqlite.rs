@@ -142,6 +142,7 @@ pub fn new_lazy_sqlite_web_storage_store(
     let store = Arc::new(WebStorageStore {
         backend: WebStorageBackend::Sqlite(backend),
         mutation_subscribers: Mutex::new(Vec::new()),
+        event_recipients: Mutex::new(Vec::new()),
     });
     Ok((store, SqliteWebStorageOwner { owner }))
 }

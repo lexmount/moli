@@ -453,6 +453,7 @@ impl PageScriptHost {
                 self.initialize_realtime_font_readiness(document);
             }
         }
+        self.register_storage_event_recipient(owner, current_dispatch_scope);
         if let Some(previous) = previous.as_ref()
             && previous.realm_token() != current_realm
         {
@@ -558,6 +559,7 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_execution_context_owner(owner);
         self.retire_realtime_animation_frame_owner(owner);
         self.retire_realtime_media_query_owner(owner);
+        self.storage_event_recipients.remove(&owner);
         self.retire_event_callbacks_for_execution_context(owner);
         self.close_watcher_managers.remove(&owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
@@ -619,6 +621,7 @@ impl PageScriptHost {
             self.local_storage_areas.remove(&owner);
             self.retire_realtime_animation_frame_owner(owner);
             crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
+            self.storage_event_recipients.remove(&owner);
             self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
