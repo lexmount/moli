@@ -1578,3 +1578,117 @@ globalThis.__retiredOneSidedDomainWindow = retiredFrame.contentWindow;
         vec!["/child.html", "/child.html"]
     );
 }
+
+#[test]
+fn initial_empty_iframe_reload_methods_preserve_synchronous_state() {
+    let mut vm = new_storage_test_vm("https://initial-empty-reload.test/page.html");
+
+    let setup = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const log = [];
+  const optionReads = [];
+  child.navigation.onnavigate = () => log.push('navigate');
+  child.navigation.onnavigatesuccess = () => log.push('navigatesuccess');
+  child.navigation.onnavigateerror = () => log.push('navigateerror');
+
+  const options = {};
+  Object.defineProperties(options, {
+    info: {
+      get() {
+        optionReads.push('info');
+        return 'initial-empty';
+      }
+    },
+    state: {
+      get() {
+        optionReads.push('state');
+        return { initialEmpty: true };
+      }
+    }
+  });
+  const result = child.navigation.reload(options);
+  result.committed.then(
+    () => log.push('committed:fulfilled'),
+    () => log.push('committed:rejected')
+  );
+  result.finished.then(
+    () => log.push('finished:fulfilled'),
+    () => log.push('finished:rejected')
+  );
+  child.location.reload();
+  child.history.go(0);
+  Promise.resolve().then(() => log.push('checkpoint'));
+  globalThis.__initialEmptyReloadFrame = frame;
+  globalThis.__initialEmptyReloadLog = log;
+
+  return JSON.stringify({
+    href: child.location.href,
+    resultRealm: Object.getPrototypeOf(result) === child.Object.prototype,
+    keys: Reflect.ownKeys(result),
+    committedPromise: result.committed instanceof child.Promise,
+    finishedPromise: result.finished instanceof child.Promise,
+    distinctPromises: result.committed !== result.finished,
+    optionReads,
+    log
+  });
+})()
+"#,
+        )
+        .expect("initial-empty reload setup should evaluate");
+
+    assert_eq!(
+        setup,
+        r#"{"href":"about:blank","resultRealm":true,"keys":["committed","finished"],"committedPromise":true,"finishedPromise":true,"distinctPromises":true,"optionReads":["info","state"],"log":[]}"#
+    );
+    assert_eq!(
+        vm.eval("globalThis.__initialEmptyReloadLog.join('|')")
+            .expect("initial-empty reload microtask log should evaluate"),
+        "checkpoint"
+    );
+    assert_eq!(
+        vm.eval("globalThis.__initialEmptyReloadFrame.contentWindow.location.href")
+            .expect("initial-empty reload location should evaluate"),
+        "about:blank"
+    );
+}
+
+#[test]
+fn location_reload_replaces_initial_empty_iframe_document_and_dispatches_load() {
+    let mut vm = new_storage_test_vm("https://initial-empty-reload.test/page.html");
+
+    vm.exec(
+        r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+globalThis.__initialReloadFrame = frame;
+globalThis.__initialReloadDocument = frame.contentDocument;
+globalThis.__initialReloadLoads = 0;
+frame.onload = () => ++__initialReloadLoads;
+frame.contentWindow.location.reload();
+"#,
+        None,
+    )
+    .expect("initial-empty iframe reload should evaluate");
+    assert!(
+        vm.has_pending_child_navigation_commit_for_test(),
+        "reloading an ordinary initial about:blank iframe must queue a navigation"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"[
+  __initialReloadFrame.contentDocument !== __initialReloadDocument,
+  __initialReloadLoads,
+  __initialReloadFrame.contentWindow.location.href
+].join('|')"#,
+        )
+        .expect("initial-empty iframe reload result should evaluate"),
+        "true|1|about:blank"
+    );
+}
