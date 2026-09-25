@@ -493,7 +493,7 @@ struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     persistent: u32,
     #[webapi(data_property = "webkitStorageInfo")]
     webkit_storage_info: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = WINDOW_NAME_SLOT)]
+    #[webapi(slot = WINDOW_NAME_SLOT)]
     window_name: &'static str,
     #[webapi(data_property = "console")]
     public_console: v8::Local<'scope, v8::Object>,
@@ -850,7 +850,7 @@ fn window_name_runtime_getter<'s>(
         rv.set(v8::String::new(scope, &name).unwrap().into());
         return;
     }
-    let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
+    let value = get_private_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
 }
@@ -867,19 +867,19 @@ fn window_name_runtime_setter<'s>(
     let Some(next) = args.get(0).to_string(scope) else {
         return;
     };
-    let next = next.to_rust_string_lossy(scope);
+    let next_string = next.to_rust_string_lossy(scope);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
-            host.set_child_browsing_context_name(handle, next.clone());
+            host.set_child_browsing_context_name(handle, next_string.clone());
         } else {
             if host.browsing_context_is_closed() {
                 return;
             }
-            host.browsing_context_name().set(next.clone());
+            host.browsing_context_name().set(next_string.clone());
         }
     }
-    define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
+    set_private_value(scope, receiver, WINDOW_NAME_SLOT, next.into());
 }
 
 fn window_status_runtime_getter<'s>(

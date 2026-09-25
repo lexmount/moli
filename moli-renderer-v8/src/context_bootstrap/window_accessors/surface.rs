@@ -207,6 +207,12 @@ pub(crate) fn window_opener_getter<'s>(
             return;
         }
     }
+    if let Some(host_ptr) = window_host_ptr(scope, receiver)
+        && let Some(opener) = unsafe { &*host_ptr }.top_window_opener(scope)
+    {
+        rv.set(opener.into());
+        return;
+    }
     let Some(host) = receiver
         .get_creation_context(scope)
         .and_then(context_host_ptr_from_context_slot)
@@ -247,8 +253,11 @@ pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
                 host.clear_lightweight_popup_opener(popup_id);
             } else if let Some(handle) = window_child_context_handle(scope, receiver) {
                 host.clear_child_browsing_context_opener(handle);
-            } else if let Some(environment) = host.page_script_environment() {
-                environment.set_opener(None);
+            } else {
+                host.clear_top_window_opener();
+                if let Some(environment) = host.page_script_environment() {
+                    environment.set_opener(None);
+                }
             }
         }
         return;

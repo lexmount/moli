@@ -107,6 +107,7 @@ if (__emptyOpenKind === 'iframe') {{
 globalThis.__emptyOpenDone = false;
 globalThis.__emptyOpenRows = [];
 const w = __emptyOpenWindow, before = w.document, href = w.location.href;
+const openerGetter = Object.getOwnPropertyDescriptor(w, 'opener').get;
 w.history.replaceState({kept:42}, '');
 const state = w.history.state, length = w.history.length;
 const marker = before.body.appendChild(before.createElement('p'));
@@ -123,7 +124,9 @@ setTimeout(() => {
   __emptyOpenRows.push([w.document === before, w.location.href === href,
     w.history.state === state, w.history.length === length,
     before.body.contains(marker), loads === 0,
-    w.opener === (__emptyOpenKind === 'iframe' ? window : null)]);
+    // Named reuse updates the native opener even when no navigation occurs.
+    // Read the original accessor independently of any author shadow property.
+    openerGetter.call(w) === window]);
   __emptyOpenDone = true;
 }, 100);
 "#,

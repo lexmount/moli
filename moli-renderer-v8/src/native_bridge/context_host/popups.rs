@@ -884,42 +884,13 @@ impl JsContextHost {
         update_existing_opener: bool,
     ) -> Option<OpenedLightweightPopup<'s>> {
         if let Some(popup_id) = self.named_lightweight_popup_id(target_name)
+            && let Some(opened) = self.reuse_lightweight_popup_window(
+                scope, popup_id, opener, opener_child_handle, href,
+                creator_base_url.clone(), creator_policy_container.clone(),
+                update_existing_opener,
+            )
         {
-            let window = self.lightweight_popup_window(scope, popup_id)?;
-            if update_existing_opener && let Some(opener) = opener {
-                set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
-                let endpoint = lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
-                if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
-                    record.opener = endpoint;
-                    record.opener_window = Some(v8::Global::new(scope, opener));
-                }
-            }
-            let Some(href) = href else {
-                return Some(OpenedLightweightPopup {
-                    window,
-                    popup_id,
-                    created_new_browsing_context: false,
-                    document_response: None,
-                });
-            };
-            let (document_response, receiver) = self.auxiliary_document_response_channel(href);
-            if let Some(window) = self.reopen_lightweight_popup_window(
-                scope,
-                popup_id,
-                opener,
-                opener_child_handle,
-                href,
-                creator_base_url.clone(),
-                creator_policy_container.clone(),
-                receiver,
-            ) {
-                return Some(OpenedLightweightPopup {
-                    window,
-                    popup_id,
-                    created_new_browsing_context: false,
-                    document_response,
-                });
-            }
+            return Some(opened);
         }
         let href = href.unwrap_or("about:blank");
         let (document_response, receiver) = self.auxiliary_document_response_channel(href);
@@ -942,6 +913,56 @@ impl JsContextHost {
             created_new_browsing_context: true,
             document_response,
         })
+    }
+
+    pub(crate) fn reuse_lightweight_popup_window<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        opener: Option<v8::Local<'s, v8::Object>>,
+        opener_child_handle: Option<DomHandle>,
+        href: Option<&str>,
+        creator_base_url: Url,
+        creator_policy_container: DocumentPolicyContainer,
+        update_existing_opener: bool,
+    ) -> Option<OpenedLightweightPopup<'s>> {
+        if !self.lightweight_popup_is_open(popup_id) {
+            return None;
+        }
+            let window = self.lightweight_popup_window(scope, popup_id)?;
+            if update_existing_opener && let Some(opener) = opener {
+                set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
+                let endpoint = lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
+                if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+                    record.opener = endpoint;
+                    record.opener_window = Some(v8::Global::new(scope, opener));
+                }
+            }
+            let Some(href) = href else {
+                return Some(OpenedLightweightPopup {
+                    window,
+                    popup_id,
+                    created_new_browsing_context: false,
+                    document_response: None,
+                });
+            };
+            let (document_response, receiver) = self.auxiliary_document_response_channel(href);
+            let window = self.reopen_lightweight_popup_window(
+                scope,
+                popup_id,
+                opener,
+                opener_child_handle,
+                href,
+                creator_base_url.clone(),
+                creator_policy_container.clone(),
+                receiver,
+            )?;
+            Some(OpenedLightweightPopup {
+                    window,
+                    popup_id,
+                    created_new_browsing_context: false,
+                    document_response,
+            })
     }
 
     pub(crate) fn create_lightweight_popup_window<'s>(
@@ -1030,7 +1051,7 @@ impl JsContextHost {
         let initial_window_name =
             trackable_lightweight_popup_window_name(target_name).unwrap_or_default();
         let initial_window_name = v8_string(scope, &initial_window_name)?;
-        set_object_slot(scope, window, WINDOW_NAME_SLOT, initial_window_name.into());
+        set_private_value(scope, window, WINDOW_NAME_SLOT, initial_window_name.into());
         LightweightPopupWindowStateDeclaration::default()
             .initialize(scope, window)
             .ok()?;
@@ -1418,6 +1439,21 @@ impl JsContextHost {
         };
         record.opener = None;
         record.opener_window = None;
+    }
+
+    pub(crate) fn set_lightweight_popup_opener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        endpoint: super::PendingWindowMessageEndpoint,
+        opener: v8::Local<'_, v8::Object>,
+    ) {
+        if let Some(record) = self.lightweight_popup_browsing_contexts.get_mut(&popup_id)
+            && record.is_open()
+        {
+            record.opener = Some(endpoint);
+            record.opener_window = Some(v8::Global::new(scope, opener));
+        }
     }
 
     pub(crate) fn lightweight_popup_origin(&self, popup_id: u64) -> Option<String> {
@@ -5519,7 +5555,7 @@ fn lightweight_popup_window_name_setter<'s>(
         return;
     };
     let next_string = next.to_rust_string_lossy(scope);
-    set_object_slot(scope, window, WINDOW_NAME_SLOT, next.into());
+    set_private_value(scope, window, WINDOW_NAME_SLOT, next.into());
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next_string);
     }
