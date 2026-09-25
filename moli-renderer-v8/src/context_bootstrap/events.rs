@@ -413,17 +413,20 @@ pub(super) fn close_event_reason_getter_function<'s>(
     rv.set(value);
 }
 
+pub(crate) fn submit_event_submitter_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'_, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    event_private_value(scope, event, SUBMIT_EVENT_SUBMITTER_SLOT)
+}
+
 pub(super) fn submit_event_submitter_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = crate::context_bootstrap::event_private_value(
-        scope,
-        args.this(),
-        SUBMIT_EVENT_SUBMITTER_SLOT,
-    )
-    .unwrap_or_else(|| v8::null(scope).into());
+    let value =
+        submit_event_submitter_value(scope, args.this()).unwrap_or_else(|| v8::null(scope).into());
     let Some(context) = args.this().get_creation_context(scope) else {
         return;
     };

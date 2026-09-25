@@ -213,6 +213,42 @@ fn event_related_target_expando_does_not_change_the_dispatch_path() {
 }
 
 #[test]
+fn submit_event_private_submitter_controls_shadow_dispatch_path() {
+    let mut vm = new_streamed_parser_test_vm(
+        "https://event-private-submitter.test/",
+        r#"<!doctype html><div id="host"></div><button id="submitter"></button>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+        const host = document.getElementById('host');
+        const submitter = document.getElementById('submitter');
+        const shadow = host.attachShadow({mode: 'open'});
+        const form = document.createElement('form');
+        shadow.append(form);
+        const event = new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter});
+        const submitterGetter = Object.getOwnPropertyDescriptor(SubmitEvent.prototype, 'submitter').get;
+        let getterCalls = 0;
+        const shadowGetter = () => { getterCalls++; throw new Error('public submitter getter'); };
+        Object.defineProperty(event, 'submitter', {get: shadowGetter});
+        Object.defineProperty(SubmitEvent.prototype, 'submitter', {get: shadowGetter, configurable: true});
+        const seen = [];
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            seen.push(['form', event.target === form, submitterGetter.call(event) === submitter]);
+        });
+        host.addEventListener('submit', event => {
+            seen.push(['host', event.target === host, submitterGetter.call(event) === submitter]);
+        });
+        form.dispatchEvent(event);
+        JSON.stringify([seen, getterCalls])
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[[["form",true,true],["host",true,true]],0]"#);
+}
+
+#[test]
 fn detached_iframe_shadow_focus_events_retarget_and_trim_paths() {
     let mut vm = new_storage_test_vm("https://detached-shadow-focus-events.test/");
 

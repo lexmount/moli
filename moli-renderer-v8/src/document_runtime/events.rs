@@ -713,17 +713,14 @@ fn source_target_for_reference_event(
     host_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let event_type = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, "type").into())?
-        .to_string(scope)?
-        .to_rust_string_lossy(scope);
-    let source_property = match event_type.as_str() {
-        "beforetoggle" | "command" | "interest" | "loseinterest" | "toggle" => "source",
-        "submit" => "submitter",
+    let event_type = public_event_type(scope, event)?;
+    let source = match event_type.as_str() {
+        "beforetoggle" | "command" | "interest" | "loseinterest" | "toggle" => {
+            crate::context_bootstrap::event_attribute(scope, event, "source")?
+        }
+        "submit" => crate::context_bootstrap::submit_event_submitter_value(scope, event)?,
         _ => return None,
     };
-    let source = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, source_property).into())?;
     if source.is_null_or_undefined() || !source.is_object() {
         return None;
     }
