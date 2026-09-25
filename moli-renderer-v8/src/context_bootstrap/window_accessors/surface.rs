@@ -145,18 +145,38 @@ fn set_receiver_related_window_alias<'s>(
         rv.set_null();
         return;
     }
+    rv.set(window_parent_or_top(
+        scope,
+        receiver,
+        slot == WINDOW_TOP_SLOT,
+    ));
+}
+
+/// Read native Window relationships without consulting replaceable JS
+/// properties, preserving the accessor's cross-origin WindowProxy projection.
+/// The caller must validate the receiver and its lifetime first.
+pub(crate) fn window_parent_or_top<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    top: bool,
+) -> v8::Local<'s, v8::Value> {
+    let slot = if top {
+        WINDOW_TOP_SLOT
+    } else {
+        WINDOW_PARENT_SLOT
+    };
     let value = {
         let context = receiver
             .get_creation_context(scope)
             .unwrap_or_else(|| scope.get_current_context());
         let scope = &mut v8::ContextScope::new(scope, context);
-        window_hidden_value(scope, receiver, slot)
-            .unwrap_or_else(|| context.global(scope).into())
+        window_hidden_value(scope, receiver, slot).unwrap_or_else(|| receiver.into())
     };
-    rv.set(CrossOriginWindowAccessor::project_related_window(scope, value));
+    CrossOriginWindowAccessor::project_related_window(scope, value)
 }
 
 pub(crate) fn window_opener_getter<'s>(
+
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
