@@ -495,7 +495,10 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         };
-        self.cancel_planned_form_navigation_to(super::super::OwnerDispatchScope::Child(handle));
+        self.cancel_planned_form_navigation_for_url(
+            super::super::OwnerDispatchScope::Child(handle),
+            Self::child_browsing_context_bootstrap_url(&bootstrap).as_ref(),
+        );
         self.abort_child_document_parser_for_navigation(handle);
         let ancestor_origins_referrer_policy =
             self.child_ancestor_origins_referrer_policy_from_owner_attribute(handle);
