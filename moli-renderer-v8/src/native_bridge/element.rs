@@ -1516,9 +1516,15 @@ pub(crate) fn install_element_template_bindings<'s>(
             HtmlElementPopoverPrototypeDeclaration,
             HtmlElementGeometryPrototypeDeclaration,
         ),
-        "SVGElement" | "MathMLElement" => install!(
+        "SVGElement" => install!(
             ElementStylePrototypeDeclaration,
             HtmlOrForeignElementPrototypeDeclaration,
+            SvgElementFocusPrototypeDeclaration,
+        ),
+        "MathMLElement" => install!(
+            ElementStylePrototypeDeclaration,
+            HtmlOrForeignElementPrototypeDeclaration,
+            MathMlElementFocusPrototypeDeclaration,
         ),
         _ => {}
     }
