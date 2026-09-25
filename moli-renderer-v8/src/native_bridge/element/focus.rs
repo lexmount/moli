@@ -338,7 +338,7 @@ pub(crate) fn post_parse_autofocus_is_pending(
     runtime: &JsContextHost,
     document: DomHandle,
 ) -> bool {
-    !runtime.autofocus_processed(document) && !runtime.autofocus_candidates(document).is_empty()
+    !runtime.autofocus_processed(document) && runtime.next_autofocus_candidate(document).is_some()
 }
 
 pub(crate) fn process_post_parse_autofocus(
@@ -347,7 +347,8 @@ pub(crate) fn process_post_parse_autofocus(
     document: DomHandle,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.autofocus_processed(document) || runtime.autofocus_candidates(document).is_empty() {
+    if runtime.autofocus_processed(document) || runtime.next_autofocus_candidate(document).is_none()
+    {
         return false;
     }
     if runtime.document_focused_area(document).is_some()
@@ -359,32 +360,37 @@ pub(crate) fn process_post_parse_autofocus(
         runtime.mark_autofocus_processed(document);
         return false;
     }
-    // A pending script-blocking stylesheet can still change focusability.
-    // Preserve the candidates until its resource and imports have settled.
-    if runtime.has_blocking_stylesheets_for_document(document) {
-        return false;
+    while let Some(candidate) = runtime.next_autofocus_candidate(document) {
+        let candidate_document = runtime.dom_host().owner_document_handle(candidate);
+        if !runtime.dom_host().is_connected(candidate)
+            || candidate_document.and_then(|doc| runtime.top_level_document_for_document(doc))
+                != Some(document)
+        {
+            runtime.pop_autofocus_candidate(document);
+            continue;
+        }
+        let candidate_document = candidate_document.expect("active candidate Document");
+        // The first remaining candidate keeps its place while its own Document
+        // waits for styles. An unrelated frame must not delay or overtake it.
+        if runtime.autofocus_document_has_blocking_stylesheets(candidate_document) {
+            return false;
+        }
+        runtime.pop_autofocus_candidate(document);
+        if runtime.autofocus_ancestor_has_target(candidate_document) {
+            continue;
+        }
+        let target = focusable_area_for_element(runtime, candidate)
+            .map(|target| delegated_focus_target(runtime, target).unwrap_or(target));
+        let Some(target) = target else {
+            continue;
+        };
+        // Focus listeners can replace the Document. Complete this Document's
+        // one-time autofocus state before running any author code.
+        runtime.mark_autofocus_processed(document);
+        update_focus(scope, runtime_ptr, Some(target));
+        return true;
     }
-    // Every examined candidate is consumed, including unfocusable elements.
-    // A later rendering opportunity must not retry them without reinsertion.
-    let target = runtime
-        .take_autofocus_candidates(document)
-        .into_iter()
-        .filter(|handle| {
-            runtime.dom_host().is_connected(*handle)
-                && runtime.dom_host().owner_document_handle(*handle) == Some(document)
-        })
-        .find_map(|candidate| {
-            focusable_area_for_element(runtime, candidate)
-                .map(|target| delegated_focus_target(runtime, target).unwrap_or(target))
-        });
-    let Some(target) = target else {
-        return false;
-    };
-    // Focus listeners can replace the Document. Complete this Document's
-    // one-time autofocus state before running any author code.
-    runtime.mark_autofocus_processed(document);
-    update_focus(scope, runtime_ptr, Some(target));
-    true
+    false
 }
 
 pub(crate) fn reset_document_navigation_focus(
@@ -734,10 +740,24 @@ fn update_focus_from_previous_with_previous_focus_within(
     }
     if let Some(previous_handle) = previous {
         dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, previous_handle);
-        if let Some(event) = construct_focus_event(scope, "blur", next_value, false) {
+        if let Some(event) = construct_node_focus_event(
+            scope,
+            runtime_ptr,
+            previous_handle,
+            "blur",
+            next_value,
+            false,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
-        if let Some(event) = construct_focus_event(scope, "focusout", next_value, true) {
+        if let Some(event) = construct_node_focus_event(
+            scope,
+            runtime_ptr,
+            previous_handle,
+            "focusout",
+            next_value,
+            true,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
@@ -749,10 +769,24 @@ fn update_focus_from_previous_with_previous_focus_within(
     }
     let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
     if let Some(next_handle) = next {
-        if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
+        if let Some(event) = construct_node_focus_event(
+            scope,
+            runtime_ptr,
+            next_handle,
+            "focus",
+            previous_value,
+            false,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
         }
-        if let Some(event) = construct_focus_event(scope, "focusin", previous_value, true) {
+        if let Some(event) = construct_node_focus_event(
+            scope,
+            runtime_ptr,
+            next_handle,
+            "focusin",
+            previous_value,
+            true,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
         }
         if let Some(target) =
@@ -820,14 +854,65 @@ fn focused_window_endpoint(
     (document == runtime.document_handle()).then_some(PendingWindowMessageEndpoint::TopWindow)
 }
 
+fn construct_node_focus_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    bubbles: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let endpoint = focused_window_endpoint(unsafe { &*runtime_ptr }, target)?;
+    construct_window_focus_event(
+        scope,
+        runtime_ptr,
+        endpoint,
+        event_type,
+        related_target,
+        bubbles,
+    )
+}
+
+fn construct_window_focus_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    endpoint: PendingWindowMessageEndpoint,
+    event_type: &str,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    bubbles: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime = unsafe { &mut *runtime_ptr };
+    match endpoint {
+        PendingWindowMessageEndpoint::ChildWindow(child) => {
+            runtime
+                .ensure_prebootstrapped_child_default_context(scope, child)
+                .ok()?;
+        }
+        PendingWindowMessageEndpoint::LightweightPopup(popup) => {
+            runtime
+                .ensure_lightweight_popup_execution_context(scope, popup)
+                .then_some(())?;
+        }
+        PendingWindowMessageEndpoint::TopWindow => {}
+    }
+    let dispatch_scope = endpoint.dispatch_scope();
+    let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
+    let (_, context) = runtime.window_execution_context(scope, owner, dispatch_scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_focus_event(scope, event_type, related_target, bubbles)
+}
+
 fn dispatch_window_focus_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     endpoint: PendingWindowMessageEndpoint,
     event_type: &str,
 ) {
-    let event = construct_focus_event(scope, event_type, None, false)
-        .expect("Window focus transition must materialize its FocusEvent");
+    let Some(event) =
+        construct_window_focus_event(scope, runtime_ptr, endpoint, event_type, None, false)
+    else {
+        return;
+    };
     let runtime = unsafe { &mut *runtime_ptr };
     match endpoint {
         PendingWindowMessageEndpoint::TopWindow => {
