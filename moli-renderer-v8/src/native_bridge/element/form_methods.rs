@@ -231,6 +231,8 @@ pub(super) struct HtmlSelectElementPrototypeMethodsDeclaration {
     named_item: (),
     #[webapi(method, length = 0, callback = select_remove_callback)]
     remove: (),
+    #[webapi(method, length = 0, callback = select_show_picker_callback)]
+    show_picker: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
