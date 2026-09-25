@@ -326,19 +326,6 @@ fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<
     first_delegates_focus_target(runtime, root)
 }
 
-fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
-    runtime
-        .autofocus_candidates()
-        .iter()
-        .copied()
-        .find(|handle| {
-            runtime.dom_host().is_connected(*handle)
-                && runtime.dom_host().owner_document_handle(*handle)
-                    == Some(runtime.document_handle())
-                && is_focusable(runtime, *handle)
-        })
-}
-
 /// Whether the current Document has post-parse autofocus work worth
 /// admitting to the rendering-update task source.
 ///
@@ -356,19 +343,45 @@ pub(crate) fn process_post_parse_autofocus(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
 ) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    if runtime.autofocus_processed() || runtime.active_element_handle().is_some() {
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.autofocus_processed() || runtime.autofocus_candidates().is_empty() {
         return false;
     }
-    let Some(candidate) = first_autofocus_candidate(runtime) else {
+    if runtime.active_element_handle().is_some()
+        || runtime
+            .dom_host()
+            .document_target_element(runtime.document_handle())
+            .is_some()
+    {
+        runtime.mark_autofocus_processed();
+        return false;
+    }
+    // A pending script-blocking stylesheet can still change focusability.
+    // Preserve the candidates until its resource and imports have settled.
+    if !runtime.has_all_blocking_stylesheets_resolved() {
+        return false;
+    }
+    // Every examined candidate is consumed, including unfocusable elements.
+    // A later rendering opportunity must not retry them without reinsertion.
+    let target = runtime
+        .take_autofocus_candidates()
+        .into_iter()
+        .filter(|handle| {
+            runtime.dom_host().is_connected(*handle)
+                && runtime.dom_host().owner_document_handle(*handle)
+                    == Some(runtime.document_handle())
+        })
+        .find_map(|candidate| {
+            focusable_area_for_element(runtime, candidate)
+                .map(|target| delegated_focus_target(runtime, target).unwrap_or(target))
+        });
+    let Some(target) = target else {
         return false;
     };
-    if let Some(target) = delegated_focus_target(runtime, candidate) {
-        update_focus(scope, runtime_ptr, Some(target));
-    } else {
-        update_focus(scope, runtime_ptr, Some(candidate));
-    }
-    unsafe { &mut *runtime_ptr }.mark_autofocus_processed();
+    // Focus listeners can replace the Document. Complete this Document's
+    // one-time autofocus state before running any author code.
+    runtime.mark_autofocus_processed();
+    update_focus(scope, runtime_ptr, Some(target));
     true
 }
 
