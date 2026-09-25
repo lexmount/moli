@@ -11,6 +11,9 @@ async fn history_traversal_retirement_reentry_preserves_reattached_frame_and_sib
         const container = document.body || document.documentElement || document;
         container.appendChild(frame); container.appendChild(sibling);
         globalThis.oldChild = frame.contentWindow;
+        // Initial about:blank forces pushState to replace; use a real document
+        // so both Windows participate in the traversal being retired.
+        oldChild.document.open(); oldChild.document.write('<body>child'); oldChild.document.close();
         history.replaceState(0, ''); oldChild.history.replaceState(0, '');
         history.pushState(1, ''); oldChild.history.pushState(1, '');
         globalThis.log = [];
@@ -83,6 +86,7 @@ async fn history_traversal_retirement_error_can_start_successor_admission() {
         r#"
         globalThis.frame = document.createElement('iframe');
         (document.body || document.documentElement || document).appendChild(frame);
+        frame.contentDocument.open(); frame.contentDocument.write('<body>child'); frame.contentDocument.close();
         history.replaceState(0, ''); frame.contentWindow.history.replaceState(0, '');
         history.pushState(1, ''); frame.contentWindow.history.pushState(1, '');
         globalThis.gates = []; globalThis.log = [];
@@ -252,6 +256,7 @@ async fn history_traversal_detach_releases_pending_admission_and_ignores_late_ca
         globalThis.frame = document.createElement('iframe');
         (document.body || document.documentElement || document).appendChild(frame);
         globalThis.child = frame.contentWindow;
+        child.document.open(); child.document.write('<body>child'); child.document.close();
     "#,
     )
     .unwrap();

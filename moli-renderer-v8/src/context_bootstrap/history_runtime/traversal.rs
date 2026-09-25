@@ -208,7 +208,13 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
         .and_then(|event| precommit_transition_resolver_from_event(scope, event))
         .or_else(|| {
             applied.previous_entry.and_then(|from| {
-                install_navigation_transition(scope, navigation, from, outcome.destination, "traverse")
+                install_navigation_transition(
+                    scope,
+                    navigation,
+                    from,
+                    outcome.destination,
+                    "traverse",
+                )
             })
         });
     let url = v8::String::new(scope, &applied.url)?;
@@ -299,9 +305,9 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
             resolver.resolve(scope, v8::undefined(scope).into())?;
             Some(resolver.get_promise(scope).into())
         });
-        if result.is_none_or(|result| {
-            !queue_pending_traversal_intercept_settlement(scope, data, result)
-        }) {
+        if result
+            .is_none_or(|result| !queue_pending_traversal_intercept_settlement(scope, data, result))
+        {
             finish_traversal_intercept(scope, data.into(), None);
         }
     }

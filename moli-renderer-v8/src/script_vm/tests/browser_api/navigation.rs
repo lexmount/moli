@@ -6735,9 +6735,12 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
               const key = navigation.currentEntry.key;
               history.pushState(null, "", "#2");
               history.back();
-              const first = navigation.traverseTo(key);
-              const second = navigation.traverseTo(key);
+              const first = navigation.traverseTo(key, { info: "first" });
+              const second = navigation.traverseTo(key, { info: "second" });
               globalThis.__lmRepeatedAfterHistory = [];
+              navigation.addEventListener("navigate", event => {
+                __lmRepeatedAfterHistory.push(`info:${event.info}`);
+              });
               for (const [label, result] of [["first", first], ["second", second]]) {
                 result.finished.then(
                   entry => __lmRepeatedAfterHistory.push(`${label}:${new URL(entry.url).hash}`),
@@ -6762,7 +6765,7 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
     assert_eq!(
         vm.eval("[location.hash, ...__lmRepeatedAfterHistory].join('|')")
             .expect("both callers should finish at their shared destination"),
-        "#1|first:#1|second:#1"
+        "#1|info:first|first:#1|second:#1"
     );
     assert!(
         !vm.run_one_history_traversal_executor_turn(&loader)

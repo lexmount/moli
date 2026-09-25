@@ -2,7 +2,9 @@ use anyhow::Result;
 
 use super::ScriptVm;
 use crate::{
-    context_bootstrap::inform_about_canceled_navigation_for_window,
+    context_bootstrap::{
+        NavigationCancellationReason, inform_about_canceled_navigation_for_window,
+    },
     native_bridge::OwnerDispatchScope,
     page_task_queue::RendererPagePopupCloseOwner,
     runtime::{AuthorizedCurrentPagePopupClose, RendererDocumentToken},
@@ -45,7 +47,11 @@ impl ScriptVm {
             if let (Some(binding), Some(window)) = (binding, window) {
                 binding.with_current_scope(scope, host_ptr, |scope, _| {
                     let window = v8::Local::new(scope, &window);
-                    inform_about_canceled_navigation_for_window(scope, window);
+                    inform_about_canceled_navigation_for_window(
+                        scope,
+                        window,
+                        NavigationCancellationReason::WindowClose,
+                    );
                     unsafe { &mut *host_ptr }
                         .dispatch_lightweight_popup_document_unload(scope, popup_id);
                 });
