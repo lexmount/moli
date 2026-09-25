@@ -14,6 +14,7 @@ async fn activate(
     ))
     .await;
     if matches!(mode, "trusted" | "location" | "nested-click") {
+        page.command("Page.captureScreenshot", json!({})).await;
         for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
             page.command("Input.dispatchMouseEvent", json!({
                 "type": kind, "x": 20, "y": 20, "button": "left", "buttons": buttons, "clickCount": 1,

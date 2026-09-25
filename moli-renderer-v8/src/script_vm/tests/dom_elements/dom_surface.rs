@@ -1411,6 +1411,7 @@ fn single_line_text_input_preserves_programmatic_scroll_across_select() {
     )
     .expect("the previous text input should be replaced");
 
+    refresh_layout_for_test(&mut vm);
     vm.eval("__scrollInput.scrollLeft = 33")
         .expect("text input should accept a programmatic scroll");
     refresh_layout_for_test(&mut vm);

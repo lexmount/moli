@@ -18,6 +18,7 @@ navigator.clipboard.writeText('seed');'ready'
 }
 
 fn activated_copy_eval(vm: &mut StandaloneScriptVmHarness, script: &str) -> String {
+    vm.publish_layout_for_test().unwrap();
     vm._context_host
         .borrow_mut()
         .begin_protocol_user_gesture_activation();

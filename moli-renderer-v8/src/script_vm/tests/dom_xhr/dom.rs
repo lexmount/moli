@@ -10585,6 +10585,7 @@ html, body { margin: 0; }
 <div id="under"></div><div id="container"><div id="target"></div></div>"#,
     );
 
+    vm.publish_layout_for_test().unwrap();
     let result = vm
         .eval(
             r#"
@@ -10602,13 +10603,32 @@ html, body { margin: 0; }
   container.inert = false;
   values.push(top() === target);
 
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("dynamic inert point-query probe should evaluate");
+    assert_eq!(result, "true|under|under,html|true");
+
+    vm.eval(
+        r#"
+  globalThis.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('style', 'position:fixed;inset:0;width:100px;height:100px');
   const rect = document.createElementNS(svg.namespaceURI, 'rect');
   rect.setAttribute('width', '100');
   rect.setAttribute('height', '100');
   svg.appendChild(rect);
   document.body.appendChild(svg);
+"#,
+    )
+    .unwrap();
+    vm.publish_layout_for_test().unwrap();
+    let result = vm
+        .eval(
+            r#"(() => {
+  const top = () => document.elementFromPoint(1, 1);
+  const target = document.getElementById('target');
+  const values = [];
   const svgHit = top();
   svg.setAttribute('inert', '');
   values.push(top() === svgHit);
@@ -10624,5 +10644,5 @@ html, body { margin: 0; }
         )
         .expect("dynamic inert point-query probe should evaluate");
 
-    assert_eq!(result, "true|under|under,html|true|true|true");
+    assert_eq!(result, "true|true");
 }

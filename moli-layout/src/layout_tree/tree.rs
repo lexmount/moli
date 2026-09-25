@@ -117,6 +117,30 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Retains a published viewport for an embedded Document without a root
+    /// element. The document identity is its source, and no box can receive
+    /// input or provide element geometry until a later layout is published.
+    pub fn empty_viewport(source_root: N, viewport: LayoutViewport) -> Self {
+        Self::new(
+            source_root,
+            viewport,
+            LayoutPoint::ZERO,
+            LayoutSize::new(viewport.css_width as f32, viewport.css_height as f32),
+            LayoutOutputBoxId::from_index(0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            FrozenCoordinateSpace {
+                owner: None,
+                local_to_viewport: super::model::LayoutTransform2D::IDENTITY,
+                local_to_viewport_ignoring_css_transforms:
+                    super::model::LayoutTransform2D::IDENTITY,
+            },
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
     /// Source root whose complete layout projection this member tree owns.
     pub const fn source_root(&self) -> N {
         self.source_root

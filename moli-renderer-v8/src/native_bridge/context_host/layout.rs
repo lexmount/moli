@@ -443,12 +443,13 @@ impl JsContextHost {
         let root = self
             .dom_host()
             .dom()
-            .document_element_handle_for_document(document);
+            .document_element_handle_for_document(document)
+            .unwrap_or(document);
         let state = self.document_layout_state.borrow();
         state
             .latest_layout(document)
-            .or_else(|| root.and_then(|root| state.latest_layout_for_root(root)))
-            .filter(|tree| Some(tree.source_root()) == root)
+            .or_else(|| state.latest_layout_for_root(root))
+            .filter(|tree| tree.source_root() == root)
             .map(inspect)
     }
 

@@ -1912,6 +1912,8 @@ fn dom_rect_list_has_readonly_indexed_semantics_and_rejects_structured_clone() {
         "<!doctype html><body><div id='node'>text</div></body>",
     );
 
+    vm.publish_layout_for_test().unwrap();
+
     let result = vm
         .eval(
             r#"
