@@ -1616,6 +1616,24 @@ struct HtmlElementActionPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGElement, receiver)]
+struct SvgElementFocusPrototypeDeclaration {
+    #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
+    focus: (),
+    #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]
+    blur: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MathMLElement, receiver)]
+struct MathMlElementFocusPrototypeDeclaration {
+    #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
+    focus: (),
+    #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]
+    blur: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLOrForeignElement")]
 struct HtmlOrForeignElementPrototypeDeclaration {
     #[webapi(accessor_property, enumerable, getter = node_dataset_getter_function)]
@@ -7434,9 +7452,15 @@ pub(crate) fn install_element_template_bindings<'s>(
             HtmlElementPopoverPrototypeDeclaration,
             HtmlElementGeometryPrototypeDeclaration,
         ),
-        "SVGElement" | "MathMLElement" => install!(
+        "SVGElement" => install!(
             ElementStylePrototypeDeclaration,
             HtmlOrForeignElementPrototypeDeclaration,
+            SvgElementFocusPrototypeDeclaration,
+        ),
+        "MathMLElement" => install!(
+            ElementStylePrototypeDeclaration,
+            HtmlOrForeignElementPrototypeDeclaration,
+            MathMlElementFocusPrototypeDeclaration,
         ),
         _ => {}
     }
