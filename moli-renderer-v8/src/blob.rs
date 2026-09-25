@@ -287,7 +287,6 @@ pub(crate) fn world_wrapper<'s>(
         .ok()?;
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
-    finalize_blob_realm_bindings(scope, prototype);
     object.set_prototype(scope, prototype.into())?;
     Some(object)
 }
