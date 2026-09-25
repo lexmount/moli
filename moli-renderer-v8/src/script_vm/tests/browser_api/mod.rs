@@ -63,6 +63,7 @@ mod notification_init;
 mod opaque_wasm_origins;
 mod payload_event_init;
 mod navigation_recursion;
+mod nested_frame_access;
 mod performance;
 mod performance_memory;
 mod platform_identity;
