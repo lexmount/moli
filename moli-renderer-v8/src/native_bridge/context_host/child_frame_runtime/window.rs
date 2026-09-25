@@ -1404,7 +1404,9 @@ impl PageScriptHost {
             .filter(|top| !is_cross_origin_window_proxy(scope, *top))
             .unwrap_or_else(|| self.child_browsing_context_root_window(scope, handle, global));
         let popup_owner = self.child_browsing_context_popup_owner_window_for_realm(scope, handle);
-        let top = popup_owner.unwrap_or(root);
+        let top = self
+            .child_browsing_context_popup_root_window_for_realm(scope, handle)
+            .unwrap_or(root);
         let parent = popup_owner
             .or(stable_parent)
             .or(existing_parent)
@@ -1441,6 +1443,10 @@ impl PageScriptHost {
         handle: DomHandle,
         global: v8::Local<'s, v8::Object>,
     ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
+        if let Some(top) = self.child_browsing_context_popup_root_window_for_realm(scope, handle) {
+            let parent = self.child_browsing_context_parent_window(scope, handle, top);
+            return (parent, top);
+        }
         let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             let top = self
@@ -1453,12 +1459,6 @@ impl PageScriptHost {
                 .unwrap_or_else(|| self.child_browsing_context_parent_window(scope, handle, top));
             return (parent, top);
         };
-
-        if let Some(popup_owner) =
-            self.child_browsing_context_popup_owner_window_for_realm(scope, handle)
-        {
-            return (popup_owner, popup_owner);
-        }
 
         let top = self
             .child_window_proxy_records
@@ -1483,8 +1483,7 @@ impl PageScriptHost {
         handle: DomHandle,
         fallback: v8::Local<'s, v8::Object>,
     ) -> v8::Local<'s, v8::Object> {
-        if let Some(window) =
-            self.child_browsing_context_popup_owner_window_for_realm(scope, handle)
+        if let Some(window) = self.child_browsing_context_popup_root_window_for_realm(scope, handle)
         {
             return window;
         }
@@ -1511,6 +1510,30 @@ impl PageScriptHost {
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         let popup_id = self.child_browsing_context_popup_owner_id(handle)?;
+        self.popup_window_for_child_realm(scope, handle, popup_id)
+    }
+
+    fn child_browsing_context_popup_root_window_for_realm<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        // The root can be a popup even when the immediate parent is a child
+        // frame. Project it for the accessing child, not for its parent.
+        let super::super::OwnerDispatchScope::LightweightPopup(popup_id) =
+            self.child_browsing_context_root_scope(handle)?
+        else {
+            return None;
+        };
+        self.popup_window_for_child_realm(scope, handle, popup_id)
+    }
+
+    fn popup_window_for_child_realm<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        popup_id: u64,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         if self.child_window_can_access_lightweight_popup(handle, popup_id) {
             return self.lightweight_popup_window(scope, popup_id);
         }
