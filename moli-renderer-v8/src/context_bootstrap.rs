@@ -1142,7 +1142,7 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
     update_live_ranges_for_detached_text_split(scope, original, new_text, offset);
 }
 
-pub(crate) use self::window_accessors::current_window_style_viewport;
+pub(crate) use self::window_accessors::{current_window_style_viewport, window_parent_or_top};
 
 pub(crate) use session_history::{
     initialize_main_session_history, install_session_history_position,
