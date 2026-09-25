@@ -10,10 +10,11 @@ mod helpers;
 mod install;
 mod methods;
 mod navigation;
+mod origin;
 mod slots;
 mod surface;
 
-pub(in crate::context_bootstrap) use access::{location_target, wrap_location_object};
+pub(in crate::context_bootstrap) use access::wrap_location_object;
 
 pub(super) use install::{
     build_location_constructor_template, build_location_runtime_object,
@@ -29,6 +30,7 @@ pub(crate) use surface::{
     install_constructed_document_location_runtime_state,
     sync_document_location_runtime_state_from_window,
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
+    window_location_href,
 };
 pub(in crate::context_bootstrap) use surface::{window_location_setter, window_navigation_setter};
 

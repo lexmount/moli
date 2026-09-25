@@ -1,5 +1,4 @@
 use super::*;
-use crate::native_bridge::window_contexts_allow_access;
 use crate::util::{get_private_value, new_null_prototype_object, set_private_value};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
@@ -80,11 +79,15 @@ fn location_proxy_set<'s>(
     let caller = scope
         .get_incumbent_context()
         .unwrap_or_else(|| scope.get_current_context());
-    if target
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(caller, owner))
-    {
-        let Ok(reflect_set) = v8::Local::<v8::Function>::try_from(args.data()) else {
+    if super::origin::context_can_access(scope, caller, target) {
+        // Reflect.set itself performs the target access check in its own
+        // realm. Use the caller's captured intrinsic when the handler belongs
+        // to a popup that shares an unrelated opener realm. Calling it without
+        // entering a ContextScope preserves the original entry settings.
+        let global = caller.global(scope);
+        let reflect_set =
+            get_private_value(scope, global, REFLECT_SET_SLOT).unwrap_or_else(|| args.data());
+        let Ok(reflect_set) = v8::Local::<v8::Function>::try_from(reflect_set) else {
             return;
         };
         if let Some(value) = reflect_set.call(
@@ -127,10 +130,7 @@ pub(super) fn set_location_href<'s>(
     // Proxy trap would instead recover the incumbent author script's realm.
     // Perform the Location operation here while preserving its actual receiver.
     let caller = scope.get_current_context();
-    if target
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(caller, owner))
-    {
+    if super::origin::context_can_access(scope, caller, target) {
         return target.set_with_receiver(scope, key.into(), value, location);
     }
     let setter = cross_origin_location_setter(scope, target, key.into())?;
@@ -178,10 +178,7 @@ fn location_proxy_set_prototype<'s>(
         .get_incumbent_context()
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, caller);
-    if !target
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(caller, owner))
-    {
+    if !super::origin::context_can_access(scope, caller, target) {
         rv.set_bool(args.get(1).is_null());
         return;
     }
@@ -242,20 +239,15 @@ unsafe extern "C" fn location_access_check(
 ) -> bool {
     let scope = std::pin::pin!(unsafe { v8::CallbackScope::new(accessing_context) });
     let scope = &mut scope.init();
-    object
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(accessing_context, owner))
+    super::origin::context_can_access(scope, accessing_context, object)
 }
 
-pub(super) fn require_same_origin(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn require_same_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    callee: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let current = scope.get_current_context();
-    if object
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(current, owner))
-    {
+    if super::origin::callback_can_access(scope, callee, object) {
         return true;
     }
     crate::native_bridge::throw_dom_exception(
@@ -274,11 +266,9 @@ pub(super) fn require_entry_origin<'s>(
     if !super::install::location_has_relevant_document(scope, object) {
         return true;
     }
-    let entry = scope.get_entered_or_microtask_context();
-    if object
-        .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(entry, owner))
-    {
+    let entry = v8::Local::new(scope, scope.get_entered_or_microtask_context());
+    let target = location_target(scope, object);
+    if super::origin::context_can_access(scope, entry, target) {
         return true;
     }
     crate::native_bridge::throw_dom_exception(
