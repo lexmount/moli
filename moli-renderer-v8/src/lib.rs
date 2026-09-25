@@ -95,6 +95,7 @@ mod resource_ready;
 mod runtime;
 mod runtime_binding_data;
 mod script_cleanup;
+mod script_continuation;
 mod script_execution;
 mod script_execution_control;
 mod script_provenance;

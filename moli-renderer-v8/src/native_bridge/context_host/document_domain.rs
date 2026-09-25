@@ -95,8 +95,7 @@ impl JsContextHost {
         if let Some(domain) = self.lightweight_popup_document_domain_override(popup_id) {
             return domain;
         }
-        self.lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
+        self.lightweight_popup_document_domain_host(popup_id)
             .unwrap_or_default()
     }
 
@@ -142,8 +141,7 @@ impl JsContextHost {
             return false;
         }
         let Some(current_host) = self
-            .lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
+            .lightweight_popup_document_domain_host(popup_id)
             .or_else(|| {
                 self.dom_host()
                     .dom()
@@ -163,8 +161,13 @@ impl JsContextHost {
         self.set_lightweight_popup_document_domain_override(popup_id, domain)
     }
 
-    fn lightweight_popup_document_url_for_domain(&self, popup_id: u64) -> Option<Url> {
-        self.lightweight_popup_document_url(popup_id)
+    fn lightweight_popup_document_domain_host(&self, popup_id: u64) -> Option<String> {
+        // An about:blank Document has its creator's origin even though its
+        // URL has no host. Domain access follows that origin, not the URL.
+        let origin = self.lightweight_popup_origin(popup_id)?;
+        Url::parse(&origin)
+            .ok()
+            .and_then(|url| url_host_domain(&url))
     }
 
     fn child_browsing_context_document_domain_host(&self, handle: DomHandle) -> Option<String> {

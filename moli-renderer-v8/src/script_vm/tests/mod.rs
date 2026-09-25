@@ -1923,6 +1923,7 @@ async fn popup_replacement_retires_local_window_owned_webcrypto_tasks() {
         vm.eval(
             r#"
             globalThis.__ownerBoundCryptoPopup = open("about:blank", "crypto-owner-popup");
+            __ownerBoundCryptoPopup.location.href = "about:blank?committed";
             String(globalThis.__ownerBoundCryptoPopup !== null)
             "#,
         )
@@ -2143,6 +2144,7 @@ async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
               "about:blank",
               "dedicated-worker-owner-popup"
             );
+            __ownerBoundWorkerPopup.location.href = "about:blank?committed";
             String(globalThis.__ownerBoundWorkerPopup !== null)
             "#,
         )

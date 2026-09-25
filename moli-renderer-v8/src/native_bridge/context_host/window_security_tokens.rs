@@ -116,7 +116,25 @@ pub(crate) struct WindowSecurityOrigin(WindowSecurityOriginSource);
 #[derive(Clone)]
 enum WindowSecurityOriginSource {
     Context(Rc<WindowContextSecurityOrigin>),
-    Popup(Rc<RefCell<WindowAccessOrigin>>),
+    Popup(Rc<RefCell<PopupWindowSecurityOrigin>>),
+}
+
+pub(super) struct PopupWindowSecurityOrigin {
+    pub(super) origin: WindowAccessOrigin,
+    pub(super) domain: DocumentDomainState,
+}
+
+impl PopupWindowSecurityOrigin {
+    pub(super) fn current_origin(&self) -> WindowAccessOrigin {
+        let mut origin = self.origin.clone();
+        if let WindowAccessOrigin::Tuple {
+            document_domain, ..
+        } = &mut origin
+        {
+            *document_domain = self.domain.get();
+        }
+        origin
+    }
 }
 
 impl WindowSecurityOrigin {
@@ -126,14 +144,14 @@ impl WindowSecurityOrigin {
             .map(|origin| Self(WindowSecurityOriginSource::Context(Rc::clone(&origin))))
     }
 
-    pub(super) fn for_popup(origin: Rc<RefCell<WindowAccessOrigin>>) -> Self {
+    pub(super) fn for_popup(origin: Rc<RefCell<PopupWindowSecurityOrigin>>) -> Self {
         Self(WindowSecurityOriginSource::Popup(origin))
     }
 
     fn current_origin(&self) -> WindowAccessOrigin {
         match &self.0 {
             WindowSecurityOriginSource::Context(origin) => origin.current_origin(),
-            WindowSecurityOriginSource::Popup(origin) => origin.borrow().clone(),
+            WindowSecurityOriginSource::Popup(origin) => origin.borrow().current_origin(),
         }
     }
 
@@ -159,6 +177,19 @@ impl WindowContextSecurityOrigin {
 }
 
 impl JsContextHost {
+    pub(super) fn window_document_domain_state(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<DocumentDomainState> {
+        match owner {
+            OwnerDispatchScope::Top => Some(self.document_domain_override.clone()),
+            OwnerDispatchScope::Child(handle) => self.child_document_domain_state(handle),
+            OwnerDispatchScope::LightweightPopup(id) => {
+                self.lightweight_popup_document_domain_state(id)
+            }
+        }
+    }
+
     pub(crate) fn window_dispatch_scope_for_context<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -177,6 +208,9 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         context: v8::Local<'s, v8::Context>,
     ) -> Option<WindowSecurityOrigin> {
+        if let Some(owner) = crate::script_continuation::running_window(scope, context) {
+            return Some(owner.origin);
+        }
         // Read the scope of the requested realm, not the callback's current
         // realm: popup bindings can call into a real child, and a popup can
         // itself share a child opener's concrete V8 context.
@@ -414,16 +448,19 @@ impl JsContextHost {
     ) -> usize {
         let target_child = self.child_browsing_context_handle_for_stored_document(document_handle);
         let target_is_main = document_handle == self.document_handle();
-        if !target_is_main && target_child.is_none() {
-            // Lightweight popups still share the opener V8 context. Until they have a concrete
-            // LocalWindow realm, changing that shared context token would also mutate the opener.
+        let target_popup = self.lightweight_popup_id_for_document_handle(document_handle);
+        if !target_is_main && target_child.is_none() && target_popup.is_none() {
             return 0;
         }
 
         let domain = if target_is_main {
             Some(self.document_domain_override.clone())
         } else {
-            target_child.and_then(|handle| self.child_document_domain_state(handle))
+            target_child
+                .and_then(|handle| self.child_document_domain_state(handle))
+                .or_else(|| {
+                    target_popup.and_then(|id| self.lightweight_popup_document_domain_state(id))
+                })
         };
         if let Some(domain) = domain {
             domain.invalidate_context_tokens(scope);
@@ -532,20 +569,6 @@ impl JsContextHost {
             return false;
         };
         top.has_same_origin(&child)
-    }
-
-    pub(in crate::native_bridge::context_host) fn child_window_can_access_lightweight_popup(
-        &self,
-        handle: DomHandle,
-        popup_id: u64,
-    ) -> bool {
-        let Some(child) = self.child_window_access_origin(handle) else {
-            return false;
-        };
-        let Some(popup) = self.lightweight_popup_window_access_origin(popup_id) else {
-            return false;
-        };
-        child.can_access(&popup)
     }
 
     pub(crate) fn window_execution_context_can_access(

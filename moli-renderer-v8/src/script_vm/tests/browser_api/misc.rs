@@ -13325,19 +13325,84 @@ async fn third_party_iframe_storage_bucket_manager_uses_partitioned_storage_key(
 
 #[tokio::test]
 async fn retained_popup_storage_managers_use_bound_popup_owner() {
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        "<!doctype html><script>localStorage.setItem('popup-local', 'value'); \
+         opener.postMessage('storage-ready', '*');</script>"
+            .to_owned(),
+    ])
+    .await;
+    let popup_url = server.url_for_host("127.0.0.1", "/popup");
+    let opener_url = server.url_for_host("localhost", "/opener");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    loader.set_network_offline(true);
-    let mut vm =
-        new_storage_test_vm_with_loader("https://popup-storage-owner.test/page.html", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(opener_url.as_str(), &loader);
+    vm.eval(&format!(
+        "globalThis.__popupStorageReady = false; \
+         onmessage = e => __popupStorageReady = e.data === 'storage-ready'; \
+         globalThis.__popupStorageOwnerPopup = open({:?}); true",
+        popup_url.as_str(),
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupStorageReady)",
+        "true",
+        "popup storage owner response",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("try { __popupStorageOwnerPopup.navigator; 'accessible'; } catch (e) { e.name; }")
+            .unwrap(),
+        "SecurityError"
+    );
+
+    // Capture the actual native popup's managers under its owner. Page script
+    // cannot obtain these objects through a cross-origin Window, but this test
+    // exercises retained receiver ownership independently of Window access.
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let host = unsafe { &*host_ptr };
+        let popup_id = host.open_lightweight_popup_ids()[0];
+        let owner = crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
+        let previous = owner.enter(scope);
+        let popup = host.lightweight_popup_window(scope, popup_id).unwrap();
+        let navigator = popup
+            .get(scope, crate::util::v8str(scope, "navigator").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .unwrap();
+        let storage = navigator
+            .get(scope, crate::util::v8str(scope, "storage").into())
+            .unwrap();
+        let buckets = navigator
+            .get(scope, crate::util::v8str(scope, "storageBuckets").into())
+            .unwrap();
+        owner.restore(scope, previous);
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(
+                scope,
+                crate::util::v8str(scope, "__retainedPopupStorage").into(),
+                storage
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            global.set(
+                scope,
+                crate::util::v8str(scope, "__retainedPopupBuckets").into(),
+                buckets
+            ),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
 
     vm.exec(
         r#"
 globalThis.__popupStorageOwnerProbe = "pending";
 (async () => {
-  const popup = open("https://popup-storage-owner-child.test/page.html");
-  popup.localStorage.setItem("popup-local", "value");
-  const storage = popup.navigator.storage;
-  const buckets = popup.navigator.storageBuckets;
+  const storage = __retainedPopupStorage;
+  const buckets = __retainedPopupBuckets;
   const bucket = await buckets.open("popup-retained", { quota: 2048 });
   const popupEstimate = await storage.estimate();
   const topEstimate = await navigator.storage.estimate();
@@ -13368,24 +13433,19 @@ globalThis.__popupStorageOwnerProbe = "pending";
     );
     assert_eq!(
         vm.storage_bucket_keys_for_test(
-            &moli_storage_key::MoliStorageKey::first_party_from_url(
-                &url::Url::parse("https://popup-storage-owner-child.test").unwrap(),
-                None,
-            )
-            .serialized_storage_key()
+            &moli_storage_key::MoliStorageKey::first_party_from_url(&popup_url, None,)
+                .serialized_storage_key()
         ),
         vec!["popup-retained"]
     );
     assert_eq!(
         vm.storage_bucket_keys_for_test(
-            &moli_storage_key::MoliStorageKey::first_party_from_url(
-                &url::Url::parse("https://popup-storage-owner.test").unwrap(),
-                None,
-            )
-            .serialized_storage_key()
+            &moli_storage_key::MoliStorageKey::first_party_from_url(&opener_url, None,)
+                .serialized_storage_key()
         ),
         Vec::<String>::new()
     );
+    assert_eq!(server.finish_targets().await.len(), 1);
 }
 
 #[test]
@@ -27314,7 +27374,7 @@ async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_trave
   globalThis.__namedPopupSecondUrl = URL.createObjectURL(new Blob([secondHtml], { type: "text/html" }));
   globalThis.__namedPopup = open(__namedPopupFirstUrl, "namedPopupHistoryWindow");
   return [
-    __namedPopup.location.href === __namedPopupFirstUrl,
+    __namedPopup.location.href === "about:blank",
     __namedPopup.history.length,
     __namedPopupHistoryEvents.length
   ].join("|");
@@ -27332,6 +27392,11 @@ async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_trave
     )
     .await;
 
+    assert_eq!(
+        vm.eval("__namedPopup.location.href === __namedPopupFirstUrl")
+            .expect("first popup response URL should commit"),
+        "true"
+    );
     let reopened = vm
         .eval(
             r#"
@@ -27900,16 +27965,22 @@ async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
               globalThis.__popupLoadEvents = [];
               const url = URL.createObjectURL(new Blob(["<!doctype html><title>popup</title>"], { type: "text/html" }));
               const popup = open(url);
+              const initialLocation = popup.location;
+              const initialNavigator = popup.navigator;
+              const initialDocument = popup.document;
               popup.onload = () => {
                 __popupLoadEvents.push([
                   popup.location.href.startsWith("blob:https://example.com/"),
                   popup.opener === window,
-                  typeof popup.close
+                  typeof popup.close,
+                  popup.location === initialLocation,
+                  popup.navigator === initialNavigator,
+                  popup.document === initialDocument
                 ].join("|"));
               };
               return [
                 String(popup),
-                popup.location.href.startsWith("blob:https://example.com/"),
+                popup.location.href === "about:blank",
                 popup.opener === window,
                 typeof popup.close
               ].join("|");
@@ -27930,7 +28001,7 @@ async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
     assert_eq!(
         vm.eval("globalThis.__popupLoadEvents.join(',')")
             .expect("popup load event log should evaluate"),
-        "true|true|function"
+        "true|true|function|true|true|false"
     );
 }
 
@@ -28791,7 +28862,7 @@ async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_hi
 "#
         ))
         .expect("204 popup setup should evaluate");
-    assert_eq!(setup, format!("{popup_url}|1"));
+    assert_eq!(setup, "about:blank|1");
 
     let result = vm
         .eval(
@@ -29937,9 +30008,16 @@ async fn lightweight_popup_document_domain_self_assignment_uses_popup_owner_stat
   const popup = open({popup_url_literal});
   popup.onload = () => {{
     try {{
-      const initial = popup.document.domain;
-      popup.document.domain = popup.document.domain;
-      __popupDomainProbe.push(`${{initial}}|${{popup.document.domain}}`);
+      const retainedDocument = popup.document;
+      const initial = retainedDocument.domain;
+      retainedDocument.domain = retainedDocument.domain;
+      __popupDomainProbe.push(`${{initial}}|${{retainedDocument.domain}}`);
+      try {{
+        popup.document;
+        __popupDomainProbe.push("unexpected-access");
+      }} catch (error) {{
+        __popupDomainProbe.push(error.name);
+      }}
     }} catch (error) {{
       __popupDomainProbe.push(`${{error.name}}:${{error instanceof DOMException}}:${{error.code}}`);
     }}
@@ -29964,7 +30042,7 @@ async fn lightweight_popup_document_domain_self_assignment_uses_popup_owner_stat
         &mut vm,
         &loader,
         "String(__popupDomainProbe.length)",
-        "1",
+        "2",
         "popup document-domain load event",
     )
     .await;
@@ -29972,7 +30050,7 @@ async fn lightweight_popup_document_domain_self_assignment_uses_popup_owner_stat
     assert_eq!(
         vm.eval("__popupDomainProbe.join('|')")
             .expect("popup document-domain result should evaluate"),
-        "127.0.0.1|127.0.0.1"
+        "127.0.0.1|127.0.0.1|SecurityError"
     );
 }
 

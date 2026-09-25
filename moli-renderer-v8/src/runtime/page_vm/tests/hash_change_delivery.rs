@@ -454,7 +454,24 @@ async fn hashchange_discards_a_retired_lightweight_popup_local_window() {
             r##"
 globalThis.__popupHashChanges = [];
 globalThis.__hashPopup = open("about:blank", "hashchange-owner-popup");
-__hashPopup.history.replaceState(null, "", "about:blank#popup-hashchange");
+__hashPopup.location.href = "about:blank?committed";
+"initial-window-reused"
+"##,
+        )?;
+        // The first same-origin commit reuses the initial Window. Complete
+        // its lifecycle tasks before queuing the hashchange in the same lane.
+        while page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::PopupDocumentLifecycle,
+                ),
+                &loader,
+            )
+            .await?
+        {}
+        page_vm.vm_mut().eval(
+            r##"
+__hashPopup.history.replaceState(null, "", "about:blank?committed#popup-hashchange");
 __hashPopup.addEventListener("hashchange", () => __popupHashChanges.push("retired"));
 __hashPopup.location.hash = "#queued-before-replacement";
 open("about:blank", "hashchange-owner-popup");
