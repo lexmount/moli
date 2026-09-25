@@ -348,7 +348,7 @@ impl JsContextHost {
                     return;
                 }
                 let entry_document = host.document_open_entry_document(scope);
-                let Some(context) = host.begin_child_document_stream_replacement(
+                let Some(context) = Self::begin_child_document_stream_replacement(
                     scope,
                     host_ptr,
                     child_handle,
@@ -510,11 +510,12 @@ impl JsContextHost {
             .child_browsing_contexts
             .get(&child_handle)
             .is_some_and(|entry| entry.has_pending_navigation_or_document_load())
-            && !unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(child_handle);
+            && !unsafe { &*host_ptr }
+                .child_browsing_context_has_pending_cross_document_traversal(child_handle);
         if has_ongoing_navigation {
             let window = script_context.global(scope);
-            if let Some(owner) =
-                unsafe { &*host_ptr }.current_window_execution_context_owner(OwnerDispatchScope::Child(child_handle))
+            if let Some(owner) = unsafe { &*host_ptr }
+                .current_window_execution_context_owner(OwnerDispatchScope::Child(child_handle))
                 && let Some(binding) = unsafe { &*host_ptr }.clone_window_execution_context_binding(
                     scope,
                     owner,
@@ -525,10 +526,14 @@ impl JsContextHost {
                     scope, window, binding,
                 );
             }
-            if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+            if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
+                != Some(document_handle)
+            {
                 return None;
             }
-            if let Some(owner) = unsafe { &*host_ptr }.current_child_document_task_owner(child_handle) {
+            if let Some(owner) =
+                unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+            {
                 unsafe { &mut *host_ptr }.abort_window_requests_for_document(
                     crate::native_bridge::WindowDocumentOwner::Frame(owner),
                 );
@@ -563,7 +568,8 @@ impl JsContextHost {
                 .cancel_child_browsing_context_attribute_navigation(child_handle);
         }
 
-        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle) != Some(document_handle)
+        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
+            != Some(document_handle)
             || unsafe { &*host_ptr }.child_document_active_parser_was_aborted(child_handle)
         {
             return None;
@@ -571,11 +577,14 @@ impl JsContextHost {
         let previous_url = unsafe { &mut *host_ptr }.document_url_for_handle(document_handle);
         let replacement_url = entry_document
             .filter(|_| unsafe { &mut *host_ptr }.child_browsing_context_is_live(child_handle))
-            .map(|entry| unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry));
+            .map(|entry| {
+                unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry)
+            });
         let document_url = replacement_url.as_ref().unwrap_or(&previous_url).clone();
         let document_base_url = if replacement_url.is_some() {
             if document_url == previous_url {
-                unsafe { &mut *host_ptr }.dom_host()
+                unsafe { &mut *host_ptr }
+                    .dom_host()
                     .node(document_handle)?
                     .as_document()?
                     .fallback_base_url()
@@ -712,7 +721,8 @@ impl JsContextHost {
                 &document_url,
             );
         }
-        unsafe { &mut *host_ptr }.frame_owner_store
+        unsafe { &mut *host_ptr }
+            .frame_owner_store
             .finish_child_document_open_replacement(child_handle, current_owner);
         (unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
             == Some(current_owner))

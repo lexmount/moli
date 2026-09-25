@@ -834,12 +834,17 @@ impl JsContextHost {
             }
             if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
                 Self::dispatch_child_document_tree_unload_without_beforeunload(
-                    scope, host_ptr, retirement.handle, false,
+                    scope,
+                    host_ptr,
+                    retirement.handle,
+                    false,
                 );
             }
             if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
                 crate::context_bootstrap::finish_joint_history_without_document_commit(
-                    scope, host_ptr, super::super::OwnerDispatchScope::Child(retirement.handle),
+                    scope,
+                    host_ptr,
+                    super::super::OwnerDispatchScope::Child(retirement.handle),
                 );
             }
             let host = unsafe { &mut *host_ptr };
