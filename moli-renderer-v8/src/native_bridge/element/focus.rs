@@ -1,5 +1,4 @@
-use super::global_attributes::parse_tab_index_attribute;
-use crate::dom::native::Node;
+use crate::dom::native::{Element, Node};
 
 use super::super::{
     JsContextHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
@@ -9,6 +8,7 @@ use super::forms::{
     text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
+use super::global_attributes::parse_tab_index_attribute;
 use super::styles::{StyleMode, style_property_value};
 use super::{
     construct_click_event, construct_focus_event, construct_interest_event,
@@ -80,10 +80,7 @@ fn html_area_has_associated_image_map(runtime: &JsContextHost, handle: DomHandle
     let Some(area) = dom.node(handle).and_then(Node::as_element) else {
         return false;
     };
-    if area.namespace() != document::XHTML_NS
-        || area.local_name() != "area"
-        || !area.has_attribute("href")
-    {
+    if !area.is_html_element("area") {
         return false;
     }
 
@@ -141,15 +138,80 @@ pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
     {
         return false;
     }
-    if element.namespace() == document::XHTML_NS && element.local_name() == "area" {
-        return html_area_has_associated_image_map(runtime, handle);
+    if element.is_html_element("area") && !html_area_has_associated_image_map(runtime, handle) {
+        return false;
     }
-    matches!(
-        element.local_name(),
-        "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame" | "dialog"
-    ) || element.has_attribute("tabindex")
-        || contenteditable_editing_host(runtime, handle) == Some(handle)
+    if element.is_html_element("input")
+        && element
+            .attribute("type")
+            .is_some_and(|value| value.eq_ignore_ascii_case("hidden"))
+    {
+        return false;
+    }
+    element
+        .attribute("tabindex")
+        .and_then(parse_tab_index_attribute)
+        .is_some()
+        || has_default_focus_behavior(runtime, handle)
         || element_is_scrollable(runtime, handle)
+}
+
+fn has_default_focus_behavior(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    let native_focus_behavior = match (element.namespace(), element.local_name()) {
+        (document::XHTML_NS, "a" | "area") | (document::MATHML_NS, "a") => {
+            element.has_attribute("href")
+        }
+        (document::SVG_NS, "a") => {
+            element.has_attribute("href")
+                || element.has_attribute_ns("http://www.w3.org/1999/xlink", "href")
+        }
+        (
+            document::XHTML_NS,
+            "input" | "button" | "select" | "textarea" | "iframe" | "frame" | "object" | "dialog",
+        ) => true,
+        (document::XHTML_NS, "audio" | "video") => element.has_attribute("controls"),
+        (document::XHTML_NS, "summary") => {
+            runtime
+                .dom_host()
+                .parent_node(handle)
+                .is_some_and(|parent| {
+                    super::details_dialog::main_summary_child(runtime, parent) == Some(handle)
+                })
+        }
+        _ => false,
+    };
+    native_focus_behavior
+        || (element.namespace() == document::XHTML_NS
+            && contenteditable_editing_host(runtime, handle) == Some(handle))
+}
+
+fn svg_element_is_non_renderable(element: &Element) -> bool {
+    // Only directly renderable SVG elements can receive focus. Definitions,
+    // effects, animation and unknown elements cannot opt in with display or
+    // tabindex. Source <symbol> elements are not <use> shadow-tree instances.
+    element.namespace() == document::SVG_NS
+        && !matches!(
+            element.local_name(),
+            "a" | "circle"
+                | "ellipse"
+                | "foreignObject"
+                | "g"
+                | "image"
+                | "line"
+                | "path"
+                | "polygon"
+                | "polyline"
+                | "rect"
+                | "svg"
+                | "switch"
+                | "text"
+                | "textPath"
+                | "tspan"
+                | "use"
+        )
 }
 
 fn element_focus_is_suppressed(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -169,6 +231,7 @@ fn element_focus_is_suppressed(runtime: &JsContextHost, handle: DomHandle) -> bo
             .and_then(Node::as_element)
             && (element.has_attribute("inert")
                 || element.has_attribute("hidden")
+                || svg_element_is_non_renderable(element)
                 || computed_display(runtime, candidate) == "none")
         {
             return true;
@@ -1510,16 +1573,10 @@ fn is_interactive_sequential_focusable_descendant(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    if is_disabled_form_control(runtime, handle) {
+    if !is_focusable(runtime, handle) {
         return false;
     }
-    let is_interactive_element = matches!(
-        element.local_name(),
-        "a" | "button" | "input" | "select" | "textarea"
-    );
+    let is_interactive_element = has_default_focus_behavior(runtime, handle);
     let has_non_negative_tab_index = element_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value >= 0);
@@ -1537,13 +1594,12 @@ fn default_sequential_tab_index(runtime: &JsContextHost, handle: DomHandle) -> i
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
-    if element.namespace() != "http://www.w3.org/1999/xhtml" {
-        return -1;
-    }
-    match element.local_name() {
-        "a" | "button" | "input" | "select" | "textarea" => 0,
-        _ if element_is_scrollable(runtime, handle) => 0,
-        _ => -1,
+    if (has_default_focus_behavior(runtime, handle) && !element.is_html_element("dialog"))
+        || element_is_scrollable(runtime, handle)
+    {
+        0
+    } else {
+        -1
     }
 }
 
