@@ -93,7 +93,12 @@ impl JsContextHost {
         }
         if self.lightweight_popup_document_owner_is_current(owner) {
             dispatch_unload_for_runtime_owner(scope, window);
-            Self::dispatch_child_documents_unload_without_beforeunload(scope, self, descendants, false);
+            Self::dispatch_child_documents_unload_without_beforeunload(
+                scope,
+                self,
+                descendants,
+                false,
+            );
         }
         true
     }
