@@ -9,7 +9,6 @@ enum RealmDependentFinalizer {
     NodeMixinUnscopables,
     DomExceptionPrototypeCache,
     CryptoSecureContextSurface,
-    BlobPrototypeCache,
     XmlHttpRequestEventTargetState,
     NotificationPermission,
     PointerEventSecureContextSurface,
@@ -43,7 +42,6 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
         "Crypto",
         RealmDependentFinalizer::CryptoSecureContextSurface,
     ),
-    ("Blob", RealmDependentFinalizer::BlobPrototypeCache),
     (
         "XMLHttpRequestEventTarget",
         RealmDependentFinalizer::XmlHttpRequestEventTargetState,
@@ -94,9 +92,6 @@ pub(super) fn finalize_materialized_interface(
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             crate::context_bootstrap::crypto::finalize_crypto_realm_bindings(scope, prototype)?;
-        }
-        RealmDependentFinalizer::BlobPrototypeCache => {
-            crate::blob::finalize_blob_realm_bindings(scope, prototype);
         }
         RealmDependentFinalizer::XmlHttpRequestEventTargetState => {
             crate::network_host::finalize_xml_http_request_event_target_realm_bindings(
@@ -157,7 +152,6 @@ mod tests {
                 "CharacterData",
                 "DOMException",
                 "Crypto",
-                "Blob",
                 "XMLHttpRequestEventTarget",
                 "Notification",
                 "PointerEvent",

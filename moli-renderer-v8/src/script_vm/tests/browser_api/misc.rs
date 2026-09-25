@@ -3158,6 +3158,8 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
 
   const blobSlice = detachedSlice.call(new Blob(["abcdef"]), 1, 4, "Text/Custom");
   const fileSlice = detachedSlice.call(new File(["uvwxyz"], "sample.txt"), 2, 5);
+  globalThis.__blobSliceRealmBlobResult = blobSlice;
+  globalThis.__blobSliceRealmFileResult = fileSlice;
   globalThis.__blobSliceRealmProbe = {
     childDetached: iframe.contentWindow === null,
     blobIsMainRealmBlob: blobSlice instanceof Blob,
@@ -3191,6 +3193,107 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
         result,
         r#"{"childDetached":true,"blobIsMainRealmBlob":true,"blobPrototypeIsMainRealmBlob":true,"fileSliceIsMainRealmBlob":true,"fileSliceIsFile":false,"fileSlicePrototypeIsMainRealmBlob":true,"type":"text/custom","blobText":"bcd","fileText":"wxy"}"#
     );
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        for name in ["__blobSliceRealmBlobResult", "__blobSliceRealmFileResult"] {
+            let key = v8::String::new(scope, name).expect("result property name should allocate");
+            let result = global
+                .get(scope, key.into())
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .expect("slice result should be an object");
+            assert_eq!(result.get_creation_context(scope), Some(context));
+        }
+        Ok(())
+    })
+    .expect("slice results should be allocated in the receiver's context");
+}
+
+#[test]
+fn blob_slice_allocates_in_foreign_receiver_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://blob-slice-foreign-receiver.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<!doctype html><html><body></body></html>";
+  document.body.appendChild(iframe);
+  globalThis.__blobSliceForeignFrame = iframe;
+})()
+"#,
+    )
+    .expect("foreign-realm Blob slice setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const iframe = __blobSliceForeignFrame;
+  const childBlob = iframe.contentWindow.Blob;
+  const receiver = new childBlob(["abcdef"]);
+  const sliced = Blob.prototype.slice.call(receiver, 1, 4);
+  iframe.remove();
+  const detachedSlice = Blob.prototype.slice.call(receiver, 2, 5);
+  globalThis.__blobSliceForeignReceiver = receiver;
+  globalThis.__blobSliceForeignResult = sliced;
+  globalThis.__blobSliceForeignDetachedResult = detachedSlice;
+  return JSON.stringify({
+    prototypeIsChild: Object.getPrototypeOf(sliced) === childBlob.prototype,
+    prototypeIsParent: Object.getPrototypeOf(sliced) === Blob.prototype,
+    size: sliced.size,
+    type: sliced.type,
+    childDetached: iframe.contentWindow === null,
+    detachedPrototypeIsChild: Object.getPrototypeOf(detachedSlice) === childBlob.prototype,
+    detachedSize: detachedSlice.size
+  });
+})()
+"#,
+        )
+        .expect("foreign-realm Blob slice should evaluate");
+    assert_eq!(
+        result,
+        r#"{"prototypeIsChild":true,"prototypeIsParent":false,"size":3,"type":"","childDetached":true,"detachedPrototypeIsChild":true,"detachedSize":3}"#
+    );
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let receiver_key = v8::String::new(scope, "__blobSliceForeignReceiver")
+            .expect("receiver property name should allocate");
+        let receiver = global
+            .get(scope, receiver_key.into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .expect("receiver should be an object");
+        let result_key = v8::String::new(scope, "__blobSliceForeignResult")
+            .expect("result property name should allocate");
+        let sliced = global
+            .get(scope, result_key.into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .expect("slice result should be an object");
+        let detached_result_key = v8::String::new(scope, "__blobSliceForeignDetachedResult")
+            .expect("detached result property name should allocate");
+        let detached_slice = global
+            .get(scope, detached_result_key.into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .expect("detached slice result should be an object");
+        let receiver_context = receiver
+            .get_creation_context(scope)
+            .expect("receiver should have a creation context");
+        assert_ne!(receiver_context, context);
+        assert_eq!(sliced.get_creation_context(scope), Some(receiver_context));
+        assert_eq!(
+            detached_slice.get_creation_context(scope),
+            Some(receiver_context)
+        );
+        Ok(())
+    })
+    .expect("slice result should be allocated in the foreign receiver's context");
 }
 
 #[test]

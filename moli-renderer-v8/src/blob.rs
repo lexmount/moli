@@ -9,13 +9,11 @@ use std::sync::{Arc, OnceLock};
 use super::{
     resource_owner::{ResourceOwnerId, current_resource_owner_id},
     runtime::RendererStoragePartitionIdentity,
-    util::{get_private_value, set_private_value, throw_type_error, v8_string},
+    util::{get_private_value, throw_type_error, v8_string},
     webidl,
 };
 
 const BLOB_ID_SLOT: &str = "__lmBlobId";
-const BLOB_PROTOTYPE_SLOT: &str = "__lmBlobPrototype";
-const BLOB_REALM_PROTOTYPE_SLOT: &str = "__lmBlobRealmPrototype";
 
 fn native_blob_line_ending() -> &'static str {
     if moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE
@@ -105,14 +103,6 @@ pub(super) fn install_blob_template_bindings<'s>(
             template.prototype_template(scope),
         );
     }
-}
-
-pub(super) fn finalize_blob_realm_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    prototype: v8::Local<'s, v8::Object>,
-) {
-    let global = scope.get_current_context().global(scope);
-    set_private_value(scope, global, BLOB_PROTOTYPE_SLOT, prototype.into());
 }
 
 fn blob_size_attribute_getter_callback<'s>(
@@ -226,11 +216,13 @@ pub(super) fn blob_slice_callback<'s>(
         .map(ToOwned::to_owned)
         .unwrap_or_default();
 
-    let prototype = blob_realm_prototype_from_object(scope, args.this())
-        .or_else(|| current_realm_blob_prototype(scope));
-    if let Some(blob) = prototype
-        .and_then(|prototype| build_blob_object_with_prototype(scope, sliced, mime_type, prototype))
-    {
+    // Convert arguments in the method's realm, then allocate in the receiver's realm.
+    let Some(receiver_context) = args.this().get_creation_context(scope) else {
+        rv.set(v8::undefined(scope).into());
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, receiver_context);
+    if let Some(blob) = build_blob_object(scope, sliced, mime_type) {
         rv.set(blob.into());
     } else {
         rv.set(v8::undefined(scope).into());
@@ -249,9 +241,6 @@ pub(super) fn init_blob_object<'s>(
     BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .initialize(scope, object)
         .expect("Blob instance declaration should initialize");
-    if let Some(prototype) = current_realm_blob_prototype(scope) {
-        set_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT, prototype.into());
-    }
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     blob_id
 }
@@ -261,39 +250,8 @@ pub(super) fn build_blob_object<'s>(
     bytes: Vec<u8>,
     mime_type: String,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = current_realm_blob_prototype(scope)?;
-    build_blob_object_with_prototype(scope, bytes, mime_type, prototype)
-}
-
-fn current_realm_blob_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    get_private_value(scope, global, BLOB_PROTOTYPE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .or_else(|| {
-            let prototype =
-                crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob")
-                    .ok()?;
-            finalize_blob_realm_bindings(scope, prototype);
-            Some(prototype)
-        })
-}
-
-fn blob_realm_prototype_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn build_blob_object_with_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: Vec<u8>,
-    mime_type: String,
-    prototype: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
     let blob_id = blob_store().create_blob(owner_id, partition_id, bytes, mime_type);
@@ -305,7 +263,6 @@ fn build_blob_object_with_prototype<'s>(
             None
         })?;
     let _ = object.set_prototype(scope, prototype.into());
-    set_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT, prototype.into());
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     Some(object)
 }
