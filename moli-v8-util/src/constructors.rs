@@ -6,7 +6,6 @@ use crate::symbols::{get_private_object, set_private_value};
 
 const INTRINSIC_CONSTRUCTORS_SLOT: &str = "__moliIntrinsicConstructors";
 const INTRINSIC_PROTOTYPES_SLOT: &str = "__moliIntrinsicPrototypes";
-const PUBLIC_INTERFACE_OBJECTS_SLOT: &str = "__moliPublicInterfaceObjects";
 
 fn intrinsic_registry_object<'s>(
     scope: &mut PinScope<'s, '_>,
@@ -34,7 +33,6 @@ pub fn initialize_intrinsic_interface_registry<'s>(
 ) {
     let _ = intrinsic_registry_object(scope, global, INTRINSIC_CONSTRUCTORS_SLOT);
     let _ = intrinsic_registry_object(scope, global, INTRINSIC_PROTOTYPES_SLOT);
-    let _ = intrinsic_registry_object(scope, global, PUBLIC_INTERFACE_OBJECTS_SLOT);
 }
 
 fn define_intrinsic<'s>(
@@ -96,29 +94,6 @@ pub fn register_intrinsic_interface<'s>(
     true
 }
 
-/// Records the value returned by the exposed-interface lazy property.
-///
-/// Most interfaces expose their intrinsic constructor directly. HTML element
-/// interfaces use a callable Proxy around that constructor to enforce the
-/// custom-element early-sanity check, so the public value is tracked
-/// separately from the trusted constructor used for inheritance and wrapper
-/// creation.
-pub fn register_public_interface_object<'s>(
-    scope: &mut PinScope<'s, '_>,
-    global: Local<'s, Object>,
-    name: &str,
-    value: Local<'s, Object>,
-) -> bool {
-    let objects = intrinsic_registry_object(scope, global, PUBLIC_INTERFACE_OBJECTS_SLOT);
-    let Some(key) = v8_string(scope, name) else {
-        return false;
-    };
-    if objects.has_own_property(scope, key.into()) != Some(false) {
-        return false;
-    }
-    define_intrinsic(scope, objects, name, value)
-}
-
 fn registered_intrinsic<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
@@ -146,14 +121,6 @@ pub fn registered_intrinsic_prototype<'s>(
     name: &str,
 ) -> Option<Local<'s, Object>> {
     registered_intrinsic(scope, global, INTRINSIC_PROTOTYPES_SLOT, name)
-}
-
-pub fn registered_public_interface_object<'s>(
-    scope: &mut PinScope<'s, '_>,
-    global: Local<'s, Object>,
-    name: &str,
-) -> Option<Local<'s, Object>> {
-    registered_intrinsic(scope, global, PUBLIC_INTERFACE_OBJECTS_SLOT, name)
 }
 
 pub fn constructor_object<'s>(

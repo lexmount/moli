@@ -222,8 +222,6 @@ pub(crate) use self::canvas::{
     build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
     canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
 };
-#[cfg(test)]
-pub(crate) use self::constructors::finalize_dom_exception_realm_bindings;
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{
     dom_exception_clone_fields, ensure_dom_implementation_singleton, new_dom_error_value,

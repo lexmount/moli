@@ -100,18 +100,12 @@ fn install_dom_exception<'s>(scope: &mut v8::PinScope<'s, '_>, global: v8::Local
     let constructor = template
         .get_function(scope)
         .expect("DOMException constructor");
-    let prototype_key = v8::String::new(scope, "prototype").unwrap();
-    let prototype = constructor
-        .get(scope, prototype_key.into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .expect("DOMException prototype");
     let _ = global.define_own_property(
         scope,
         v8::String::new(scope, "DOMException").unwrap().into(),
         constructor.into(),
         v8::PropertyAttribute::DONT_ENUM,
     );
-    crate::context_bootstrap::finalize_dom_exception_realm_bindings(scope, prototype);
 }
 
 /// Helper callback: __drainWorkerMessages(workerObj) → bool

@@ -34,9 +34,8 @@ pub(super) use document_nodes::{
 };
 pub(crate) use dom_exception::{
     dom_error_constructor_callback, dom_exception_clone_fields, dom_exception_constructor_callback,
-    finalize_dom_exception_realm_bindings, initialize_websocket_error,
-    install_dom_exception_template_bindings, new_dom_error_value, new_dom_exception_value,
-    new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
+    initialize_websocket_error, install_dom_exception_template_bindings, new_dom_error_value,
+    new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
     new_websocket_error_value, quota_exceeded_error_clone_fields,
     quota_exceeded_error_constructor_callback, throw_dom_exception_value,
     websocket_error_close_info,

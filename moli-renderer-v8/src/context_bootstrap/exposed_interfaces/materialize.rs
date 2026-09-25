@@ -11,9 +11,8 @@ use crate::context_bootstrap::runtime_state::set_interface_prototype_constructor
 use crate::context_bootstrap::shared::throw_error;
 use crate::context_bootstrap::specs::ConstructorKind;
 use crate::util::{
-    constructor_prototype_object, register_intrinsic_interface, register_public_interface_object,
-    registered_intrinsic_constructor, registered_intrinsic_prototype,
-    registered_public_interface_object, v8str,
+    constructor_prototype_object, register_intrinsic_interface, registered_intrinsic_constructor,
+    registered_intrinsic_prototype, v8str,
 };
 
 pub(super) fn exposed_interface_lazy_getter<'s>(
@@ -98,7 +97,6 @@ pub(super) fn materialize_interface<'s>(
 
     if registered_intrinsic_constructor(scope, global, metadata.name).is_some()
         || registered_intrinsic_prototype(scope, global, metadata.name).is_some()
-        || registered_public_interface_object(scope, global, metadata.name).is_some()
     {
         return Err(anyhow!(
             "uninitialized interface `{}` has partial registry state",
@@ -174,6 +172,19 @@ pub(crate) fn ensure_intrinsic_interface_prototype<'s>(
     realm
         .prototype(scope, id)
         .ok_or_else(|| anyhow!("intrinsic prototype `{name}` is missing after materialization"))
+}
+
+/// Reads an already registered prototype without materializing an interface.
+/// This is useful while creating an exception for a bootstrap failure.
+pub(crate) fn materialized_intrinsic_interface_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let registry = ExposedInterfaceTemplateRegistry::current(scope)?;
+    let id = registry.id_by_name(name)?;
+    IntrinsicInterfaceRegistry::for_current_context(scope, registry.len())
+        .ok()?
+        .prototype(scope, id)
 }
 
 fn materialize_uninitialized_interface<'s>(
@@ -273,12 +284,6 @@ fn materialize_uninitialized_interface<'s>(
         }
         _ => constructor.into(),
     };
-    if !register_public_interface_object(scope, global, metadata.name, public_interface) {
-        return Err(anyhow!(
-            "failed to register public interface object `{}`",
-            metadata.name
-        ));
-    }
     realm.register_objects(
         scope,
         id,

@@ -586,6 +586,34 @@ fn lazy_dom_exception_uses_original_error_prototype_after_public_override() {
 }
 
 #[test]
+fn native_dom_exception_uses_registered_prototype_after_public_override() {
+    let mut vm = new_storage_test_vm("https://native-dom-exception-intrinsic.test/");
+    vm.eval("void DOMException; globalThis.DOMException = function FakeDOMException() {}")
+        .expect("DOMException override should evaluate");
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let context = scope.get_current_context();
+        let intrinsic =
+            crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "DOMException")
+                .expect("DOMException intrinsic should be registered");
+        let exception = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "native exception",
+            "DataError",
+        );
+        let exception = v8::Local::<v8::Object>::try_from(exception)
+            .expect("native DOMException should be an object");
+        let prototype = exception
+            .get_prototype(scope)
+            .expect("native DOMException should have a prototype");
+        assert!(prototype.strict_equals(intrinsic.into()));
+        assert_eq!(exception.get_creation_context(scope), Some(context));
+        Ok(())
+    })
+    .expect("native exception should use the realm registry");
+}
+
+#[test]
 fn illegal_storage_receivers_do_not_materialize_wrappers_or_opfs_state() {
     let mut vm = new_storage_test_vm("https://lazy-illegal-storage-receivers.test/");
     vm.exec(

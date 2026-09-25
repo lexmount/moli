@@ -14,11 +14,6 @@ const QUOTA_EXCEEDED_ERROR_REQUESTED_SLOT: &str = "__lmQuotaExceededErrorRequest
 const WEBSOCKET_ERROR_CLOSE_CODE_SLOT: &str = "__lmWebSocketErrorCloseCode";
 const WEBSOCKET_ERROR_REASON_SLOT: &str = "__lmWebSocketErrorReason";
 
-#[derive(Debug)]
-struct DomExceptionPrototypeSlot {
-    prototype: v8::Global<v8::Object>,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMException")]
 struct DomExceptionConstructorArgs {
@@ -194,17 +189,6 @@ pub(crate) fn install_dom_exception_template_bindings<'s>(
         }
         _ => {}
     }
-}
-
-pub(crate) fn finalize_dom_exception_realm_bindings(
-    scope: &mut v8::PinScope<'_, '_>,
-    prototype: v8::Local<'_, v8::Object>,
-) {
-    let _ = scope
-        .get_current_context()
-        .set_slot(std::rc::Rc::new(DomExceptionPrototypeSlot {
-            prototype: v8::Global::new(scope, prototype),
-        }));
 }
 
 fn dom_exception_receiver<'s>(
@@ -541,13 +525,14 @@ pub(crate) fn new_dom_exception_value<'s>(
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(prototype) = scope
-        .get_current_context()
-        .get_slot::<DomExceptionPrototypeSlot>()
+    if let Some(prototype) =
+        crate::context_bootstrap::exposed_interfaces::materialized_intrinsic_interface_prototype(
+            scope,
+            "DOMException",
+        )
     {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
-        let prototype = v8::Local::new(scope, &prototype.prototype);
         let _ = exception.set_prototype(scope, prototype.into());
         return exception.into();
     }

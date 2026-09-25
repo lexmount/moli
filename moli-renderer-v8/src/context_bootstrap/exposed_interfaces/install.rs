@@ -11,9 +11,8 @@ use super::template_registry::ExposedInterfaceTemplateRegistry;
 use crate::context_bootstrap::specs::ConstructorSpec;
 use crate::util::{
     constructor_object, constructor_prototype_object, initialize_intrinsic_interface_registry,
-    register_intrinsic_interface, register_public_interface_object,
-    registered_intrinsic_constructor, registered_intrinsic_prototype,
-    registered_public_interface_object, v8str,
+    register_intrinsic_interface, registered_intrinsic_constructor, registered_intrinsic_prototype,
+    v8str,
 };
 
 const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
@@ -191,18 +190,9 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         }
         if let Some(constructor) = captured_constructor {
             let prototype = captured_prototype.expect("captured intrinsic pair was validated");
-            if registered_public_interface_object(scope, global, metadata.name).is_none()
-                && !register_public_interface_object(scope, global, metadata.name, constructor)
-            {
-                return Err(anyhow!(
-                    "failed to capture eager public interface `{}`",
-                    metadata.name
-                ));
-            }
-            let public_interface = registered_public_interface_object(scope, global, metadata.name)
-                .ok_or_else(|| {
-                    anyhow!("captured public interface `{}` is missing", metadata.name)
-                })?;
+            let public_interface = realm
+                .public_interface(scope, metadata.id)
+                .unwrap_or(constructor);
             realm.register_objects(scope, metadata.id, constructor, prototype, public_interface)?;
             realm.set_state(metadata.id, RealmInterfaceState::Ready)?;
             continue;
@@ -229,12 +219,6 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         if !register_intrinsic_interface(scope, global, metadata.name, constructor, prototype) {
             return Err(anyhow!(
                 "failed to capture eager intrinsic `{}`",
-                metadata.name
-            ));
-        }
-        if !register_public_interface_object(scope, global, metadata.name, constructor) {
-            return Err(anyhow!(
-                "failed to capture eager public interface `{}`",
                 metadata.name
             ));
         }
