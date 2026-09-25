@@ -65,8 +65,7 @@ async fn assert_child_javascript_origin(
         globalThis.messages = [];
         onmessage = event => messages.push(event.data);
         globalThis.originProbeDone = false;
-        // Keep GET form serialization from turning an appended query into code.
-        const code = "javascript:parent.postMessage('ran', '*');void 0;//";
+        const code = "javascript:parent.postMessage('ran', '*');void 0";
         {navigation}
         {after_navigation}
         requestIdleCallback(() => originProbeDone = true);

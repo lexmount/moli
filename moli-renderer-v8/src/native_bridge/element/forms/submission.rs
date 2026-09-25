@@ -921,9 +921,7 @@ fn build_form_submission_request(
     if matches!(resolved_url.scheme(), "ftp" | "javascript")
         || (resolved_url.scheme() == "data" && method == "post")
     {
-        return Some(FormSubmissionMethod::Get {
-            resolved_url: resolved_url.to_string(),
-        });
+        return Some(FormSubmissionMethod::Get { resolved_url });
     }
     if method == "post" {
         let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding);
