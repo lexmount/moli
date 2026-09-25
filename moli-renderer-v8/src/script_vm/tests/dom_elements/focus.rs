@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn post_parse_autofocus_uses_connection_order_after_reinsert() {
+    let mut vm = new_storage_test_vm("https://autofocus-reinsert.test/");
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id="first" autofocus><input id="second" autofocus>';
+  const first = document.getElementById('first');
+  const second = document.getElementById('second');
+  first.remove();
+  body.insertBefore(first, second);
+})()
+"#,
+    )
+    .expect("autofocus candidates should be reinserted");
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
+        assert!(crate::native_bridge::element::process_post_parse_autofocus(
+            scope,
+            runtime_ptr
+        ));
+        Ok(())
+    })
+    .expect("autofocus should select a candidate");
+
+    assert_eq!(
+        vm.eval("document.activeElement.id")
+            .expect("autofocus result should be observable"),
+        "second"
+    );
+}
+
+#[test]
 fn image_map_area_focusability_supports_autofocus() {
     let mut vm = new_storage_test_vm("https://area-autofocus.test/");
 
