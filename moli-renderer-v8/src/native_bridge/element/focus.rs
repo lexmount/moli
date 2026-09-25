@@ -342,13 +342,14 @@ fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
 /// Whether the current Document has post-parse autofocus work worth
 /// admitting to the rendering-update task source.
 ///
-/// This is only an admission snapshot. The selected rendering task resolves
-/// the candidate again because script can move focus or mutate the Document
+/// Do not check candidate focusability here: the inserting script can enable
+/// or reveal an element before the rendering task runs. The selected task
+/// resolves the candidate because script can also remove it or move focus
 /// between publication and execution.
 pub(crate) fn post_parse_autofocus_is_pending(runtime: &JsContextHost) -> bool {
     !runtime.autofocus_processed()
         && runtime.active_element_handle().is_none()
-        && first_autofocus_candidate(runtime).is_some()
+        && !runtime.autofocus_candidates().is_empty()
 }
 
 pub(crate) fn process_post_parse_autofocus(
