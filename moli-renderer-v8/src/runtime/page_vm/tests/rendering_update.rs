@@ -5513,7 +5513,7 @@ document.body.append(second, manual);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn domcontentloaded_microtask_focus_prevents_autofocus_task_admission() {
+async fn domcontentloaded_microtask_focus_consumes_autofocus_without_moving_focus() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -5544,16 +5544,85 @@ document.addEventListener("DOMContentLoaded", () => {
         );
         assert!(
             page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                    &loader,
+                )
+                .await?,
+            "rendering must consume candidates even when author code already focused"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("document.activeElement === manualFocus")?,
+            "true"
+        );
+        page_vm.vm_mut().eval(
+            "manualFocus.blur(); document.body.insertAdjacentHTML('beforeend', '<input autofocus>')",
+        )?;
+        assert!(
+            page_vm
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::RenderingUpdate,
                 )
                 .is_none(),
-            "a Document that acquired focus must not publish redundant autofocus work"
+            "blur must not re-enable a Document's completed autofocus decision"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("document.activeElement === document.body")?,
+            "true"
         );
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("manual focus admission test should run");
+    .expect("manual focus must consume autofocus at the rendering opportunity");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focused_document_autofocus_checks_focus_at_rendering_time() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for popup in [false, true] {
+            for blur_before_render in [false, true] {
+                let (mut page_vm, _queue, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader,
+                    Url::parse("https://example.com/focused-autofocus-candidate")?,
+                );
+                dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+                let view = if popup { "open()" } else { "window" };
+                page_vm.vm_mut().eval(&format!(
+                    "globalThis.focusWindow={view}; const d=focusWindow.document; \
+                     d.body.innerHTML='<input id=manual>'; \
+                     const manual=d.getElementById('manual'); manual.focus(); \
+                     d.body.insertAdjacentHTML('beforeend','<input id=candidate autofocus>'); \
+                     'inserted'"
+                ))?;
+                let claimed = page_vm
+                    .claim_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate,
+                    )
+                    .expect("existing focus must not skip candidate processing");
+                if blur_before_render {
+                    page_vm.vm_mut().eval("manual.blur()")?;
+                }
+                page_vm.run_claimed_selected_page_task_for_test(claimed, &loader).await?;
+                assert_eq!(
+                    page_vm.vm_mut().eval("d.activeElement.id")?,
+                    if blur_before_render { "candidate" } else { "manual" },
+                    "popup={popup}, blur_before_render={blur_before_render}"
+                );
+                page_vm.vm_mut().eval(
+                    "d.activeElement.blur(); d.body.insertAdjacentHTML('beforeend','<input id=late autofocus>')"
+                )?;
+                assert!(page_vm.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                ).is_none(), "both rendering outcomes complete the one-time decision");
+                assert_eq!(page_vm.vm_mut().eval("d.activeElement===d.body")?, "true");
+                if popup {
+                    page_vm.vm_mut().eval("focusWindow.close()")?;
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("focus state must be resolved during rendering, not admission");
 }
 
 #[tokio::test(flavor = "current_thread")]
