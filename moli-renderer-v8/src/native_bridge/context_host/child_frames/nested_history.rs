@@ -107,14 +107,6 @@ impl NestedHistoryStore {
 }
 
 impl JsContextHost {
-    fn nested_history_root(&self, handle: DomHandle) -> Option<OwnerDispatchScope> {
-        let mut owner = self.owner_dispatch_scope_for_node(handle)?;
-        while let OwnerDispatchScope::Child(parent) = owner {
-            owner = self.owner_dispatch_scope_for_node(parent)?;
-        }
-        Some(owner)
-    }
-
     pub(crate) fn nested_history_store(&mut self, root: OwnerDispatchScope) -> NestedHistoryStore {
         if root == OwnerDispatchScope::Top {
             return self.top_level_navigation_history.nested_history();
@@ -196,7 +188,7 @@ impl JsContextHost {
         {
             return None;
         }
-        let root = self.nested_history_root(handle)?;
+        let root = self.child_browsing_context_root_scope(handle)?;
         let popup = match root {
             OwnerDispatchScope::LightweightPopup(id) => Some(id),
             _ => None,
@@ -238,7 +230,7 @@ impl JsContextHost {
         };
         let url = target.url.clone();
         let root = self
-            .nested_history_root(handle)
+            .child_browsing_context_root_scope(handle)
             .unwrap_or(OwnerDispatchScope::Top);
         let popup = match root {
             OwnerDispatchScope::LightweightPopup(id) => Some(id),
@@ -267,7 +259,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn remember_child_history(&mut self, handle: DomHandle) {
-        let Some(root) = self.nested_history_root(handle) else {
+        let Some(root) = self.child_browsing_context_root_scope(handle) else {
             return;
         };
         let store = self.nested_history_store(root);
@@ -330,7 +322,7 @@ impl JsContextHost {
             .child_browsing_contexts
             .keys()
             .copied()
-            .filter(|handle| self.nested_history_root(*handle) == Some(root))
+            .filter(|handle| self.child_browsing_context_root_scope(*handle) == Some(root))
             .collect();
         for handle in handles {
             self.remember_child_history(handle);
