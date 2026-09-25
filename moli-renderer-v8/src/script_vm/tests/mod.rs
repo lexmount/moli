@@ -26,6 +26,7 @@ mod native_drag_pointer_coordinates;
 mod native_drag_pointer_suppression;
 #[cfg(feature = "devtools")]
 mod native_drag_source_events;
+mod offline_audio_float;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
 #[cfg(feature = "devtools")]
@@ -2425,6 +2426,7 @@ mod observer_receivers;
 mod offline_audio_context_interfaces;
 mod offline_audio_float;
 mod periodic_wave_interfaces;
+mod popup_root_window;
 mod post_parse;
 
 mod promise_jobs;
