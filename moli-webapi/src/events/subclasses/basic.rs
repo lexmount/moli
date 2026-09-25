@@ -41,6 +41,7 @@ pub fn construct_native_focus_event<'s>(
     event_type: &str,
     related_target: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
+    view: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let related_target = nullable_native_event_interface(
         scope,
@@ -58,7 +59,7 @@ pub fn construct_native_focus_event<'s>(
         composed: true,
     };
     let init = FocusEventInit {
-        ui: UiEventInit::from_native(flags, 0, None),
+        ui: UiEventInit::from_native(flags, 0, view),
         related_target,
     };
     construct_native_subclass(

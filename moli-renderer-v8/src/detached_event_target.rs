@@ -23,7 +23,8 @@ pub(super) fn dispatch_detached_focus_event<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
 ) -> bool {
-    let Some(event) = construct_native_focus_event(scope, event_type, related_target, bubbles)
+    let Some(event) =
+        construct_native_focus_event(scope, event_type, related_target, bubbles, None)
     else {
         return true;
     };
