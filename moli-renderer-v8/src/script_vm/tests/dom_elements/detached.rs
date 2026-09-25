@@ -1695,8 +1695,6 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
-  accessor(HTMLAreaElement.prototype, "hreflang");
-  accessor(HTMLAreaElement.prototype, "type");
   accessor(HTMLLinkElement.prototype, "hreflang");
   for (const name of ["download", "ping", "hreflang"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
@@ -1707,6 +1705,12 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   assert(!("hreflang" in div), "div should not expose hreflang");
   assert(!("download" in document.createElement("link")), "link should not expose download");
   assert(!("ping" in document.createElement("link")), "link should not expose ping");
+  for (const property of ["hreflang", "type"]) {
+    const area = document.createElement("area");
+    area.setAttribute(property, "retained attribute");
+    assert(!(property in area), `area should not expose ${property}`);
+    assert(area.getAttribute(property) === "retained attribute", `${property} remains an attribute`);
+  }
 
   const parsed = new DOMParser().parseFromString(
     "<html><head><link></head><body><a></a><area></area></body></html>",
@@ -1714,7 +1718,7 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang", "type"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
