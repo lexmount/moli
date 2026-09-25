@@ -1628,8 +1628,9 @@ fn expand_callback(
         }
     });
     let access_check = access_policy.map(|policy| {
+        let data = attrs.access_policy_with_data.then(|| quote!(, args.data()));
         quote! {
-            if !#policy(scope, args.this()) {
+            if !#policy(scope, args.this() #data) {
                 return;
             }
         }

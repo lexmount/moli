@@ -208,6 +208,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) access_policy: Option<Path>,
     pub(crate) getter_access_policy: Option<Path>,
     pub(crate) setter_access_policy: Option<Path>,
+    pub(crate) access_policy_with_data: bool,
     pub(crate) returns_promise: bool,
     pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
@@ -532,6 +533,15 @@ pub(crate) fn parse_field_attrs_with_defaults(
                 }
                 return Ok(());
             }
+            if meta.path.is_ident("access_policy_with_data") {
+                if parsed.access_policy_with_data {
+                    return Err(
+                        meta.error("field access_policy_with_data can only be specified once")
+                    );
+                }
+                parsed.access_policy_with_data = true;
+                return Ok(());
+            }
             if meta.path.is_ident("getter_access_policy") {
                 if parsed
                     .getter_access_policy
@@ -796,6 +806,12 @@ pub(crate) fn parse_field_attrs_with_defaults(
         return Err(Error::new(
             field.span(),
             "getter_access_policy and setter_access_policy require their accessor callback and cannot be combined with access_policy",
+        ));
+    }
+    if parsed.access_policy_with_data && !parsed.has_access_policy() {
+        return Err(Error::new(
+            field.span(),
+            "access_policy_with_data requires an access policy",
         ));
     }
     if parsed.has_access_policy() {
@@ -1350,6 +1366,25 @@ mod tests {
         for field in fields {
             assert!(parse_field_attrs(&field).is_err());
         }
+    }
+
+    #[test]
+    fn access_policy_can_request_callback_data() {
+        let field: Field = syn::parse_quote!(
+            #[webapi(accessor_property, getter = get, setter = set,
+                     getter_access_policy = authorize, access_policy_with_data, data = self.owner)]
+            value: ()
+        );
+        let attrs = parse_field_attrs(&field).unwrap();
+        assert!(attrs.access_policy_with_data);
+        assert!(attrs.callback_access_policy(false).is_some());
+        assert!(attrs.callback_access_policy(true).is_none());
+
+        let field: Field = syn::parse_quote!(
+            #[webapi(method, callback = call, access_policy_with_data)]
+            value: ()
+        );
+        assert!(parse_field_attrs(&field).is_err());
     }
 
     #[test]

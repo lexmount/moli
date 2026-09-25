@@ -196,7 +196,7 @@ mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
 mod window_world;
-pub(crate) use window_security_tokens::window_contexts_allow_access;
+pub(crate) use window_security_tokens::{WindowSecurityOrigin, window_contexts_allow_access};
 mod workers;
 pub(crate) use window_security_tokens::DocumentDomainState;
 pub(crate) use window_security_tokens::set_window_security_token;
