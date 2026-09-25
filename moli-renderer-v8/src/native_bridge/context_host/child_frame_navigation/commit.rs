@@ -240,6 +240,7 @@ impl JsContextHost {
         handle: DomHandle,
         url: &Url,
         initiator_url: Option<Url>,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -254,6 +255,7 @@ impl JsContextHost {
                 ChildBrowsingContextBootstrap::Url(url.clone()),
                 initiator_url,
                 true,
+                initiator,
             )
             .is_none()
         {
@@ -282,6 +284,7 @@ impl JsContextHost {
                 ChildBrowsingContextBootstrap::Request(request),
                 None,
                 true,
+                None,
             )
             .is_none()
         {
@@ -364,6 +367,7 @@ impl JsContextHost {
                 ChildBrowsingContextBootstrap::Url(url.clone()),
                 None,
                 true,
+                entry_snapshot.pending_javascript_initiator_origin(),
             );
             self.queue_child_browsing_context_javascript_url_execution(
                 handle,
@@ -455,14 +459,16 @@ impl JsContextHost {
         dispatch_load_on_no_string_completion: bool,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
     ) {
-        if !self.child_browsing_context_scripting_enabled(handle) {
+        if !self.child_browsing_context_scripting_enabled(handle)
+            || !self.child_javascript_navigation_origin_allows_execution(handle)
+        {
             let cancelled = self
                 .cancel_child_javascript_url_navigation_without_execution(handle, navigation_load);
             tracing::debug!(
                 ?handle,
                 %url,
                 cancelled,
-                "blocked child javascript URL because scripting is disabled"
+                "blocked child javascript URL by scripting or origin policy"
             );
             return;
         }
@@ -562,6 +568,7 @@ impl JsContextHost {
         if !self.frame_document_task_owner_is_current(work.child_handle, work.owner)
             || self.current_child_navigation_load(work.child_handle) != Some(work.navigation_load)
             || !self.child_browsing_context_scripting_enabled(work.child_handle)
+            || !self.child_javascript_navigation_origin_allows_execution(work.child_handle)
         {
             return None;
         }
@@ -585,6 +592,14 @@ impl JsContextHost {
             work.preserve_window_event_state,
             work.dispatch_load_on_no_string_completion,
         ))
+    }
+
+    fn child_javascript_navigation_origin_allows_execution(&self, handle: DomHandle) -> bool {
+        self.child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.pending_javascript_initiator_origin())
+            .zip(self.child_window_access_origin(handle))
+            .is_some_and(|(source, target)| source.can_access(&target))
     }
 
     pub(crate) fn finish_child_javascript_url_without_string_completion(

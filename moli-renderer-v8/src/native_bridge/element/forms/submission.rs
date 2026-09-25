@@ -860,11 +860,15 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 Some(navigation.mutation),
             );
             if let Some(handle) = target_child {
+                let initiator = navigation
+                    .source_document
+                    .and_then(|document| runtime.owner_dispatch_scope_for_node(document));
                 let navigated = runtime.queue_deferred_child_form_navigation_request(
                     handle,
                     request,
                     history.entry_seed,
                     history.mutation,
+                    initiator,
                 );
                 if navigated {
                     runtime.mark_pending_form_submission_child_navigation(navigation.form, handle);

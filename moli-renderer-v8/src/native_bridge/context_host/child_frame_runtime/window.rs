@@ -3380,10 +3380,13 @@ fn cross_origin_location_replace_callback<'s>(
     }
     let host = unsafe { &mut *host_ptr };
     let target = host.resolve_child_browsing_context_url(handle, &parsed.url);
+    let context = cross_origin_accessing_context(scope);
+    let initiator = host.window_dispatch_scope_for_context(scope, context);
     let _ = host.queue_child_browsing_context_navigation_from_existing_seed(
         handle,
         target.as_str(),
         true,
+        initiator,
     );
 }
 

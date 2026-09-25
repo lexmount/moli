@@ -59,6 +59,9 @@ pub(super) struct ChildBrowsingContextEntry {
     pending_attribute_bootstrap_commit: bool,
     pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
     pending_live_navigation_initiator_url: Option<Url>,
+    // Snapshot at navigation admission. The target's origin is checked again
+    // when queued javascript: code is about to execute.
+    pending_javascript_initiator_origin: Option<WindowAccessOrigin>,
     pending_live_navigation_reflects_window_state: bool,
     live_bootstrap: ChildBrowsingContextBootstrap,
     navigation_entry_seed: NavigationHistoryEntrySeed,
@@ -998,6 +1001,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
         self.pending_live_navigation = None;
         self.pending_live_navigation_initiator_url = None;
+        self.pending_javascript_initiator_origin = None;
     }
 
     pub(super) fn has_pending_live_navigation(&self) -> bool {
@@ -1066,6 +1070,10 @@ impl ChildBrowsingContextEntry {
         self.pending_live_navigation_initiator_url.clone()
     }
 
+    pub(super) fn pending_javascript_initiator_origin(&self) -> Option<WindowAccessOrigin> {
+        self.pending_javascript_initiator_origin.clone()
+    }
+
     pub(super) fn pending_live_navigation_initiator_url_for_refresh(
         &self,
         attribute_bootstrap_changed: bool,
@@ -1097,17 +1105,20 @@ impl ChildBrowsingContextEntry {
         bootstrap: ChildBrowsingContextBootstrap,
         initiator_url: Option<Url>,
         reflects_window_state: bool,
+        javascript_initiator_origin: Option<WindowAccessOrigin>,
     ) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = Some(bootstrap);
         self.pending_live_navigation_initiator_url = initiator_url;
         self.pending_live_navigation_reflects_window_state = reflects_window_state;
+        self.pending_javascript_initiator_origin = javascript_initiator_origin;
     }
 
     pub(super) fn clear_pending_navigation(&mut self) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = None;
         self.pending_live_navigation_initiator_url = None;
+        self.pending_javascript_initiator_origin = None;
         self.pending_live_navigation_reflects_window_state = false;
     }
 
