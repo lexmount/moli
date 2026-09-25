@@ -669,23 +669,6 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
     true
 }
 
-pub(crate) fn navigate_named_iframe_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    target_name: &str,
-    resolved_url: &str,
-    source_element: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    navigate_named_iframe_target_from_document(
-        scope,
-        runtime_ptr,
-        target_name,
-        resolved_url,
-        None,
-        source_element,
-    )
-}
-
 pub(in crate::native_bridge) fn named_iframe_target_handle_for_navigation(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -706,19 +689,13 @@ pub(in crate::native_bridge) fn named_iframe_target_handle_for_navigation(
     runtime.child_browsing_context_handle_by_name_for_navigation(scope, target_name)
 }
 
-pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
+pub(crate) fn navigate_iframe_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
-    target_name: &str,
+    target_iframe: DomHandle,
     resolved_url: &str,
-    source_document: Option<DomHandle>,
     source_element: Option<v8::Local<'s, v8::Object>>,
 ) -> bool {
-    let target_iframe =
-        named_iframe_target_handle_for_navigation(scope, runtime_ptr, target_name, source_document);
-    let Some(target_iframe) = target_iframe else {
-        return false;
-    };
     let runtime = unsafe { &mut *runtime_ptr };
     let Ok(context) = runtime.ensure_prebootstrapped_child_default_context(scope, target_iframe)
     else {
