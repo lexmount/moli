@@ -125,6 +125,15 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
     pub fn same_route_as(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
+
+    /// Preserve producer identity across an interface that does not share its task types.
+    /// This clones the existing allocation and exposes no queue operations.
+    pub fn shared_identity(&self) -> Arc<dyn Send + Sync>
+    where
+        T: Send + 'static,
+    {
+        self.shared.clone()
+    }
 }
 
 /// Single-consumer task source that coalesces producer wakes by readiness edge.

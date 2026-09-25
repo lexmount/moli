@@ -431,6 +431,7 @@ impl PageScriptHost {
             web_storage_store: new_shared_web_storage_store(),
             local_storage_areas: HashMap::new(),
             session_storage_store: new_shared_web_storage_store(),
+            storage_event_recipients: HashMap::new(),
             indexed_db_manager: None,
             storage_bucket_store: new_shared_storage_bucket_store(),
             stored_document_start_scripts: Vec::new(),
@@ -812,13 +813,14 @@ impl PageScriptHost {
     }
 
     pub(crate) fn install_page_task_capabilities(
-        &self,
+        &mut self,
         capabilities: super::PageScriptHostTaskCapabilities,
     ) {
         assert!(
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
+        self.refresh_storage_event_recipients();
     }
 
     pub(crate) fn page_websocket_sender(

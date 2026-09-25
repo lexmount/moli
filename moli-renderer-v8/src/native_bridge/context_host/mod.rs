@@ -945,6 +945,10 @@ pub(crate) struct PageScriptHost {
     web_storage_store: SharedWebStorageStore,
     local_storage_areas: HashMap<WindowExecutionContextOwner, web_storage::WindowStorageArea>,
     session_storage_store: SharedWebStorageStore,
+    storage_event_recipients: HashMap<
+        WindowExecutionContextOwner,
+        std::sync::Arc<crate::context_bootstrap::WebStorageEventRecipient>,
+    >,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
     stored_document_start_scripts: Vec<crate::DocumentStartScript>,
@@ -1488,6 +1492,7 @@ impl PageScriptHost {
             .unregister_service_worker_client(self.service_worker_client_id);
         self.close_shared_worker_clients();
         self.close_owned_broadcast_channels();
+        self.storage_event_recipients.clear();
         self.close_owned_message_ports();
         self.shutdown_workers();
         self.output_journal = None;
