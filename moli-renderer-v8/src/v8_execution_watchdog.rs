@@ -26,6 +26,7 @@ pub(crate) const SCRIPT_TURN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8)
 pub(crate) enum V8ExecutionWatchdogKind {
     ScriptTurn,
     TimerCallback,
+    AnimationFrameCallback,
     LifecycleEvent,
 }
 
@@ -36,6 +37,7 @@ impl V8ExecutionWatchdogKind {
             Self::ScriptTurn => 0,
             Self::TimerCallback => 1,
             Self::LifecycleEvent => 2,
+            Self::AnimationFrameCallback => 3,
         }
     }
 }
@@ -43,8 +45,8 @@ impl V8ExecutionWatchdogKind {
 #[cfg(test)]
 std::thread_local! {
     static V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES:
-        std::cell::Cell<[Option<Duration>; 3]> =
-            const { std::cell::Cell::new([None, None, None]) };
+        std::cell::Cell<[Option<Duration>; 4]> =
+            const { std::cell::Cell::new([None, None, None, None]) };
 }
 
 #[cfg(test)]
