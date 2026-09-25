@@ -2244,3 +2244,133 @@ async fn webdriver_classic_actions_reject_move_target_out_of_bounds() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn webdriver_classic_active_element_uses_current_browsing_context_after_child_autofocus() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let page_url = "data:text/html,<body id='top-body'><input id='top-input'><iframe id='child' srcdoc=\"<body id='child-body'><input id='child-input' autofocus></body>\"></iframe></body>";
+
+    let navigated = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({ "url": page_url }),
+    )
+    .await;
+    assert_eq!(navigated, json!({ "value": null }));
+
+    // Navigation completion may precede autofocus's rendering opportunity.
+    let rendered = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/async"),
+        json!({
+            "script": "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => done(null));",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(rendered, json!({ "value": null }));
+
+    let (active_status, active) = classic_request_status_and_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/active"),
+    )
+    .await;
+    assert_eq!(active_status, StatusCode::OK, "{active:?}");
+    let active_id = active["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap_or_else(|| panic!("active element should return the focused iframe: {active:?}"));
+    let active_tag = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{active_id}/name"),
+    )
+    .await;
+    assert_eq!(active_tag, json!({ "value": "iframe" }));
+    let active_property = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{active_id}/property/id"),
+    )
+    .await;
+    assert_eq!(active_property, json!({ "value": "child" }));
+
+    let focused = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "document.getElementById('top-input').focus(); return document.activeElement.id;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(focused, json!({ "value": "top-input" }));
+
+    let active = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/active/"),
+    )
+    .await;
+    let active_id = active["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap_or_else(|| panic!("focused input should be active: {active:?}"));
+    let active_property = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{active_id}/property/id"),
+    )
+    .await;
+    assert_eq!(active_property, json!({ "value": "top-input" }));
+
+    let frame_id = classic_find_css_element_id(app.clone(), session_id, "#child").await;
+    let switched = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/frame"),
+        json!({
+            "id": {
+                "element-6066-11e4-a52e-4f735466cecf": frame_id
+            }
+        }),
+    )
+    .await;
+    assert_eq!(switched, json!({ "value": null }));
+
+    let child_focused = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "document.getElementById('child-input').focus(); return document.activeElement.id;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(child_focused, json!({ "value": "child-input" }));
+
+    let (active_status, active) = classic_request_status_and_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/active"),
+    )
+    .await;
+    assert_eq!(active_status, StatusCode::OK, "{active:?}");
+    let active_id = active["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap_or_else(|| panic!("child frame active element should return input: {active:?}"));
+    let active_property = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{active_id}/property/id"),
+    )
+    .await;
+    assert_eq!(active_property, json!({ "value": "child-input" }));
+}
