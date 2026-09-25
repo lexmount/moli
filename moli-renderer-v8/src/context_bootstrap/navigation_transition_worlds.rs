@@ -1,9 +1,7 @@
-use super::history_runtime::native;
-use crate::util::{get_private_value, set_private_value, v8str};
+use super::{history_runtime::native, world_wrappers};
+use crate::util::v8str;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
-
-const WRAPPERS: &str = "__moliNavigationTransitionWrappers";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::NavigationTransition, own_to_string_tag = "NavigationTransition", readonly_to_string_tag)]
@@ -25,18 +23,8 @@ pub(super) fn transition_in_realm<'s>(
     transition: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = context.global(scope);
-    let wrappers = get_private_value(scope, transition, WRAPPERS)
-        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
-        .unwrap_or_else(|| {
-            let map = v8::Map::new(scope);
-            set_private_value(scope, transition, WRAPPERS, map.into());
-            map
-        });
-    if let Some(wrapper) = wrappers
-        .get(scope, global.into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
+    let transition = world_wrappers::owner(scope, transition);
+    if let Some(wrapper) = world_wrappers::get(scope, transition, context) {
         return Some(wrapper);
     }
     let scope = &mut v8::ContextScope::new(scope, context);
@@ -64,7 +52,7 @@ pub(super) fn transition_in_realm<'s>(
     }
     .bind(scope)
     .ok()?;
-    let _ = wrappers.set(scope, global.into(), wrapper.into());
+    world_wrappers::insert(scope, transition, wrapper);
     Some(wrapper)
 }
 

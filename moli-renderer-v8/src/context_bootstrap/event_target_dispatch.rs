@@ -42,6 +42,11 @@ pub(crate) fn begin_dispatch<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let backing = super::events::event_backing(scope, event);
+    let target = backing
+        .get_creation_context(scope)
+        .map(|context| super::shared_event_targets::target_in_realm(scope, target, context))
+        .unwrap_or(target);
     set_event_dispatch_fields(scope, target, event);
     let path = v8::Array::new_with_elements(scope, &[target.into()]);
     set_event_composed_path(scope, event, path);

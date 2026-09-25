@@ -68,20 +68,11 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
         return;
     };
     let current_entry = navigation_current_entry(scope, owner);
-    let copied = build_visible_navigation_entries_array(scope, entries, current_entry);
     let context = navigation
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
-    for index in 0..copied.length() {
-        if let Some(entry) = copied
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            let wrapper =
-                super::super::history_runtime::native::entry_in_realm(scope, entry, context);
-            let _ = copied.set_index(scope, index, wrapper.into());
-        }
-    }
+    let copied =
+        build_visible_navigation_entries_array(scope, owner, &entries, current_entry, context);
     rv.set(copied.into());
 }
 
@@ -765,23 +756,6 @@ fn set_reload_current_entry_state<'s>(
         return;
     };
     set_navigation_entry_state(scope, current_entry, state);
-    let Some(history) = window_history_for_holder(scope, owner) else {
-        return;
-    };
-    let Some(entries) = history_entries(scope, history) else {
-        return;
-    };
-    let current_index = history_index(scope, history);
-    let Some(history_entry) = entries
-        .get_index(scope, current_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    if history_entry.strict_equals(current_entry.into()) {
-        return;
-    }
-    set_navigation_entry_state(scope, history_entry, state);
 }
 
 const PRECOMMIT_COMMIT_OWNER_SLOT: &str = "__lmPrecommitCommitOwner";
@@ -1930,19 +1904,6 @@ pub(in crate::context_bootstrap) fn navigation_update_current_entry_callback<'s>
         return;
     };
     set_navigation_entry_state(scope, current_entry, cloned_state);
-
-    if let Some(history) = window_history_for_holder(scope, owner)
-        && let Some(entries) = history_entries(scope, history)
-    {
-        let current_index = history_index(scope, history);
-        if let Some(history_entry) = entries
-            .get_index(scope, current_index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            && !history_entry.strict_equals(current_entry.into())
-        {
-            set_navigation_entry_state(scope, history_entry, cloned_state);
-        }
-    }
 
     dispatch_navigation_currententrychange(scope, navigation, Some(previous_entry), None);
     sync_child_navigation_entry_seed_from_owner(scope, owner);

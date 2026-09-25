@@ -1,4 +1,4 @@
-use super::super::navigation_entry::{history_entries, navigation_entry_key_value};
+use super::super::navigation_entry::history_entries;
 use super::super::navigation_events::{
     NavigationDispatchOutcome, dispatch_navigation_success,
     run_navigation_precommit_deferred_handlers,
@@ -137,14 +137,12 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
 ) {
     let plan = history_traversal_target_window(scope, host, traversal.target).and_then(|owner| {
         let history = window_history_for_holder(scope, owner)?;
-        let entry = history_entries(scope, history)?
-            .get_index(scope, traversal.target_index)?
-            .try_into()
-            .ok()?;
+        let entries = history_entries(scope, history)?;
+        let entry = entries.get(traversal.target_index as usize)?;
         if traversal
             .target_key
             .as_ref()
-            .is_some_and(|key| navigation_entry_key_value(scope, entry).as_ref() != Some(key))
+            .is_some_and(|key| entry.borrow().key.as_str() != key)
         {
             return None;
         }

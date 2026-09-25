@@ -119,27 +119,18 @@ pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
 pub(super) fn create_navigation_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     url: &str,
-    history_state_json: Option<&str>,
-    navigation_state_json: Option<&str>,
     referrer_policy: Option<&str>,
     index: u32,
     id: &str,
     key: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let history_snapshot =
-        super::navigation_serialize::parse_history_entry_state(scope, history_state_json);
-    let navigation_snapshot =
-        super::navigation_serialize::parse_navigation_entry_state(scope, navigation_state_json);
     let public_id = navigation_entry_public_token(id);
     let public_key = navigation_entry_public_token(key);
     let entry = HistoryEntry {
         url: url.to_owned(),
         referrer_policy: referrer_policy.map(str::to_owned),
-        history_state: crate::structured_clone::serialize_history_state(scope, history_snapshot),
-        navigation_state: crate::structured_clone::serialize_history_state(
-            scope,
-            navigation_snapshot,
-        ),
+        history_state: None,
+        navigation_state: None,
         id: public_id.clone(),
         key: NavigationHistoryEntryKey::from_serialized(public_key),
         document: NavigationHistoryDocumentId::from_serialized(public_id),
@@ -203,16 +194,6 @@ pub(super) fn navigation_entry_initial_index<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<u32> {
     native::entry(scope, entry).map(|entry| entry.borrow().index)
-}
-
-pub(super) fn set_navigation_entry_initial_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    index: u32,
-) {
-    if let Some(entry) = native::entry(scope, entry) {
-        entry.borrow_mut().index = index;
-    }
 }
 
 pub(super) fn navigation_entry_referrer_policy_value<'s>(
@@ -440,10 +421,11 @@ fn navigation_entry_index_getter<'s>(
     let owner = runtime_window_owner(scope, args.this());
     if let Some(history) = window_history_for_holder(scope, owner)
         && let Some(entries) = history_entries(scope, history)
+        && let Some(entry) = native::entry(scope, args.this())
     {
         let current_entry = navigation_current_entry(scope, owner);
         if let Some(visible_index) =
-            visible_navigation_index_for_entry(scope, entries, current_entry, args.this())
+            visible_navigation_index_for_entry(scope, &entries, current_entry, &entry)
         {
             rv.set(v8::Number::new(scope, visible_index as f64).into());
             return;

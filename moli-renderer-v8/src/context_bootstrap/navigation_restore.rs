@@ -1,17 +1,17 @@
+use super::history_runtime::native;
 use super::navigation_activation::{
-    bind_navigation_entry_runtime_owner, install_navigation_activation_runtime_state,
-    set_navigation_current_entry,
+    install_navigation_activation_runtime_state, set_navigation_current_entry,
 };
 use super::navigation_entry::{
-    cache_current_history_state, create_navigation_entry, set_history_entries, set_history_index,
-    set_navigation_entry_document_id,
+    cache_current_history_state, set_history_entries, set_history_index,
 };
 use super::navigation_entry_state::clone_history_entry_state;
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
+use super::navigation_seed::{
+    build_current_navigation_entry_from_seed, build_history_entries_from_seed,
+};
 use super::navigation_window::{window_history_for_holder, window_navigation_for_holder};
 use crate::native_bridge::NavigationHistoryEntrySeed;
-use moli_page_types::NavigationHistoryEntryId;
-use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 
 pub(crate) fn install_navigation_bootstrap_entry(
     scope: &mut v8::PinScope<'_, '_>,
@@ -62,57 +62,23 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
-    let entries = v8::Array::new(scope, entry_seed.entries.len() as i32);
-    let mut current_entry = None;
-    let mut current_state: Option<v8::Local<'_, v8::Value>> = None;
-    for snapshot in &entry_seed.entries {
-        let entry = create_navigation_entry(
-            scope,
-            &snapshot.url,
-            snapshot.history_state_json.as_deref(),
-            snapshot.navigation_state_json.as_deref(),
-            snapshot.referrer_policy.as_deref(),
-            snapshot.index,
-            &snapshot.id,
-            &snapshot.key,
-        );
-        set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
-        super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
-        bind_navigation_entry_runtime_owner(scope, entry, owner);
-        let _ = entries.set_index(scope, snapshot.history_index, entry.into());
-        if snapshot.history_index == entry_seed.current_index {
-            current_entry = Some(entry);
-            current_state = Some(
-                clone_history_entry_state(scope, entry).unwrap_or_else(|| v8::null(scope).into()),
-            );
-        }
-    }
-    let current_entry = current_entry.unwrap_or_else(|| {
-        current_state = Some(v8::null(scope).into());
-        let entry_id = NavigationHistoryEntryId::allocate();
-        let entry_key = NavigationHistoryEntryKey::allocate();
-        let entry = create_navigation_entry(
-            scope,
-            "about:blank",
-            None,
-            None,
-            None,
-            0,
-            entry_id.as_str(),
-            entry_key.as_str(),
-        );
-        let document_id = NavigationHistoryDocumentId::allocate();
-        set_navigation_entry_document_id(scope, entry, document_id.as_str());
-        bind_navigation_entry_runtime_owner(scope, entry, owner);
-        entry
-    });
+    let entries = build_history_entries_from_seed(entry_seed);
+    let current_entry = entries
+        .get(entry_seed.current_index as usize)
+        .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))
+        .unwrap_or_else(|| {
+            build_current_navigation_entry_from_seed(
+                scope,
+                owner,
+                entry_seed,
+                v8::null(scope).into(),
+            )
+        });
+    let current_state =
+        clone_history_entry_state(scope, current_entry).unwrap_or_else(|| v8::null(scope).into());
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, entry_seed.current_index);
-    cache_current_history_state(
-        scope,
-        history,
-        current_state.unwrap_or_else(|| v8::null(scope).into()),
-    );
+    cache_current_history_state(scope, history, current_state);
     set_navigation_current_entry(scope, navigation, current_entry);
     if let Some(snapshot) = entry_seed
         .entries

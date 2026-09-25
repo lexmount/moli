@@ -33,7 +33,6 @@ use moli_webapi_declare::WebApiObject;
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
 const NAVIGATION_DESTINATION_ENTRY_SLOT: &str = "__lmNavigationDestinationEntry";
 const NAVIGATION_DESTINATION_BACKING_SLOT: &str = "__moliNavigationDestinationBacking";
-const NAVIGATION_DESTINATION_WRAPPERS_SLOT: &str = "__moliNavigationDestinationWrappers";
 const NAVIGATION_TRACKED_DESTINATIONS_SLOT: &str = "__lmNavigationTrackedDestinations";
 const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
@@ -1233,12 +1232,11 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     let Some(entries) = history_entries(scope, history) else {
         return NavigationDispatchOutcome::proceed();
     };
-    let Some(entry) = entries
-        .get_index(scope, target_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(entry) = entries.get(target_index as usize) else {
         return NavigationDispatchOutcome::proceed();
     };
+    let owner = runtime_window_owner(scope, navigation);
+    let entry = super::history_runtime::native::entry_wrapper(scope, owner, entry.clone());
     let destination = create_navigation_destination_for_entry(scope, navigation, entry);
     let target_href = destination
         .get(scope, v8str(scope, "url").into())
@@ -1369,23 +1367,8 @@ pub(super) fn navigation_destination_for_realm<'s>(
     let destination =
         crate::util::get_private_object(scope, destination, NAVIGATION_DESTINATION_BACKING_SLOT)
             .unwrap_or(destination);
-    let global = scope.get_current_context().global(scope);
-    let wrappers = get_private_value(scope, destination, NAVIGATION_DESTINATION_WRAPPERS_SLOT)
-        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
-        .unwrap_or_else(|| {
-            let map = v8::Map::new(scope);
-            set_private_value(
-                scope,
-                destination,
-                NAVIGATION_DESTINATION_WRAPPERS_SLOT,
-                map.into(),
-            );
-            map
-        });
-    if let Some(wrapper) = wrappers
-        .get(scope, global.into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
+    let context = scope.get_current_context();
+    if let Some(wrapper) = super::world_wrappers::get(scope, destination, context) {
         return Some(wrapper);
     }
     let wrapper = create_navigation_destination(scope, "", false, -1, None);
@@ -1410,7 +1393,7 @@ pub(super) fn navigation_destination_for_realm<'s>(
         )
         .ok()?;
     }
-    let _ = wrappers.set(scope, global.into(), wrapper.into());
+    super::world_wrappers::insert(scope, destination, wrapper);
     Some(wrapper)
 }
 
@@ -1506,18 +1489,18 @@ fn navigation_destination_live_index<'s>(
     let Some(entries) = history_entries(scope, history) else {
         return -1;
     };
-    for index in 0..entries.length() {
-        let Some(entry) = entries
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        if entry.strict_equals(destination_entry.into()) {
-            return navigation_entry_visible_index(scope, entry).unwrap_or(index as i32);
-        }
-    }
-    -1
+    let Some(entry) = super::history_runtime::native::entry(scope, destination_entry) else {
+        return -1;
+    };
+    let owner = runtime_window_owner(scope, history);
+    let current_entry = super::navigation_entry::navigation_current_entry(scope, owner);
+    super::navigation_projection::visible_navigation_index_for_entry(
+        scope,
+        &entries,
+        current_entry,
+        &entry,
+    )
+    .map_or(-1, |index| index as i32)
 }
 
 fn navigation_entry_visible_index<'s>(

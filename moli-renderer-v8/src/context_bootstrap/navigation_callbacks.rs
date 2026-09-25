@@ -4,7 +4,7 @@ use super::location_navigation::{
 };
 use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
 use super::navigation_cross_document::handle_navigation_navigate_cross_document;
-use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
+use super::navigation_entry::{history_entries, navigation_current_entry};
 use super::navigation_entry_state::{
     clone_navigation_entry_state, clone_navigation_state_arg_for_result, set_navigation_entry_state,
 };

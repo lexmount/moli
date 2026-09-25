@@ -284,6 +284,23 @@ fn blob_id_from_object<'s>(
     blob_id_from_value(scope, value)
 }
 
+pub(crate) fn world_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let id = blob_id_from_object(scope, source)?;
+    // The wrapper cache binds this view to source, retaining its native Blob
+    // reference. No payload copy or independent Blob identity is created.
+    let object = BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, id))
+        .bind(scope)
+        .ok()?;
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
+    finalize_blob_realm_bindings(scope, prototype);
+    object.set_prototype(scope, prototype.into())?;
+    Some(object)
+}
+
 fn blob_id_from_value(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,

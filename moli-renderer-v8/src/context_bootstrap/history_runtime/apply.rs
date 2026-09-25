@@ -3,7 +3,7 @@ use super::super::location_runtime::{
 };
 use super::super::navigation_entry::{
     cache_current_history_state, history_entries, history_index, navigation_current_entry,
-    navigation_entries_share_document, navigation_entry_url_value, set_history_index,
+    navigation_entries_share_document, set_history_index,
     sync_navigation_current_entry_from_history_entry,
 };
 use super::super::navigation_events::{
@@ -50,12 +50,16 @@ pub(in crate::context_bootstrap) fn prepare_local_history_entry_commit<'s>(
     let old_url = window_location_for_holder(scope, owner)
         .and_then(|location| location_href_slot(scope, location));
     let entries = history_entries(scope, history)?;
-    let entry = entries
-        .get_index(scope, index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let state = super::super::navigation_entry_state::clone_history_entry_state(scope, entry)
+    let record = entries.get(index as usize)?;
+    let (url, snapshot) = {
+        let record = record.borrow();
+        (record.url.clone(), record.history_state.clone())
+    };
+    let state = snapshot
+        .as_ref()
+        .and_then(|state| crate::structured_clone::deserialize_history_state(scope, state))
         .unwrap_or_else(|| v8::null(scope).into());
-    let url = navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
+    let entry = super::native::entry_wrapper(scope, owner, record.clone());
     let location = window_location_for_holder(scope, owner)?;
     let parsed_url = url::Url::parse(&url).ok()?;
     Some(PreparedHistoryEntry {

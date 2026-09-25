@@ -26,6 +26,18 @@ const ABORT_SIGNAL_ID_SLOT: &str = "__lmAbortSignalId";
 const ABORT_CONTROLLER_ID_SLOT: &str = "__lmAbortControllerId";
 const ABORT_CONTROLLER_SIGNAL_SLOT: &str = "__lmAbortControllerSignal";
 
+pub(crate) fn bind_signal_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+    wrapper: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = get_private_value(scope, signal, ABORT_SIGNAL_ID_SLOT) else {
+        return false;
+    };
+    set_private_value(scope, wrapper, ABORT_SIGNAL_ID_SLOT, id);
+    true
+}
+
 #[derive(Default)]
 pub(super) struct AbortStore {
     next_signal_id: u32,

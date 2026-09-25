@@ -87,10 +87,13 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
     let entries = history_entries(scope, history)?;
     let current_entry = navigation_current_entry(scope, owner);
     let current_navigation_index = current_entry
-        .and_then(|entry| visible_navigation_index_for_entry(scope, entries, Some(entry), entry))
+        .and_then(|entry| {
+            let record = super::history_runtime::native::entry(scope, entry)?;
+            visible_navigation_index_for_entry(scope, &entries, Some(entry), &record)
+        })
         .or_else(|| navigation_current_entry_index(scope, owner))
         .unwrap_or(0) as i64;
-    let visible_len = visible_navigation_entries_len(scope, entries, current_entry) as i64;
+    let visible_len = visible_navigation_entries_len(scope, &entries, current_entry) as i64;
     if delta < 0 && current_navigation_index <= 0 {
         return Some(NavigationTraversalPlan::RejectInvalidState(
             "Cannot go back",
@@ -102,7 +105,7 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
         ));
     }
     let next_index = current_index + delta;
-    if next_index < 0 || next_index >= entries.length() as i64 {
+    if next_index < 0 || next_index >= entries.len() as i64 {
         let message = if delta < 0 {
             "Cannot go back"
         } else {
@@ -137,7 +140,7 @@ pub(super) fn navigation_index_traversal_plan<'s>(
     }
     let history = window_history_for_holder(scope, owner)?;
     let entries = history_entries(scope, history)?;
-    if target_index >= entries.length() {
+    if target_index as usize >= entries.len() {
         return Some(NavigationTraversalPlan::RejectInvalidState("Invalid key"));
     }
     let pending_target_index = pending_history_traversal_target_index(scope, history);

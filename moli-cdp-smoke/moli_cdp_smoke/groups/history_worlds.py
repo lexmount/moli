@@ -125,9 +125,123 @@ async def run_history_worlds_group(
              changes]
         """, isolated)
         assert_equal(state, [3, True, True, True, 2], "native History updates reach existing worlds")
+
+        await evaluate("""
+            navigation.addEventListener('navigate', event => {
+                globalThis.probeDestination = event.destination;
+                event.signal.pageOnly = 'page';
+                event.signal.addEventListener = () => { throw new Error('page override'); };
+            }, {once: true});
+        """)
+        await evaluate("""
+            globalThis.signalViews = [];
+            navigation.addEventListener('navigate', event => {
+                signalViews.push(event instanceof NavigateEvent,
+                    event.signal instanceof AbortSignal,
+                    Object.getPrototypeOf(event.signal) === AbortSignal.prototype,
+                    event.signal.pageOnly === undefined);
+                try { event.signal.addEventListener('abort', () => {}); signalViews.push(true); }
+                catch (_) { signalViews.push(false); }
+            }, {once: true});
+        """, isolated)
+        await evaluate("history.pushState({}, '', '#signal-view')")
+        signal_views = await evaluate("signalViews", isolated)
+        assert_equal(signal_views, [True] * 5, "NavigateEvent signal world wrapper")
+
+        await evaluate("""
+            globalThis.syntheticViews = [];
+            for (const type of ['probe', 'navigate']) {
+                navigation.addEventListener(type, function (event) {
+                    syntheticViews.push([event instanceof Event, event.expando === undefined,
+                        event.target === navigation, event.currentTarget === navigation,
+                        this === navigation, event instanceof CustomEvent,
+                        event instanceof NavigateEvent, event.detail ?? null]);
+                    event.preventDefault();
+                }, {once: true});
+            }
+        """)
+        original_identity = await evaluate("""
+            (() => {
+                const facts = [];
+                for (const original of [new CustomEvent('probe', {detail: 7, cancelable: true}),
+                                        new Event('navigate', {cancelable: true})]) {
+                    original.expando = 'isolated';
+                    navigation.addEventListener(original.type, event => {
+                        facts.push(event === original, event.defaultPrevented,
+                            event.target === navigation, event.composedPath()[0] === navigation);
+                    }, {once: true});
+                    facts.push(navigation.dispatchEvent(original), original.defaultPrevented,
+                        original.currentTarget === null, original.composedPath().length === 0);
+                }
+                return facts;
+            })()
+        """, isolated)
+        assert_equal(original_identity, [True, True, True, True, False, True, True, True] * 2,
+                     "synthetic event identity and shared cancellation")
+        synthetic_views = await evaluate("syntheticViews")
+        assert_equal(synthetic_views, [
+            [True, True, True, True, True, True, False, 7],
+            [True, True, True, True, True, False, False, None],
+        ], "synthetic event interface and expando isolation")
+
+        await evaluate("""
+            globalThis.probeController = new AbortController();
+            globalThis.probeData = new FormData();
+            probeData.set('value', 'page');
+            const file = new File(['bytes'], 'probe.txt', {type: 'text/plain', lastModified: 7});
+            file.pageOnly = true;
+            probeData.set('file', file);
+            const source = document.createElement('button');
+            source.id = 'world-probe-source';
+            document.body.appendChild(source);
+            globalThis.platformProbe = new NavigateEvent('platform-probe', {
+                destination: probeDestination, signal: probeController.signal,
+                formData: probeData, sourceElement: source,
+            });
+            navigation.addEventListener('platform-probe', event => {
+                event.signal.pageOnly = true;
+                event.signal.addEventListener = () => { throw new Error('page signal override'); };
+                event.formData.pageOnly = true;
+                event.formData.get = () => 'page override';
+                event.sourceElement.pageOnly = true;
+                event.sourceElement.getAttribute = () => 'page override';
+            }, {once: true});
+        """)
+        await evaluate("""
+            globalThis.platformViews = [];
+            navigation.addEventListener('platform-probe', event => {
+                globalThis.probeSignal = event.signal;
+                globalThis.probeFormData = event.formData;
+                const file = event.formData.get('file');
+                platformViews.push(event instanceof NavigateEvent,
+                    event.signal instanceof AbortSignal, event.signal.pageOnly === undefined,
+                    event.formData instanceof FormData, event.formData.pageOnly === undefined,
+                    event.formData.get('value') === 'page',
+                    event.sourceElement instanceof HTMLButtonElement,
+                    event.sourceElement === document.getElementById('world-probe-source'),
+                    event.sourceElement.pageOnly === undefined,
+                    event.sourceElement.getAttribute('id') === 'world-probe-source',
+                    file instanceof File, file.pageOnly === undefined,
+                    file === event.formData.get('file'), file.name === 'probe.txt',
+                    file.size === 5, file.type === 'text/plain', file.lastModified === 7);
+                event.formData.set('value', 'isolated');
+            }, {once: true});
+        """, isolated)
+        await evaluate("navigation.dispatchEvent(platformProbe)")
+        # Chrome 154 crashes when aborting this synthetic NavigateEvent's signal.
+        # Shared abort state and delivery are covered by history_worlds.rs.
+        platform_views = await evaluate("platformViews", isolated)
+        assert_equal(platform_views, [True] * 17, "nested platform object world wrappers")
+        assert_equal(await evaluate("FormData.prototype.get.call(probeData, 'value')"),
+                     "isolated", "FormData writes reach the original object")
+        await evaluate("FormData.prototype.set.call(probeData, 'value', 'updated')")
+        assert_equal(await evaluate("probeFormData.get('value')", isolated),
+                     "updated", "FormData views remain live")
         record(results, "raw_cdp_history_world_boundaries", {
             "wrappers": wrappers, "changes": changes, "cancellation": cancellation,
             "errors": errors, "state": state,
+            "signal_views": signal_views, "original_identity": original_identity,
+            "synthetic_views": synthetic_views, "platform_views": platform_views,
         })
     finally:
         session = None

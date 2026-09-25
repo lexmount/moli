@@ -75,8 +75,10 @@ mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
 mod navigator_runtime;
+mod platform_object_worlds;
 mod session_history;
 mod shared_event_targets;
+mod world_wrappers;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,

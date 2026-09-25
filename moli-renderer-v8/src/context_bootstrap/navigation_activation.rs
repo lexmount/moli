@@ -1,12 +1,11 @@
+use super::history_runtime::native;
 use super::location_history_storage::{
     NAVIGATION_ACTIVATION_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_TRANSITION_SLOT,
 };
-use super::navigation_entry::{
-    create_navigation_entry, history_entries, navigation_entry_public_token,
-    set_navigation_entry_document_id,
-};
+use super::navigation_entry::{history_entries, navigation_entry_public_token};
 use super::navigation_lifecycle::enqueue_navigation_lifecycle_microtask;
 use super::navigation_result::suppress_unhandled_rejection;
+use super::navigation_seed::history_entry_from_snapshot;
 use super::navigation_window::{
     runtime_window_owner, set_runtime_window_owner, window_history_for_holder,
 };
@@ -100,16 +99,16 @@ fn navigation_entry_matches_activation_snapshot<'s>(
     entry: v8::Local<'s, v8::Object>,
     snapshot: &NavigationHistorySerializedEntry,
 ) -> bool {
-    let current_id = get_own_static_property(scope, entry, "id")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
-    let current_key = get_own_static_property(scope, entry, "key")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
-    let snapshot_id = navigation_entry_public_token(&snapshot.id);
-    let snapshot_key = navigation_entry_public_token(&snapshot.key);
-    current_id.as_deref() == Some(snapshot_id.as_str())
-        && current_key.as_deref() == Some(snapshot_key.as_str())
+    native::entry(scope, entry)
+        .is_some_and(|entry| native_entry_matches_activation_snapshot(&entry.borrow(), snapshot))
+}
+
+fn native_entry_matches_activation_snapshot(
+    entry: &moli_history::HistoryEntry,
+    snapshot: &NavigationHistorySerializedEntry,
+) -> bool {
+    entry.id == navigation_entry_public_token(&snapshot.id)
+        && entry.key.as_str() == navigation_entry_public_token(&snapshot.key)
 }
 
 pub(super) fn navigation_entry_object_from_snapshot<'s>(
@@ -124,32 +123,13 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     if let Some(history) = window_history_for_holder(scope, owner)
         && let Some(entries) = history_entries(scope, history)
     {
-        for index in 0..entries.length() {
-            let Some(entry) = entries
-                .get_index(scope, index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            else {
-                continue;
-            };
-            if navigation_entry_matches_activation_snapshot(scope, entry, snapshot) {
-                return entry;
+        for entry in entries {
+            if native_entry_matches_activation_snapshot(&entry.borrow(), snapshot) {
+                return native::entry_wrapper(scope, owner, entry);
             }
         }
     }
-    let entry = create_navigation_entry(
-        scope,
-        &snapshot.url,
-        snapshot.history_state_json.as_deref(),
-        snapshot.navigation_state_json.as_deref(),
-        snapshot.referrer_policy.as_deref(),
-        snapshot.index,
-        &snapshot.id,
-        &snapshot.key,
-    );
-    set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
-    super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
-    bind_navigation_entry_runtime_owner(scope, entry, owner);
-    entry
+    native::entry_wrapper(scope, owner, history_entry_from_snapshot(snapshot))
 }
 
 fn navigation_activation_entry_object<'s>(

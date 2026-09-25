@@ -1,6 +1,292 @@
 use super::*;
 
 #[test]
+fn history_worlds_retained_page_event_does_not_retain_unobserved_foreign_views() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval("navigation.addEventListener('navigate', event => { globalThis.keptEvent = event; }, {once: true}); 'ready'")
+        .unwrap();
+    let isolated = vm
+        .create_isolated_world("collectible-views", false)
+        .unwrap();
+    vm.eval_in_isolated_context(isolated, "navigation.addEventListener('navigate', event => { globalThis.views = [event, event.destination, event.signal]; }, {once: true}); 'ready'")
+        .unwrap();
+    vm.eval("history.pushState({}, '', '#retained'); 'pushed'")
+        .unwrap();
+    let context_ptr = &vm
+        .page_isolated_world_contexts
+        .context(isolated)
+        .unwrap()
+        .context as *const _;
+    let views = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let value = global
+                .get(scope, crate::util::v8str(scope, "views").into())
+                .unwrap();
+            let array = v8::Local::<v8::Array>::try_from(value).unwrap();
+            Ok((0..array.length())
+                .map(|index| {
+                    let value = array.get_index(scope, index).unwrap();
+                    let object = v8::Local::<v8::Object>::try_from(value).unwrap();
+                    v8::Weak::new(scope, object)
+                })
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
+    vm.eval_in_isolated_context(isolated, "views = null; 'released'")
+        .unwrap();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        assert!(
+            views.iter().all(|view| view.to_local(scope).is_none()),
+            "a retained page event must not root its foreign Event, destination, or signal wrappers"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval("String(keptEvent.destination.url.endsWith('#retained') && keptEvent.signal instanceof AbortSignal)").unwrap(), "true");
+}
+
+#[test]
+fn history_worlds_navigate_signal_has_a_local_wrapper() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        navigation.addEventListener('navigate', event => {
+            event.signal.pageOnly = 'page';
+            event.signal.addEventListener = () => { throw new Error('page override'); };
+        }, {once: true});
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("signal-view", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        globalThis.facts = [];
+        navigation.addEventListener('navigate', event => {
+            facts.push(event instanceof NavigateEvent,
+                event.signal instanceof AbortSignal,
+                Object.getPrototypeOf(event.signal) === AbortSignal.prototype,
+                event.signal.pageOnly === undefined);
+            try { event.signal.addEventListener('abort', () => {}); facts.push(true); }
+            catch (_) { facts.push(false); }
+        }, {once: true});
+        history.pushState({}, '', '#signal');
+        JSON.stringify(facts)
+    "#
+        )
+        .unwrap(),
+        "[true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn history_worlds_synthetic_events_keep_interface_identity_and_shared_dispatch() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.pageFacts = [];
+        globalThis.pageEvents = [];
+        for (const type of ['probe', 'navigate']) {
+            navigation.addEventListener(type, function (event) {
+                pageEvents.push(event);
+                pageFacts.push([event instanceof Event, event.expando === undefined,
+                    event.target === navigation, event.currentTarget === navigation,
+                    this === navigation, event instanceof CustomEvent,
+                    event instanceof NavigateEvent, event.detail ?? null]);
+                event.preventDefault();
+            });
+        }
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("synthetic-views", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        const facts = [];
+        for (const original of [new CustomEvent('probe', {detail: 7, cancelable: true}),
+                                new Event('navigate', {cancelable: true})]) {
+            original.expando = 'isolated';
+            navigation.addEventListener(original.type, event => {
+                facts.push(event === original, event.defaultPrevented,
+                    event.target === navigation, event.composedPath()[0] === navigation);
+            }, {once: true});
+            facts.push(navigation.dispatchEvent(original), original.defaultPrevented,
+                original.currentTarget === null, original.composedPath().length === 0);
+        }
+        JSON.stringify(facts)
+    "#
+        )
+        .unwrap(),
+        "[true,true,true,true,false,true,true,true,true,true,true,true,false,true,true,true]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(pageFacts)").unwrap(),
+        "[[true,true,true,true,true,true,false,7],[true,true,true,true,true,false,false,null]]"
+    );
+    assert_eq!(vm.eval("String(pageEvents.every(event => event.defaultPrevented && event.currentTarget === null))").unwrap(), "true");
+}
+
+#[test]
+fn history_worlds_nested_platform_objects_share_state_without_sharing_wrappers() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(r#"
+        globalThis.destination = null;
+        navigation.addEventListener('navigate', event => { destination = event.destination; }, {once: true});
+        history.pushState({}, '', '#destination');
+        globalThis.controller = new AbortController();
+        globalThis.data = new FormData();
+        data.set('value', 'page');
+        const file = new File(['bytes'], 'probe.txt', {type: 'text/plain', lastModified: 7});
+        file.pageOnly = true;
+        data.set('file', file);
+        globalThis.source = document.createElement('button');
+        source.id = 'source';
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        document.body.appendChild(source);
+        globalThis.original = new NavigateEvent('probe', {
+            destination, signal: controller.signal, formData: data, sourceElement: source,
+        });
+        navigation.addEventListener('probe', event => {
+            event.signal.pageOnly = true;
+            event.signal.addEventListener = () => { throw new Error('page signal override'); };
+            event.formData.pageOnly = true;
+            event.formData.get = () => 'page override';
+            event.sourceElement.pageOnly = true;
+            event.sourceElement.getAttribute = () => 'page override';
+        });
+        'ready'
+    "#).unwrap();
+    let isolated = vm.create_isolated_world("platform-views", false).unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.facts = [];
+        globalThis.abortFacts = [];
+        navigation.addEventListener('probe', event => {
+            globalThis.savedSignal = event.signal;
+            globalThis.savedData = event.formData;
+            const file = event.formData.get('file');
+            facts.push(event instanceof NavigateEvent,
+                event.signal instanceof AbortSignal, event.signal.pageOnly === undefined,
+                event.formData instanceof FormData, event.formData.pageOnly === undefined,
+                event.formData.get('value') === 'page',
+                event.sourceElement instanceof HTMLButtonElement,
+                event.sourceElement === document.getElementById('source'),
+                event.sourceElement.pageOnly === undefined,
+                event.sourceElement.getAttribute('id') === 'source',
+                file instanceof File, file.pageOnly === undefined,
+                file === event.formData.get('file'), file.name === 'probe.txt',
+                file.size === 5, file.type === 'text/plain', file.lastModified === 7);
+            event.formData.set('value', 'isolated');
+            event.signal.addEventListener('abort', function (abort) {
+                abortFacts.push(this === savedSignal, abort.target === savedSignal,
+                    abort instanceof Event, savedSignal.aborted, savedSignal.reason === 'stop');
+            }, {once: true});
+        });
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.eval("navigation.dispatchEvent(original); controller.abort('stop'); 'dispatched'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap(),
+        "[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(abortFacts)")
+            .unwrap(),
+        "[true,true,true,true,true]"
+    );
+    assert_eq!(
+        vm.eval("FormData.prototype.get.call(data, 'value')")
+            .unwrap(),
+        "isolated"
+    );
+    vm.eval("FormData.prototype.set.call(data, 'value', 'updated'); 'updated'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "savedData.get('value')")
+            .unwrap(),
+        "updated"
+    );
+}
+
+#[test]
+fn history_worlds_synthetic_event_views_can_be_reinitialized_and_redispatched() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.original = new CustomEvent('probe', {detail: 1, cancelable: true});
+        original.expando = 'page';
+        globalThis.pageFacts = [];
+        navigation.addEventListener('probe', event => {
+            pageFacts.push(event === original, event.target === navigation);
+        });
+        navigation.addEventListener('reused', event => {
+            pageFacts.push(event === original, event.detail === 9, event.expando === 'page',
+                event.target === navigation, event.composedPath()[0] === navigation);
+            event.preventDefault();
+        });
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("redispatch-views", false).unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.view = null;
+        globalThis.facts = [];
+        navigation.addEventListener('probe', event => {
+            view = event;
+            facts.push(event instanceof CustomEvent, event.expando === undefined,
+                event.target === navigation, event.detail === 1);
+        });
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.eval("navigation.dispatchEvent(original); 'dispatched'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        view.initCustomEvent('reused', false, true, 9);
+        view.expando = 'isolated';
+        navigation.addEventListener('reused', event => {
+            facts.push(event === view, event.defaultPrevented,
+                event.target === navigation, event.detail === 9);
+        }, {once: true});
+        facts.push(navigation.dispatchEvent(view));
+        JSON.stringify(facts)
+    "#
+        )
+        .unwrap(),
+        "[true,true,true,true,true,true,true,true,false]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(pageFacts)").unwrap(),
+        "[true,true,true,true,true,true,true]"
+    );
+}
+
+#[test]
 fn history_worlds_navigation_entries_keep_their_own_wrappers() {
     let mut vm = new_storage_test_vm("https://example.com/base");
     vm.eval(
@@ -715,6 +1001,113 @@ fn history_native_snapshot_survives_isolate_replacement_with_structured_values()
         restored.eval_in_isolated_context(isolated, READ).unwrap(),
         r#"[true,true,true,true,true,true,true,"manual",true,true]"#
     );
+}
+
+#[test]
+fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
+    const ENTRIES: &str = r#"JSON.stringify(navigation.entries()
+        .filter(entry => entry.url.includes('#'))
+        .map(entry => [entry.url, entry.id, entry.key, entry.index, entry.sameDocument,
+            entry instanceof NavigationHistoryEntry, entry.getState() instanceof Map,
+            String(entry.getState().get('value'))]))"#;
+    let (mut seed, expected) = {
+        let mut vm = new_storage_test_vm("https://example.com/base");
+        vm.eval(
+            r##"
+            history.replaceState({value: 1n}, '', '#one');
+            history.scrollRestoration = 'manual';
+            navigation.updateCurrentEntry({state: new Map([['value', 1n]])});
+            history.pushState({value: 2n}, '', '#two');
+            navigation.updateCurrentEntry({state: new Map([['value', 2n]])});
+            'ready'
+        "##,
+        )
+        .unwrap();
+        let expected = vm.eval(ENTRIES).unwrap();
+        vm.eval("location.href = '/next'; 'queued'").unwrap();
+        let mut seed = vm
+            .take_pending_location_navigation_with_seed()
+            .unwrap()
+            .entry_seed
+            .unwrap();
+        seed.current_index = seed
+            .entries
+            .iter()
+            .find(|entry| entry.url.ends_with("#one"))
+            .unwrap()
+            .history_index;
+        seed.activation = None;
+        // Snapshot order is not the history position stored in each snapshot.
+        seed.entries.reverse();
+        (seed, expected)
+    };
+    let mut restored = new_storage_test_vm("https://example.com/base#one");
+    restored.install_navigation_bootstrap_entry(Some(seed.clone()));
+    let isolated = restored
+        .create_isolated_world("lazy-history-entries", false)
+        .unwrap();
+    // The first observation of non-current entries is in the isolated world.
+    assert_eq!(
+        restored
+            .eval_in_isolated_context(isolated, ENTRIES)
+            .unwrap(),
+        expected
+    );
+    restored
+        .eval_in_isolated_context(
+            isolated,
+            r#"
+        navigation.entries().find(entry => entry.url.endsWith('#two')).worldOnly = 'isolated';
+        globalThis.retained = navigation.currentEntry;
+        'observed'
+    "#,
+        )
+        .unwrap();
+    assert_eq!(restored.eval(ENTRIES).unwrap(), expected);
+    assert_eq!(
+        restored
+            .eval(r#"String(navigation.entries().every(entry => entry.worldOnly === undefined))"#)
+            .unwrap(),
+        "true"
+    );
+    restored
+        .eval("globalThis.retained = navigation.currentEntry; 'retained'")
+        .unwrap();
+    let replacement = seed
+        .entries
+        .iter()
+        .find(|entry| entry.url.ends_with("#two"))
+        .unwrap()
+        .clone();
+    let current = seed
+        .entries
+        .iter_mut()
+        .find(|entry| entry.url.ends_with("#one"))
+        .unwrap();
+    current.history_state = replacement.history_state;
+    current.navigation_state = replacement.navigation_state;
+    current.scroll_restoration = moli_history::ScrollRestoration::Auto;
+    // Reusing serialized IDs must not return wrappers for the previous native records.
+    restored.install_navigation_bootstrap_entry(Some(seed));
+    const REFRESHED: &str = r#"JSON.stringify([
+        navigation.currentEntry !== retained,
+        navigation.currentEntry.id === retained.id,
+        navigation.currentEntry instanceof NavigationHistoryEntry,
+        navigation.entries().includes(navigation.currentEntry),
+        history.state.value === 2n,
+        navigation.currentEntry.getState().get('value') === 2n,
+        retained.getState().get('value') === 1n,
+        history.scrollRestoration
+    ])"#;
+    for result in [
+        restored.eval(REFRESHED),
+        restored.eval_in_isolated_context(isolated, REFRESHED),
+    ] {
+        assert_eq!(
+            result.unwrap(),
+            r#"[true,true,true,true,true,true,true,"auto"]"#
+        );
+    }
 }
 
 #[test]

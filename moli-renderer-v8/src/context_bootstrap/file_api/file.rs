@@ -10,6 +10,20 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const FILE_NAME_SLOT: &str = "__lmFileName";
 const FILE_LAST_MODIFIED_SLOT: &str = "__lmFileLastModified";
 
+pub(in crate::context_bootstrap) fn bind_file_world_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    wrapper: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    let name = file_name_from_object(scope, source)?;
+    let modified =
+        get_private_value(scope, source, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
+    initialize_file_metadata(scope, wrapper, &name, modified);
+    let prototype = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
+    wrapper.set_prototype(scope, prototype.into())?;
+    Some(())
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::File)]
 struct FileMetadataDeclaration {

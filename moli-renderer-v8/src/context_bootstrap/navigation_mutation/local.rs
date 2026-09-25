@@ -14,7 +14,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
         return;
     };
     let previous_entry = navigation_current_entry(scope, owner);
-    let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
+    let entries = history_entries(scope, history).unwrap_or_default();
     let current_index = history_index(scope, history);
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
 
@@ -25,8 +25,6 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let next_entry = create_navigation_entry(
                 scope,
                 resolved.as_str(),
-                None,
-                None,
                 None,
                 next_navigation_index,
                 &new_navigation_entry_id(),
@@ -62,8 +60,6 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 scope,
                 resolved.as_str(),
                 None,
-                None,
-                None,
                 current_navigation_index,
                 &new_navigation_entry_id(),
                 &key,
@@ -94,10 +90,12 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             );
         }
         LocationNavigationKind::Reload => {
-            if let Some(entry) = entries
-                .get_index(scope, current_index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            {
+            if let Some(record) = entries.get(current_index as usize) {
+                let entry = super::super::history_runtime::native::entry_wrapper(
+                    scope,
+                    owner,
+                    record.clone(),
+                );
                 let current_entry = previous_entry.unwrap_or(entry);
                 if previous_entry.is_none() {
                     sync_navigation_current_entry_from_history_entry(scope, owner, entry);

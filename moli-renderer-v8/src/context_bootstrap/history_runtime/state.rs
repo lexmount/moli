@@ -4,7 +4,7 @@ use super::super::navigation_window::runtime_window_owner;
 use super::native;
 use crate::structured_clone::deserialize_history_state;
 use crate::util::{get_private_value, private_key, set_private_value, v8_string};
-use moli_history::ScrollRestoration;
+use moli_history::{HistoryEntryRef, ScrollRestoration};
 
 const WINDOW_HISTORY_OWNER_SLOT: &str = "__moliWindowHistoryOwner";
 const CACHED_REVISION_SLOT: &str = "__moliHistoryCachedRevision";
@@ -39,46 +39,23 @@ pub(in crate::context_bootstrap) fn window_has_shared_history<'s>(
 pub(in crate::context_bootstrap) fn history_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Array>> {
+) -> Option<Vec<HistoryEntryRef>> {
     let record = native::history(scope, history)?;
     let entries = record.borrow().entries().to_vec();
-    let owner = runtime_window_owner(scope, history);
-    // This array is a binding projection. The native vector is authoritative.
-    let array = v8::Array::new(scope, entries.len() as i32);
-    for (index, entry) in entries.into_iter().enumerate() {
-        let wrapper = native::entry_wrapper(scope, owner, entry);
-        let _ = array.set_index(scope, index as u32, wrapper.into());
-    }
-    Some(array)
+    Some(entries)
 }
 
 pub(in crate::context_bootstrap) fn set_history_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
-    entries: v8::Local<'s, v8::Array>,
+    entries: Vec<HistoryEntryRef>,
 ) {
     let Some(record) = native::history(scope, history) else {
         return;
     };
     let owner = runtime_window_owner(scope, history);
-    let mut native_entries = Vec::with_capacity(entries.length() as usize);
-    for index in 0..entries.length() {
-        let Some(wrapper) = entries
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            return;
-        };
-        let Some(entry) = native::entry(scope, wrapper) else {
-            return;
-        };
-        super::super::navigation_activation::bind_navigation_entry_runtime_owner(
-            scope, wrapper, owner,
-        );
-        native_entries.push(entry);
-    }
-    native::prune_entry_wrappers(scope, owner, &native_entries);
-    record.borrow_mut().restore_entries(native_entries);
+    native::prune_entry_wrappers(scope, owner, &entries);
+    record.borrow_mut().restore_entries(entries);
 }
 
 pub(in crate::context_bootstrap) fn push_history_entry<'s>(

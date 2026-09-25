@@ -161,7 +161,7 @@ impl JsContextHost {
                             );
                         } else {
                             Self::replace_child_browsing_context_navigation_in_entry_seed(
-                                &mut seed, &url, None, None,
+                                &mut seed, &url,
                             );
                         }
                     }

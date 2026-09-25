@@ -743,11 +743,11 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn apply_navigation_to_entry_seed(&mut self, url: &Url) {
-        apply_child_navigation_to_seed(&mut self.navigation_entry_seed, url, None, None);
+        apply_child_navigation_to_seed(&mut self.navigation_entry_seed, url);
     }
 
     pub(super) fn replace_navigation_in_entry_seed(&mut self, url: &Url) {
-        replace_child_navigation_in_seed(&mut self.navigation_entry_seed, url, None, None);
+        replace_child_navigation_in_seed(&mut self.navigation_entry_seed, url);
     }
 
     pub(super) fn apply_javascript_url_navigation_to_entry_seed(&mut self) {
@@ -798,8 +798,6 @@ impl ChildBrowsingContextEntry {
                 history_state: None,
                 navigation_state: None,
                 scroll_restoration: Default::default(),
-                history_state_json: None,
-                navigation_state_json: None,
                 referrer_policy: None,
                 document_id: NavigationHistoryDocumentId::allocate(),
                 history_index: 1,

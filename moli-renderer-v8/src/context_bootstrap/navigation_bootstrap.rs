@@ -10,7 +10,7 @@ use super::navigation_activation::{
 use super::navigation_entry::{set_history_entries, set_history_index};
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
-    build_current_navigation_entry_from_seed, build_history_entries_array_from_seed,
+    build_current_navigation_entry_from_seed, build_history_entries_from_seed,
     initial_navigation_history_seed,
 };
 use super::navigation_surface::{
@@ -79,7 +79,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     href: &str,
 ) -> Result<()> {
     // Creating/rebinding an isolated realm must never reset the Window's
-    // shared history, including structured-clone state absent from JSON seeds.
+    // shared history or its structured-clone state.
     if window_has_shared_history(scope, window) {
         return Ok(());
     }
@@ -104,10 +104,10 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     set_runtime_window_owner(scope, history, window);
     install_history_scroll_restoration_runtime_state(scope, history, "auto");
     install_history_state_runtime_state(scope, history, v8::null(scope).into());
-    let entries = build_history_entries_array_from_seed(scope, window, &initial_seed);
+    let entries = build_history_entries_from_seed(&initial_seed);
     let current_entry = entries
-        .get_index(scope, initial_seed.current_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .get(initial_seed.current_index as usize)
+        .map(|entry| super::history_runtime::native::entry_wrapper(scope, window, entry.clone()))
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(
                 scope,

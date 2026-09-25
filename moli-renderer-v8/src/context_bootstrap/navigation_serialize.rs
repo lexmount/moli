@@ -101,8 +101,6 @@ pub(super) fn serialize_navigation_entry_object<'s>(
             url: "about:blank".to_owned(),
             history_state: None,
             navigation_state: None,
-            history_state_json: None,
-            navigation_state_json: None,
             scroll_restoration: Default::default(),
             referrer_policy: None,
             document_id: NavigationHistoryDocumentId::allocate(),
@@ -130,10 +128,6 @@ fn snapshot_native_entry(
         url: entry.url.clone(),
         history_state: entry.history_state.clone(),
         navigation_state: entry.navigation_state.clone(),
-        // JSON is accepted only for legacy/bootstrap seeds. Capturing a native
-        // snapshot never deserializes state or invokes script's toJSON hooks.
-        history_state_json: None,
-        navigation_state_json: None,
         scroll_restoration: entry.scroll_restoration,
         referrer_policy: entry.referrer_policy.clone(),
         document_id: entry.document.clone(),
@@ -168,32 +162,6 @@ fn serialize_navigation_activation_seed<'s>(
         from,
         navigation_type,
     })
-}
-
-pub(super) fn parse_history_entry_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state_json: Option<&str>,
-) -> v8::Local<'s, v8::Value> {
-    if let Some(state_json) = state_json {
-        v8_string(scope, state_json)
-            .and_then(|json| v8::json::parse(scope, json))
-            .unwrap_or_else(|| v8::null(scope).into())
-    } else {
-        v8::null(scope).into()
-    }
-}
-
-pub(super) fn parse_navigation_entry_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state_json: Option<&str>,
-) -> v8::Local<'s, v8::Value> {
-    if let Some(state_json) = state_json {
-        v8_string(scope, state_json)
-            .and_then(|json| v8::json::parse(scope, json))
-            .unwrap_or_else(|| v8::undefined(scope).into())
-    } else {
-        v8::undefined(scope).into()
-    }
 }
 
 pub(super) fn serialize_history_entries<'s>(

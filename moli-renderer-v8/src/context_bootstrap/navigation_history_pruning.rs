@@ -1,9 +1,11 @@
+use super::history_runtime::native;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_key_value,
-    set_history_entries, set_history_index, set_navigation_entry_initial_index,
+    set_history_entries, set_history_index,
 };
 use super::navigation_events::dispatch_navigation_entry_dispose;
 use super::navigation_window::window_history_for_holder;
+use moli_history::HistoryEntryRef;
 
 #[derive(Debug)]
 pub(crate) struct NavigationHistoryPrunePlan {
@@ -15,17 +17,14 @@ pub(crate) fn plan_navigation_history_prune(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<NavigationHistoryPrunePlan> {
     let (_history, entries, current_index, current_entry) = navigation_history_prune_state(scope)?;
-    let retained_entry_key = navigation_entry_key_value(scope, current_entry)?;
-    let mut removed_entry_keys = Vec::with_capacity(entries.length().saturating_sub(1) as usize);
-    for index in (0..entries.length()).rev() {
-        if index == current_index {
-            continue;
-        }
-        let entry = entries
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-        removed_entry_keys.push(navigation_entry_key_value(scope, entry)?);
-    }
+    let retained_entry_key = current_entry.borrow().key.as_str().to_owned();
+    let removed_entry_keys = entries
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(index, _)| *index != current_index as usize)
+        .map(|(_, entry)| entry.borrow().key.as_str().to_owned())
+        .collect();
     Some(NavigationHistoryPrunePlan {
         retained_entry_key,
         removed_entry_keys,
@@ -49,20 +48,12 @@ pub(crate) fn apply_navigation_history_prune_plan(
         return false;
     };
 
-    let mut retained_entries = Vec::with_capacity(entries.length() as usize);
+    let mut retained_entries = Vec::with_capacity(entries.len());
     let mut removed_entries = Vec::with_capacity(plan.removed_entry_keys.len());
-    for index in 0..entries.length() {
-        let Some(entry) = entries
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            return false;
-        };
-        let Some(key) = navigation_entry_key_value(scope, entry) else {
-            return false;
-        };
+    for entry in entries {
+        let key = entry.borrow().key.as_str().to_owned();
         if plan.removed_entry_keys.contains(&key) {
-            removed_entries.push((key, entry));
+            removed_entries.push((key, native::entry_wrapper(scope, owner, entry)));
         } else {
             retained_entries.push((key, entry));
         }
@@ -79,12 +70,15 @@ pub(crate) fn apply_navigation_history_prune_plan(
     else {
         return false;
     };
-    let retained_entries_array = v8::Array::new(scope, retained_entries.len() as i32);
-    for (index, (_, entry)) in retained_entries.into_iter().enumerate() {
-        set_navigation_entry_initial_index(scope, entry, index as u32);
-        let _ = retained_entries_array.set_index(scope, index as u32, entry.into());
-    }
-    set_history_entries(scope, history, retained_entries_array);
+    let retained_entries = retained_entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, entry))| {
+            entry.borrow_mut().index = index as u32;
+            entry
+        })
+        .collect();
+    set_history_entries(scope, history, retained_entries);
     set_history_index(scope, history, current_index as u32);
     super::navigation_serialize::sync_child_navigation_entry_seed_from_owner(scope, owner);
     for removed_key in &plan.removed_entry_keys {
@@ -104,16 +98,14 @@ fn navigation_history_prune_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<(
     v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Array>,
+    Vec<HistoryEntryRef>,
     u32,
-    v8::Local<'s, v8::Object>,
+    HistoryEntryRef,
 )> {
     let owner = scope.get_current_context().global(scope);
     let history = window_history_for_holder(scope, owner)?;
     let entries = history_entries(scope, history)?;
     let current_index = history_index(scope, history);
-    let current_entry = entries
-        .get_index(scope, current_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let current_entry = entries.get(current_index as usize)?.clone();
     Some((history, entries, current_index, current_entry))
 }

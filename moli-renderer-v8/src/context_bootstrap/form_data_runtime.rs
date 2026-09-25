@@ -18,6 +18,15 @@ pub(crate) use serialize::form_data_entries_to_string_pairs;
 pub(in crate::context_bootstrap) use storage::form_data_is_object;
 pub(super) use template::build_form_data_constructor_template;
 
+pub(super) fn new_world_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let constructor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "FormData")
+            .ok()?;
+    constructor.new_instance(scope, &[])
+}
+
 pub(crate) fn form_data_object_from_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[(String, v8::Global<v8::Value>)],

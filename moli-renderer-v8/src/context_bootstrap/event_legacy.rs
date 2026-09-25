@@ -316,7 +316,7 @@ pub(super) fn ui_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -341,7 +341,7 @@ pub(super) fn text_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -369,7 +369,7 @@ pub(super) fn mouse_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -415,7 +415,7 @@ pub(super) fn keyboard_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -442,7 +442,7 @@ pub(super) fn composition_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -468,7 +468,7 @@ pub(super) fn custom_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -493,7 +493,7 @@ pub(super) fn storage_event_init_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }
@@ -526,7 +526,7 @@ pub(super) fn keyboard_event_get_modifier_state_callback<'s>(
     let Some(parsed) = webidl::parse_args::<KeyboardEventGetModifierStateArgs>(scope, &args) else {
         return;
     };
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     let key_name = match parsed.key_arg.as_str() {
         "Alt" | "AltGraph" => "altKey",
         "Control" => "ctrlKey",

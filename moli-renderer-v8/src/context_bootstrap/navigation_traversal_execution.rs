@@ -1,5 +1,5 @@
 use super::history_runtime::route_history_traversal_task;
-use super::navigation_entry::{history_entries, navigation_entry_key_value};
+use super::navigation_entry::history_entries;
 use super::navigation_result::{
     navigation_pending_result, navigation_rejected_dom_exception_result,
 };
@@ -11,6 +11,7 @@ use super::navigation_window::{
 use super::*;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::PendingHistoryTraversalAction;
+use moli_history::HistoryEntryRef;
 
 pub(super) struct TraversalTarget<'s> {
     pub(super) owner: v8::Local<'s, v8::Object>,
@@ -27,7 +28,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     target.joint_step = target.joint_step.or_else(|| {
         traversal_target_entry(scope, &target)
-            .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, entry))
+            .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, &entry))
     });
     let child_handle = child_browsing_context_handle_for_traversal(scope, target.owner);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -72,7 +73,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             return Some(navigation_pending_result(scope));
         };
         let target_key = traversal_target_entry(scope, &target)
-            .and_then(|entry| navigation_entry_key_value(scope, entry));
+            .map(|entry| entry.borrow().key.as_str().to_owned());
         let receiver_context = target
             .history
             .get_creation_context(scope)
@@ -90,14 +91,14 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
         return Some(result);
     }
     let target_entry = traversal_target_entry(scope, &target);
-    if !traversal_target_entry_still_available(scope, &target, target_entry) {
+    if !traversal_target_entry_still_available(scope, &target, target_entry.as_ref()) {
         return Some(navigation_rejected_dom_exception_result(
             scope,
             "Navigation was canceled",
             "AbortError",
         ));
     }
-    let target_key = target_entry.and_then(|entry| navigation_entry_key_value(scope, entry));
+    let target_key = target_entry.map(|entry| entry.borrow().key.as_str().to_owned());
     let receiver_context = target
         .history
         .get_creation_context(scope)
@@ -123,7 +124,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
 ) {
     target.joint_step = target.joint_step.or_else(|| {
         traversal_target_entry(scope, &target)
-            .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, entry))
+            .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, &entry))
     });
     let child_handle = child_browsing_context_handle_for_traversal(scope, target.owner);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -165,7 +166,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
         }
         if child_handle.is_some() {
             let target_key = traversal_target_entry(scope, &target)
-                .and_then(|entry| navigation_entry_key_value(scope, entry));
+                .map(|entry| entry.borrow().key.as_str().to_owned());
             let receiver_context = target
                 .history
                 .get_creation_context(scope)
@@ -184,7 +185,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
         return;
     }
     let target_entry = traversal_target_entry(scope, &target);
-    if !traversal_target_entry_still_available(scope, &target, target_entry) {
+    if !traversal_target_entry_still_available(scope, &target, target_entry.as_ref()) {
         return;
     }
     let receiver_context = target
@@ -192,8 +193,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let receiver_scope = &mut v8::ContextScope::new(scope, receiver_context);
-    let target_key =
-        target_entry.and_then(|entry| navigation_entry_key_value(receiver_scope, entry));
+    let target_key = target_entry.map(|entry| entry.borrow().key.as_str().to_owned());
     if let Some(producer) = host.queue_history_traversal(
         receiver_scope,
         exact_target,
@@ -208,24 +208,22 @@ pub(super) fn queue_history_traversal_without_result<'s>(
 fn traversal_target_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: &TraversalTarget<'s>,
-) -> Option<v8::Local<'s, v8::Object>> {
+) -> Option<HistoryEntryRef> {
     history_entries(scope, target.history)?
-        .get_index(scope, target.target_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .get(target.target_index as usize)
+        .cloned()
 }
 
 fn traversal_target_entry_still_available<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: &TraversalTarget<'s>,
-    expected_entry: Option<v8::Local<'s, v8::Object>>,
+    expected_entry: Option<&HistoryEntryRef>,
 ) -> bool {
     let Some(expected_entry) = expected_entry else {
         return true;
     };
-    history_entries(scope, target.history)
-        .and_then(|entries| entries.get_index(scope, target.target_index))
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|entry| entry.strict_equals(expected_entry.into()))
+    traversal_target_entry(scope, target)
+        .is_some_and(|entry| std::rc::Rc::ptr_eq(&entry, expected_entry))
 }
 
 pub(crate) fn apply_authorized_history_traversal_task(

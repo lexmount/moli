@@ -31,7 +31,12 @@ and `Page.createIsolatedWorld` to cover the PR #818 regressions: entry wrapper
 identity and expando/method isolation, one `currententrychange` in each world,
 isolated `navigate` cancellation, and the realm of History `SecurityError`s.
 It also verifies that a later main-world mutation updates the isolated world's
-structured state and preserves its local state cache. Run it with
+structured state and preserves its local state cache. Event checks cover local
+AbortSignal, FormData, File, and DOM wrappers; live FormData mutations; and
+synthetic Event/CustomEvent identity, interface type, and shared cancellation.
+Abort delivery for a synthetic NavigateEvent is covered by renderer Rust tests:
+Chrome 154 crashes when aborting the signal passed to that synthetic event.
+Run it with
 `uv run moli-cdp-smoke --group history-worlds`, or add `--endpoint URL` to use an
 existing browser process.
 

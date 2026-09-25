@@ -29,6 +29,7 @@ pub(crate) use directory_reader::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, file_system_directory_reader_read_entries_callback,
 };
+pub(super) use file::bind_file_world_wrapper;
 pub(super) use file::file_constructor_callback;
 pub(in crate::context_bootstrap) use file::file_name_from_object;
 pub(crate) use file::{build_file_object, selected_file_from_object};

@@ -53,14 +53,7 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
                 anyhow::anyhow!("isolated History is missing its native Window history")
             })?
     } else {
-        let entries = build_history_entries_array_from_seed(scope, window, initial_seed);
-        let records = (0..entries.length())
-            .filter_map(|index| {
-                let entry = entries.get_index(scope, index)?;
-                let entry = v8::Local::<v8::Object>::try_from(entry).ok()?;
-                native::entry(scope, entry)
-            })
-            .collect();
+        let records = build_history_entries_from_seed(initial_seed);
         std::rc::Rc::new(std::cell::RefCell::new(moli_history::WindowHistory::new(
             records,
             initial_seed.current_index,
@@ -86,9 +79,10 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
         .and_then(|history| {
             let entries = history_entries(scope, history)?;
             let index = history_index(scope, history);
+            let owner = history_window_owner(scope, window);
             entries
-                .get_index(scope, index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .get(index as usize)
+                .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))
         })
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(

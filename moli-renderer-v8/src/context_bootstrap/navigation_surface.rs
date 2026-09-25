@@ -9,7 +9,7 @@ use super::navigation_callbacks::{
 };
 use super::navigation_events::navigation_error_event_active;
 use super::navigation_seed::{
-    build_current_navigation_entry_from_seed, build_history_entries_array_from_seed,
+    build_current_navigation_entry_from_seed, build_history_entries_from_seed,
 };
 use super::navigation_traversal::{
     history_back_callback, history_forward_callback, history_go_callback, navigation_back_callback,

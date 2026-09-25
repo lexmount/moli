@@ -41,15 +41,13 @@ impl JsContextHost {
         seed: &mut NavigationHistoryEntrySeed,
         url: &Url,
     ) {
-        apply_child_navigation_to_seed(seed, url, None, None);
+        apply_child_navigation_to_seed(seed, url);
     }
 
     pub(in crate::native_bridge::context_host) fn replace_child_browsing_context_navigation_in_entry_seed(
         seed: &mut NavigationHistoryEntrySeed,
         url: &Url,
-        history_state_json: Option<String>,
-        navigation_state_json: Option<String>,
     ) {
-        replace_child_navigation_in_seed(seed, url, history_state_json, navigation_state_json);
+        replace_child_navigation_in_seed(seed, url);
     }
 }

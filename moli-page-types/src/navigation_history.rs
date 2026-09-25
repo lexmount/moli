@@ -51,10 +51,6 @@ pub struct NavigationHistorySerializedEntry {
     pub history_state: Option<moli_history::SerializedScriptValue>,
     pub navigation_state: Option<moli_history::SerializedScriptValue>,
     pub scroll_restoration: moli_history::ScrollRestoration,
-    /// Legacy/bootstrap input only; native snapshots use `history_state`.
-    pub history_state_json: Option<String>,
-    /// Legacy/bootstrap input only; native snapshots use `navigation_state`.
-    pub navigation_state_json: Option<String>,
     pub referrer_policy: Option<String>,
     pub document_id: NavigationHistoryDocumentId,
     pub history_index: u32,
@@ -129,8 +125,6 @@ pub fn initial_navigation_history_seed(
                 initial_document_id,
                 NavigationHistoryEntryId::allocate(),
                 NavigationHistoryEntryKey::allocate(),
-                None,
-                None,
             ),
             navigation_history_entry(
                 href,
@@ -139,8 +133,6 @@ pub fn initial_navigation_history_seed(
                 current_document_id,
                 NavigationHistoryEntryId::allocate(),
                 NavigationHistoryEntryKey::allocate(),
-                None,
-                None,
             ),
         ];
         return NavigationHistoryEntrySeed {
@@ -161,8 +153,6 @@ pub fn initial_navigation_history_seed(
         NavigationHistoryDocumentId::allocate(),
         NavigationHistoryEntryId::allocate(),
         NavigationHistoryEntryKey::allocate(),
-        None,
-        None,
     )];
     NavigationHistoryEntrySeed {
         session_history: Default::default(),
@@ -189,8 +179,6 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
                 NavigationHistoryDocumentId::allocate(),
                 NavigationHistoryEntryId::allocate(),
                 NavigationHistoryEntryKey::allocate(),
-                None,
-                None,
             ),
             navigation_history_entry(
                 &url,
@@ -199,8 +187,6 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
                 NavigationHistoryDocumentId::allocate(),
                 NavigationHistoryEntryId::allocate(),
                 NavigationHistoryEntryKey::allocate(),
-                None,
-                None,
             ),
         ];
         return NavigationHistoryEntrySeed {
@@ -221,8 +207,6 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
         NavigationHistoryDocumentId::allocate(),
         NavigationHistoryEntryId::allocate(),
         NavigationHistoryEntryKey::allocate(),
-        None,
-        None,
     )];
     NavigationHistoryEntrySeed {
         session_history: Default::default(),
@@ -235,8 +219,6 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
 pub fn apply_child_browsing_context_navigation_to_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
     url: &Url,
-    history_state_json: Option<String>,
-    navigation_state_json: Option<String>,
 ) {
     seed.session_history = crate::SessionHistorySeed {
         commit: crate::SessionHistoryCommit::Push,
@@ -258,8 +240,6 @@ pub fn apply_child_browsing_context_navigation_to_entry_seed(
         NavigationHistoryDocumentId::allocate(),
         NavigationHistoryEntryId::allocate(),
         NavigationHistoryEntryKey::allocate(),
-        history_state_json,
-        navigation_state_json,
     ));
     seed.current_index = next_index;
     seed.activation = Some(NavigationActivationSeed {
@@ -296,8 +276,6 @@ fn visible_activation_from(
 pub fn replace_child_browsing_context_navigation_in_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
     url: &Url,
-    history_state_json: Option<String>,
-    navigation_state_json: Option<String>,
 ) {
     seed.session_history = crate::SessionHistorySeed {
         commit: crate::SessionHistoryCommit::Replace,
@@ -324,8 +302,6 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
         next_document_id,
         NavigationHistoryEntryId::allocate(),
         next_key,
-        history_state_json,
-        navigation_state_json,
     );
     if let Some(existing) = seed
         .entries
@@ -400,8 +376,6 @@ pub fn cross_document_navigation_seed(
                 NavigationHistoryDocumentId::allocate(),
                 NavigationHistoryEntryId::allocate(),
                 NavigationHistoryEntryKey::allocate(),
-                None,
-                None,
             );
             entries.push(entry.clone());
             (entry, next_index)
@@ -416,8 +390,6 @@ pub fn cross_document_navigation_seed(
                 next_document_id,
                 NavigationHistoryEntryId::allocate(),
                 next_key,
-                None,
-                None,
             );
             if let Some(existing) = entries
                 .iter_mut()
@@ -517,16 +489,12 @@ fn navigation_history_entry(
     document_id: NavigationHistoryDocumentId,
     id: NavigationHistoryEntryId,
     key: NavigationHistoryEntryKey,
-    history_state_json: Option<String>,
-    navigation_state_json: Option<String>,
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: url.to_owned(),
         history_state: None,
         navigation_state: None,
         scroll_restoration: Default::default(),
-        history_state_json,
-        navigation_state_json,
         referrer_policy: None,
         document_id,
         history_index,
@@ -614,10 +582,10 @@ mod tests {
         let url = Url::parse("https://child.example/frame").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url, None, None);
+        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
         let first = seed.entries[0].clone();
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url, None, None);
+        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
         let second = seed.entries[0].clone();
 
         assert_eq!(first.history_index, second.history_index);
@@ -644,8 +612,6 @@ mod tests {
             document_id("opaque-existing-document"),
             entry_id("entry-4"),
             entry_key("key-4"),
-            None,
-            None,
         )];
 
         let first = cross_document_navigation_seed(
@@ -688,12 +654,12 @@ mod tests {
         let second = Url::parse("https://example.test/second").unwrap();
         let replacement = Url::parse("https://example.test/replacement").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &first, None, None);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second, None, None);
+        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &first);
+        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second);
         let retired_forward_entry = seed.entries[2].clone();
 
         seed.current_index = 1;
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &replacement, None, None);
+        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &replacement);
 
         let replacement_entry = &seed.entries[2];
         assert_eq!(
@@ -716,7 +682,7 @@ mod tests {
         let mut seed = child_browsing_context_single_entry_seed(Some(&first));
         let previous = seed.entries[1].clone();
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &second, None, None);
+        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &second);
 
         assert_eq!(seed.entries[1].history_index, previous.history_index);
         assert_ne!(seed.entries[1].id, previous.id);
@@ -729,7 +695,7 @@ mod tests {
         let second = Url::parse("http://127.0.0.1:2222/common/blank.html").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(Some(&first));
 
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second, None, None);
+        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &second);
 
         assert_eq!(
             seed.activation
@@ -744,7 +710,7 @@ mod tests {
                 .is_none()
         );
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &first, None, None);
+        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &first);
 
         assert_eq!(
             seed.activation
@@ -765,7 +731,7 @@ mod tests {
         let url = Url::parse("http://127.0.0.1:1111/common/blank.html").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
 
-        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url, None, None);
+        replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &url);
 
         assert_eq!(
             seed.activation
@@ -780,7 +746,7 @@ mod tests {
     fn child_javascript_url_navigation_preserves_current_entry_url_and_key() {
         let url = Url::parse("http://127.0.0.1:1111/common/blank.html?1").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(None);
-        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &url, None, None);
+        apply_child_browsing_context_navigation_to_entry_seed(&mut seed, &url);
         let before = seed.entries[1].clone();
 
         apply_child_browsing_context_javascript_url_navigation_to_entry_seed(&mut seed);
@@ -804,8 +770,6 @@ mod tests {
                 document_id("document-0"),
                 entry_id("entry-0"),
                 entry_key("key-0"),
-                None,
-                None,
             ),
             navigation_history_entry(
                 "https://example.test/current",
@@ -814,8 +778,6 @@ mod tests {
                 document_id("document-1"),
                 entry_id("entry-1"),
                 entry_key("key-1"),
-                None,
-                None,
             ),
             navigation_history_entry(
                 "https://example.test/forward",
@@ -824,8 +786,6 @@ mod tests {
                 document_id("document-2"),
                 entry_id("entry-2"),
                 entry_key("key-2"),
-                None,
-                None,
             ),
         ];
 
@@ -860,8 +820,6 @@ mod tests {
             document_id("document-4"),
             entry_id("entry-4"),
             entry_key("key-4"),
-            None,
-            None,
         )];
 
         let seed = cross_document_navigation_seed(
@@ -894,8 +852,6 @@ mod tests {
             document_id("document-7"),
             entry_id("entry-7"),
             entry_key("key-7"),
-            None,
-            None,
         )];
 
         let seed = reload_navigation_seed(entries, 7).expect("reload seed");
@@ -919,8 +875,6 @@ mod tests {
                 document_id("document-1"),
                 entry_id("entry-0"),
                 entry_key("key-0"),
-                None,
-                None,
             ),
             navigation_history_entry(
                 "https://example.test/target",
@@ -929,8 +883,6 @@ mod tests {
                 document_id("document-1"),
                 entry_id("entry-1"),
                 entry_key("key-1"),
-                None,
-                None,
             ),
         ];
 
@@ -947,8 +899,6 @@ mod tests {
                 document_id("document-0"),
                 entry_id("entry-0"),
                 entry_key("key-0"),
-                None,
-                None,
             ),
             navigation_history_entry(
                 "https://example.test/target",
@@ -957,8 +907,6 @@ mod tests {
                 document_id("document-1"),
                 entry_id("entry-1"),
                 entry_key("key-1"),
-                None,
-                None,
             ),
         ];
 

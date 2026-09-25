@@ -428,6 +428,20 @@ struct BridgeContextWrapperCache {
 #[derive(Debug)]
 struct SharedDefaultWorldWrapperCache;
 
+pub(crate) fn contexts_share_wrapper_world(
+    left: v8::Local<'_, v8::Context>,
+    right: v8::Local<'_, v8::Context>,
+) -> bool {
+    left == right
+        || match (
+            left.get_slot::<RefCell<BridgeContextWrapperCache>>(),
+            right.get_slot::<RefCell<BridgeContextWrapperCache>>(),
+        ) {
+            (Some(left), Some(right)) => Rc::ptr_eq(&left, &right),
+            _ => false,
+        }
+}
+
 #[derive(Debug)]
 struct BridgeCachedWrapper {
     wrapper: v8::Global<v8::Object>,

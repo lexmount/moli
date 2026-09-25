@@ -50,21 +50,29 @@ pub(in crate::context_bootstrap) fn bind_event_backing<'s>(
         {
             continue;
         }
-        let getter = v8::Function::builder(shared_event_attribute_getter)
-            .data(v8str(scope, property).into())
-            .build(scope)
-            .expect("event attribute getter");
-        crate::definitions::define_get_set_property(
-            scope,
-            wrapper,
-            v8str(scope, property).into(),
-            getter.into(),
-            v8::undefined(scope).into(),
-            v8::PropertyAttribute::NONE,
-            "shared Event attribute",
-        )
-        .expect("shared Event attribute");
+        bind_event_attribute(scope, wrapper, property);
     }
+}
+
+pub(in crate::context_bootstrap) fn bind_event_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+    property: &'static str,
+) {
+    let getter = v8::Function::builder(shared_event_attribute_getter)
+        .data(v8str(scope, property).into())
+        .build(scope)
+        .expect("event attribute getter");
+    crate::definitions::define_get_set_property(
+        scope,
+        wrapper,
+        v8str(scope, property).into(),
+        getter.into(),
+        v8::undefined(scope).into(),
+        v8::PropertyAttribute::NONE,
+        "shared Event attribute",
+    )
+    .expect("shared Event attribute");
 }
 
 fn shared_event_attribute_getter<'s>(
@@ -95,7 +103,8 @@ fn shared_event_attribute_value<'s>(
                 .into(),
         );
     }
-    Some(value)
+    let context = wrapper.get_creation_context(scope)?;
+    super::super::navigation_event_worlds::attribute_in_realm(scope, property, value, context)
 }
 
 #[derive(WebApiObject)]

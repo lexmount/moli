@@ -36,7 +36,9 @@ pub(super) fn bind_shared_target<'s>(
 ) {
     let owner = shared_target_owner(scope, owner);
     set_private_value(scope, wrapper, OWNER, owner.into());
-    if native::entry(scope, wrapper).is_none() {
+    if native::entry(scope, wrapper).is_none()
+        && !crate::web_api_interfaces::AbortSignal::is_instance(scope, wrapper)
+    {
         let context = wrapper
             .get_creation_context(scope)
             .expect("Navigation realm");
@@ -60,6 +62,11 @@ pub(super) fn target_in_realm<'s>(
     let Some(owner) = get_private_object(scope, target, OWNER) else {
         return target;
     };
+    if crate::web_api_interfaces::AbortSignal::is_instance(scope, owner) {
+        return super::platform_object_worlds::in_realm(scope, owner.into(), context)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .unwrap_or(target);
+    }
     if native::entry(scope, target).is_some() {
         let window = super::navigation_window::runtime_window_owner(scope, owner);
         let navigation = super::navigation_window::window_navigation_for_holder(scope, window);

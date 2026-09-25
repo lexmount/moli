@@ -193,17 +193,10 @@ pub(super) fn navigation_traverse_to_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
-    let target_index = (0..entries.length()).find(|index| {
-        entries
-            .get_index(scope, *index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .and_then(|entry| {
-                get_own_static_property(scope, entry, "key")
-                    .and_then(|value| value.to_string(scope))
-                    .map(|value| value.to_rust_string_lossy(scope))
-            })
-            .is_some_and(|key| key == target_key)
-    });
+    let target_index = entries
+        .iter()
+        .position(|entry| entry.borrow().key.as_str() == target_key)
+        .map(|index| index as u32);
     let Some(target_index) = target_index else {
         rv.set(navigation_rejected_invalid_state_result(scope, "Invalid key").into());
         return;
@@ -417,23 +410,6 @@ fn set_reload_current_entry_state<'s>(
         return;
     };
     super::navigation_entry_state::set_navigation_entry_state(scope, current_entry, state);
-    let Some(history) = window_history_for_holder(scope, owner) else {
-        return;
-    };
-    let Some(entries) = history_entries(scope, history) else {
-        return;
-    };
-    let current_index = history_index(scope, history);
-    let Some(history_entry) = entries
-        .get_index(scope, current_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    if history_entry.strict_equals(current_entry.into()) {
-        return;
-    }
-    super::navigation_entry_state::set_navigation_entry_state(scope, history_entry, state);
 }
 
 fn navigation_traverse_result<'s>(
@@ -582,15 +558,16 @@ fn history_entry_navigation_index<'s>(
     history: v8::Local<'s, v8::Object>,
     history_index: u32,
 ) -> Option<u32> {
-    history_entries(scope, history)?
-        .get_index(scope, history_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|entry| {
-            get_own_static_property(scope, entry, "index")
-                .and_then(|value| value.integer_value(scope))
-        })
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
+    let owner = runtime_window_owner(scope, history);
+    let entries = history_entries(scope, history)?;
+    let entry = entries.get(history_index as usize)?;
+    let current_entry = navigation_current_entry(scope, owner);
+    super::navigation_projection::visible_navigation_index_for_entry(
+        scope,
+        &entries,
+        current_entry,
+        entry,
+    )
 }
 
 pub(super) fn navigation_entries_len<'s>(
@@ -600,6 +577,6 @@ pub(super) fn navigation_entries_len<'s>(
     let owner = runtime_window_owner(scope, history);
     let current_entry = navigation_current_entry(scope, owner);
     history_entries(scope, history)
-        .map(|entries| visible_navigation_entries_len(scope, entries, current_entry))
+        .map(|entries| visible_navigation_entries_len(scope, &entries, current_entry))
         .unwrap_or(0)
 }

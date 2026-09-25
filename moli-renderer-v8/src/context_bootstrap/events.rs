@@ -228,7 +228,9 @@ pub(crate) use base::{
     event_internal_bool_flag, event_is_dispatching, initialize_event_object, mark_event_trusted,
     set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
-pub(in crate::context_bootstrap) use base::{bind_event_backing, event_backing, event_trusted};
+pub(in crate::context_bootstrap) use base::{
+    bind_event_attribute, bind_event_backing, event_backing, event_trusted,
+};
 fn event_subclass_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,

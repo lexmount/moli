@@ -199,8 +199,6 @@ fn mutate_history_object<'s>(
                 scope,
                 url.as_str(),
                 None,
-                None,
-                None,
                 next_navigation_index,
                 &new_navigation_entry_id(),
                 &new_navigation_entry_key(),
@@ -219,8 +217,6 @@ fn mutate_history_object<'s>(
             let entry = create_navigation_entry(
                 scope,
                 url.as_str(),
-                None,
-                None,
                 None,
                 current_navigation_index,
                 &new_navigation_entry_id(),

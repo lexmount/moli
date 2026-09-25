@@ -38,19 +38,6 @@ pub(super) fn clone_history_entry_state<'s>(
     history_entry_state_snapshot(scope, entry)
 }
 
-pub(super) fn set_history_entry_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    state: v8::Local<'s, v8::Value>,
-) {
-    let Some(record) = native::entry(scope, entry) else {
-        return;
-    };
-    if let Some(state) = serialize_history_state(scope, state) {
-        record.borrow_mut().history_state = Some(state);
-    }
-}
-
 pub(super) fn copy_entry_serialized_states<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     from: v8::Local<'s, v8::Object>,
@@ -82,24 +69,6 @@ pub(super) fn set_navigation_entry_state<'s>(
     if let Some(state) = serialize_history_state(scope, state) {
         record.borrow_mut().navigation_state = Some(state);
     }
-}
-
-pub(super) fn restore_serialized_entry_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    snapshot: &moli_page_types::NavigationHistorySerializedEntry,
-) {
-    let Some(record) = native::entry(scope, entry) else {
-        return;
-    };
-    let mut record = record.borrow_mut();
-    if snapshot.history_state.is_some() {
-        record.history_state = snapshot.history_state.clone();
-    }
-    if snapshot.navigation_state.is_some() {
-        record.navigation_state = snapshot.navigation_state.clone();
-    }
-    record.scroll_restoration = snapshot.scroll_restoration;
 }
 
 pub(super) fn clone_navigation_state_arg_for_result<'s>(

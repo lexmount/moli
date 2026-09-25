@@ -54,11 +54,11 @@ fn entry_reference<'s>(
     history: v8::Local<'s, v8::Object>,
     index: u32,
 ) -> Option<SessionHistoryEntry> {
-    let entry = history_entries(scope, history)?
-        .get_index(scope, index)?
-        .try_into()
-        .ok()?;
-    super::session_history::entry_reference(scope, entry)
+    let entries = history_entries(scope, history)?;
+    let entry = entries.get(index as usize)?;
+    Some(super::session_history::native_entry_reference(
+        &entry.borrow(),
+    ))
 }
 
 impl TraversalParticipantOutcome {

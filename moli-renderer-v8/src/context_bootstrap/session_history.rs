@@ -1,17 +1,16 @@
 use super::navigation_entry::{
-    history_entries, history_index, navigation_entry_document_id, navigation_entry_key_value,
-    set_history_entries, set_history_index,
+    history_entries, history_index, set_history_entries, set_history_index,
 };
 use super::navigation_window::{
     runtime_top_window_owner, runtime_window_dispatch_scope, window_history_for_holder,
 };
 use crate::native_bridge::{JsContextHost, NavigationHistoryEntrySeed, OwnerDispatchScope};
 use crate::util::context_host_ptr_from_global_bridge;
+use moli_history::{HistoryEntry, HistoryEntryRef};
 use moli_page_types::SessionHistoryCommit;
 use moli_session_history::{
-    JointSessionHistory, NavigationHistoryDocumentId, NavigationHistoryEntryKey,
-    SessionHistoryContextId, SessionHistoryEntry, SessionHistoryPosition, SessionHistoryStepId,
-    SessionHistoryTraversalPlan,
+    JointSessionHistory, NavigationHistoryEntryKey, SessionHistoryContextId, SessionHistoryEntry,
+    SessionHistoryPosition, SessionHistoryStepId, SessionHistoryTraversalPlan,
 };
 
 #[derive(Clone, Copy)]
@@ -39,12 +38,15 @@ pub(super) fn entry_reference<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<SessionHistoryEntry> {
-    Some(SessionHistoryEntry {
-        key: NavigationHistoryEntryKey::from_serialized(navigation_entry_key_value(scope, entry)?),
-        document: NavigationHistoryDocumentId::from_serialized(navigation_entry_document_id(
-            scope, entry,
-        )?),
-    })
+    let entry = super::history_runtime::native::entry(scope, entry)?;
+    Some(native_entry_reference(&entry.borrow()))
+}
+
+pub(super) fn native_entry_reference(entry: &HistoryEntry) -> SessionHistoryEntry {
+    SessionHistoryEntry {
+        key: entry.key.clone(),
+        document: entry.document.clone(),
+    }
 }
 
 pub(super) fn initialize<'s>(
@@ -157,9 +159,8 @@ pub(crate) fn install_session_history_position(
     let entry = window_history_for_holder(scope, owner).and_then(|history| {
         let index = history_index(scope, history);
         history_entries(scope, history)?
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .and_then(|entry| entry_reference(scope, entry))
+            .get(index as usize)
+            .map(|entry| native_entry_reference(&entry.borrow()))
     });
     let history = unsafe { &mut *host_ptr }.session_histories.get_mut(None);
     *history = JointSessionHistory::new(position);
@@ -176,10 +177,11 @@ pub(crate) fn initialize_main_session_history(scope: &mut v8::PinScope<'_, '_>) 
         return;
     };
     let index = history_index(scope, history);
-    let entry = history_entries(scope, history)
-        .and_then(|entries| entries.get_index(scope, index))
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|entry| entry_reference(scope, entry));
+    let entry = history_entries(scope, history).and_then(|entries| {
+        entries
+            .get(index as usize)
+            .map(|entry| native_entry_reference(&entry.borrow()))
+    });
     if let Some(entry) = entry
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
@@ -314,9 +316,9 @@ pub(super) fn owner_for_context<'s>(
 pub(super) fn step_for_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-    entry: v8::Local<'s, v8::Object>,
+    entry: &HistoryEntryRef,
 ) -> Option<SessionHistoryStepId> {
-    let key = entry_reference(scope, entry)?.key;
+    let key = entry.borrow().key.clone();
     let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
     let binding = binding(scope, host, owner);
     host.session_histories
@@ -357,35 +359,28 @@ pub(super) fn prune_views<'s>(
         let old_current = history_index(scope, history);
         let mut retained = Vec::new();
         let mut current = 0;
-        for index in 0..entries.length() {
-            let Some(entry) = entries
-                .get_index(scope, index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            else {
-                continue;
-            };
-            let keep = index <= old_current
-                || entry_reference(scope, entry)
-                    .is_some_and(|entry| model.contains_entry(context, &entry.key));
+        let old_len = entries.len();
+        for (index, entry) in entries.into_iter().enumerate() {
+            let keep =
+                index <= old_current as usize || model.contains_entry(context, &entry.borrow().key);
             if keep {
-                if index == old_current {
+                if index == old_current as usize {
                     current = retained.len() as u32;
                 }
                 retained.push(entry);
             } else {
-                removed.push(entry);
+                // Keep observable wrappers alive until dispose delivery, before pruning the cache.
+                removed.push(super::history_runtime::native::entry_wrapper(
+                    scope, owner, entry,
+                ));
             }
         }
-        if retained.len() == entries.length() as usize {
+        if retained.len() == old_len {
             continue;
         }
-        let array = v8::Array::new(scope, retained.len() as i32);
-        for (index, entry) in retained.into_iter().enumerate() {
-            let _ = array.set_index(scope, index as u32, entry.into());
-            // Removing a suffix preserves Navigation's filtered indices. Raw
-            // history includes hidden entries and cannot supply these indices.
-        }
-        set_history_entries(scope, history, array);
+        // Removing a suffix preserves Navigation's filtered indices. Raw
+        // history includes hidden entries and cannot supply these indices.
+        set_history_entries(scope, history, retained);
         set_history_index(scope, history, current);
         super::navigation_serialize::sync_child_navigation_entry_seed_from_owner(scope, owner);
     }
@@ -450,13 +445,10 @@ pub(super) fn project_traversal<'s>(
         };
         let local_entries = history_entries(scope, history)?;
         let current_index = history_index(scope, history);
-        let index = (0..local_entries.length()).find(|index| {
-            local_entries
-                .get_index(scope, *index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                .and_then(|entry| navigation_entry_key_value(scope, entry))
-                .is_some_and(|key| key == entry.key.as_str())
-        });
+        let index = local_entries
+            .iter()
+            .position(|candidate| candidate.borrow().key == entry.key)
+            .map(|index| index as u32);
         let Some(target_index) = index else {
             if context == SessionHistoryContextId::ROOT {
                 return None;
@@ -513,16 +505,12 @@ pub(super) fn publish<'s>(
     let root_url = window_history_for_holder(scope, top)
         .and_then(|history| history_entries(scope, history))
         .and_then(|entries| {
-            (0..entries.length()).find_map(|index| {
-                let entry = entries
-                    .get_index(scope, index)
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-                let key = navigation_entry_key_value(scope, entry)?;
-                if root_key.as_ref().is_some_and(|root| root.as_str() == key) {
-                    super::navigation_entry::navigation_entry_url_value(scope, entry)
-                } else {
-                    None
-                }
+            entries.iter().find_map(|entry| {
+                let entry = entry.borrow();
+                root_key
+                    .as_ref()
+                    .filter(|root| *root == &entry.key)
+                    .map(|_| entry.url.clone())
             })
         })
         .unwrap_or_else(|| host.document_url().as_str().to_owned());

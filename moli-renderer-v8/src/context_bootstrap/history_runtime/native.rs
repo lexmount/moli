@@ -187,18 +187,6 @@ pub(in crate::context_bootstrap) fn entry_in_realm<'s>(
     wrapper
 }
 
-pub(in crate::context_bootstrap) fn same_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    left: v8::Local<'s, v8::Object>,
-    right: v8::Local<'s, v8::Object>,
-) -> bool {
-    left.strict_equals(right.into())
-        || match (entry(scope, left), entry(scope, right)) {
-            (Some(left), Some(right)) => Rc::ptr_eq(&left, &right),
-            _ => false,
-        }
-}
-
 pub(in crate::context_bootstrap) fn entry_value_in_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -247,12 +235,17 @@ pub(in crate::context_bootstrap) fn entry_wrapper<'s>(
     owner: v8::Local<'s, v8::Object>,
     entry: HistoryEntryRef,
 ) -> v8::Local<'s, v8::Object> {
+    let context = owner
+        .get_creation_context(scope)
+        .expect("History Window realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     let id = entry.borrow().id.clone();
     let map = wrappers(scope, owner);
     if let Some(key) = v8_string(scope, &id)
         && let Some(wrapper) = map
             .get(scope, key.into())
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        && self::entry(scope, wrapper).is_some_and(|record| Rc::ptr_eq(&record, &entry))
     {
         return wrapper;
     }
@@ -266,17 +259,27 @@ pub(in crate::context_bootstrap) fn prune_entry_wrappers<'s>(
     owner: v8::Local<'s, v8::Object>,
     entries: &[HistoryEntryRef],
 ) {
-    let live: std::collections::HashSet<String> = entries
+    let live: std::collections::HashMap<_, _> = entries
         .iter()
-        .map(|entry| entry.borrow().id.clone())
+        .map(|entry| (entry.borrow().id.clone(), Rc::as_ptr(entry)))
         .collect();
-    let map = wrappers(scope, owner);
+    let Some(map) = get_private_value(scope, owner, ENTRY_WRAPPERS)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+    else {
+        return;
+    };
     let pairs = map.as_array(scope);
     for index in (0..pairs.length()).step_by(2) {
-        if let Some(key) = pairs.get_index(scope, index)
-            && let Some(id) = key.to_string(scope)
-            && !live.contains(&id.to_rust_string_lossy(scope))
-        {
+        let Some(key) = pairs.get_index(scope, index) else {
+            continue;
+        };
+        let record = pairs
+            .get_index(scope, index + 1)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .and_then(|wrapper| entry(scope, wrapper));
+        let retained = record
+            .is_some_and(|record| live.get(&record.borrow().id) == Some(&Rc::as_ptr(&record)));
+        if !retained {
             let _ = map.delete(scope, key);
         }
     }
