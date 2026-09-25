@@ -737,6 +737,32 @@ impl JsContextHost {
             .take_pending_navigation_finished_results_for_navigation(scope, navigation)
     }
 
+    /// Promote the upcoming Navigation API tracker before a classic History
+    /// traversal dispatches navigate. Calls made by that event's listeners
+    /// register a new tracker and must not join the ongoing navigation.
+    pub(crate) fn take_upcoming_history_traversal_tracker(
+        &mut self,
+        target: WindowTaskTarget,
+        key: &str,
+    ) -> Option<(Option<v8::Global<v8::Value>>, Vec<PendingNavigationResult>)> {
+        let queue = &mut self.history_queue;
+        for queued in queue.pending_history_traversal_tasks.iter_mut().chain(
+            queue
+                .deferred_traversals
+                .iter_mut()
+                .map(|(_, queued)| queued),
+        ) {
+            if let PendingHistoryTraversalAction::SameDocument(pending) = &mut queued.action
+                && pending.target == target
+                && pending.target_key.as_deref() == Some(key)
+                && !pending.results.is_empty()
+            {
+                return Some((pending.info.take(), std::mem::take(&mut pending.results)));
+            }
+        }
+        None
+    }
+
     pub(crate) fn queue_history_traversal_with_result<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -750,26 +776,27 @@ impl JsContextHost {
         Option<RendererPageHistoryTraversalProducer>,
     )> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
-        if target_key.is_some() && let Some(pending) = self
-            .history_queue
-            .pending_history_traversal_tasks
-            .iter()
-            .chain(
-                self.history_queue
-                    .deferred_traversals
-                    .iter()
-                    .map(|(_, queued)| queued),
-            )
-            .find_map(|queued| match &queued.action {
-                PendingHistoryTraversalAction::SameDocument(pending)
-                    if pending.target == target
-                        && pending.target_key == target_key =>
-                {
-                    Some(pending)
-                }
-                _ => None,
-            })
-            && !pending.results.is_empty()
+        if target_key.is_some()
+            && let Some(pending) = self
+                .history_queue
+                .pending_history_traversal_tasks
+                .iter()
+                .chain(
+                    self.history_queue
+                        .deferred_traversals
+                        .iter()
+                        .map(|(_, queued)| queued),
+                )
+                .find_map(|queued| match &queued.action {
+                    PendingHistoryTraversalAction::SameDocument(pending)
+                        if pending.target == target
+                            && pending.target_key == target_key
+                            && !pending.results.is_empty() =>
+                    {
+                        Some(pending)
+                    }
+                    _ => None,
+                })
         {
             // Upcoming calls for one key share the original method tracker,
             // including its info, even while an earlier traversal blocks it.

@@ -136,17 +136,6 @@ impl RendererSessionHistories {
         Some((step, delta))
     }
 
-    pub(crate) fn is_pending_traversal_entry(
-        &self,
-        popup: Option<u64>,
-        context: SessionHistoryContextId,
-        key: &NavigationHistoryEntryKey,
-    ) -> bool {
-        self.pending
-            .get(&popup)
-            .is_some_and(|pending| pending.remaining.get(&context) == Some(key))
-    }
-
     pub(crate) fn cancel_traversal_step(
         &mut self,
         popup: Option<u64>,

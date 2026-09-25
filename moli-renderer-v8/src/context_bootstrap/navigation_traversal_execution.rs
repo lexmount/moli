@@ -8,8 +8,7 @@ use super::navigation_events::{
     dispatch_navigation_traverse_event_with_outcome,
 };
 use super::navigation_result::{
-    cancel_active_cross_document_navigation, navigation_dom_exception,
-    navigation_pending_result,
+    cancel_active_cross_document_navigation, navigation_dom_exception, navigation_pending_result,
     navigation_rejected_dom_exception_result, track_cross_document_traversal_navigation,
 };
 use super::navigation_seed::history_entry_seed_for_traversal;
@@ -19,8 +18,7 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::native_bridge::{
-    PendingCrossDocumentTraversal,
-    PendingHistoryTraversalAction, PendingNavigationResult,
+    PendingCrossDocumentTraversal, PendingHistoryTraversalAction, PendingNavigationResult,
 };
 use moli_history::HistoryEntryRef;
 
@@ -51,7 +49,11 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
         ));
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return Some(navigation_rejected_dom_exception_result(scope, "Navigation was canceled", "AbortError"));
+        return Some(navigation_rejected_dom_exception_result(
+            scope,
+            "Navigation was canceled",
+            "AbortError",
+        ));
     };
     let host = unsafe { &mut *host_ptr };
     let Some(exact_target) = window_task_target_for_runtime_owner(scope, host, target.owner) else {
@@ -226,9 +228,13 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     host: &mut JsContextHost,
     traversal: PendingCrossDocumentTraversal,
 ) -> bool {
-    if matches!(traversal.target.dispatch_scope(), crate::native_bridge::OwnerDispatchScope::Child(_)) {
+    if matches!(
+        traversal.target.dispatch_scope(),
+        crate::native_bridge::OwnerDispatchScope::Child(_)
+    ) {
         return super::history_runtime::apply_pending_history_traversal(
-            scope, host,
+            scope,
+            host,
             crate::native_bridge::PendingHistoryTraversal {
                 joint_step: traversal.seed.session_history.target_step,
                 target: traversal.target,
@@ -239,7 +245,10 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
             },
         );
     }
-    let Some(target_url) = traversal.seed.entries.iter()
+    let Some(target_url) = traversal
+        .seed
+        .entries
+        .iter()
         .find(|entry| entry.history_index == traversal.seed.current_index)
         .map(|entry| entry.url.clone())
     else {
@@ -342,7 +351,9 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
         return false;
     }
     match dispatch_scope {
-        crate::native_bridge::OwnerDispatchScope::Child(_) => unreachable!("child traversal uses the coordinator"),
+        crate::native_bridge::OwnerDispatchScope::Child(_) => {
+            unreachable!("child traversal uses the coordinator")
+        }
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
             let queued = host.queue_lightweight_popup_cross_document_traversal(
                 scope,

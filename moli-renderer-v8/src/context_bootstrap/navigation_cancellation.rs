@@ -175,11 +175,16 @@ fn stop_navigation_for_window<'s>(
     if navigation_unload_event_active(scope, window) {
         return;
     }
-    inform_about_canceled_navigation_for_window(scope, window, NavigationCancellationReason::WindowStop);
+    inform_about_canceled_navigation_for_window(
+        scope,
+        window,
+        NavigationCancellationReason::WindowStop,
+    );
 }
 
 pub(crate) enum NavigationCancellationReason {
     WindowStop,
+    WindowClose,
     /// Native retirement has already invalidated and extracted traversal
     /// admissions; their JS settlement belongs to the owning ScriptVm.
     LocalWindowRetirement,
@@ -196,7 +201,10 @@ pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     let _ = cancel_active_navigation_event(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_active_cross_document_navigation(scope, navigation, None);
-    if matches!(reason, NavigationCancellationReason::WindowStop) {
+    if matches!(
+        reason,
+        NavigationCancellationReason::WindowStop | NavigationCancellationReason::WindowClose
+    ) {
         cancel_pending_precommit_history_traversal(scope, navigation);
     }
     cancel_pending_precommit_same_document_navigation(scope, navigation);
@@ -219,7 +227,7 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
                 host.child_browsing_context_has_pending_cross_document_traversal(handle)
             }
             Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
-                host.lightweight_popup_has_pending_cross_document_traversal(popup_id)
+                host.lightweight_popup_has_pending_history_traversal(popup_id)
             }
             _ => false,
         }
