@@ -119,8 +119,31 @@ pub(super) fn execute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     plan: JointTraversalPlan<'s>,
     initiator_info: Option<v8::Local<'s, v8::Value>>,
-    results: Vec<PendingNavigationResult>,
+    mut results: Vec<PendingNavigationResult>,
 ) {
+    let mut upcoming_info = None;
+    if results.is_empty()
+        && let Some(target) = plan
+            .targets
+            .iter()
+            .find(|target| target.owner.strict_equals(plan.owner.into()))
+        && let Some(entry) = entry_reference(scope, target.history, target.target_index)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(target) = window_task_target_for_runtime_owner(scope, host, target.owner)
+            && let Some((info, upcoming)) =
+                host.take_upcoming_history_traversal_tracker(target, entry.key.as_str())
+        {
+            upcoming_info = info;
+            results = upcoming;
+        }
+    }
+    let initiator_info = initiator_info.or_else(|| {
+        upcoming_info
+            .as_ref()
+            .map(|info| v8::Local::new(scope, info))
+    });
     let captured = capture_participants(scope, &plan).and_then(|participants| {
         let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
         let owner = window_task_target_for_runtime_owner(scope, host, plan.owner)?.owner();
@@ -587,9 +610,14 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     let applied = prepared
         .into_iter()
         .map(|(index, entry)| {
+            let kind = if admission.participants[index].outcome.intercepted {
+                "other"
+            } else {
+                "fragment"
+            };
             (
                 index,
-                apply::commit_prepared_history_entry(scope, entry, Some("other")),
+                apply::commit_prepared_history_entry(scope, entry, Some(kind)),
             )
         })
         .collect::<Vec<_>>();

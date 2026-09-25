@@ -398,13 +398,13 @@ pub(super) fn cancel_active_cross_document_navigation<'s>(
     );
     clear_active_cross_document_navigation(scope, navigation);
     let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+    // Retire only this Window's load before abort listeners can start a successor.
     super::navigation_cancellation::clear_pending_cross_document_navigation_for_window(
         scope, owner, false,
     );
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if context_host_ptr_from_global_bridge(scope).is_some()
-        && let Some(signal) = get_private_value(scope, data, CROSS_DOCUMENT_PENDING_SIGNAL_SLOT)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    if let Some(signal) = get_private_value(scope, data, CROSS_DOCUMENT_PENDING_SIGNAL_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
         crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
