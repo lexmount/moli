@@ -250,6 +250,7 @@ impl ScriptVm {
                 host_ptr,
                 None,
                 None,
+                None,
                 "_blank",
                 Some(&url),
                 creator_base_url.clone(),
@@ -332,6 +333,7 @@ impl ScriptVm {
             let opened_popup = host.open_lightweight_popup_window(
                 scope,
                 host_ptr,
+                None,
                 None,
                 None,
                 "_blank",

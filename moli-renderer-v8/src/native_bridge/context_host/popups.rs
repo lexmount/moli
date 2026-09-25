@@ -880,6 +880,7 @@ impl PageScriptHost {
         host_ptr: *mut PageScriptHost,
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
+        source_scope: Option<OwnerDispatchScope>,
         target_name: &str,
         href: Option<&str>,
         creator_base_url: Url,
@@ -909,8 +910,7 @@ impl PageScriptHost {
             opener_child_handle,
             target_name,
             href,
-            opener_child_handle
-                .and_then(|handle| self.child_browsing_context_popup_opener_sandbox_policy(handle)),
+            source_scope.and_then(|scope| self.popup_sandbox_policy_for_source(scope)),
             creator_base_url,
             creator_policy_container,
             receiver,
@@ -921,6 +921,23 @@ impl PageScriptHost {
             created_new_browsing_context: true,
             document_response,
         })
+    }
+
+    fn popup_sandbox_policy_for_source(
+        &self,
+        source_scope: OwnerDispatchScope,
+    ) -> Option<DocumentSandboxPolicy> {
+        let policy = match source_scope {
+            OwnerDispatchScope::Top => self.document_policy_container().sandbox,
+            OwnerDispatchScope::Child(handle) => self
+                .child_browsing_contexts
+                .get(&handle)?
+                .document_sandbox_policy(),
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_policy_container(popup_id)?.sandbox
+            }
+        };
+        (policy.sandboxes_document_domain && !policy.allows_popups_to_escape).then_some(policy)
     }
 
     pub(crate) fn reuse_lightweight_popup_window<'s>(
