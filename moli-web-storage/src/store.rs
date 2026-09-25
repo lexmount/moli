@@ -30,6 +30,7 @@ pub fn deep_clone_shared_web_storage_store(
     Arc::new(WebStorageStore {
         backend: WebStorageBackend::Memory(Mutex::new(memory)),
         mutation_subscribers: Mutex::new(Vec::new()),
+        event_recipients: Mutex::new(Vec::new()),
     })
 }
 impl Default for WebStorageStore {
@@ -37,6 +38,7 @@ impl Default for WebStorageStore {
         Self {
             backend: WebStorageBackend::Memory(Mutex::new(MemoryWebStorageBackend::default())),
             mutation_subscribers: Mutex::new(Vec::new()),
+            event_recipients: Mutex::new(Vec::new()),
         }
     }
 }

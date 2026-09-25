@@ -22,6 +22,8 @@ fn string_from_utf16_units_lossy(units: &[u16]) -> String {
 
 mod sqlite;
 mod store;
+mod events;
+pub use events::{WebStorageEventData, WebStorageEventDelivery, WebStorageEventSink, WebStorageEventSource};
 pub use sqlite::{
     SqliteWebStorageOwner, WebStorageAreaLease, import_sqlite_web_storage,
     new_lazy_sqlite_web_storage_store, new_sqlite_web_storage_store,
@@ -66,6 +68,7 @@ enum WebStorageBackend {
 pub struct WebStorageStore {
     backend: WebStorageBackend,
     mutation_subscribers: Mutex<Vec<WebStorageMutationSubscriber>>,
+    event_recipients: Mutex<Vec<Weak<dyn WebStorageEventSink>>>,
 }
 
 pub type SharedWebStorageStore = Arc<WebStorageStore>;

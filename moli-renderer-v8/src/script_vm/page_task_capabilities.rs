@@ -6,7 +6,7 @@ impl ScriptVm {
         capabilities: crate::native_bridge::JsContextHostPageTaskCapabilities,
     ) {
         self._context_host
-            .borrow()
+            .borrow_mut()
             .install_page_task_capabilities(capabilities);
     }
 
