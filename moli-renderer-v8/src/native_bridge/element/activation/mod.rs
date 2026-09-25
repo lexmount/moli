@@ -21,5 +21,5 @@ pub(crate) use default_action::{
 pub(in crate::native_bridge) use targets::choose_form_navigation_target;
 pub(crate) use targets::{
     NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    navigate_iframe_target,
 };
