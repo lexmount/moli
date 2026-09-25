@@ -81,6 +81,7 @@ impl DomHost {
             child_browsing_context_host_candidates: RefCell::new(Vec::new()),
             shadow_disabled_custom_element_definitions: RefCell::new(HashSet::new()),
             active_element: Cell::new(None),
+            focus_transition_common_ancestor: Cell::new(None),
             hovered_elements: RefCell::new(IndexSet::new()),
             mutation_observer_records_enabled: Cell::new(false),
             devtools_mutation_records_enabled: Cell::new(false),
@@ -557,11 +558,23 @@ impl DomHost {
     }
 
     pub fn set_active_element_handle(&self, handle: Option<DomHandle>) {
-        if self.active_element.get() == handle {
+        let had_transition = self.focus_transition_common_ancestor.take().is_some();
+        if self.active_element.get() == handle && !had_transition {
             return;
         }
         self.active_element.set(handle);
         self.record_mutation(MutationScope::QueryState);
+    }
+
+    pub fn set_focus_transition_common_ancestor(
+        &self,
+        handle: Option<DomHandle>,
+    ) -> Option<DomHandle> {
+        let previous = self.focus_transition_common_ancestor.replace(handle);
+        if previous != handle {
+            self.record_mutation(MutationScope::QueryState);
+        }
+        previous
     }
 
     pub fn element_matches_focus(&self, handle: DomHandle) -> bool {
@@ -585,7 +598,13 @@ impl DomHost {
     }
 
     pub fn element_matches_focus_within(&self, handle: DomHandle) -> bool {
-        let Some(active) = self.active_element_handle() else {
+        // Shared ancestors retain :focus-within while blur listeners run,
+        // although neither the old nor the pending element matches :focus.
+        let Some(active) = self.active_element_handle().or_else(|| {
+            self.focus_transition_common_ancestor
+                .get()
+                .filter(|ancestor| self.node(*ancestor).is_some_and(Node::is_connected))
+        }) else {
             return false;
         };
         let mut current = Some(active);

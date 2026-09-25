@@ -235,3 +235,305 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
         "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,input-focus,top-window-focus|true"
     );
 }
+
+#[test]
+fn focus_transitions_publish_state_before_each_event_phase() {
+    let mut vm = new_storage_test_vm("https://focus-state.test/");
+    let result = vm.eval(r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<style>input { color: red } input:focus { color: blue }</style><input id=a><input id=b>';
+  const a = document.getElementById('a'), b = document.getElementById('b');
+  a.focus();
+  const events = [];
+  for (const node of [a, b]) for (const type of ['blur', 'focusout', 'focus', 'focusin']) {
+    node.addEventListener(type, e => events.push([
+      e.type, e.target.id, document.activeElement.id || 'body',
+      e.relatedTarget.id, e.target.matches(':focus'), getComputedStyle(e.target).color
+    ].join(':')));
+  }
+  b.focus();
+  return events.join('|');
+})()
+"#).expect("focus event state fixture");
+    assert_eq!(
+        result,
+        "blur:a:body:b:false:rgb(255, 0, 0)|focusout:a:body:b:false:rgb(255, 0, 0)|focus:b:b:a:true:rgb(0, 0, 255)|focusin:b:b:a:true:rgb(0, 0, 255)"
+    );
+}
+
+#[test]
+fn reentrant_focus_handlers_preserve_the_completed_transition() {
+    // These event traces also match Chromium. In particular, a temporary focus
+    // that is blurred before the handler returns does not cancel the request.
+    for (source, event_type, action, expected) in [
+        (
+            "a",
+            "blur",
+            "c.focus()",
+            "blur:a:body:b|focus:c:c:null|focusin:c:c:null|focusout:a:c:null;c",
+        ),
+        (
+            "a",
+            "blur",
+            "b.focus()",
+            "blur:a:body:b|focus:b:b:null|focusin:b:b:null|focusout:a:b:null;b",
+        ),
+        (
+            "a",
+            "blur",
+            "a.focus()",
+            "blur:a:body:b|focus:a:a:null|focusin:a:a:null|focusout:a:a:null;a",
+        ),
+        (
+            "a",
+            "blur",
+            "c.focus(); c.blur()",
+            "blur:a:body:b|focus:c:c:null|focusin:c:c:null|blur:c:body:null|focusout:c:body:null|focusout:a:body:b|focus:b:b:a|focusin:b:b:a;b",
+        ),
+        (
+            "a",
+            "blur",
+            "c.focus(); a.addEventListener('focusout', () => c.blur(), {once:true})",
+            "blur:a:body:b|focus:c:c:null|focusin:c:c:null|focusout:a:c:null|blur:c:body:null|focusout:c:body:null;body",
+        ),
+        (
+            "a",
+            "focusout",
+            "c.focus()",
+            "blur:a:body:b|focusout:a:body:b|focus:c:c:null|focusin:c:c:null;c",
+        ),
+        (
+            "a",
+            "focusout",
+            "c.focus(); c.blur()",
+            "blur:a:body:b|focusout:a:body:b|focus:c:c:null|focusin:c:c:null|blur:c:body:null|focusout:c:body:null|focus:b:b:a|focusin:b:b:a;b",
+        ),
+        (
+            "b",
+            "focus",
+            "c.focus()",
+            "blur:a:body:b|focusout:a:body:b|focus:b:b:a|blur:b:body:c|focusout:b:body:c|focus:c:c:b|focusin:c:c:b;c",
+        ),
+        (
+            "b",
+            "focus",
+            "b.blur()",
+            "blur:a:body:b|focusout:a:body:b|focus:b:b:a|blur:b:body:null|focusout:b:body:null;body",
+        ),
+        (
+            "b",
+            "focus",
+            "b.remove()",
+            "blur:a:body:b|focusout:a:body:b|focus:b:b:a|blur:b:body:null|focusout:b:body:null;body",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://focus-reentry.test/");
+        let script = r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id=a><input id=b><input id=c>';
+  const a = document.getElementById('a'), b = document.getElementById('b'), c = document.getElementById('c');
+  a.focus();
+  const label = node => node === body ? 'body' : node?.id ?? 'null';
+  const events = [];
+  for (const node of [a, b, c]) for (const type of ['blur', 'focusout', 'focus', 'focusin'])
+    node.addEventListener(type, e => events.push([e.type, e.target.id, label(document.activeElement), label(e.relatedTarget)].join(':')));
+  /*SOURCE*/.addEventListener(/*TYPE*/, () => { /*ACTION*/ }, {once:true});
+  b.focus();
+  return events.join('|') + ';' + label(document.activeElement);
+})()
+"#
+            .replace("/*SOURCE*/", source)
+            .replace("/*TYPE*/", &serde_json::to_string(event_type).unwrap())
+            .replace("/*ACTION*/", action);
+        assert_eq!(
+            vm.eval(&script).expect("reentrant focus fixture"),
+            expected,
+            "{source} {event_type}: {action}"
+        );
+    }
+}
+
+#[test]
+fn focus_transitions_revalidate_the_target_after_blur_handlers() {
+    for mutation in [
+        "b.remove()",
+        "b.disabled = true",
+        "b.hidden = true",
+        "b.inert = true",
+        "document.implementation.createHTMLDocument().body.append(b)",
+    ] {
+        let mut vm = new_storage_test_vm("https://focus-target-revalidation.test/");
+        let script = r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id=a><input id=b>';
+  const a = document.getElementById('a'), b = document.getElementById('b');
+  a.focus();
+  let focused = 0;
+  b.addEventListener('focus', () => focused++);
+  b.addEventListener('focusin', () => focused++);
+  a.addEventListener('blur', () => { /*MUTATION*/ });
+  b.focus();
+  return [document.activeElement === body, focused].join(':');
+})()
+"#
+        .replace("/*MUTATION*/", mutation);
+        assert_eq!(
+            vm.eval(&script).expect("target retirement fixture"),
+            "true:0",
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn shadow_root_active_element_tracks_focus_event_phases() {
+    let mut vm = new_storage_test_vm("https://shadow-focus-phases.test/");
+    let result = vm.eval(r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<div id=host></div>';
+  const host = document.getElementById('host');
+  const shadow = host.attachShadow({mode:'closed'});
+  shadow.innerHTML = '<input id=a><input id=b>';
+  const a = shadow.querySelector('#a'), b = shadow.querySelector('#b');
+  a.focus();
+  const events = [];
+  for (const node of [a, b]) for (const type of ['blur', 'focusout', 'focus', 'focusin'])
+    node.addEventListener(type, e => events.push([
+      type, document.activeElement === host, shadow.activeElement?.id ?? 'null', host.matches(':focus-within')
+    ].join(':')));
+  b.focus();
+  return events.join('|');
+})()
+"#).expect("shadow focus state fixture");
+    assert_eq!(
+        result,
+        "blur:false:null:true|focusout:false:null:true|focus:true:b:true|focusin:true:b:true"
+    );
+}
+
+#[test]
+fn child_focus_transitions_preserve_the_viewport_and_scope_related_targets() {
+    for (scenario, expected) in [
+        (
+            "same-child",
+            "blur:a:one:body:body:b|focusout:a:one:body:body:b|focus:b:one:b:body:a|focusin:b:one:b:body:a",
+        ),
+        (
+            "enter-child",
+            "blur:main:body:body:body:null|focusout:main:body:body:body:null|focus:b:one:b:body:null|focusin:b:one:b:body:null",
+        ),
+        (
+            "leave-child",
+            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:main:main:body:body:null|focusin:main:main:body:body:null",
+        ),
+        (
+            "sibling-child",
+            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:c:two:body:c:null|focusin:c:two:body:c:null",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://child-focus-phases.test/");
+        let script = r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id=main><iframe id=one></iframe><iframe id=two></iframe>';
+  const scenario = /*SCENARIO*/;
+  const d1 = document.getElementById('one').contentDocument;
+  const d2 = document.getElementById('two').contentDocument;
+  d1.body.innerHTML = '<input id=a><input id=b>';
+  d2.body.innerHTML = '<input id=c>';
+  const a = scenario === 'enter-child' ? document.getElementById('main') : d1.getElementById('a');
+  const b = scenario === 'leave-child' ? document.getElementById('main') :
+    scenario === 'sibling-child' ? d2.getElementById('c') : d1.getElementById('b');
+  const label = node => node?.id || node?.localName || 'null';
+  a.focus();
+  const events = [];
+  for (const node of [a, b]) for (const type of ['blur', 'focusout', 'focus', 'focusin'])
+    node.addEventListener(type, e => events.push([
+      type, label(e.target), label(document.activeElement), label(d1.activeElement),
+      label(d2.activeElement), label(e.relatedTarget)
+    ].join(':')));
+  b.focus();
+  return events.join('|');
+})()
+"#
+        .replace("/*SCENARIO*/", &serde_json::to_string(scenario).unwrap());
+        assert_eq!(
+            vm.eval(&script).expect("child focus transition fixture"),
+            expected,
+            "{scenario}"
+        );
+    }
+}
+
+#[test]
+fn text_change_commit_can_redirect_a_pending_focus_transition() {
+    for (action, expected) in [
+        (
+            "",
+            "change:a:body:null|blur:a:body:b|focusout:a:body:b|focus:b:b:a|focusin:b:b:a;b",
+        ),
+        (
+            "c.focus()",
+            "change:a:body:null|focus:c:c:null|focusin:c:c:null|blur:a:c:b|focusout:a:c:null;c",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://focus-change-commit.test/");
+        let script = r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id=a><input id=b><input id=c>';
+  const a = document.getElementById('a'), b = document.getElementById('b'), c = document.getElementById('c');
+  a.focus();
+  document.execCommand('insertText', false, 'edited');
+  const label = node => node?.id || node?.localName || 'null';
+  const events = [];
+  for (const node of [a, b, c]) for (const type of ['change', 'blur', 'focusout', 'focus', 'focusin'])
+    node.addEventListener(type, e => events.push([type, label(e.target), label(document.activeElement), label(e.relatedTarget)].join(':')));
+  a.addEventListener('change', () => { /*ACTION*/ }, {once:true});
+  b.focus();
+  return events.join('|') + ';' + label(document.activeElement);
+})()
+"#.replace("/*ACTION*/", action);
+        assert_eq!(
+            vm.eval(&script).expect("text commit focus fixture"),
+            expected,
+            "{action}"
+        );
+    }
+}
+
+#[test]
+fn child_viewport_focus_is_retired_when_its_container_is_removed() {
+    let mut vm = new_storage_test_vm("https://focus-viewport-retirement.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<iframe id=frame></iframe>';
+  const frame = document.getElementById('frame'), child = frame.contentDocument;
+  child.body.innerHTML = '<input id=a>';
+  const input = child.getElementById('a');
+  input.focus(); input.blur();
+  const viewport = document.activeElement === frame && child.activeElement === child.body;
+  frame.remove();
+  const removed = document.activeElement === body;
+  body.append(frame);
+  return [viewport, removed, document.activeElement === body].join(':');
+})()
+"#,
+        )
+        .expect("child viewport retirement fixture");
+    assert_eq!(result, "true:true:true");
+}
