@@ -1,6 +1,3 @@
-pub(super) const HISTORY_ENTRY_STATE_SNAPSHOT_SLOT: &str = "__lmHistoryEntryStateSnapshot";
-pub(super) const NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT: &str = "__lmNavigationEntryStateSnapshot";
-pub(super) const NAVIGATION_ENTRY_DOCUMENT_ID_SLOT: &str = "__lmNavigationEntryDocumentId";
 pub(super) const NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT: &str = "__lmNavigationEntryEventListeners";
 pub(super) const NAVIGATION_EVENT_LISTENERS_SLOT: &str = "__lmNavigationEventListeners";
 pub(super) const NAVIGATION_CURRENT_ENTRY_SLOT: &str = "__lmNavigationCurrentEntry";

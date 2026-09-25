@@ -101,7 +101,7 @@ async fn history_worlds_share_mutations_but_keep_wrappers_and_state_caches_separ
     );
     assert_eq!(
         vm.eval_in_isolated_context(isolated, READ_STATE).unwrap(),
-        r##"[1,true,true,true,3,true,true,"auto","#one",true,true]"##
+        r##"[1,true,true,true,3,true,true,"manual","#one",true,true]"##
     );
     assert_eq!(vm.eval("String(history.state.value)").unwrap(), "1");
     vm.eval_in_isolated_context(later, "history.forward(); 'queued'")
@@ -212,7 +212,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     );
     assert_eq!(
         vm.eval_in_isolated_context(isolated, READ_CHILD).unwrap(),
-        "child:auto:#child"
+        "child:manual:#child"
     );
     vm.eval_in_isolated_context(isolated, "history.forward(); 'queued'")
         .unwrap();
@@ -331,4 +331,79 @@ fn history_worlds_share_primitive_state_without_coercion() {
         vm.eval_in_isolated_context(isolated, &update).unwrap();
         assert_eq!(vm.eval(&check).unwrap(), "true", "state: {state}");
     }
+}
+
+#[test]
+fn history_native_snapshot_survives_isolate_replacement_with_structured_values() {
+    let seed = {
+        let mut vm = new_storage_test_vm("https://example.com/base");
+        vm.eval(r##"
+            globalThis.jsonHooks = 0;
+            Object.defineProperty(Object.prototype, 'toJSON', {configurable: true, get() {
+                jsonHooks++;
+                throw new Error('history must not call toJSON');
+            }});
+            const state = {map: new Map([['answer', 42n]]), bytes: new Uint8Array([3, 4]), missing: undefined, zero: -0, blob: new Blob(['native'], {type: 'text/plain'})};
+            state.self = state;
+            history.replaceState(state, '', '#saved');
+            history.scrollRestoration = 'manual';
+            navigation.updateCurrentEntry({state: new Set([7n])});
+            history.state.map.set('answer', 99n);
+            location.href = '/next';
+            'queued'
+        "##).unwrap();
+        let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+        assert_eq!(vm.eval("String(jsonHooks)").unwrap(), "0");
+        let mut seed = pending.entry_seed.unwrap();
+        seed.current_index = seed
+            .entries
+            .iter()
+            .find(|entry| entry.url.ends_with("#saved"))
+            .unwrap()
+            .history_index;
+        seed.activation = None;
+        seed
+    };
+    // The source VM (including its isolate and all JS objects) is gone.
+    let mut restored = new_storage_test_vm("https://example.com/base#saved");
+    restored.install_navigation_bootstrap_entry(Some(seed));
+    let isolated = restored
+        .create_isolated_world("restored-history", false)
+        .unwrap();
+    const READ: &str = r#"JSON.stringify([
+        history.state.map instanceof Map,
+        history.state.map.get('answer') === 42n,
+        history.state.bytes instanceof Uint8Array,
+        history.state.bytes[1] === 4,
+        'missing' in history.state && history.state.missing === undefined,
+        Object.is(history.state.zero, -0),
+        history.state.self === history.state,
+        history.scrollRestoration,
+        navigation.currentEntry.getState().has(7n),
+        history.state.blob instanceof Blob && history.state.blob.size === 6 && history.state.blob.type === 'text/plain'
+    ])"#;
+    assert_eq!(
+        restored.eval(READ).unwrap(),
+        r#"[true,true,true,true,true,true,true,"manual",true,true]"#
+    );
+    assert_eq!(
+        restored.eval_in_isolated_context(isolated, READ).unwrap(),
+        r#"[true,true,true,true,true,true,true,"manual",true,true]"#
+    );
+}
+
+#[test]
+fn history_native_fragment_navigation_preserves_structured_navigation_state() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r##"
+        history.replaceState({value: 5n}, '');
+        navigation.updateCurrentEntry({state: new Map([['value', 9n]])});
+        globalThis.retained = navigation.currentEntry;
+        location.hash = '#next';
+        'changed'
+    "##,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("String(history.state.value === 5n && navigation.currentEntry.getState().get('value') === 9n && retained.getState().get('value') === 9n)").unwrap(), "true");
 }

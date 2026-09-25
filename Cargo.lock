@@ -2720,6 +2720,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-history"
+version = "0.1.0"
+dependencies = [
+ "moli-session-history",
+ "moli-structured-clone",
+]
+
+[[package]]
 name = "moli-html-input-temporal"
 version = "0.1.0"
 dependencies = [
@@ -2888,6 +2896,7 @@ dependencies = [
  "moli-disk-pool",
  "moli-dom",
  "moli-fetch",
+ "moli-history",
  "moli-parkable-image",
  "moli-session-history",
  "moli-web-mime",
@@ -3094,6 +3103,7 @@ dependencies = [
  "moli-fetch",
  "moli-file-api",
  "moli-geometry",
+ "moli-history",
  "moli-html2md",
  "moli-http-cache",
  "moli-image",

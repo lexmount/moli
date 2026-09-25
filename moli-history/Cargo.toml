@@ -1,0 +1,13 @@
+[package]
+license.workspace = true
+name = "moli-history"
+version = "0.1.0"
+edition = "2024"
+description = "Native Window history records and state for Moli"
+
+[dependencies]
+moli-session-history = { path = "../moli-session-history" }
+moli-structured-clone = { path = "../moli-structured-clone" }
+
+[lints]
+workspace = true

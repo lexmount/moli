@@ -2,8 +2,8 @@ use super::super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, sync_location_object,
 };
 use super::super::navigation_entry::{
-    history_entries, history_index, navigation_current_entry, navigation_entries_share_document,
-    navigation_entry_url_value, set_history_index, set_history_state,
+    cache_current_history_state, history_entries, history_index, navigation_current_entry,
+    navigation_entries_share_document, navigation_entry_url_value, set_history_index,
     sync_navigation_current_entry_from_history_entry,
 };
 use super::super::navigation_events::{
@@ -87,7 +87,7 @@ pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
         mut applied,
     } = prepared;
     set_history_index(scope, history, applied.history_index);
-    set_history_state(scope, history, applied.state);
+    cache_current_history_state(scope, history, applied.state);
     sync_location_object(scope, location, &applied.url);
     sync_navigation_current_entry_from_history_entry(scope, applied.owner, applied.entry);
     applied.resolved_entry = navigation_current_entry(scope, applied.owner)

@@ -1,3 +1,4 @@
+use super::super::history_runtime::state::{push_history_entry, replace_history_entry};
 use super::*;
 
 pub(crate) fn apply_local_window_location_navigation<'s>(
@@ -19,14 +20,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
 
     match kind {
         LocationNavigationKind::Assign => {
-            let next_index = current_index + 1;
             let next_navigation_index = current_navigation_index + 1;
-            let next_entries = v8::Array::new(scope, (current_index + 2) as i32);
-            for index in 0..=current_index {
-                if let Some(entry) = entries.get_index(scope, index) {
-                    let _ = next_entries.set_index(scope, index, entry);
-                }
-            }
             let state = v8::null(scope).into();
             let next_entry = create_navigation_entry(
                 scope,
@@ -41,9 +35,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, next_entry, document_id.as_str());
             bind_navigation_entry_runtime_owner(scope, next_entry, owner);
-            let _ = next_entries.set_index(scope, next_index, next_entry.into());
-            set_history_entries(scope, history, next_entries);
-            set_history_index(scope, history, next_index);
+            let _ = push_history_entry(scope, history, next_entry);
             if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
                 scope, owner,
             )
@@ -56,7 +48,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                     moli_page_types::SessionHistoryCommit::Push,
                 );
             }
-            set_history_state(scope, history, state);
+            cache_current_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, next_entry);
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));
         }
@@ -79,9 +71,8 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, entry, document_id.as_str());
             bind_navigation_entry_runtime_owner(scope, entry, owner);
-            let _ = entries.set_index(scope, current_index, entry.into());
-            set_history_entries(scope, history, entries);
-            set_history_state(scope, history, state);
+            replace_history_entry(scope, history, entry);
+            cache_current_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, entry);
             if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
                 scope, owner,

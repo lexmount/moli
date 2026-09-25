@@ -5,15 +5,13 @@ use super::navigation_activation::{
     set_navigation_current_entry,
 };
 use super::navigation_entry::{
-    copy_navigation_entry_document_id, create_navigation_entry, history_entries, history_index,
-    navigation_current_entry, navigation_current_entry_index, navigation_entry_key_value,
-    navigation_entry_url_value, new_navigation_entry_id, new_navigation_entry_key,
-    set_history_entries, set_history_index, set_history_state, set_navigation_entry_document_id,
-    stringify_history_state, sync_navigation_current_entry_from_history_entry,
+    cache_current_history_state, copy_navigation_entry_document_id, create_navigation_entry,
+    history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
+    navigation_entry_key_value, navigation_entry_url_value, new_navigation_entry_id,
+    new_navigation_entry_key, set_navigation_entry_document_id,
+    sync_navigation_current_entry_from_history_entry,
 };
-use super::navigation_entry_state::{
-    clone_history_entry_state, clone_navigation_entry_state, set_navigation_entry_state,
-};
+use super::navigation_entry_state::{copy_entry_serialized_states, set_navigation_entry_state};
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_entry_dispose,
     refresh_navigation_destination_indexes,

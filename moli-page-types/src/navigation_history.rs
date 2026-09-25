@@ -47,7 +47,13 @@ fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistor
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationHistorySerializedEntry {
     pub url: String,
+    /// Authoritative structured state, preserved across renderer replacement.
+    pub history_state: Option<moli_history::SerializedScriptValue>,
+    pub navigation_state: Option<moli_history::SerializedScriptValue>,
+    pub scroll_restoration: moli_history::ScrollRestoration,
+    /// Legacy/bootstrap input only; native snapshots use `history_state`.
     pub history_state_json: Option<String>,
+    /// Legacy/bootstrap input only; native snapshots use `navigation_state`.
     pub navigation_state_json: Option<String>,
     pub referrer_policy: Option<String>,
     pub document_id: NavigationHistoryDocumentId,
@@ -516,6 +522,9 @@ fn navigation_history_entry(
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: url.to_owned(),
+        history_state: None,
+        navigation_state: None,
+        scroll_restoration: Default::default(),
         history_state_json,
         navigation_state_json,
         referrer_policy: None,

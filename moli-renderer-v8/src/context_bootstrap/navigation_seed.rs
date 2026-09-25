@@ -2,8 +2,8 @@ use super::location_runtime::is_same_document_fragment_navigation;
 use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_entry::{
     create_navigation_entry, history_index, set_navigation_entry_document_id,
-    stringify_history_state,
 };
+use super::navigation_entry_state::{set_history_entry_state, set_navigation_entry_state};
 use super::navigation_serialize::{
     apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
 };
@@ -47,6 +47,7 @@ pub(super) fn build_history_entries_array_from_seed<'s>(
             &snapshot.key,
         );
         set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
+        super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         let _ = entries.set_index(scope, snapshot.history_index, entry.into());
     }
@@ -64,19 +65,20 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         .iter()
         .find(|entry| entry.history_index == seed.current_index)
     else {
-        let fallback_state_json = stringify_history_state(scope, fallback_state);
         let entry_id = NavigationHistoryEntryId::allocate();
         let entry_key = NavigationHistoryEntryKey::allocate();
         let entry = create_navigation_entry(
             scope,
             "about:blank",
-            fallback_state_json.as_deref(),
-            fallback_state_json.as_deref(),
+            None,
+            None,
             None,
             0,
             entry_id.as_str(),
             entry_key.as_str(),
         );
+        set_history_entry_state(scope, entry, fallback_state);
+        set_navigation_entry_state(scope, entry, fallback_state);
         let document_id = NavigationHistoryDocumentId::allocate();
         set_navigation_entry_document_id(scope, entry, document_id.as_str());
         bind_navigation_entry_runtime_owner(scope, entry, owner);
@@ -93,6 +95,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         &snapshot.key,
     );
     set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
+    super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
     bind_navigation_entry_runtime_owner(scope, entry, owner);
     entry
 }

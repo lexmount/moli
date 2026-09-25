@@ -1,11 +1,6 @@
 use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
-    history_entries, history_index, navigation_current_entry, navigation_entry_document_id,
-    navigation_entry_id_value, navigation_entry_key_value, navigation_entry_referrer_policy_value,
-    navigation_entry_url_value,
-};
-use super::navigation_entry_state::{
-    history_entry_state_snapshot, navigation_entry_state_snapshot,
+    history_index, navigation_current_entry, navigation_entry_referrer_policy_value,
 };
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
@@ -101,45 +96,51 @@ pub(super) fn serialize_navigation_entry_object<'s>(
     entry: v8::Local<'s, v8::Object>,
     history_entries: &[NavigationHistorySerializedEntry],
 ) -> NavigationHistorySerializedEntry {
-    let id = navigation_entry_id_value(scope, entry)
-        .map(NavigationHistoryEntryId::from_serialized)
-        .unwrap_or_else(NavigationHistoryEntryId::allocate);
-    let key = navigation_entry_key_value(scope, entry)
-        .map(NavigationHistoryEntryKey::from_serialized)
-        .unwrap_or_else(NavigationHistoryEntryKey::allocate);
+    let Some(record) = super::history_runtime::native::entry(scope, entry) else {
+        return NavigationHistorySerializedEntry {
+            url: "about:blank".to_owned(),
+            history_state: None,
+            navigation_state: None,
+            history_state_json: None,
+            navigation_state_json: None,
+            scroll_restoration: Default::default(),
+            referrer_policy: None,
+            document_id: NavigationHistoryDocumentId::allocate(),
+            history_index: 0,
+            index: 0,
+            id: NavigationHistoryEntryId::allocate(),
+            key: NavigationHistoryEntryKey::allocate(),
+        };
+    };
+    let record = record.borrow();
     if let Some(snapshot) = history_entries
         .iter()
-        .find(|snapshot| snapshot.id == id && snapshot.key == key)
+        .find(|snapshot| snapshot.id.as_str() == record.id && snapshot.key == record.key)
     {
         return snapshot.clone();
     }
-    let url = navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
-    let history_state_json = history_entry_state_snapshot(scope, entry)
-        .and_then(|value| v8::json::stringify(scope, value))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| value != "null");
-    let navigation_state_json = navigation_entry_state_snapshot(scope, entry)
-        .and_then(|value| v8::json::stringify(scope, value))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| value != "null");
-    let entry_index = get_own_static_property(scope, entry, "index")
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
-    let document_id = navigation_entry_document_id(scope, entry)
-        .map(NavigationHistoryDocumentId::from_serialized)
-        .unwrap_or_else(NavigationHistoryDocumentId::allocate);
+    snapshot_native_entry(&record, record.index)
+}
+
+fn snapshot_native_entry(
+    entry: &moli_history::HistoryEntry,
+    history_index: u32,
+) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
-        url,
-        history_state_json,
-        navigation_state_json,
-        referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
-        document_id,
-        history_index: entry_index,
-        index: entry_index,
-        id,
-        key,
+        url: entry.url.clone(),
+        history_state: entry.history_state.clone(),
+        navigation_state: entry.navigation_state.clone(),
+        // JSON is accepted only for legacy/bootstrap seeds. Capturing a native
+        // snapshot never deserializes state or invokes script's toJSON hooks.
+        history_state_json: None,
+        navigation_state_json: None,
+        scroll_restoration: entry.scroll_restoration,
+        referrer_policy: entry.referrer_policy.clone(),
+        document_id: entry.document.clone(),
+        history_index,
+        index: entry.index,
+        id: NavigationHistoryEntryId::from_serialized(entry.id.clone()),
+        key: entry.key.clone(),
     }
 }
 
@@ -199,57 +200,16 @@ pub(super) fn serialize_history_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> Vec<NavigationHistorySerializedEntry> {
-    let Some(entries) = history_entries(scope, history) else {
+    let Some(record) = super::history_runtime::native::history(scope, history) else {
         return Vec::new();
     };
-    let mut snapshots = Vec::new();
-    for index in 0..entries.length() {
-        let Some(entry) = entries
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        let url =
-            navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
-        let history_state_json = history_entry_state_snapshot(scope, entry)
-            .and_then(|value| v8::json::stringify(scope, value))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| value != "null");
-        let navigation_state_json = navigation_entry_state_snapshot(scope, entry)
-            .and_then(|value| v8::json::stringify(scope, value))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| value != "null");
-        let entry_index = get_own_static_property(scope, entry, "index")
-            .and_then(|value| value.integer_value(scope))
-            .filter(|value| *value >= 0)
-            .map(|value| value as u32)
-            .unwrap_or(index);
-        // Public Navigation getters may hide entries from an inactive view.
-        // Persist their stored identities so restoration still matches the
-        // shared session history, including a popup's forward entries.
-        let id = navigation_entry_id_value(scope, entry)
-            .map(NavigationHistoryEntryId::from_serialized)
-            .unwrap_or_else(NavigationHistoryEntryId::allocate);
-        let key = navigation_entry_key_value(scope, entry)
-            .map(NavigationHistoryEntryKey::from_serialized)
-            .unwrap_or_else(NavigationHistoryEntryKey::allocate);
-        let document_id = navigation_entry_document_id(scope, entry)
-            .map(NavigationHistoryDocumentId::from_serialized)
-            .unwrap_or_else(NavigationHistoryDocumentId::allocate);
-        snapshots.push(NavigationHistorySerializedEntry {
-            url,
-            history_state_json,
-            navigation_state_json,
-            referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
-            document_id,
-            history_index: index,
-            index: entry_index,
-            id,
-            key,
-        });
-    }
-    snapshots
+    record
+        .borrow()
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| snapshot_native_entry(&entry.borrow(), index as u32))
+        .collect()
 }
 
 pub(super) fn apply_current_document_referrer_policy_to_entry_snapshots<'s>(

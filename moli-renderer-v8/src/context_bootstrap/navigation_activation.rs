@@ -147,6 +147,7 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
         &snapshot.key,
     );
     set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
+    super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
     bind_navigation_entry_runtime_owner(scope, entry, owner);
     entry
 }
@@ -168,6 +169,7 @@ pub(super) fn bind_navigation_entry_runtime_owner<'s>(
     owner: v8::Local<'s, v8::Object>,
 ) {
     set_runtime_window_owner(scope, entry, owner);
+    super::history_runtime::native::cache_entry(scope, owner, entry);
 }
 
 pub(super) fn create_navigation_activation_object<'s>(

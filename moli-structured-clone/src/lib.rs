@@ -6,5 +6,7 @@
 //! services such as MessagePort and BroadcastChannel.
 
 mod payload;
+mod stored;
 
 pub use payload::{StructuredCloneBytes, TransferredArrayBuffer};
+pub use stored::SerializedScriptValue;

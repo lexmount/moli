@@ -1,8 +1,9 @@
-use super::super::history_runtime::state::{
-    HISTORY_BACKING_SLOT, new_history_backing, shared_history_backing, window_has_shared_history,
+use super::super::history_runtime::{
+    native,
+    state::{history_window_owner, window_has_shared_history},
 };
 use super::super::navigation_entry::{
-    history_entries, history_index, set_history_scroll_restoration, set_history_state,
+    cache_current_history_state, history_entries, history_index, set_history_scroll_restoration,
 };
 use super::accessors::{
     install_history_prototype_accessors, install_navigation_prototype_accessors,
@@ -15,10 +16,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::History)]
-struct HistoryRuntimeObjectDeclaration<'scope> {
-    #[webapi(slot = HISTORY_BACKING_SLOT)]
-    backing: v8::Local<'scope, v8::Object>,
-}
+struct HistoryRuntimeObjectDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Navigation)]
@@ -47,16 +45,31 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
     if let Some(prototype) = global_constructor_prototype(scope, "History") {
         install_history_prototype_accessors(scope, prototype);
     }
-    let backing = if window_has_shared_history(scope, window) {
-        shared_history_backing(scope, window)
-            .ok_or_else(|| anyhow::anyhow!("isolated History is missing its Window's backing"))?
+    let record = if window_has_shared_history(scope, window) {
+        let owner = history_window_owner(scope, window);
+        super::super::navigation_window::window_history_for_holder(scope, owner)
+            .and_then(|history| native::history(scope, history))
+            .ok_or_else(|| {
+                anyhow::anyhow!("isolated History is missing its native Window history")
+            })?
     } else {
         let entries = build_history_entries_array_from_seed(scope, window, initial_seed);
-        new_history_backing(scope, entries, initial_seed.current_index)
+        let records = (0..entries.length())
+            .filter_map(|index| {
+                let entry = entries.get_index(scope, index)?;
+                let entry = v8::Local::<v8::Object>::try_from(entry).ok()?;
+                native::entry(scope, entry)
+            })
+            .collect();
+        std::rc::Rc::new(std::cell::RefCell::new(moli_history::WindowHistory::new(
+            records,
+            initial_seed.current_index,
+        )))
     };
-    let history = HistoryRuntimeObjectDeclaration::new(backing)
+    let history = HistoryRuntimeObjectDeclaration::new()
         .bind(scope)
         .map_err(anyhow::Error::from)?;
+    native::bind_history(scope, history, record);
     Ok(history)
 }
 
@@ -124,5 +137,5 @@ pub(in crate::context_bootstrap) fn install_history_state_runtime_state<'s>(
     history: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    set_history_state(scope, history, state);
+    cache_current_history_state(scope, history, state);
 }

@@ -64,6 +64,45 @@ impl V8StructuredClonePayload {
 }
 
 #[derive(Clone)]
+struct StoredCloneAttachments {
+    blobs: Vec<ClonedBlob>,
+    file_system_handles: Vec<ClonedFileSystemHandle>,
+}
+
+/// History retains serialized bytes and native capabilities, never a live JS
+/// graph. Storage serialization rejects transferred objects and Wasm modules.
+pub(crate) fn serialize_history_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<moli_history::SerializedScriptValue> {
+    let payload = serialize_for_wire_for_storage(scope, value)?;
+    Some(moli_history::SerializedScriptValue::new(
+        payload.base.wire_bytes,
+        StoredCloneAttachments {
+            blobs: payload.blobs,
+            file_system_handles: payload.file_system_handles,
+        },
+    ))
+}
+
+pub(crate) fn deserialize_history_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &moli_history::SerializedScriptValue,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let attachments = value.attachments::<StoredCloneAttachments>()?;
+    let payload = V8StructuredClonePayload {
+        base: StructuredCloneWireBytes {
+            wire_bytes: value.bytes().to_vec(),
+            ..Default::default()
+        },
+        blobs: attachments.blobs.clone(),
+        file_system_handles: attachments.file_system_handles.clone(),
+        ..Default::default()
+    };
+    deserialize_from_wire(scope, &payload)
+}
+
+#[derive(Clone)]
 struct ClonedWasmModule {
     clone_id: u32,
     compiled_module: Arc<v8::CompiledWasmModule>,

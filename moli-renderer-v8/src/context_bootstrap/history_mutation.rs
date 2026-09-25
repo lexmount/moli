@@ -1,14 +1,15 @@
 use super::history_runtime::require_fully_active_history_owner;
+use super::history_runtime::state::{push_history_entry, replace_history_entry};
 use super::location_runtime::{location_href_slot, sync_location_object};
 use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
 use super::navigation_entry::{
-    copy_navigation_entry_document_id, create_navigation_entry, history_entries, history_index,
+    cache_current_history_state, copy_navigation_entry_document_id, create_navigation_entry,
     navigation_current_entry, navigation_current_entry_index, navigation_entry_key_value,
-    new_navigation_entry_id, new_navigation_entry_key, set_history_entries, set_history_index,
-    set_history_state, stringify_history_state, sync_navigation_current_entry_from_history_entry,
+    new_navigation_entry_id, new_navigation_entry_key,
+    sync_navigation_current_entry_from_history_entry,
 };
-use super::navigation_entry_state::{clone_history_entry_state, set_history_entry_state};
+use super::navigation_entry_state::clone_history_entry_state;
 use super::navigation_events::{
     cancel_active_navigation_event, dispatch_navigation_currententrychange,
     dispatch_navigation_entry_dispose, dispatch_navigation_navigate_event_with_outcome,
@@ -26,6 +27,7 @@ use super::navigation_window::{
     runtime_window_is_global, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
+use crate::structured_clone::{deserialize_history_state, serialize_history_state};
 use crate::webidl;
 
 struct ParsedHistoryMutationArgs<'s> {
@@ -105,7 +107,7 @@ fn mutate_history_object<'s>(
     let Some(owner) = require_fully_active_history_owner(scope, history) else {
         return;
     };
-    let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
+    let Some(snapshot) = serialize_history_state(scope, parsed.state) else {
         return;
     };
     // Argument conversion/serialization belongs to the caller. Entry objects
@@ -114,7 +116,9 @@ fn mutate_history_object<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let state_json = stringify_history_state(scope, state);
+    let Some(state) = deserialize_history_state(scope, &snapshot) else {
+        return;
+    };
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;
     };
@@ -184,33 +188,16 @@ fn mutate_history_object<'s>(
         navigate_outcome = Some(outcome);
     }
 
-    let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
-    let current_index = history_index(scope, history);
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
     let previous_entry = navigation_current_entry(scope, owner);
     let mut pruned = Vec::new();
     let entry = match kind {
         HistoryMutationKind::Push => {
-            for index in current_index + 1..entries.length() {
-                if let Some(entry) = entries
-                    .get_index(scope, index)
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                {
-                    pruned.push(entry);
-                }
-            }
-            let next_entries = v8::Array::new(scope, (current_index + 2) as i32);
-            for index in 0..=current_index {
-                if let Some(entry) = entries.get_index(scope, index) {
-                    let _ = next_entries.set_index(scope, index, entry);
-                }
-            }
-            let next_index = current_index + 1;
             let next_navigation_index = current_navigation_index + 1;
             let entry = create_navigation_entry(
                 scope,
                 url.as_str(),
-                state_json.as_deref(),
+                None,
                 None,
                 None,
                 next_navigation_index,
@@ -221,9 +208,7 @@ fn mutate_history_object<'s>(
                 copy_navigation_entry_document_id(scope, previous_entry, entry);
             }
             bind_navigation_entry_runtime_owner(scope, entry, owner);
-            let _ = next_entries.set_index(scope, next_index, entry.into());
-            set_history_entries(scope, history, next_entries);
-            set_history_index(scope, history, next_index);
+            pruned = push_history_entry(scope, history, entry);
             entry
         }
         HistoryMutationKind::Replace => {
@@ -233,7 +218,7 @@ fn mutate_history_object<'s>(
             let entry = create_navigation_entry(
                 scope,
                 url.as_str(),
-                state_json.as_deref(),
+                None,
                 None,
                 None,
                 current_navigation_index,
@@ -244,19 +229,18 @@ fn mutate_history_object<'s>(
                 copy_navigation_entry_document_id(scope, previous_entry, entry);
             }
             bind_navigation_entry_runtime_owner(scope, entry, owner);
-            let _ = entries.set_index(scope, current_index, entry.into());
-            set_history_entries(scope, history, entries);
+            replace_history_entry(scope, history, entry);
             entry
         }
     };
-    // `history.state` is a structured-clone value, not a JSON value. Keep the
-    // live entry's cloned snapshot authoritative even when the optional
-    // cross-runtime JSON projection cannot represent values such as Map,
-    // ArrayBuffer, or BigInt.
-    set_history_entry_state(scope, entry, state);
+    // Keep the pre-event serialized snapshot authoritative even if a callback
+    // has modified an exposed JS value during the navigation.
+    if let Some(record) = super::history_runtime::native::entry(scope, entry) {
+        record.borrow_mut().history_state = Some(snapshot);
+    }
     let current_state =
         clone_history_entry_state(scope, entry).unwrap_or_else(|| v8::null(scope).into());
-    set_history_state(scope, history, current_state);
+    cache_current_history_state(scope, history, current_state);
     sync_location_object(scope, location, url.as_str());
     sync_navigation_current_entry_from_history_entry(scope, owner, entry);
     super::session_history::commit(

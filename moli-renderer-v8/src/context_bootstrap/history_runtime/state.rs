@@ -1,35 +1,14 @@
-//! One History implementation per Window, with realm-local public wrappers.
-//!
-//! The private backing object keeps V8 payloads in the GC graph. Wrappers share
-//! it rather than copying entry identities, the cursor, or restoration policy.
-//! Only the deserialized `history.state` cache belongs to a particular wrapper.
+//! Native History state with realm-local caches of deserialized JS values.
 
-use super::super::navigation_window::window_history_for_holder;
-use super::super::structured_clone_value;
+use super::super::navigation_window::runtime_window_owner;
+use super::native;
+use crate::structured_clone::deserialize_history_state;
 use crate::util::{get_private_value, private_key, set_private_value, v8_string};
-use moli_webapi_declare::WebApiObject;
+use moli_history::ScrollRestoration;
 
-pub(in crate::context_bootstrap) const HISTORY_BACKING_SLOT: &str = "__moliHistoryBacking";
 const WINDOW_HISTORY_OWNER_SLOT: &str = "__moliWindowHistoryOwner";
-const ENTRIES_SLOT: &str = "entries";
-const INDEX_SLOT: &str = "index";
-const STATE_SLOT: &str = "state";
-const SCROLL_RESTORATION_SLOT: &str = "scrollRestoration";
-const CACHED_SNAPSHOT_SLOT: &str = "__moliHistoryCachedSnapshot";
+const CACHED_REVISION_SLOT: &str = "__moliHistoryCachedRevision";
 const CACHED_STATE_SLOT: &str = "__moliHistoryCachedState";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct HistoryBackingDeclaration<'scope> {
-    #[webapi(slot = ENTRIES_SLOT)]
-    entries: v8::Local<'scope, v8::Array>,
-    #[webapi(slot = INDEX_SLOT)]
-    index: f64,
-    #[webapi(slot = STATE_SLOT)]
-    state: v8::Local<'scope, v8::Value>,
-    #[webapi(slot = SCROLL_RESTORATION_SLOT)]
-    scroll_restoration: &'static str,
-}
 
 /// Bind once during realm creation; never resolve an old wrapper to a new
 /// document's current Window by looking up its frame at call time.
@@ -57,43 +36,20 @@ pub(in crate::context_bootstrap) fn window_has_shared_history<'s>(
     !history_window_owner(scope, window).strict_equals(window.into())
 }
 
-pub(in crate::context_bootstrap) fn shared_history_backing<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if !window_has_shared_history(scope, window) {
-        return None;
-    }
-    let owner = history_window_owner(scope, window);
-    let history = window_history_for_holder(scope, owner)?;
-    backing(scope, history)
-}
-
-pub(in crate::context_bootstrap) fn new_history_backing<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entries: v8::Local<'s, v8::Array>,
-    index: u32,
-) -> v8::Local<'s, v8::Object> {
-    HistoryBackingDeclaration::new(entries, index as f64, v8::null(scope).into(), "auto")
-        .bind(scope)
-        .expect("History backing declaration should bind")
-}
-
-fn backing<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_value(scope, history, HISTORY_BACKING_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
 pub(in crate::context_bootstrap) fn history_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let backing = backing(scope, history)?;
-    get_private_value(scope, backing, ENTRIES_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    let record = native::history(scope, history)?;
+    let entries = record.borrow().entries().to_vec();
+    let owner = runtime_window_owner(scope, history);
+    // This array is a binding projection. The native vector is authoritative.
+    let array = v8::Array::new(scope, entries.len() as i32);
+    for (index, entry) in entries.into_iter().enumerate() {
+        let wrapper = native::entry_wrapper(scope, owner, entry);
+        let _ = array.set_index(scope, index as u32, wrapper.into());
+    }
+    Some(array)
 }
 
 pub(in crate::context_bootstrap) fn set_history_entries<'s>(
@@ -101,19 +57,76 @@ pub(in crate::context_bootstrap) fn set_history_entries<'s>(
     history: v8::Local<'s, v8::Object>,
     entries: v8::Local<'s, v8::Array>,
 ) {
-    if let Some(backing) = backing(scope, history) {
-        set_private_value(scope, backing, ENTRIES_SLOT, entries.into());
+    let Some(record) = native::history(scope, history) else {
+        return;
+    };
+    let owner = runtime_window_owner(scope, history);
+    let mut native_entries = Vec::with_capacity(entries.length() as usize);
+    for index in 0..entries.length() {
+        let Some(wrapper) = entries
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            return;
+        };
+        let Some(entry) = native::entry(scope, wrapper) else {
+            return;
+        };
+        super::super::navigation_activation::bind_navigation_entry_runtime_owner(
+            scope, wrapper, owner,
+        );
+        native_entries.push(entry);
     }
+    native::prune_entry_wrappers(scope, owner, &native_entries);
+    record.borrow_mut().restore_entries(native_entries);
+}
+
+pub(in crate::context_bootstrap) fn push_history_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+    wrapper: v8::Local<'s, v8::Object>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let Some(record) = native::history(scope, history) else {
+        return Vec::new();
+    };
+    let Some(entry) = native::entry(scope, wrapper) else {
+        return Vec::new();
+    };
+    let owner = runtime_window_owner(scope, history);
+    super::super::navigation_activation::bind_navigation_entry_runtime_owner(scope, wrapper, owner);
+    let removed = record.borrow_mut().push(entry);
+    let removed = removed
+        .into_iter()
+        .map(|entry| native::entry_wrapper(scope, owner, entry))
+        .collect();
+    let retained = record.borrow().entries().to_vec();
+    native::prune_entry_wrappers(scope, owner, &retained);
+    removed
+}
+
+pub(in crate::context_bootstrap) fn replace_history_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+    wrapper: v8::Local<'s, v8::Object>,
+) {
+    let Some(record) = native::history(scope, history) else {
+        return;
+    };
+    let Some(entry) = native::entry(scope, wrapper) else {
+        return;
+    };
+    let owner = runtime_window_owner(scope, history);
+    super::super::navigation_activation::bind_navigation_entry_runtime_owner(scope, wrapper, owner);
+    record.borrow_mut().replace(entry);
+    let retained = record.borrow().entries().to_vec();
+    native::prune_entry_wrappers(scope, owner, &retained);
 }
 
 pub(in crate::context_bootstrap) fn history_index<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> u32 {
-    backing(scope, history)
-        .and_then(|backing| get_private_value(scope, backing, INDEX_SLOT))
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0)
+    native::history(scope, history).map_or(0, |record| record.borrow().current_index())
 }
 
 pub(in crate::context_bootstrap) fn set_history_index<'s>(
@@ -121,13 +134,8 @@ pub(in crate::context_bootstrap) fn set_history_index<'s>(
     history: v8::Local<'s, v8::Object>,
     index: u32,
 ) {
-    if let Some(backing) = backing(scope, history) {
-        set_private_value(
-            scope,
-            backing,
-            INDEX_SLOT,
-            v8::Integer::new_from_unsigned(scope, index).into(),
-        );
+    if let Some(record) = native::history(scope, history) {
+        record.borrow_mut().set_current_index(index);
     }
 }
 
@@ -135,8 +143,9 @@ pub(in crate::context_bootstrap) fn history_scroll_restoration_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let backing = backing(scope, history)?;
-    get_private_value(scope, backing, SCROLL_RESTORATION_SLOT)
+    let record = native::history(scope, history)?;
+    let value = record.borrow().scroll_restoration().as_str();
+    v8_string(scope, value).map(Into::into)
 }
 
 pub(in crate::context_bootstrap) fn set_history_scroll_restoration<'s>(
@@ -144,10 +153,11 @@ pub(in crate::context_bootstrap) fn set_history_scroll_restoration<'s>(
     history: v8::Local<'s, v8::Object>,
     value: &str,
 ) {
-    if let Some(backing) = backing(scope, history)
-        && let Some(value) = v8_string(scope, value)
-    {
-        set_private_value(scope, backing, SCROLL_RESTORATION_SLOT, value.into());
+    if let Some(record) = native::history(scope, history) {
+        record.borrow_mut().set_scroll_restoration(match value {
+            "manual" => ScrollRestoration::Manual,
+            _ => ScrollRestoration::Auto,
+        });
     }
 }
 
@@ -155,18 +165,19 @@ pub(in crate::context_bootstrap) fn history_state_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
-    let snapshot = backing(scope, history)
-        .and_then(|backing| {
-            let key = private_key(scope, STATE_SLOT)?;
-            backing.get_private(scope, key)
-        })
-        .unwrap_or_else(|| v8::null(scope).into());
-    if !snapshot.is_object() {
-        return snapshot;
-    }
-    if get_private_value(scope, history, CACHED_SNAPSHOT_SLOT)
-        .is_some_and(|cached| cached.same_value(snapshot))
-        && let Some(value) = get_private_value(scope, history, CACHED_STATE_SLOT)
+    let Some(record) = native::history(scope, history) else {
+        return v8::null(scope).into();
+    };
+    let (revision, snapshot) = {
+        let record = record.borrow();
+        (record.revision(), record.state())
+    };
+    let cached_revision = get_private_value(scope, history, CACHED_REVISION_SLOT)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .map(|value| value.u64_value().0);
+    if cached_revision == Some(revision)
+        && let Some(key) = private_key(scope, CACHED_STATE_SLOT)
+        && let Some(value) = history.get_private(scope, key)
     {
         return value;
     }
@@ -174,26 +185,42 @@ pub(in crate::context_bootstrap) fn history_state_value<'s>(
         return v8::null(scope).into();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let value = structured_clone_value(scope, snapshot).unwrap_or_else(|| v8::null(scope).into());
-    set_private_value(scope, history, CACHED_SNAPSHOT_SLOT, snapshot);
-    set_private_value(scope, history, CACHED_STATE_SLOT, value);
+    let value = snapshot
+        .as_ref()
+        .and_then(|state| deserialize_history_state(scope, state))
+        .unwrap_or_else(|| v8::null(scope).into());
+    cache_history_state(scope, history, revision, value);
     value
 }
 
-pub(in crate::context_bootstrap) fn set_history_state<'s>(
+fn cache_history_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+    revision: u64,
+    value: v8::Local<'s, v8::Value>,
+) {
+    set_private_value(
+        scope,
+        history,
+        CACHED_REVISION_SLOT,
+        v8::BigInt::new_from_u64(scope, revision).into(),
+    );
+    set_private_value(scope, history, CACHED_STATE_SLOT, value);
+}
+
+/// Cache an already deserialized value after a native history transition.
+/// The entry's serialized state stays authoritative and is never rewritten
+/// from a mutable JS cache during traversal.
+pub(in crate::context_bootstrap) fn cache_current_history_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let Some(backing) = backing(scope, history) else {
+    let Some(record) = native::history(scope, history) else {
         return;
     };
-    // The cache can be mutated by script (and is also popstate.state). Keep a
-    // separate snapshot so another realm never deserializes those mutations.
-    let snapshot = structured_clone_value(scope, state).unwrap_or_else(|| v8::null(scope).into());
-    set_private_value(scope, backing, STATE_SLOT, snapshot);
+    let revision = record.borrow().revision();
     if history.get_creation_context(scope) == Some(scope.get_current_context()) {
-        set_private_value(scope, history, CACHED_SNAPSHOT_SLOT, snapshot);
-        set_private_value(scope, history, CACHED_STATE_SLOT, state);
+        cache_history_state(scope, history, revision, state);
     }
 }

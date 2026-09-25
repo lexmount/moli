@@ -1,11 +1,10 @@
+use super::history_runtime::native;
 pub(super) use super::history_runtime::state::{
-    history_entries, history_index, history_scroll_restoration_value, history_state_value,
-    set_history_entries, set_history_index, set_history_scroll_restoration, set_history_state,
+    cache_current_history_state, history_entries, history_index, history_scroll_restoration_value,
+    history_state_value, set_history_entries, set_history_index, set_history_scroll_restoration,
 };
 use super::location_history_storage::{
-    HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT,
-    NAVIGATION_ENTRY_DOCUMENT_ID_SLOT, NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
-    NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
+    NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
 };
 use super::location_runtime::urls_refer_to_same_document;
 use super::navigation_activation::set_navigation_current_entry;
@@ -16,62 +15,31 @@ use super::navigation_window::{
     window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
-use crate::util::{get_private_value, set_private_value};
+use crate::util::get_private_value;
 use crate::web_api_interfaces;
+use moli_history::{HistoryEntry, HistoryEntryRef, ScrollRestoration};
 use moli_page_types::NavigationHistoryEntryId;
+use moli_session_history::NavigationHistoryDocumentId;
 use moli_session_history::NavigationHistoryEntryKey;
 use moli_webapi_declare::WebApiObject;
 
-const NAVIGATION_ENTRY_INITIAL_INDEX_SLOT: &str = "__lmNavigationEntryInitialIndex";
-const NAVIGATION_ENTRY_URL_SLOT: &str = "__lmNavigationEntryUrl";
-const NAVIGATION_ENTRY_REFERRER_POLICY_SLOT: &str = "__lmNavigationEntryReferrerPolicy";
-const NAVIGATION_ENTRY_ID_SLOT: &str = "__lmNavigationEntryId";
-const NAVIGATION_ENTRY_KEY_SLOT: &str = "__lmNavigationEntryKey";
-const NAVIGATION_ENTRY_SCROLL_X_SLOT: &str = "__lmNavigationEntryScrollX";
-const NAVIGATION_ENTRY_SCROLL_Y_SLOT: &str = "__lmNavigationEntryScrollY";
+#[derive(Clone, Copy)]
+enum EntryStringField {
+    Document,
+    Url,
+    ReferrerPolicy,
+    Id,
+    Key,
+}
 
 #[derive(WebApiObject)]
 #[webapi(
     interface = web_api_interfaces::NavigationHistoryEntry,
     own_to_string_tag = "NavigationHistoryEntry",
     readonly_to_string_tag,
-    enumerable,
-    scope_lifetime = 'scope
+    enumerable
 )]
-struct NavigationHistoryEntryObjectDeclaration<'scope, 'value> {
-    #[webapi(slot = NAVIGATION_ENTRY_URL_SLOT)]
-    stored_url: &'value str,
-
-    #[webapi(slot = NAVIGATION_ENTRY_REFERRER_POLICY_SLOT)]
-    stored_referrer_policy: Option<&'value str>,
-
-    #[webapi(slot = HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)]
-    history_snapshot: v8::Local<'scope, v8::Value>,
-
-    #[webapi(slot = NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT)]
-    navigation_snapshot: v8::Local<'scope, v8::Value>,
-
-    #[webapi(slot = "state")]
-    exposed_state: v8::Local<'scope, v8::Value>,
-
-    #[webapi(slot = NAVIGATION_ENTRY_INITIAL_INDEX_SLOT)]
-    initial_index: f64,
-
-    #[webapi(slot = NAVIGATION_ENTRY_SCROLL_X_SLOT, init = "undefined")]
-    scroll_x: (),
-
-    #[webapi(slot = NAVIGATION_ENTRY_SCROLL_Y_SLOT, init = "undefined")]
-    scroll_y: (),
-
-    #[webapi(slot = NAVIGATION_ENTRY_ID_SLOT)]
-    public_id: &'value str,
-
-    #[webapi(slot = NAVIGATION_ENTRY_KEY_SLOT)]
-    public_key: &'value str,
-
-    #[webapi(slot = NAVIGATION_ENTRY_DOCUMENT_ID_SLOT)]
-    document_id: &'value str,
-
+struct NavigationHistoryEntryObjectDeclaration {
     #[webapi(accessor_property, getter = navigation_entry_url_getter)]
     url: (),
 
@@ -97,20 +65,9 @@ struct NavigationHistoryEntryObjectDeclaration<'scope, 'value> {
 fn finite_window_number_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    slot: &'static str,
+    slot: &str,
 ) -> Option<f64> {
     get_private_value(scope, object, slot)
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite())
-}
-
-fn finite_navigation_entry_number_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> Option<f64> {
-    navigation_entry_slot_value(scope, entry, slot)
-        .filter(|value| !value.is_undefined())
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite())
 }
@@ -135,8 +92,9 @@ pub(super) fn save_current_navigation_entry_scroll_position<'s>(
     };
     let scroll_x = finite_window_number_slot(scope, owner, WINDOW_SCROLL_X_SLOT).unwrap_or(0.0);
     let scroll_y = finite_window_number_slot(scope, owner, WINDOW_SCROLL_Y_SLOT).unwrap_or(0.0);
-    set_navigation_entry_number_slot(scope, entry, NAVIGATION_ENTRY_SCROLL_X_SLOT, scroll_x);
-    set_navigation_entry_number_slot(scope, entry, NAVIGATION_ENTRY_SCROLL_Y_SLOT, scroll_y);
+    if let Some(entry) = native::entry(scope, entry) {
+        entry.borrow_mut().scroll_offset = Some((scroll_x, scroll_y));
+    }
 }
 
 pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
@@ -146,13 +104,8 @@ pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
     let Some(entry) = navigation_current_entry(scope, owner) else {
         return false;
     };
-    let Some(scroll_x) =
-        finite_navigation_entry_number_slot(scope, entry, NAVIGATION_ENTRY_SCROLL_X_SLOT)
-    else {
-        return false;
-    };
-    let Some(scroll_y) =
-        finite_navigation_entry_number_slot(scope, entry, NAVIGATION_ENTRY_SCROLL_Y_SLOT)
+    let Some((scroll_x, scroll_y)) =
+        native::entry(scope, entry).and_then(|entry| entry.borrow().scroll_offset)
     else {
         return false;
     };
@@ -177,24 +130,35 @@ pub(super) fn create_navigation_entry<'s>(
         super::navigation_serialize::parse_history_entry_state(scope, history_state_json);
     let navigation_snapshot =
         super::navigation_serialize::parse_navigation_entry_state(scope, navigation_state_json);
-    let exposed_state = structured_clone_value(scope, navigation_snapshot)
-        .or(Some(navigation_snapshot))
-        .unwrap_or_else(|| v8::undefined(scope).into());
     let public_id = navigation_entry_public_token(id);
     let public_key = navigation_entry_public_token(key);
-    let entry = NavigationHistoryEntryObjectDeclaration::new(
-        url,
-        referrer_policy,
-        history_snapshot,
-        navigation_snapshot,
-        exposed_state,
-        index as f64,
-        &public_id,
-        &public_key,
-        &public_id,
-    )
-    .bind(scope)
-    .expect("NavigationHistoryEntry declaration should bind");
+    let entry = HistoryEntry {
+        url: url.to_owned(),
+        referrer_policy: referrer_policy.map(str::to_owned),
+        history_state: crate::structured_clone::serialize_history_state(scope, history_snapshot),
+        navigation_state: crate::structured_clone::serialize_history_state(
+            scope,
+            navigation_snapshot,
+        ),
+        id: public_id.clone(),
+        key: NavigationHistoryEntryKey::from_serialized(public_key),
+        document: NavigationHistoryDocumentId::from_serialized(public_id),
+        index,
+        scroll_restoration: ScrollRestoration::Auto,
+        scroll_offset: None,
+    }
+    .into_ref();
+    wrap_native_navigation_entry(scope, entry)
+}
+
+pub(in crate::context_bootstrap) fn wrap_native_navigation_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    record: HistoryEntryRef,
+) -> v8::Local<'s, v8::Object> {
+    let entry = NavigationHistoryEntryObjectDeclaration::new()
+        .bind(scope)
+        .expect("NavigationHistoryEntry declaration should bind");
+    native::bind_entry(scope, entry, record);
     super::media_queries::install_simple_event_target_methods(
         scope,
         entry,
@@ -216,31 +180,28 @@ pub(super) fn navigation_entry_key_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_KEY_SLOT)
+    navigation_entry_stored_string(scope, entry, EntryStringField::Key)
 }
 
 pub(super) fn navigation_entry_id_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_ID_SLOT)
+    navigation_entry_stored_string(scope, entry, EntryStringField::Id)
 }
 
 pub(super) fn navigation_entry_url_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_URL_SLOT)
+    navigation_entry_stored_string(scope, entry, EntryStringField::Url)
 }
 
 pub(super) fn navigation_entry_initial_index<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<u32> {
-    navigation_entry_slot_value(scope, entry, NAVIGATION_ENTRY_INITIAL_INDEX_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
+    native::entry(scope, entry).map(|entry| entry.borrow().index)
 }
 
 pub(super) fn set_navigation_entry_initial_index<'s>(
@@ -248,19 +209,16 @@ pub(super) fn set_navigation_entry_initial_index<'s>(
     entry: v8::Local<'s, v8::Object>,
     index: u32,
 ) {
-    set_navigation_entry_number_slot(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_INITIAL_INDEX_SLOT,
-        index as f64,
-    );
+    if let Some(entry) = native::entry(scope, entry) {
+        entry.borrow_mut().index = index;
+    }
 }
 
 pub(super) fn navigation_entry_referrer_policy_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_REFERRER_POLICY_SLOT)
+    navigation_entry_stored_string(scope, entry, EntryStringField::ReferrerPolicy)
 }
 
 pub(super) fn navigation_entry_public_token(token: &str) -> String {
@@ -305,7 +263,7 @@ pub(super) fn navigation_entry_document_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_DOCUMENT_ID_SLOT)
+    navigation_entry_stored_string(scope, entry, EntryStringField::Document)
 }
 
 pub(super) fn set_navigation_entry_document_id<'s>(
@@ -313,7 +271,10 @@ pub(super) fn set_navigation_entry_document_id<'s>(
     entry: v8::Local<'s, v8::Object>,
     document_id: &str,
 ) {
-    set_navigation_entry_string_slot(scope, entry, NAVIGATION_ENTRY_DOCUMENT_ID_SLOT, document_id);
+    if let Some(entry) = native::entry(scope, entry) {
+        entry.borrow_mut().document =
+            NavigationHistoryDocumentId::from_serialized(document_id.to_owned());
+    }
 }
 
 pub(super) fn copy_navigation_entry_document_id<'s>(
@@ -342,9 +303,8 @@ fn navigation_entry_get_state_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let this = args.this();
-    let state = navigation_entry_state_snapshot(scope, this)
-        .and_then(|snapshot| structured_clone_value(scope, snapshot).or(Some(snapshot)))
-        .unwrap_or_else(|| v8::undefined(scope).into());
+    let state =
+        navigation_entry_state_snapshot(scope, this).unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(state);
 }
 
@@ -359,12 +319,18 @@ fn navigation_entry_is_active<'s>(
 fn navigation_entry_stored_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
-    slot: &'static str,
+    field: EntryStringField,
 ) -> Option<String> {
-    navigation_entry_slot_value(scope, entry, slot)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
+    let record = native::entry(scope, entry)?;
+    let record = record.borrow();
+    match field {
+        EntryStringField::Url => Some(record.url.clone()),
+        EntryStringField::Id => Some(record.id.clone()),
+        EntryStringField::Key => Some(record.key.as_str().to_owned()),
+        EntryStringField::Document => Some(record.document.as_str().to_owned()),
+        EntryStringField::ReferrerPolicy => record.referrer_policy.clone(),
+    }
+    .filter(|value| !value.is_empty())
 }
 
 fn navigation_entry_url_getter<'s>(
@@ -388,7 +354,7 @@ fn navigation_entry_url_getter<'s>(
         rv.set(v8::null(scope).into());
         return;
     }
-    let value = navigation_entry_stored_string(scope, args.this(), NAVIGATION_ENTRY_URL_SLOT)
+    let value = navigation_entry_stored_string(scope, args.this(), EntryStringField::Url)
         .and_then(|value| v8_string(scope, &value))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
@@ -400,7 +366,7 @@ fn navigation_entry_id_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = navigation_entry_active_token(scope, args.this(), NAVIGATION_ENTRY_ID_SLOT);
+    let value = navigation_entry_active_token(scope, args.this(), EntryStringField::Id);
     rv.set(value);
 }
 
@@ -409,19 +375,19 @@ fn navigation_entry_key_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = navigation_entry_active_token(scope, args.this(), NAVIGATION_ENTRY_KEY_SLOT);
+    let value = navigation_entry_active_token(scope, args.this(), EntryStringField::Key);
     rv.set(value);
 }
 
 fn navigation_entry_active_token<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
-    slot: &'static str,
+    field: EntryStringField,
 ) -> v8::Local<'s, v8::Value> {
     if !navigation_entry_is_active(scope, entry) {
         return v8str(scope, "").into();
     }
-    navigation_entry_stored_string(scope, entry, slot)
+    navigation_entry_stored_string(scope, entry, field)
         .and_then(|value| v8_string(scope, &value))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8str(scope, "").into())
@@ -453,7 +419,7 @@ fn navigation_entry_same_document_getter<'s>(
         return;
     };
     let Some(entry_href) =
-        navigation_entry_stored_string(scope, args.this(), NAVIGATION_ENTRY_URL_SLOT)
+        navigation_entry_stored_string(scope, args.this(), EntryStringField::Url)
     else {
         rv.set_bool(false);
         return;
@@ -484,61 +450,8 @@ fn navigation_entry_index_getter<'s>(
         rv.set(v8::Number::new(scope, -1.0).into());
         return;
     }
-    let fallback =
-        navigation_entry_slot_value(scope, args.this(), NAVIGATION_ENTRY_INITIAL_INDEX_SLOT)
-            .and_then(|value| value.integer_value(scope))
-            .unwrap_or(-1);
+    let fallback = navigation_entry_initial_index(scope, args.this()).map_or(-1, i64::from);
     rv.set(v8::Number::new(scope, fallback as f64).into());
-}
-
-fn navigation_entry_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, entry, slot)
-}
-
-pub(super) fn navigation_entry_private_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_slot_value(scope, entry, slot)
-}
-
-pub(super) fn set_navigation_entry_private_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    set_private_value(scope, entry, slot, value);
-}
-
-fn set_navigation_entry_number_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: f64,
-) {
-    set_navigation_entry_private_slot_value(
-        scope,
-        entry,
-        slot,
-        v8::Number::new(scope, value).into(),
-    );
-}
-
-fn set_navigation_entry_string_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: &str,
-) {
-    if let Some(value) = v8_string(scope, value) {
-        set_navigation_entry_private_slot_value(scope, entry, slot, value.into());
-    }
 }
 
 pub(super) fn navigation_current_entry_index<'s>(
@@ -557,17 +470,4 @@ pub(super) fn navigation_current_entry<'s>(
     let navigation = window_navigation_for_holder(scope, owner)?;
     get_private_value(scope, navigation, NAVIGATION_CURRENT_ENTRY_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-pub(super) fn stringify_history_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    let serialized = v8::json::stringify(&scope, state)
-        .map(|value| value.to_rust_string_lossy(&scope))
-        .filter(|value| value != "null");
-    scope.reset();
-    serialized
 }

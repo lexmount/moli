@@ -3,7 +3,7 @@ use super::navigation_activation::{
     set_navigation_current_entry,
 };
 use super::navigation_entry::{
-    create_navigation_entry, set_history_entries, set_history_index, set_history_state,
+    cache_current_history_state, create_navigation_entry, set_history_entries, set_history_index,
     set_navigation_entry_document_id,
 };
 use super::navigation_entry_state::clone_history_entry_state;
@@ -77,6 +77,7 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
             &snapshot.key,
         );
         set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
+        super::navigation_entry_state::restore_serialized_entry_state(scope, entry, snapshot);
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         let _ = entries.set_index(scope, snapshot.history_index, entry.into());
         if snapshot.history_index == entry_seed.current_index {
@@ -107,7 +108,7 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     });
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, entry_seed.current_index);
-    set_history_state(
+    cache_current_history_state(
         scope,
         history,
         current_state.unwrap_or_else(|| v8::null(scope).into()),

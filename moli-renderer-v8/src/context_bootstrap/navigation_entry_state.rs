@@ -1,42 +1,41 @@
-use super::location_history_storage::{
-    HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
-};
-use super::navigation_entry::{
-    navigation_entry_private_slot_value, set_navigation_entry_private_slot_value,
-};
+use super::history_runtime::native;
 use super::*;
+use crate::structured_clone::{deserialize_history_state, serialize_history_state};
 
 pub(super) fn navigation_entry_state_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_private_slot_value(scope, entry, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT)
-        .filter(|value| !value.is_undefined())
+    let state = native::entry(scope, entry)?
+        .borrow()
+        .navigation_state
+        .clone()?;
+    deserialize_history_state(scope, &state)
 }
 
 pub(super) fn history_entry_state_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    // Unlike an absent optional slot, undefined is a valid History state.
-    let key = crate::util::private_key(scope, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)?;
-    entry.get_private(scope, key)
+    let state = native::entry(scope, entry)?
+        .borrow()
+        .history_state
+        .clone()?;
+    deserialize_history_state(scope, &state)
 }
 
 pub(super) fn clone_navigation_entry_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let snapshot = navigation_entry_state_snapshot(scope, entry)?;
-    structured_clone_value(scope, snapshot).or(Some(snapshot))
+    navigation_entry_state_snapshot(scope, entry)
 }
 
 pub(super) fn clone_history_entry_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let snapshot = history_entry_state_snapshot(scope, entry)?;
-    structured_clone_value(scope, snapshot).or(Some(snapshot))
+    history_entry_state_snapshot(scope, entry)
 }
 
 pub(super) fn set_history_entry_state<'s>(
@@ -44,7 +43,32 @@ pub(super) fn set_history_entry_state<'s>(
     entry: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    set_navigation_entry_private_slot_value(scope, entry, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, state);
+    let Some(record) = native::entry(scope, entry) else {
+        return;
+    };
+    if let Some(state) = serialize_history_state(scope, state) {
+        record.borrow_mut().history_state = Some(state);
+    }
+}
+
+pub(super) fn copy_entry_serialized_states<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    from: v8::Local<'s, v8::Object>,
+    to: v8::Local<'s, v8::Object>,
+) {
+    let Some(from) = native::entry(scope, from) else {
+        return;
+    };
+    let Some(to) = native::entry(scope, to) else {
+        return;
+    };
+    let (history_state, navigation_state) = {
+        let from = from.borrow();
+        (from.history_state.clone(), from.navigation_state.clone())
+    };
+    let mut to = to.borrow_mut();
+    to.history_state = history_state;
+    to.navigation_state = navigation_state;
 }
 
 pub(super) fn set_navigation_entry_state<'s>(
@@ -52,14 +76,30 @@ pub(super) fn set_navigation_entry_state<'s>(
     entry: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let exposed_state = structured_clone_value(scope, state).unwrap_or(state);
-    set_navigation_entry_private_slot_value(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
-        state,
-    );
-    set_navigation_entry_private_slot_value(scope, entry, "state", exposed_state);
+    let Some(record) = native::entry(scope, entry) else {
+        return;
+    };
+    if let Some(state) = serialize_history_state(scope, state) {
+        record.borrow_mut().navigation_state = Some(state);
+    }
+}
+
+pub(super) fn restore_serialized_entry_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    snapshot: &moli_page_types::NavigationHistorySerializedEntry,
+) {
+    let Some(record) = native::entry(scope, entry) else {
+        return;
+    };
+    let mut record = record.borrow_mut();
+    if snapshot.history_state.is_some() {
+        record.history_state = snapshot.history_state.clone();
+    }
+    if snapshot.navigation_state.is_some() {
+        record.navigation_state = snapshot.navigation_state.clone();
+    }
+    record.scroll_restoration = snapshot.scroll_restoration;
 }
 
 pub(super) fn clone_navigation_state_arg_for_result<'s>(
@@ -77,7 +117,7 @@ pub(super) fn clone_navigation_state_arg_for_result<'s>(
 
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    let cloned_state = structured_clone_value(&mut scope, raw_state);
+    let cloned_state = structured_clone_value_for_storage(&mut scope, raw_state);
     if let Some(error) = scope.exception() {
         scope.reset();
         return Err(error);
