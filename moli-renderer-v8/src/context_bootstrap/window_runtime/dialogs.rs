@@ -240,12 +240,7 @@ pub(crate) fn window_open_callback<'s>(
         }
     };
     if special_target == Some(SpecialBrowsingContextTarget::Current) {
-        navigate_window_open_self(
-            scope,
-            entered_window,
-            url.as_ref().map(Url::as_str),
-            &mut rv,
-        );
+        navigate_window_open_self(scope, args.this(), url.as_ref().map(Url::as_str), &mut rv);
         return;
     }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
@@ -296,6 +291,8 @@ pub(crate) fn window_open_callback<'s>(
             scope,
             host_ptr,
             source,
+            receiver.dispatch_scope(),
+            args.this(),
             target,
             url.as_deref(),
         ) {

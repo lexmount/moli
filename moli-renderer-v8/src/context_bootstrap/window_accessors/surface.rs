@@ -136,11 +136,28 @@ fn set_receiver_related_window_alias<'s>(
         rv.set_null();
         return;
     }
-    let value = window_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into());
-    rv.set(CrossOriginWindowAccessor::project_related_window(
-        scope, value,
+    rv.set(window_parent_or_top(
+        scope,
+        receiver,
+        slot == WINDOW_TOP_SLOT,
     ));
+}
+
+/// Read native Window relationships without consulting replaceable JS
+/// properties, preserving the accessor's cross-origin WindowProxy projection.
+/// The caller must validate the receiver and its lifetime first.
+pub(crate) fn window_parent_or_top<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    top: bool,
+) -> v8::Local<'s, v8::Value> {
+    let slot = if top {
+        WINDOW_TOP_SLOT
+    } else {
+        WINDOW_PARENT_SLOT
+    };
+    let value = window_hidden_value(scope, receiver, slot).unwrap_or_else(|| receiver.into());
+    CrossOriginWindowAccessor::project_related_window(scope, value)
 }
 
 pub(in crate::context_bootstrap) fn window_opener_getter<'s>(

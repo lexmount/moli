@@ -30,6 +30,7 @@ pub(super) use interceptors::{
     window_named_properties_indexed_property_query, window_named_property_getter,
     window_named_property_query,
 };
+pub(crate) use surface::window_parent_or_top;
 pub(super) use surface::{
     window_closed_getter, window_custom_elements_getter, window_device_pixel_ratio_getter,
     window_frames_getter, window_inner_height_getter, window_inner_surface_height,
