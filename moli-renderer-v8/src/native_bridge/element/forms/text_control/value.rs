@@ -55,6 +55,9 @@ pub(crate) fn is_text_control(runtime: &PageScriptHost, handle: DomHandle) -> bo
                     && !matches!(
                         element.input_type(),
                         InputType::Hidden
+                            | InputType::Color
+                            | InputType::File
+                            | InputType::Range
                             | InputType::Checkbox
                             | InputType::Radio
                             | InputType::Button

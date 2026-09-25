@@ -450,7 +450,7 @@ pub(super) use forms::{
 pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, replace_text_control_selection,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
     replace_text_control_selection_for_insert_html, text_control_value,
 };
 pub(crate) use forms::{form_control_is_effectively_disabled, input_files_for_object};
