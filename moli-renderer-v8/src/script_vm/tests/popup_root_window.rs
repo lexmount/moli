@@ -1,5 +1,137 @@
 use super::*;
 
+#[tokio::test]
+async fn initial_popup_aliases_its_creators_document_domain_in_both_directions() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://www.example.test/opener",
+        &loader,
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            const popup = open();
+            popup.document.body.textContent = 'popup';
+            const initialDomain = popup.document.domain;
+            const frame = document.createElement('iframe');
+            document.body.append(frame);
+            const childPopup = frame.contentWindow.open();
+            document.domain = document.domain;
+            const before = [popup.document.domain, childPopup.document.domain];
+            popup.document.domain = 'example.test';
+            JSON.stringify([initialDomain, ...before, document.domain, frame.contentWindow.document.domain,
+                popup.document.domain, childPopup.document.domain, popup.document.body.textContent]);
+            "#,
+        ).unwrap(),
+        r#"["www.example.test","www.example.test","www.example.test","example.test","example.test","example.test","example.test","popup"]"#
+    );
+}
+
+#[tokio::test]
+async fn popup_window_promise_reactions_keep_their_origin_without_granting_it_to_the_opener() {
+    const SOURCE: &str = include_str!("../../../tests/fixtures/popup-window-async.js");
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><title>popup</title><script>{SOURCE}</script>"
+    )])
+    .await;
+    let loader = static_http_loader([
+        server.resolve_entry("www.example.test"),
+        server.resolve_entry("remote.example.test"),
+    ]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        server.url_for_host("www.example.test", "/opener").as_str(),
+        &loader,
+    );
+    vm.eval(&format!(
+        r#"
+        globalThis.popupMessages = [];
+        onmessage = event => {{
+            popupMessages.push(event.data);
+            Promise.resolve().then(() => {{
+                let result;
+                try {{ result = popup.document.title; }} catch (error) {{ result = error.name; }}
+                popupMessages.push({{kind: "main-" + event.data.kind, result}});
+            }});
+        }};
+        globalThis.popup = open({:?}); true;
+    "#,
+        server
+            .url_for_host("remote.example.test", "/popup")
+            .as_str()
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popupMessages.length)",
+        "6",
+        "popup Promise reactions",
+    )
+    .await;
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(popupMessages.sort((a, b) => a.kind.localeCompare(b.kind)))")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"kind":"await", "title":"popup"},
+            {"kind":"catch", "title":"popup"},
+            {"kind":"main-await", "result":"SecurityError"},
+            {"kind":"main-catch", "result":"SecurityError"},
+            {"kind":"main-then", "result":"SecurityError"},
+            {"kind":"then", "title":"popup", "self":true},
+        ])
+    );
+
+    let popup_id = vm._context_host.borrow().open_lightweight_popup_ids()[0];
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        fn run_body(scope: &mut v8::PinScope<'_, '_>, source: &str) {
+            let source = crate::util::v8_string(scope, source).unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            crate::script_execution::execute_compiled_script(scope, script).unwrap();
+        }
+        run_body(
+            scope,
+            r#"
+            globalThis.retainedPopupReaction = []; globalThis.newWindowReaction = [];
+            globalThis.popupNavigationError = null;
+            Promise.resolve().then(() => {
+                popup.location.href = "about:blank";
+            }).catch(error => { popupNavigationError = error.name; });
+            "#,
+        );
+        let owner = crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
+        let previous = owner.enter(scope);
+        // Keep this job queued while a new LocalWindow commits. Its origin
+        // must remain that of the old popup, even after the proxy becomes
+        // same-origin with the opener.
+        run_body(
+            scope,
+            r#"Promise.resolve().then(() => {
+            try { retainedPopupReaction.push(popup.document.URL); }
+            catch (error) { retainedPopupReaction.push(error.name); }
+        });"#,
+        );
+        owner.restore(scope, previous);
+        run_body(
+            scope,
+            r#"
+            Promise.resolve().then(() => newWindowReaction.push(popup.document.URL));
+        "#,
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([retainedPopupReaction, newWindowReaction, popupNavigationError])")
+            .unwrap(),
+        r#"[["SecurityError"],["about:blank"],null]"#
+    );
+    assert_eq!(server.finish_targets().await.len(), 1);
+}
+
 fn expected_location_surface(same_origin: bool, path: &str) -> serde_json::Value {
     let read = if same_origin { "ok" } else { "SecurityError" };
     let convert = if same_origin {
@@ -320,4 +452,168 @@ async fn popup_root_window_preserves_nested_parent_top_identity_and_origin_check
         vm.eval("rootPopup.close()").unwrap();
         assert_eq!(server.finish_targets().await.len(), hosts.len());
     }
+}
+
+#[tokio::test]
+async fn popup_window_keeps_canonical_identity_and_cross_origin_access_boundaries() {
+    const PROBE: &str = include_str!("../../../tests/fixtures/popup-window-access.js");
+    const A: &str = "www.example.test";
+    const B: &str = "remote.example.test";
+    for has_same_origin_child in [false, true] {
+        let mut bodies = vec![format!(
+            r#"<!doctype html><body><iframe name="related-target"></iframe><script>
+            if ({has_same_origin_child}) {{
+                const child = document.createElement('iframe');
+                const url = new URL('/child', location.href);
+                url.hostname = '{A}';
+                child.name = 'related-target'; child.src = url.href;
+                document.body.append(child);
+            }}
+            onload = () => opener.postMessage('ready', '*');
+            </script>"#,
+        )];
+        if has_same_origin_child {
+            bodies.push("<!doctype html><body>child".to_owned());
+        }
+        let server = StaticHttpServer::spawn_with_bodies(bodies).await;
+        let loader = static_http_loader([server.resolve_entry(A), server.resolve_entry(B)]);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            server.url_for_host(A, "/opener").as_str(),
+            &loader,
+        );
+        assert_eq!(
+            vm.eval(&format!(
+                "globalThis.ready = false; onmessage = event => ready = event.data === 'ready'; \
+             globalThis.rootPopup = open({:?}, 'related-page'); String(rootPopup.document.URL);",
+                server.url_for_host(B, "/popup").as_str(),
+            ))
+            .unwrap(),
+            "about:blank"
+        );
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(ready)",
+            "true",
+            "cross-origin popup projection",
+        )
+        .await;
+        vm.eval(PROBE).unwrap();
+        let child_index = usize::from(has_same_origin_child);
+        let actual: serde_json::Value = serde_json::from_str(
+            &vm.eval(&format!(
+                "JSON.stringify(inspectPopupWindow(rootPopup, {child_index}))",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let expected: Vec<_> = ["popup", "parent", "top"].map(|path| serde_json::json!({
+            "path": path, "identity": true,
+            "document": "SecurityError", "name": "SecurityError", "location": "SecurityError",
+            "expando": "SecurityError", "descriptor": "SecurityError", "set": "SecurityError",
+            "define": "SecurityError", "has": "SecurityError", "del": "SecurityError",
+            "closed": false, "self": true, "roots": true, "length": child_index + 1,
+            "opener": true, "postMessage": "function", "postMessageStable": true,
+            "postMessageRealm": true, "close": "function", "prototypeIsNull": true,
+            "then": "undefined", "iterator": "SecurityError",
+        })).into();
+        assert_eq!(
+            actual,
+            serde_json::json!(expected),
+            "same-origin child: {has_same_origin_child}"
+        );
+        assert_eq!(
+            vm.eval("rootPopup.close(); String(rootPopup.closed)")
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(server.finish_targets().await.len(), child_index + 1);
+    }
+}
+
+#[tokio::test]
+async fn popup_window_rechecks_borrowed_accessors_after_navigation_and_close() {
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        "<!doctype html><script>onload = () => opener.postMessage('ready', '*')</script>"
+            .to_owned(),
+    ])
+    .await;
+    let loader = static_http_loader([server.resolve_entry("remote.example.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        server.url_for_host("www.example.test", "/opener").as_str(),
+        &loader,
+    );
+    assert_eq!(
+        vm.eval(&format!(
+            r#"
+        globalThis.ready = false; onmessage = event => ready = event.data === 'ready';
+        globalThis.popup = open({:?}, 'popup-transition');
+        globalThis.originalPopup = popup;
+        globalThis.originalName = Object.getOwnPropertyDescriptor(popup, 'name');
+        globalThis.originalOpener = Object.getOwnPropertyDescriptor(popup, 'opener');
+        popup.document.URL;
+    "#,
+            server
+                .url_for_host("remote.example.test", "/popup")
+                .as_str()
+        ))
+        .unwrap(),
+        "about:blank"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(ready)",
+        "true",
+        "popup cross-origin navigation",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const read = f => { try { return f(); } catch (error) { return error.name; } };
+        let conversions = 0;
+        const value = {toString() { conversions++; return 'renamed'; }};
+        globalThis.foreignLocation = popup.location;
+        return JSON.stringify([
+            popup === originalPopup,
+            read(() => popup.document.URL),
+            read(() => originalName.get.call(popup)),
+            read(() => originalName.set.call(popup, value)),
+            conversions,
+            read(() => originalOpener.set.call(popup, null)),
+            popup.opener === window,
+        ]);
+    })()"#
+        )
+        .unwrap(),
+        r#"[true,"SecurityError","SecurityError","SecurityError",0,"SecurityError",true]"#
+    );
+    vm.eval("popup.location = 'about:blank'; true").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm, &loader,
+        "(() => { try { return String(popup.document.URL === 'about:blank'); } catch (_) { return 'false'; } })()",
+        "true", "popup returns to same origin",
+    ).await;
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+        popup === originalPopup, popup.document.URL,
+        originalName.get.call(popup), popup.location !== foreignLocation,
+    ])"#
+        )
+        .unwrap(),
+        r#"[true,"about:blank","popup-transition",true]"#
+    );
+    vm.eval("popup.close(); true").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popup.closed && popup.parent === null && popup.top === null)",
+        "true",
+        "closed popup browsing context",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify([popup === originalPopup, popup.closed, popup.length, popup.self === popup])").unwrap(), "[true,true,0,true]");
+    assert_eq!(server.finish_targets().await.len(), 1);
 }

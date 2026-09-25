@@ -155,6 +155,11 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<WindowExecutionContextIdentity> {
+        if let Some(owner) =
+            crate::script_continuation::running_window(scope, scope.get_current_context())
+        {
+            return Some(owner.identity);
+        }
         let dispatch_scope = if let Some(popup_id) = active_lightweight_popup_id(scope) {
             OwnerDispatchScope::LightweightPopup(popup_id)
         } else if let Some(child_handle) =

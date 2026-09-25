@@ -258,12 +258,31 @@ impl JsContextHost {
         parent: Option<DomHandle>,
         key: &str,
     ) -> Option<DomHandle> {
+        self.child_browsing_context_named_child_handle_for_scope(
+            parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
+            key,
+        )
+    }
+
+    pub(crate) fn child_browsing_context_named_child_handle_for_scope(
+        &self,
+        parent: OwnerDispatchScope,
+        key: &str,
+    ) -> Option<DomHandle> {
         // Window named access only searches direct scoped children. A full
         // frame-tree search can rediscover the receiver (for example when a
         // nested frame is named `document`) and recursively materialize it.
         let handles = match parent {
-            Some(parent) => self.child_browsing_context_child_frame_handles(parent),
-            None => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
+            OwnerDispatchScope::Child(parent) => {
+                self.child_browsing_context_child_frame_handles(parent)
+            }
+            OwnerDispatchScope::Top => {
+                self.top_level_child_browsing_context_handles_in_frame_tree_order()
+            }
+            OwnerDispatchScope::LightweightPopup(id) => self
+                .window_child_browsing_context_handles_for_document(
+                    self.lightweight_popup_document_handle(id)?,
+                ),
         };
         let first = handles.into_iter().find(|handle| {
             self.dom_host()
@@ -278,8 +297,7 @@ impl JsContextHost {
         // before filtering by origin. A cross-origin first match must not
         // expose a later same-origin duplicate, and document.domain does not
         // relax this same-origin check.
-        let parent_scope = parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
-        self.window_scopes_have_same_origin(parent_scope, OwnerDispatchScope::Child(first))
+        self.window_scopes_have_same_origin(parent, OwnerDispatchScope::Child(first))
             .then_some(first)
     }
 

@@ -52,6 +52,22 @@ pub(crate) fn require_same_origin_window_receiver<'s>(
     if is_current_window_receiver(scope, receiver) {
         return true;
     }
+    if let Some(context) = receiver.get_creation_context(scope)
+        && !receiver.strict_equals(context.global(scope).into())
+        && crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
+    {
+        let context = scope.get_current_context();
+        if crate::native_bridge::synthetic_window_context_can_access(scope, context, receiver) {
+            return true;
+        }
+        crate::native_bridge::throw_dom_exception(
+            scope,
+            "SecurityError",
+            18,
+            "Blocked access to a cross-origin Window.",
+        );
+        return false;
+    }
     // An extracted method or accessor bypasses WindowProxy's property access check.
     // Authorize native globals before reading slots, which can themselves
     // trigger V8's cross-origin fallback. Leniency only applies to objects
