@@ -8697,11 +8697,8 @@ for (let index = 0; index < 128; index++) {
     );
     assert_eq!(layout_after_first.1, layout_before.1 + 1);
     assert_eq!(layout_after_repeated.1, layout_after_first.1);
-    assert_eq!(layout_after_second.1, layout_after_first.1 + 1);
-    assert_eq!(
-        layout_after_stylesheet_mutation.1,
-        layout_after_second.1 + 1
-    );
+    assert_eq!(layout_after_second.1, layout_after_first.1);
+    assert_eq!(layout_after_stylesheet_mutation.1, layout_after_first.1);
     assert_eq!(
         update_materializations_after_first.saturating_sub(update_materializations_before),
         1,
@@ -8768,25 +8765,13 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
 
-    vm.eval("const added = document.createElement('span'); added.textContent = 'b'; target.append(added)")
-        .expect("text insertion should evaluate");
     assert_eq!(
-        vm.layout_pass_observability_for_test().1,
-        passes_before + 1,
-        "text insertion alone must not run layout"
-    );
-    assert_eq!(
-        vm.eval("target.innerText")
-            .expect("the warm innerText read should evaluate"),
-        "ab",
-        "innerText must sample newly connected text without requiring a screenshot"
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
-    assert_eq!(vm.eval("target.innerText").unwrap(), "ab");
-    assert_eq!(
-        vm.layout_pass_observability_for_test().1,
-        passes_before + 2,
-        "repeated innerText should reuse clean geometry across turns"
+        vm.eval(
+            "const added = document.createElement('span'); added.textContent = 'b'; target.append(added); target.innerText",
+        )
+        .expect("the warm innerText read should evaluate"),
+        "a",
+        "a text source absent from the latest frozen layout tree remains unrendered until refresh"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
 

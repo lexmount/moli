@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::{RendererElementClickError, RendererElementClickTarget};
+use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
 
 #[test]
 fn native_element_click_requires_explicit_layout_without_building_it() {

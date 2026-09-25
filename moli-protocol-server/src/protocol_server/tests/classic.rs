@@ -11643,6 +11643,7 @@ async fn webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_w
                 json!({"url":classic_data_url(&html)}),
             )
             .await;
+            classic_capture_layout(app.clone(), session_id).await;
             for _ in 0..depth {
                 classic_request_json_with_body(
                     app.clone(),
@@ -11682,6 +11683,7 @@ async fn webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_w
                     document.body.appendChild(veil);
                 "#,"args":[]}),
             ).await;
+            classic_capture_layout(app.clone(), session_id).await;
             let (status, blocked) = classic_request_status_and_json(
                 app.clone(),
                 Method::POST,
@@ -11728,6 +11730,7 @@ async fn webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatc
             json!({"url":classic_data_url(&html)}),
         )
         .await;
+        classic_capture_layout(app.clone(), session_id).await;
         for _ in 0..depth {
             assert_eq!(
                 classic_request_json_with_body(
@@ -11754,6 +11757,7 @@ async fn webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatc
                 json!({"script":overlay_script,"args":[if blocked {"block"} else {"none"}]}),
             )
             .await;
+            classic_capture_layout(app.clone(), session_id).await;
             let (status, clicked) = classic_request_status_and_json(
                 app.clone(),
                 Method::POST,

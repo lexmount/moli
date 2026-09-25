@@ -77,7 +77,7 @@ async fn computed_size_held_getters_wait_for_explicit_publication() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() {
+async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh() {
     run_page_vm_async_test(async move {
         let mut page = page_with_size_fixture(GRID)?;
         page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
@@ -116,12 +116,6 @@ async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() 
             'mutated'
         "#,
         )?;
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
-        assert_eq!(
-            page.vm().layout_snapshot_cache_observability_for_test(),
-            sampled,
-            "style mutation must only mark the retained snapshot dirty"
-        );
         assert_eq!(
             read_without_layout(&mut page, "held.color")?,
             json!("rgb(255, 0, 0)")
@@ -132,33 +126,13 @@ async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() 
         );
         assert_eq!(
             page.vm_mut().eval("held.gridTemplateColumns")?,
-            "100px 100px"
+            "40px 120px"
         );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
         assert_eq!(
-            held_sizes(&mut page)?,
-            json!(["200px", "40px", "200px", "40px"])
+            page.vm().layout_snapshot_cache_observability_for_test().2,
+            sampled.2
         );
-        let refreshed = page.vm().layout_snapshot_cache_observability_for_test();
-        assert_eq!(
-            refreshed.2,
-            sampled.2 + 1,
-            "the first exact demand must publish one replacement tree"
-        );
-
-        page.vm_mut().eval("'clean turn'")?;
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
-        assert_eq!(
-            page.vm().layout_snapshot_cache_observability_for_test(),
-            refreshed,
-            "a clean turn must keep the replacement tree reusable"
-        );
-        assert_eq!(
-            page.vm_mut().eval("held.gridTemplateColumns")?,
-            "100px 100px"
-        );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
-
         publish_size_layout(&mut page)?;
         assert_eq!(
             held_sizes(&mut page)?,
@@ -168,7 +142,7 @@ async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() 
             page.vm_mut().eval("held.gridTemplateColumns")?,
             "100px 100px"
         );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 3);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
         Ok::<_, anyhow::Error>(())
     })
     .await

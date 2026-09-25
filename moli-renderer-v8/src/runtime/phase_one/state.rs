@@ -43,7 +43,6 @@ impl ParseTimeDriverState {
             final_url,
             document_character_set: "UTF-8".to_owned(),
             scheduler: DocumentScriptScheduler::new(),
-            pending_parsing_blocking_script: PendingParsingBlockingClassicScriptRunner::empty(),
             buffered_document_preloads: Box::default(),
             service_worker_preload_context: None,
             input_closed: false,

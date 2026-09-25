@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_style_refreshes_dirty_used_grid_tracks_on_exact_demand() {
+async fn computed_style_serializes_used_grid_tracks_from_the_frozen_layout_tree() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -89,82 +89,20 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
             "resolved horizontal Grid longhands must expose used tracks while preserving expanded line names, without publishing physical-axis values for vertical Grid",
         );
 
-        let passes_before_mutation = page_vm.vm().layout_pass_observability_for_test().1;
-        let cache_before_mutation = page_vm
-            .vm()
-            .layout_snapshot_cache_observability_for_test();
-
         page_vm
             .vm_mut()
             .eval("document.getElementById('named').style.cssText='width:400px;grid-template-columns:[new] 1fr 1fr';'mutated'")?;
         assert_eq!(
-            page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before_mutation,
-            "a style mutation must mark layout dirty without eagerly rebuilding it",
-        );
-        assert_eq!(
-            page_vm
-                .vm()
-                .layout_snapshot_cache_observability_for_test(),
-            cache_before_mutation,
-            "marking the current frozen tree dirty must not discard or replace it eagerly",
-        );
-
-        assert_eq!(
             page_vm.vm_mut().eval(
                 "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
             )?,
-            "[new] 200px 200px",
-            "an exact used-track read must refresh a dirty layout before answering",
+            "[a] 21px [b c] 22px [d] 23px [e c] 22px [d] 23px [e f] 189px [g]",
+            "a synchronous style read must stay on the last published layout epoch",
         );
-        let passes_after_demand = page_vm.vm().layout_pass_observability_for_test().1;
-        let cache_after_demand = page_vm
-            .vm()
-            .layout_snapshot_cache_observability_for_test();
-        assert_eq!(passes_after_demand, passes_before_mutation + 1);
-        assert_eq!(cache_after_demand.0, cache_before_mutation.0);
-        assert_eq!(cache_after_demand.1, cache_before_mutation.1 + 1);
-        assert_eq!(cache_after_demand.2, cache_before_mutation.2 + 1);
-
-        page_vm.vm_mut().eval("'clean turn'")?;
-        assert_eq!(
-            page_vm.vm().layout_pass_observability_for_test().1,
-            passes_after_demand,
-            "a clean script turn must retain the freshly published layout",
-        );
-        assert_eq!(
-            page_vm.vm_mut().eval(
-                "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
-            )?,
-            "[new] 200px 200px",
-        );
-        let cache_after_reuse = page_vm
-            .vm()
-            .layout_snapshot_cache_observability_for_test();
-        assert_eq!(
-            page_vm.vm().layout_pass_observability_for_test().1,
-            passes_after_demand,
-            "a repeated exact read across a clean turn must reuse the frozen tree",
-        );
-        assert_eq!(cache_after_reuse.0, cache_after_demand.0 + 1);
-        assert_eq!(cache_after_reuse.1, cache_after_demand.1);
-        assert_eq!(cache_after_reuse.2, cache_after_demand.2);
-
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?
             .expect("updated used Grid track CSSOM screenshot layout");
-        assert_eq!(
-            page_vm.vm().layout_pass_observability_for_test().1,
-            passes_after_demand + 1,
-            "a screenshot remains a force-fresh paint boundary even when the tree is clean",
-        );
-        let cache_after_screenshot = page_vm
-            .vm()
-            .layout_snapshot_cache_observability_for_test();
-        assert_eq!(cache_after_screenshot.0, cache_after_reuse.0);
-        assert_eq!(cache_after_screenshot.1, cache_after_reuse.1);
-        assert_eq!(cache_after_screenshot.2, cache_after_reuse.2 + 1);
         assert_eq!(
             page_vm.vm_mut().eval(
                 "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
