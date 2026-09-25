@@ -12,6 +12,7 @@ mod touch_native_receivers;
 mod visual_viewport_receiver;
 mod writable_stream_native_receivers;
 mod dom_rect_factory_descriptors;
+mod offline_audio_float;
 mod webtransport_stream_interface_exposure;
 
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
@@ -2371,7 +2372,7 @@ mod observer_callbacks;
 mod svg_text_position_native_receivers;
 
 mod observer_receivers;
-mod offline_audio_float;
+mod popup_root_window;
 mod post_parse;
 mod queue_microtask;
 
