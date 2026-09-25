@@ -1824,10 +1824,7 @@ impl JsContextHost {
             .any(|pending| pending.target.task().popup_id() == popup_id)
     }
 
-    pub(crate) fn lightweight_popup_has_pending_history_traversal(
-        &self,
-        popup_id: u64,
-    ) -> bool {
+    pub(crate) fn lightweight_popup_has_pending_history_traversal(&self, popup_id: u64) -> bool {
         self.pending_lightweight_popup_document_loads
             .values()
             .any(|pending| {

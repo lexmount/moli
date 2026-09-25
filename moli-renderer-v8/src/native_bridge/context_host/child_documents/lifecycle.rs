@@ -1079,20 +1079,28 @@ impl JsContextHost {
             {
                 unload_guards.pop();
             }
-            if unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle) == Some(document) {
-                unload_guards.push((document, unsafe { &mut *host_ptr }.enter_document_unload(document)));
-                if cancel_navigation {
-                    if let Some(window) = unsafe { &mut *host_ptr }
+            if unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)
+                == Some(document)
+            {
+                unload_guards.push((
+                    document,
+                    unsafe { &mut *host_ptr }.enter_document_unload(document),
+                ));
+                if cancel_navigation
+                    && let Some(window) = unsafe { &mut *host_ptr }
                         .existing_child_browsing_context_window_wrapper(scope, handle)
-                    {
-                        crate::context_bootstrap::inform_about_canceled_navigation_for_window(
-                            scope, window,
-                            crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
-                        );
-                    }
+                {
+                    crate::context_bootstrap::inform_about_canceled_navigation_for_window(
+                        scope, window,
+                        crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
+                    );
                 }
-                if unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle) == Some(document) {
-                    Self::dispatch_child_document_unload_without_beforeunload(scope, host_ptr, handle);
+                if unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)
+                    == Some(document)
+                {
+                    Self::dispatch_child_document_unload_without_beforeunload(
+                        scope, host_ptr, handle,
+                    );
                 }
             }
         }
@@ -1136,7 +1144,8 @@ impl JsContextHost {
         {
             return;
         }
-        let Some(window) = unsafe { &mut *host_ptr }.existing_child_browsing_context_window_wrapper(scope, handle)
+        let Some(window) =
+            unsafe { &mut *host_ptr }.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             return;
         };
@@ -1146,7 +1155,8 @@ impl JsContextHost {
         // Frame removal may be initiated by a parent that cannot access the
         // child Window. Run internal lifecycle work in the retiring realm.
         let scope = &mut v8::ContextScope::new(scope, context);
-        let Some(document) = unsafe { &mut *host_ptr }.existing_child_browsing_context_document_wrapper(scope, handle)
+        let Some(document) = unsafe { &mut *host_ptr }
+            .existing_child_browsing_context_document_wrapper(scope, handle)
         else {
             return;
         };
@@ -1158,7 +1168,8 @@ impl JsContextHost {
             .child_browsing_context_document_handle(handle)
             .map(|document| unsafe { &mut *host_ptr }.enter_document_unload(document));
         dispatch_pagehide_for_runtime_owner(scope, window);
-        if let Some(document_handle) = unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)
+        if let Some(document_handle) =
+            unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)
             && unsafe { &mut *host_ptr }
                 .frame_owner_store
                 .child_document_task_owner_is_current(handle, action.owner())
@@ -1185,7 +1196,7 @@ impl JsContextHost {
         let _ = unsafe { &mut *host_ptr }
             .frame_owner_store
             .finish_current_child_document_unload(action);
-        unsafe { &mut *unsafe { &mut *host_ptr }.runtime }
+        unsafe { &mut *(*host_ptr).runtime }
             .cancel_window_execution_context_timers(execution_context_owner);
     }
 
@@ -1203,9 +1214,7 @@ impl JsContextHost {
             {
                 continue;
             }
-            Self::dispatch_child_document_unload_without_beforeunload(
-                scope, host_ptr, handle,
-            );
+            Self::dispatch_child_document_unload_without_beforeunload(scope, host_ptr, handle);
         }
     }
 }

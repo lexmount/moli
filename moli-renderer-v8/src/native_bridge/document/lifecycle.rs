@@ -208,7 +208,12 @@ fn node_document_write_or_writeln_callback<'s>(
             return;
         }
         let entry_document = runtime.document_open_entry_document(scope);
-        JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
+        JsContextHost::prepare_root_document_replacement(
+            scope,
+            runtime_ptr,
+            handle,
+            entry_document,
+        );
     }
     let _ = unsafe { &mut *runtime_ptr }.write_html(scope, runtime_ptr, handle, &html);
     rv.set_undefined();
@@ -356,7 +361,12 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
             let entry_document = runtime.document_open_entry_document(scope);
-            JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
+            JsContextHost::prepare_root_document_replacement(
+                scope,
+                runtime_ptr,
+                handle,
+                entry_document,
+            );
         }
     }
     rv.set(args.this().into());
@@ -462,8 +472,9 @@ impl JsContextHost {
         if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
             return;
         }
-        let replacement_url =
-            entry_document.map(|entry| unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry));
+        let replacement_url = entry_document.map(|entry| {
+            unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry)
+        });
         let url_changed = replacement_url
             .as_ref()
             .is_some_and(|url| url != unsafe { &mut *host_ptr }.document_url());
@@ -478,11 +489,7 @@ impl JsContextHost {
             // Entry-change listeners can synchronously change the URL again.
             // Publish this change first so their later handoffs remain last.
             if url_changed {
-                unsafe { &mut *host_ptr }.record_same_document_navigation(
-                    &url,
-                    "historyApi",
-                    moli_page_types::SameDocumentHistoryUpdate::Replace,
-                );
+                unsafe { &mut *host_ptr }.record_same_document_navigation(&url, "historyApi");
             }
             crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
         }
