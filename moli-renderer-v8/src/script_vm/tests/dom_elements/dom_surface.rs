@@ -14108,7 +14108,7 @@ frame.src = "data:text/html,<body>cross-origin</body>";
 
     assert_eq!(
         result,
-        "true|true|true|[object Window]|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true"
+        "true|true|true|[object Object]|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true"
     );
 }
 
