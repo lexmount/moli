@@ -15,6 +15,16 @@ pub(crate) fn track_context_owned_v8_finalizer(
     V8FinalizerRegistry::track(&common.finalizers, scope, object, cleanup);
 }
 
+pub(crate) fn track_context_owned_external_finalizer(
+    scope: &mut v8::PinScope<'_, '_>,
+    external: v8::Local<'_, v8::External>,
+    cleanup: impl FnOnce() + 'static,
+) {
+    let common = crate::common_runtime::CommonRuntimeState::from_scope(scope)
+        .expect("V8 finalizer must belong to a page or worker context");
+    V8FinalizerRegistry::track(&common.finalizers, scope, external, cleanup);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

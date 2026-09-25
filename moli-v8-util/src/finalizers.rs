@@ -24,14 +24,14 @@ pub struct V8FinalizerRegistry {
 struct ContextOwnedV8Finalizer {
     // Keep the weak before the shared cleanup so field teardown resets the V8
     // handle before releasing the final copy of the once-cell.
-    weak: v8::Weak<v8::Object>,
+    weak: v8::Weak<v8::Value>,
     cleanup: SharedFinalizerCleanup,
 }
 
 impl ContextOwnedV8Finalizer {
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
+        object: v8::Local<'_, v8::Value>,
         cleanup: FinalizerCleanup,
     ) -> Self {
         let cleanup = Rc::new(Cell::new(Some(cleanup)));
@@ -57,13 +57,13 @@ impl Drop for ContextOwnedV8Finalizer {
 impl V8FinalizerRegistry {
     /// Register a weak handle without holding its registry borrow across V8.
     /// Retired cleanup callbacks may reenter the resource owner.
-    pub fn track(
+    pub fn track<'s>(
         registry: &RefCell<Self>,
         scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
+        object: impl Into<v8::Local<'s, v8::Value>>,
         cleanup: impl FnOnce() + 'static,
     ) {
-        let entry = ContextOwnedV8Finalizer::new(scope, object, Box::new(cleanup));
+        let entry = ContextOwnedV8Finalizer::new(scope, object.into(), Box::new(cleanup));
         let retired = registry.borrow_mut().push(entry);
         drop(retired);
     }
@@ -119,7 +119,7 @@ mod tests {
             let cleanup_count_for_callback = Rc::clone(&cleanup_count);
             drop(registry.push(ContextOwnedV8Finalizer::new(
                 scope,
-                object,
+                object.into(),
                 Box::new(move || {
                     cleanup_count_for_callback
                         .set(cleanup_count_for_callback.get().saturating_add(1));

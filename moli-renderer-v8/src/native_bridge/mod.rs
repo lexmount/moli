@@ -74,9 +74,9 @@ pub(crate) use context_host::{
     lightweight_popup_id_from_window, remember_isolated_window_context,
     restore_active_lightweight_popup_scope,
     restore_deferred_active_lightweight_popup_scope_if_present,
-    throw_cross_origin_location_security_error, throw_cross_origin_type_error,
-    window_context_in_wrapper_world, window_contexts_allow_access, window_event_access,
-    window_in_wrapper_world,
+    synthetic_window_context_can_access, throw_cross_origin_location_security_error,
+    throw_cross_origin_type_error, window_context_in_wrapper_world, window_contexts_allow_access,
+    window_event_access, window_in_wrapper_world,
 };
 #[cfg(test)]
 pub(crate) use context_host::{IsolatedWindowWorldId, install_isolated_window_world_for_context};
