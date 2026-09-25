@@ -78,6 +78,9 @@ pub(crate) fn window_opener_value<'s>(
         if let Some(handle) = window_child_context_handle(scope, receiver) {
             return Some(host.child_browsing_context_opener(scope, handle).map(Into::into).unwrap_or(null));
         }
+        if let Some(opener) = host.top_window_opener(scope) {
+            return Some(opener.into());
+        }
     }
     let opener = (|| {
         let host = receiver
