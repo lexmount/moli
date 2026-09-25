@@ -6,6 +6,7 @@ mod value;
 
 pub(crate) use events::{
     dispatch_text_control_event, queue_text_control_document_selection_change_event,
+    queue_text_control_selection_change_event,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use selection::replace_text_control_selection_after_beforeinput;

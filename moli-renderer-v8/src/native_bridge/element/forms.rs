@@ -243,7 +243,7 @@ pub(in crate::native_bridge) use self::submission::{
 pub(crate) use self::text_control::replace_text_control_selection_after_beforeinput;
 pub(crate) use self::text_control::{
     dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, replace_text_control_selection,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
     replace_text_control_selection_for_insert_html, text_control_value,
 };
 #[cfg(feature = "devtools")]
