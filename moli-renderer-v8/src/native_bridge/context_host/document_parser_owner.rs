@@ -382,9 +382,24 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
     }
 
     fn add_attrs_if_missing_for_parser(&mut self, node_id: DomHandle, attrs: Vec<Attribute>) {
+        let handlers = self
+            .host
+            .dom_host()
+            .is_connected(node_id)
+            .then(|| {
+                crate::native_bridge::element::ParserAddedBodyWindowHandlers::capture(
+                    self.host.dom_host(),
+                    node_id,
+                    &attrs,
+                )
+            })
+            .flatten();
         self.host
             .dom_host_mut()
             .add_attrs_if_missing_for_parser(node_id, attrs);
+        if let Some(handlers) = handlers {
+            handlers.initialize(self.scope, self.host);
+        }
     }
 
     fn create_text_node(&mut self, document_handle: DomHandle, text: String) -> DomHandle {
