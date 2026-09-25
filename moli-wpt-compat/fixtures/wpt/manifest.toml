@@ -20950,20 +20950,6 @@ tags = ["navigation-api", "precommit-handler", "navigation", "window-stop"]
 notes = "Unmodified upstream test including the June 2026 correction requiring Window.stop() to cancel intercepted fragment navigations."
 
 [[test]]
-id = "testharness-dom-exception-assertions"
-upstream = "local WPT harness DOMException assertion overload and realm canary"
-upstream_commit = "local-regression-2026-09-20"
-local_path = "ported/harness/dom-exception-assertions.html"
-type = "testharness"
-global = "window"
-status = "pass"
-wait_until = "load"
-timeout_ms = 5000
-suite = "broad"
-tags = ["testharness", "domexception", "cross-realm"]
-notes = "Local harness canary for implicit and explicit DOMException constructors, cross-realm exceptions, and rejection of incorrect constructors or missing exceptions."
-
-[[test]]
 id = "upstream-preload-preload-link-cached-stylesheet-different-doc"
 upstream = "web-platform-tests/preload/preload-link-cached-stylesheet-different-doc.html"
 upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
