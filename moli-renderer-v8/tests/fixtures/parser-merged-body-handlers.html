@@ -1,0 +1,33 @@
+<!doctype html>
+<p>This creates an implicit body before the body attributes arrive.</p>
+<script>
+window.mergedBodyTrace = [];
+window.addEventListener('resize', () => window.mergedBodyTrace.push('before'));
+</script>
+<body onresize="mergedBodyTrace.push('attribute:' + (this === window) + ':' + (event.currentTarget === window))"
+      onload="window.mergedBodyLoaded = this === window && event.target === document && event.isTrusted">
+<script>
+window.mergedBodyHandler = window.onresize;
+window.addEventListener('resize', () => window.mergedBodyTrace.push('after'));
+window.dispatchEvent(new Event('resize'));
+</script>
+<body onresize="mergedBodyTrace.push('ignored replacement')">
+<script>
+window.mergedBodySameHandler = window.onresize === window.mergedBodyHandler;
+window.dispatchEvent(new Event('resize'));
+window.onresize = null;
+</script>
+<body onresize="mergedBodyTrace.push('incorrectly reactivated')"
+      onfocus="mergedBodyTrace.push('focus:' + (this === window))">
+<script>
+window.dispatchEvent(new Event('resize'));
+window.dispatchEvent(new Event('focus'));
+window.mergedBodySnapshot = {
+  trace: window.mergedBodyTrace,
+  sameHandler: window.mergedBodySameHandler,
+  cleared: window.onresize === null && document.body.onresize === null,
+  attributeRetained: document.body.getAttribute('onresize').startsWith("mergedBodyTrace.push('attribute:"),
+  loadHandler: typeof window.onload === 'function' && window.onload === document.body.onload
+};
+window.mergedBodyScriptDone = true;
+</script>
