@@ -3,17 +3,51 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
 
+pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, webidl::WebIdlError> {
+    normalize_request_method(method).map_err(|error| {
+        webidl::WebIdlError::custom_message(match error {
+            RequestMethodError::InvalidToken => "Request method is not a valid HTTP token",
+            RequestMethodError::Forbidden => "Request method is forbidden",
+        })
+    })
+}
+
+#[derive(Debug)]
+pub(in crate::network_host) enum RequestMethodError {
+    InvalidToken,
+    Forbidden,
+}
+
 pub(in crate::network_host) fn normalize_request_method(
     method: &str,
-) -> Result<String, webidl::WebIdlError> {
-    if method.is_empty() {
-        return Ok("GET".to_owned());
+) -> Result<String, RequestMethodError> {
+    if method.is_empty()
+        || !method.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        return Err(RequestMethodError::InvalidToken);
     }
     let normalized = method.to_ascii_uppercase();
     if matches!(normalized.as_str(), "CONNECT" | "TRACE" | "TRACK") {
-        return Err(webidl::WebIdlError::custom_message(
-            "Request method is forbidden",
-        ));
+        return Err(RequestMethodError::Forbidden);
     }
     if matches!(
         normalized.as_str(),
@@ -108,7 +142,7 @@ fn request_input_snapshot_inner<'s>(
         return Ok(None);
     };
     let method = defined_object_string_property(scope, object, "method")
-        .map(|value| normalize_request_method(&value))
+        .map(|value| normalize_fetch_request_method(&value))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
     let mode =
@@ -169,7 +203,7 @@ fn request_input_snapshot_from_private_slots<'s>(
 ) -> Result<RequestInputSnapshot, webidl::WebIdlError> {
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
-        .map(|value| normalize_request_method(&value))
+        .map(|value| normalize_fetch_request_method(&value))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
     let mode =
