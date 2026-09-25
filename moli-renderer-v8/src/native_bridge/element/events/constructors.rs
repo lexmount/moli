@@ -396,6 +396,7 @@ struct FocusEventInitDeclaration<'scope> {
     cancelable: bool,
     composed: bool,
     related_target: v8::Local<'scope, v8::Value>,
+    view: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -841,10 +842,16 @@ pub(crate) fn construct_focus_event<'s>(
         false,
         true,
         related_target.unwrap_or_else(|| v8::null(scope).into()),
+        scope.get_current_context().global(scope).into(),
     )
     .bind(scope)
     .ok()?;
-    construct_event(scope, "FocusEvent", event_type, init)
+    // Native event initialization must not consult author Object.prototype getters.
+    let null = v8::null(scope);
+    if !init.set_prototype(scope, null.into())? {
+        return None;
+    }
+    construct_intrinsic_event(scope, "FocusEvent", event_type, init)
 }
 
 pub(crate) fn construct_input_event<'s>(

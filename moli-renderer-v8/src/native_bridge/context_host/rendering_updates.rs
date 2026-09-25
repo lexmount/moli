@@ -28,7 +28,7 @@ pub(super) struct PendingEnvironmentChange {
 pub(crate) enum PostParseAutofocusAdmission {
     /// The exact lifecycle owner was replaced before admission.
     StaleOwner,
-    /// Autofocus is processed, focus already exists, or no candidates remain.
+    /// Autofocus is processed or no candidates remain.
     NotNeeded,
     /// One exact rendering-update entry owns the pending flush.
     Published,

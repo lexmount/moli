@@ -264,7 +264,11 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
-        self.document_policy_container.clone()
+        self.document_policy_container().clone()
+    }
+
+    pub(super) fn document_policy_container(&self) -> &ChildDocumentPolicyContainer {
+        &self.document_policy_container
     }
 
     pub(super) fn document_internal_ancestor_origins(&self) -> Vec<WindowAccessOrigin> {
