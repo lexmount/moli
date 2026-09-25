@@ -720,24 +720,59 @@ fn update_focus_from_previous_with_previous_focus_within(
     if previous == next {
         return;
     }
-    let next_value = wrap_handle_value(scope, runtime_ptr, next);
+    let next_document = next.and_then(|handle| {
+        unsafe { &*runtime_ptr }
+            .dom_host()
+            .owner_document_handle(handle)
+    });
+    let previous_document = previous.and_then(|handle| {
+        unsafe { &*runtime_ptr }
+            .dom_host()
+            .owner_document_handle(handle)
+    });
+    let window_focus_transition =
+        window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
+    // Related targets do not cross Document boundaries in the focus chains.
+    let same_document = previous_document == next_document;
+    let next_value = same_document
+        .then(|| wrap_handle_value(scope, runtime_ptr, next))
+        .flatten();
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_active_element_handle(next);
-    if let Some(handle) = next.filter(|handle| is_text_control(runtime, *handle)) {
-        runtime.note_text_control_selection(handle);
-    }
-    if viewport_document.is_none() || next.is_some() {
-        runtime.mark_focus_changed(previous, next);
+    // Blur listeners observe the viewport, before the new target gains focus.
+    // Keep inactive Documents' focused areas when moving between Documents.
+    let previous_viewport = previous_document.or(runtime.focused_viewport_document());
+    let common_ancestor = previous.zip(next).and_then(|(previous, next)| {
+        let mut candidate = Some(previous);
+        while let Some(handle) = candidate {
+            if shadow_including_contains(runtime, handle, next) {
+                return Some(handle);
+            }
+            candidate = flat_tree_parent(runtime, handle);
+        }
+        None
+    });
+    runtime.set_active_element_handle(None);
+    runtime
+        .dom_host()
+        .set_focus_transition_common_ancestor(common_ancestor);
+    runtime.set_focused_viewport_document(previous_viewport);
+    if viewport_document.is_none()
+        && (next.is_none()
+            || previous.and_then(|handle| runtime.dom_host().owner_document_handle(handle))
+                == next_document)
+    {
+        runtime.mark_focus_changed(previous, None);
     }
     if let Some(previous_focus_within) = previous_focus_within {
         runtime.note_focus_style_activity_with_previous_focus_within(
             previous,
-            next,
+            None,
             Some(previous_focus_within),
         );
     } else {
-        runtime.note_focus_style_activity(previous, next);
+        runtime.note_focus_style_activity(previous, None);
     }
+    let mut redirected = false;
     if let Some(previous_handle) = previous {
         dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, previous_handle);
         if let Some(event) = construct_node_focus_event(
@@ -750,24 +785,62 @@ fn update_focus_from_previous_with_previous_focus_within(
         ) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
+        // A blur listener can complete a different focus transition. Finish the
+        // old target's focusout, but do not overwrite the listener's decision.
+        redirected = unsafe { &*runtime_ptr }.active_element_handle().is_some();
         if let Some(event) = construct_node_focus_event(
             scope,
             runtime_ptr,
             previous_handle,
             "focusout",
-            next_value,
+            if redirected { None } else { next_value },
             true,
         ) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
     }
-    let window_focus_transition =
-        window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
+    if redirected || unsafe { &*runtime_ptr }.active_element_handle().is_some() {
+        clear_focus_transition_style(unsafe { &mut *runtime_ptr });
+        return;
+    }
+    let target_is_current = |runtime: &JsContextHost| {
+        next.is_none_or(|handle| {
+            runtime.dom_host().owner_document_handle(handle) == next_document
+                && next_document.is_some_and(|document| {
+                    runtime.top_level_document_for_document(document).is_some()
+                })
+                && is_focusable(runtime, handle)
+        })
+    };
+    if !target_is_current(unsafe { &*runtime_ptr }) {
+        clear_focus_transition_style(unsafe { &mut *runtime_ptr });
+        return;
+    }
     if let Some((previous_window, _)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
     }
-    let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.active_element_handle().is_some() || !target_is_current(runtime) {
+        clear_focus_transition_style(runtime);
+        return;
+    }
+    runtime.set_active_element_handle(next);
+    runtime.set_focused_viewport_document(if next.is_some() {
+        None
+    } else {
+        viewport_document.or(previous_viewport)
+    });
+    if let Some(handle) = next.filter(|handle| is_text_control(runtime, *handle)) {
+        runtime.note_text_control_selection(handle);
+    }
+    if viewport_document.is_none() || next.is_some() {
+        runtime.mark_focus_changed(previous, next);
+    }
+    runtime.note_focus_style_activity(None, next);
+    let previous_value = same_document
+        .then(|| wrap_handle_value(scope, runtime_ptr, previous))
+        .flatten();
     if let Some(next_handle) = next {
         if let Some(event) = construct_node_focus_event(
             scope,
@@ -779,6 +852,9 @@ fn update_focus_from_previous_with_previous_focus_within(
         ) {
             let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
         }
+        if unsafe { &*runtime_ptr }.active_element_handle() != Some(next_handle) {
+            return;
+        }
         if let Some(event) = construct_node_focus_event(
             scope,
             runtime_ptr,
@@ -789,15 +865,30 @@ fn update_focus_from_previous_with_previous_focus_within(
         ) {
             let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
         }
+        if unsafe { &*runtime_ptr }.active_element_handle() != Some(next_handle) {
+            return;
+        }
         if let Some(target) =
             dispatch_interest_event_if_needed(scope, runtime_ptr, next_handle, "interest")
         {
             show_interest_popover_if_needed(scope, runtime_ptr, next_handle, target);
         }
+        if unsafe { &*runtime_ptr }.active_element_handle() != Some(next_handle) {
+            return;
+        }
         schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
     }
     if let Some((_, next_window)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
+    }
+}
+
+fn clear_focus_transition_style(runtime: &mut JsContextHost) {
+    if let Some(ancestor) = runtime
+        .dom_host()
+        .set_focus_transition_common_ancestor(None)
+    {
+        runtime.note_focus_style_activity(Some(ancestor), runtime.active_element_handle());
     }
 }
 
@@ -811,6 +902,11 @@ fn window_focus_transition_for_handles(
     let execution_window = current_execution_window_endpoint(scope);
     let previous_window = previous
         .and_then(|handle| focused_window_endpoint(runtime, handle))
+        .or_else(|| {
+            runtime
+                .focused_viewport_document()
+                .and_then(|document| runtime.window_endpoint_for_document(document))
+        })
         .unwrap_or(execution_window);
     // Clearing an element's focus does not blur its Window. A later focus in
     // another Document supplies the concrete new focused-frame endpoint.

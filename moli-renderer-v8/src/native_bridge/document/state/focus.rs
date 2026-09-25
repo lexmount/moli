@@ -18,6 +18,11 @@ pub(in crate::native_bridge) fn node_document_active_element_getter_function<'s>
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime
         .active_element_handle()
+        .or_else(|| {
+            runtime.focused_viewport_document().and_then(|document| {
+                runtime.child_browsing_context_host_for_document_handle(document)
+            })
+        })
         .and_then(|active| retarget_active_element_to_document(runtime, active, handle))
         .or_else(|| {
             runtime
