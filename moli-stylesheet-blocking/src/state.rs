@@ -576,9 +576,16 @@ impl StylesheetBlockingState {
     }
 
     pub fn has_any_pending_entries(&self) -> bool {
-        self.blocking_entries
-            .values()
-            .any(|entry| self.blocking_entry_status(entry) == StylesheetBlockingStatus::Pending)
+        self.has_pending_entries_matching(|_| true)
+    }
+
+    /// Query blockers belonging to a particular embedding Document without
+    /// letting an unrelated Document's fetch delay its rendering work.
+    pub fn has_pending_entries_matching(&self, mut includes: impl FnMut(NodeId) -> bool) -> bool {
+        self.blocking_entries.iter().any(|(owner, entry)| {
+            includes(*owner)
+                && self.blocking_entry_status(entry) == StylesheetBlockingStatus::Pending
+        })
     }
 
     pub fn invalidate_node(&mut self, node_id: NodeId) {

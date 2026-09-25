@@ -130,6 +130,169 @@ const POPUP_READINESS_MARKUP: &str = r#"<!doctype html><script>
 })();
 </script>"#;
 
+#[tokio::test(flavor = "current_thread")]
+async fn popup_autofocus_lifecycle_keeps_rendering_work_with_its_exact_document() {
+    run_page_vm_async_test(async move {
+        for retire_before_flush in [false, true] {
+            let (base_url, server) = spawn_path_response_http_server(vec![(
+                "/autofocus.html",
+                "HTTP/1.1 200 OK",
+                r#"<!doctype html><body><input id=first autofocus><script>
+opener.focusOrder=[];
+document.addEventListener('DOMContentLoaded',()=>{
+  opener.focusOrder.push('dcl');
+  queueMicrotask(()=>opener.focusOrder.push('reaction'));
+});
+document.getElementById('first').onfocus=()=>opener.focusOrder.push('old-focus');
+</script>"#
+                    .to_owned(),
+                Duration::ZERO,
+            )])
+            .await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, mut queue, mut wake) =
+                owner_attached_popup_page_vm(&loader, Url::parse(&format!("{base_url}/opener"))?);
+            open_popup(
+                &mut page_vm,
+                &format!("{base_url}/autofocus.html"),
+                "focus-popup",
+                "popup",
+            );
+            wait_for_popup_terminal(&mut queue, &mut wake, "popup autofocus response").await;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::ResourceCompletion,
+                        &loader,
+                    )
+                    .await?
+            );
+            assert_eq!(page_vm.vm_mut().eval("focusOrder.join('|')")?, "");
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::DomManipulation(
+                            PageDomManipulationTestFamily::PopupDocumentLifecycle
+                        ),
+                        &loader,
+                    )
+                    .await?
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("focusOrder.join('|')")?,
+                "dcl|reaction"
+            );
+            let claimed = page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .expect("DOMContentLoaded must publish autofocus after its checkpoint");
+            let expected = if retire_before_flush {
+                page_vm.vm_mut().eval("popup.location.href='about:blank'")?;
+                "dcl|reaction"
+            } else {
+                "dcl|reaction|old-focus"
+            };
+            page_vm
+                .run_claimed_selected_page_task_for_test(claimed, &loader)
+                .await?;
+            assert_eq!(page_vm.vm_mut().eval("focusOrder.join('|')")?, expected);
+            if !retire_before_flush {
+                page_vm.vm_mut().eval("popup.location.href='about:blank'")?;
+            }
+            page_vm.vm_mut().eval(
+                "popup.document.body.innerHTML='<input id=successor autofocus>'; 'inserted'",
+            )?;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate,
+                        &loader,
+                    )
+                    .await?
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("popup.document.activeElement.id")?,
+                "successor",
+                "a new Document must not inherit the retired Document's processed flag"
+            );
+            page_vm.vm_mut().eval("popup.close()")?;
+            server.await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup autofocus lifecycle must preserve exact Document ownership");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_autofocus_respects_its_response_sandbox_and_permissions_policy() {
+    run_page_vm_async_test(async move {
+        for status in [
+            "HTTP/1.1 200 OK\r\nContent-Security-Policy: sandbox allow-same-origin",
+            "HTTP/1.1 200 OK\r\nPermissions-Policy: focus-without-user-activation=()",
+        ] {
+            let (base_url, server) = spawn_path_response_http_server(vec![(
+                "/blocked-autofocus.html",
+                status,
+                "<!doctype html><body><input id=parser autofocus>".to_owned(),
+                Duration::ZERO,
+            )])
+            .await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, mut queue, mut wake) =
+                owner_attached_popup_page_vm(&loader, Url::parse(&format!("{base_url}/opener"))?);
+            open_popup(
+                &mut page_vm,
+                &format!("{base_url}/blocked-autofocus.html"),
+                "blocked",
+                "popup",
+            );
+            wait_for_popup_terminal(&mut queue, &mut wake, "popup policy response").await;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::ResourceCompletion,
+                        &loader,
+                    )
+                    .await?
+            );
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::DomManipulation(
+                            PageDomManipulationTestFamily::PopupDocumentLifecycle
+                        ),
+                        &loader,
+                    )
+                    .await?
+            );
+            page_vm.vm_mut().eval(
+                "popup.document.body.insertAdjacentHTML('beforeend','<input id=late autofocus>')",
+            )?;
+            assert!(
+                page_vm
+                    .claim_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate,
+                    )
+                    .is_none(),
+                "{status}: parser and script insertion must obey the popup's policy"
+            );
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("popup.document.activeElement===popup.document.body")?,
+                "true"
+            );
+            page_vm.vm_mut().eval("popup.close()")?;
+            server.await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup autofocus admission must honor its own response policy");
+}
+
 async fn assert_popup_readiness_tasks(
     page_vm: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,

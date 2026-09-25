@@ -193,6 +193,9 @@ impl JsContextHost {
                 .expect("current popup")
                 .stream = None;
             host.remove_all_children_for_document_replacement(scope, host_ptr, document_handle);
+            // The input stream changes, but the same Document retains its
+            // autofocus processed flag. Retire only its old candidates.
+            host.take_autofocus_candidates(document_handle);
             host.set_lightweight_popup_same_document_url(scope, popup_id, url.clone());
             host.dom_host_mut()
                 .set_html_quirks_mode_for_parser_document(

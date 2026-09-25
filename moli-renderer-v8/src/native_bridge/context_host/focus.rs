@@ -9,6 +9,80 @@ pub(super) struct DocumentFocusChangeState {
 }
 
 impl JsContextHost {
+    pub(crate) fn clear_disconnected_document_focus(&mut self) {
+        let documents = self
+            .document_focus_changes
+            .iter()
+            .filter_map(|(document, state)| {
+                state
+                    .focused_area
+                    .filter(|area| {
+                        !self.dom_host().is_connected(*area)
+                            || self.dom_host().owner_document_handle(*area) != Some(*document)
+                    })
+                    .map(|_| *document)
+            })
+            .collect::<Vec<_>>();
+        for document in documents {
+            // A retained iframe handle must not revive its former parent's
+            // focus when script inserts the iframe again after removal.
+            self.note_document_focused_area(document, None);
+        }
+    }
+
+    pub(crate) fn note_inserted_autofocus_candidates(&mut self, roots: &[DomHandle]) {
+        for &root in roots {
+            let Some(document) = self.dom_host().owner_document_handle(root) else {
+                continue;
+            };
+            if self.autofocus_processed(document) || !self.document_allows_autofocus(document) {
+                continue;
+            }
+            if self
+                .queue_autofocus_candidates_in_subtrees(&[root])
+                .is_empty()
+            {
+                continue;
+            }
+            // Parsing admits after DOMContentLoaded and its checkpoint. Late
+            // insertion must also publish work without requiring an author rAF.
+            if document == self.document_handle() {
+                if self.dom_content_loaded_dispatched()
+                    && let Some(owner) = self.current_main_document_task_owner()
+                {
+                    let _ = self.queue_main_document_post_parse_autofocus(owner);
+                }
+            } else if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
+                self.queue_lightweight_popup_post_parse_autofocus(popup_id);
+            }
+        }
+    }
+
+    pub(crate) fn document_focused_area(&self, document: DomHandle) -> Option<DomHandle> {
+        self.document_focus_changes
+            .get(&document)
+            .and_then(|state| state.focused_area)
+            .filter(|handle| {
+                self.dom_host().is_connected(*handle)
+                    && self.dom_host().owner_document_handle(*handle) == Some(document)
+            })
+    }
+
+    pub(crate) fn top_level_document_for_document(
+        &self,
+        mut document: DomHandle,
+    ) -> Option<DomHandle> {
+        loop {
+            match self.window_endpoint_for_document(document)? {
+                PendingWindowMessageEndpoint::TopWindow
+                | PendingWindowMessageEndpoint::LightweightPopup(_) => return Some(document),
+                PendingWindowMessageEndpoint::ChildWindow(container) => {
+                    document = self.dom_host().owner_document_handle(container)?;
+                }
+            }
+        }
+    }
+
     pub(crate) fn focus_change_epoch(&self, document: DomHandle) -> u64 {
         self.document_focus_changes
             .get(&document)
