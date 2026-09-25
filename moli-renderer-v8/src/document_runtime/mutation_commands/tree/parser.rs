@@ -170,6 +170,11 @@ impl DocumentRuntime {
     ) {
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+            self.discard_child_contexts_before_reinsertion_followups(
+                scope,
+                host_ptr,
+                &insertion_plan,
+            );
         }
         self.assert_active_parser_document_incarnation();
         self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
