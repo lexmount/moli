@@ -7,6 +7,8 @@ mod install;
 mod interceptors;
 mod store;
 
+pub(crate) use store::WebStorageEventRecipient;
+
 pub(super) use accessors::{window_local_storage_getter, window_session_storage_getter};
 pub(crate) use install::install_storage_aliases_for_window;
 pub(super) use install::{ensure_storage_runtime_state_for_window, install_storage_runtime_state};

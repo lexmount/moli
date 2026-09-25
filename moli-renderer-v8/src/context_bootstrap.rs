@@ -495,13 +495,13 @@ pub(crate) use self::trusted_types::{
     trusted_type_string_or_throw, trusted_types_code_generation_check,
 };
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
-pub(crate) use self::web_storage::install_storage_aliases_for_window;
 pub use self::web_storage::{
     SharedWebStorageStore, WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord,
     WebStorageMutationSubscription, WebStorageString, deep_clone_shared_web_storage_store,
     new_shared_json_web_storage_store, new_shared_web_storage_store,
     web_storage_area_key_for_storage_key, web_storage_partitioned_area_key,
 };
+pub(crate) use self::web_storage::{WebStorageEventRecipient, install_storage_aliases_for_window};
 pub(crate) use self::webassembly_runtime::{
     set_current_context_webassembly_default_prototype, webassembly_default_prototype_for_context,
 };

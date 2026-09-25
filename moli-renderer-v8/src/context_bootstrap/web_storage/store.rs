@@ -18,6 +18,10 @@ use typed_num::Num;
 use crate::util::{
     string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
 };
+use crate::{
+    native_bridge::WindowTaskTarget,
+    page_task_queue::{RendererPageStorageEventData, RendererPageStorageEventDeliverySender},
+};
 
 const WEB_STORAGE_QUOTA_BYTES: usize = 5 * 1024 * 1024;
 type WebStorageJsonVersion = Num<1>;
@@ -66,6 +70,53 @@ enum WebStorageBackend {
 pub struct WebStorageStore {
     backend: WebStorageBackend,
     mutation_subscribers: Vec<WebStorageMutationSubscriber>,
+    event_recipients: Vec<Weak<WebStorageEventRecipient>>,
+}
+
+/// One live LocalWindow's localStorage delivery capability. The Window owns
+/// this registration; the shared storage partition keeps only a weak reference.
+pub(crate) struct WebStorageEventRecipient {
+    origin: String,
+    area_key: String,
+    target: WindowTaskTarget,
+    sender: Box<dyn WebStorageEventDelivery>,
+}
+
+// Keep the partition's Send/Sync graph independent of the Page scheduler's
+// complete task enum, which itself contains shared storage handles.
+trait WebStorageEventDelivery: Send + Sync {
+    fn same_page_as(&self, source: &RendererPageStorageEventDeliverySender) -> bool;
+    fn send(&self, target: WindowTaskTarget, data: RendererPageStorageEventData) -> bool;
+}
+
+impl WebStorageEventDelivery for RendererPageStorageEventDeliverySender {
+    fn same_page_as(&self, source: &Self) -> bool {
+        self.same_page_route_as(source)
+    }
+
+    fn send(&self, target: WindowTaskTarget, data: RendererPageStorageEventData) -> bool {
+        self.send(target, data).is_ok()
+    }
+}
+
+impl WebStorageEventRecipient {
+    pub(crate) fn new(
+        origin: String,
+        area_key: String,
+        target: WindowTaskTarget,
+        sender: RendererPageStorageEventDeliverySender,
+    ) -> Self {
+        Self {
+            origin,
+            area_key,
+            target,
+            sender: Box::new(sender),
+        }
+    }
+
+    pub(crate) fn matches(&self, origin: &str, area_key: &str, target: WindowTaskTarget) -> bool {
+        self.origin == origin && self.area_key == area_key && self.target == target
+    }
 }
 
 pub type SharedWebStorageStore = Arc<Mutex<WebStorageStore>>;
@@ -146,6 +197,7 @@ pub fn deep_clone_shared_web_storage_store(
     Arc::new(Mutex::new(WebStorageStore {
         backend: WebStorageBackend::Memory(memory),
         mutation_subscribers: Vec::new(),
+        event_recipients: Vec::new(),
     }))
 }
 
@@ -154,6 +206,7 @@ pub fn new_shared_json_web_storage_store(path: impl AsRef<Path>) -> Result<Share
     Ok(Arc::new(Mutex::new(WebStorageStore {
         backend: WebStorageBackend::Json(backend),
         mutation_subscribers: Vec::new(),
+        event_recipients: Vec::new(),
     })))
 }
 
@@ -162,6 +215,7 @@ impl Default for WebStorageStore {
         Self {
             backend: WebStorageBackend::Memory(MemoryWebStorageBackend::default()),
             mutation_subscribers: Vec::new(),
+            event_recipients: Vec::new(),
         }
     }
 }
@@ -340,6 +394,42 @@ fn updated_storage_size(
 }
 
 impl WebStorageStore {
+    pub(crate) fn register_event_recipient(&mut self, recipient: &Arc<WebStorageEventRecipient>) {
+        self.event_recipients
+            .retain(|entry| entry.strong_count() != 0);
+        self.event_recipients.push(Arc::downgrade(recipient));
+    }
+
+    pub(crate) fn queue_remote_storage_events(
+        &mut self,
+        source: &RendererPageStorageEventDeliverySender,
+        origin: &str,
+        area_key: &str,
+        data: &RendererPageStorageEventData,
+    ) -> usize {
+        debug_assert!(!data.is_session());
+        let mut queued = 0;
+        self.event_recipients.retain(|entry| {
+            let Some(recipient) = entry.upgrade() else {
+                return false;
+            };
+            // The source Page has already captured its local recipients,
+            // including not-yet-materialized child Windows. Avoid duplicates.
+            if recipient.sender.same_page_as(source)
+                || recipient.origin != origin
+                || recipient.area_key != area_key
+            {
+                return true;
+            }
+            if !recipient.sender.send(recipient.target, data.clone()) {
+                return false;
+            }
+            queued += 1;
+            true
+        });
+        queued
+    }
+
     pub fn subscribe_mutations(
         &mut self,
         area_kind: WebStorageAreaKind,

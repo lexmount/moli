@@ -129,6 +129,10 @@ pub(crate) struct RendererPageStorageEventDeliverySender {
 }
 
 impl RendererPageStorageEventDeliverySender {
+    pub(crate) fn same_page_route_as(&self, other: &Self) -> bool {
+        self.route.same_route_as(&other.route)
+    }
+
     pub(super) fn new(
         route: RendererPageDomManipulationRoute,
         root_document: RendererDocumentToken,
