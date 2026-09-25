@@ -158,6 +158,7 @@ mod modulepreload_start_completion;
 mod navigation_api_task;
 mod opfs;
 mod parser_written_script_residence;
+mod popup_autofocus;
 mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod promise_rejection;

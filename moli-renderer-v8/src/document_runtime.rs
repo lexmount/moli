@@ -7,6 +7,7 @@ use std::{
 
 use url::Url;
 
+mod autofocus;
 mod destructive_writes;
 mod devtools_mutations;
 mod document_write;
@@ -793,8 +794,7 @@ pub(super) struct DocumentRuntime {
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
-    autofocus_processed: bool,
-    autofocus_candidates: Vec<DomHandle>,
+    document_autofocus: HashMap<DomHandle, autofocus::DocumentAutofocusState>,
     document_incarnation: DocumentRuntimeIncarnationIdentity,
     document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,
