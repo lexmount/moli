@@ -103,6 +103,9 @@ pub(crate) fn window_opener_value<'s>(
                     .unwrap_or(null),
             );
         }
+        if let Some(opener) = host.top_window_opener(scope) {
+            return Some(opener.into());
+        }
     }
     let opener = (|| {
         let host = receiver
