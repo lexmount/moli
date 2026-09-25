@@ -6043,6 +6043,16 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn initialize_parser_added_body_window_handlers_in_default_context(
+        &mut self,
+        handlers: crate::native_bridge::element::ParserAddedBodyWindowHandlers,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            handlers.initialize(scope, host_ptr);
+            Ok(())
+        })
+    }
+
     pub(crate) fn sync_selectedcontents_after_parser_option_finished_in_default_context(
         &mut self,
         option: NativeNodeId,

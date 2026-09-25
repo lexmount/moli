@@ -239,9 +239,27 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
     }
 
     fn add_attrs_if_missing_for_parser(&mut self, node_id: NativeNodeId, attrs: Vec<Attribute>) {
+        let handlers = self
+            .vm
+            .document_runtime
+            .dom_host()
+            .is_connected(node_id)
+            .then(|| {
+                crate::native_bridge::element::ParserAddedBodyWindowHandlers::capture(
+                    self.vm.document_runtime.dom_host(),
+                    node_id,
+                    &attrs,
+                )
+            })
+            .flatten();
         self.vm
             .document_runtime
             .add_attrs_if_missing_for_parser_in_live_dom_host(node_id, attrs);
+        if let Some(handlers) = handlers {
+            let _ = self
+                .vm
+                .initialize_parser_added_body_window_handlers_in_default_context(handlers);
+        }
     }
 
     fn create_text_node(&mut self, document_handle: NativeNodeId, text: String) -> NativeNodeId {

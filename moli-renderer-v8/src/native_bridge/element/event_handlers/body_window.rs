@@ -250,11 +250,64 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
+    initialize_parser_body_window_event_handlers(
+        scope,
+        runtime_ptr,
+        handle,
+        body_or_frameset_window_event_handler_properties(),
+    );
+}
+
+/// Attributes accepted by a parser merge, captured before the DOM changes.
+/// An ignored duplicate must not replace a compiled handler or reactivate one
+/// that author code cleared through the corresponding IDL property.
+pub(crate) struct ParserAddedBodyWindowHandlers {
+    handle: DomHandle,
+    names: Vec<&'static str>,
+}
+
+impl ParserAddedBodyWindowHandlers {
+    pub(crate) fn capture(
+        dom_host: &crate::dom::native::DomHost,
+        handle: DomHandle,
+        attrs: &[crate::dom::native::Attribute],
+    ) -> Option<Self> {
+        if !dom_host.node(handle).is_some_and(|node| {
+            node.is_html_element_named("body") || node.is_html_element_named("frameset")
+        }) {
+            return None;
+        }
+        let names = body_or_frameset_window_event_handler_properties()
+            .filter(|name| {
+                dom_host.get_attribute(handle, name).is_none()
+                    && attrs
+                        .iter()
+                        .any(|attr| attr.namespace().is_empty() && attr.local_name() == *name)
+            })
+            .collect::<Vec<_>>();
+        (!names.is_empty()).then_some(Self { handle, names })
+    }
+
+    pub(crate) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut JsContextHost,
+    ) {
+        initialize_parser_body_window_event_handlers(scope, runtime_ptr, self.handle, self.names);
+    }
+}
+
+fn initialize_parser_body_window_event_handlers(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    names: impl IntoIterator<Item = &'static str>,
+) {
     let runtime = unsafe { &mut *runtime_ptr };
     if super::body_or_frameset_window_owner(runtime, handle).is_none() {
         return;
     }
-    for handler_name in body_or_frameset_window_event_handler_properties() {
+    for handler_name in names {
         if runtime
             .dom_host()
             .get_attribute(handle, handler_name)

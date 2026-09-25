@@ -12764,6 +12764,37 @@ window.selectedcontentMoveState = [selectedcontent.textContent.trim()];
     }
 
     #[test]
+    fn parser_merged_body_attributes_register_window_handlers_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/parser-merged-body-handlers.html"
+            )))
+            .await;
+            let result = page_vm
+                .evaluate_expression("JSON.stringify(mergedBodySnapshot)")
+                .expect("merged body handler snapshot should evaluate");
+            let snapshot: serde_json::Value =
+                serde_json::from_str(result["value"].as_str().expect("snapshot JSON")).unwrap();
+            assert_eq!(
+                snapshot,
+                serde_json::json!({
+                    "trace": ["before", "attribute:true:true", "after",
+                        "before", "attribute:true:true", "after", "before", "after", "focus:true"],
+                    "sameHandler": true,
+                    "cleared": true,
+                    "attributeRetained": true,
+                    "loadHandler": true
+                })
+            );
+        }));
+    }
+
+    #[test]
     fn parser_merged_root_attributes_hide_nonce_content_values() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
