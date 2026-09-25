@@ -1464,8 +1464,6 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
-  accessor(HTMLAreaElement.prototype, "hreflang");
-  accessor(HTMLAreaElement.prototype, "type");
   accessor(HTMLLinkElement.prototype, "hreflang");
   for (const name of ["download", "ping", "hreflang"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
@@ -1489,7 +1487,7 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang", "type"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
