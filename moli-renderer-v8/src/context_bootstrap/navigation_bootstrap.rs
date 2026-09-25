@@ -2,7 +2,7 @@ use super::history_runtime::state::{history_window_owner, window_has_shared_hist
 use super::location_history_storage::WINDOW_RUNTIME_OWNER_SLOT;
 use super::location_runtime::{
     build_location_runtime_object, install_location_runtime_state,
-    location_belongs_to_current_local_window, location_owner_has_current_realm, location_target,
+    location_belongs_to_current_local_window, location_owner_has_current_realm,
     sync_window_location_history_navigation_runtime_surface, wrap_location_object,
 };
 use super::navigation_activation::{
@@ -78,7 +78,7 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
     Ok(())
 }
 
-pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
+pub(crate) fn reset_window_location_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
     href: &str,
@@ -101,12 +101,18 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
         Some(_) | None => None,
     };
     if let Some(location) = location {
-        let location = location_target(scope, location);
-        LocationRuntimeObjectDeclaration::new(window, href.to_owned())
-            .initialize(scope, location)
-            .map_err(|error| anyhow::anyhow!("failed to initialize Location object: {error}"))?;
         install_location_runtime_state(scope, location, href)?;
     }
+
+    Ok(())
+}
+
+pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    href: &str,
+) -> Result<()> {
+    reset_window_location_runtime_state(scope, window, href)?;
 
     let initial_seed = initial_navigation_history_seed(scope, window, href);
     let history = match window_runtime_object(scope, window, WINDOW_HISTORY_SLOT) {

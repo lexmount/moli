@@ -108,6 +108,42 @@ struct WindowContextSecurityOrigin {
     access_policy: WindowExecutionContextAccessPolicy,
 }
 
+/// The origin of a particular LocalWindow, including virtual popup realms.
+/// Retained bindings keep this identity when a browsing context navigates.
+#[derive(Clone)]
+pub(crate) struct WindowSecurityOrigin(WindowSecurityOriginSource);
+
+#[derive(Clone)]
+enum WindowSecurityOriginSource {
+    Context(Rc<WindowContextSecurityOrigin>),
+    Popup(Rc<RefCell<WindowAccessOrigin>>),
+}
+
+impl WindowSecurityOrigin {
+    pub(crate) fn for_context(context: v8::Local<'_, v8::Context>) -> Option<Self> {
+        context
+            .get_slot::<WindowContextSecurityOrigin>()
+            .map(|origin| Self(WindowSecurityOriginSource::Context(Rc::clone(&origin))))
+    }
+
+    pub(super) fn for_popup(origin: Rc<RefCell<WindowAccessOrigin>>) -> Self {
+        Self(WindowSecurityOriginSource::Popup(origin))
+    }
+
+    fn current_origin(&self) -> WindowAccessOrigin {
+        match &self.0 {
+            WindowSecurityOriginSource::Context(origin) => origin.current_origin(),
+            WindowSecurityOriginSource::Popup(origin) => origin.borrow().clone(),
+        }
+    }
+
+    pub(crate) fn can_access(&self, target: &Self) -> bool {
+        matches!(&self.0, WindowSecurityOriginSource::Context(origin)
+            if origin.access_policy == WindowExecutionContextAccessPolicy::Universal)
+            || self.current_origin().can_access(&target.current_origin())
+    }
+}
+
 impl WindowContextSecurityOrigin {
     fn current_origin(&self) -> WindowAccessOrigin {
         let mut origin = self.origin.clone();
@@ -123,6 +159,22 @@ impl WindowContextSecurityOrigin {
 }
 
 impl JsContextHost {
+    pub(crate) fn window_security_origin_for_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        context: v8::Local<'s, v8::Context>,
+    ) -> Option<WindowSecurityOrigin> {
+        // Read the scope of the requested realm, not the callback's current
+        // realm: popup bindings can call into a real child, and a popup can
+        // itself share a child opener's concrete V8 context.
+        if let Some(popup_id) =
+            super::popups::active_lightweight_popup_id_for_context(scope, context)
+        {
+            return self.lightweight_popup_security_origin(popup_id);
+        }
+        WindowSecurityOrigin::for_context(context)
+    }
+
     pub(in crate::native_bridge) fn document_has_same_origin_as_entry<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,

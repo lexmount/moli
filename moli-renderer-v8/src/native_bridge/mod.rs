@@ -59,7 +59,7 @@ pub(crate) use collections::{
 };
 pub(crate) use context_host::{
     DetachedChildBrowsingContextDocumentSnapshot, ImageDecodeRequestId,
-    RuntimeObservableContextToken, cross_origin_lightweight_popup_id,
+    RuntimeObservableContextToken, WindowSecurityOrigin, cross_origin_lightweight_popup_id,
     current_runtime_observable_context_token, defer_active_lightweight_popup_restore,
     enter_active_lightweight_popup_scope, enter_top_level_lightweight_popup_scope,
     install_child_window_proxy_access_check_handlers,
