@@ -1,6 +1,5 @@
 use super::*;
 
-mod specifiers;
 use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
