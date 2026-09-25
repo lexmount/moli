@@ -9,7 +9,9 @@ pub(super) use crate::context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES;
 pub(in crate::native_bridge::context_host) use window::ChildWindowProxyRecords;
 pub(crate) use window::{
     CrossOriginWindowAccessor, CrossOriginWindowProperty, cross_origin_lightweight_popup_id,
-    install_child_window_proxy_access_check_handlers, is_cross_origin_location_proxy,
-    is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
-    throw_cross_origin_type_error,
+    install_child_window_proxy_access_check_handlers,
+    install_popup_window_cross_origin_access_surface,
+    install_synthetic_window_access_check_handlers, is_cross_origin_location_proxy,
+    is_cross_origin_top_window_proxy, synthetic_window_context_can_access,
+    throw_cross_origin_location_security_error, throw_cross_origin_type_error,
 };

@@ -17,6 +17,7 @@ pub(super) fn build_window_wrapper_template<'s, 'i>(
     // global interface surface from Window.prototype because [Global]
     // interface members are own properties in Blink and Web IDL.
     crate::context_bootstrap::install_window_own_template_bindings(scope, template);
+    super::context_host::install_synthetic_window_access_check_handlers(template);
     template
 }
 
