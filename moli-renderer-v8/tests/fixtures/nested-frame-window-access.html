@@ -1,0 +1,50 @@
+<!doctype html><body><script>
+const rows = [];
+const readers = {
+  contentWindow: frame => frame.contentWindow,
+  indexed: (_, index) => window[index],
+  named: frame => window[frame.name],
+  descriptor: (_, index) => Object.getOwnPropertyDescriptor(window, String(index)).value,
+  contentDocument: frame => frame.contentDocument.defaultView
+};
+for (const mode of ['empty', 'about-blank', 'srcdoc', 'sandbox-same-origin']) {
+  for (const [reader, read] of Object.entries(readers)) {
+    const frame = document.createElement('iframe');
+    frame.name = 'nested-' + mode + '-' + reader;
+    if (mode === 'about-blank') frame.src = 'about:blank';
+    if (mode === 'srcdoc') frame.srcdoc = '<body>srcdoc';
+    if (mode === 'sandbox-same-origin') frame.sandbox = 'allow-scripts allow-same-origin';
+    const index = window.length;
+    document.body.append(frame);
+    try {
+      const child = read(frame, index);
+      const doc = child.document;
+      rows.push({mode, reader, checks: [
+        doc === frame.contentDocument,
+        doc.defaultView === child,
+        child.origin === origin,
+        child.parent === window,
+        child.top === top,
+        child === frame.contentWindow,
+        child === window[index],
+        child === window[frame.name],
+        child.eval('globalThis === window')
+      ]});
+    } catch (error) {
+      rows.push({mode, reader, error: error.name});
+    }
+  }
+}
+const opaque = document.createElement('iframe');
+opaque.sandbox = 'allow-scripts';
+const opaqueIndex = window.length;
+document.body.append(opaque);
+const denials = [];
+for (const child of [opaque.contentWindow, window[opaqueIndex]]) {
+  try { child.document; denials.push(false); }
+  catch (error) { denials.push(error.name === 'SecurityError'); }
+}
+let topDenied = false;
+try { top.document; } catch (error) { topDenied = error.name === 'SecurityError'; }
+parent.postMessage({rows, opaqueDocumentNull: opaque.contentDocument === null, denials, topDenied}, '*');
+</script>
