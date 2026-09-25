@@ -393,7 +393,9 @@ pub(crate) fn construct_focus_event<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let event = construct_native_focus_event(scope, event_type, related_target, bubbles)?;
+    let view = scope.get_current_context().global(scope);
+    let event =
+        construct_native_focus_event(scope, event_type, related_target, bubbles, Some(view))?;
     mark_event_trusted(scope, event);
     Some(event)
 }

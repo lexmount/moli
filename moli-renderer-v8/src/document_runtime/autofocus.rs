@@ -1,9 +1,10 @@
 use super::{DocumentRuntime, DomHandle, Node};
+use std::collections::VecDeque;
 
 #[derive(Debug, Default)]
 pub(super) struct DocumentAutofocusState {
     processed: bool,
-    candidates: Vec<DomHandle>,
+    candidates: VecDeque<DomHandle>,
 }
 
 impl DocumentRuntime {
@@ -23,40 +24,43 @@ impl DocumentRuntime {
             .is_none_or(|state| state.processed)
     }
 
-    pub(crate) fn autofocus_candidates(&self, document: DomHandle) -> &[DomHandle] {
+    pub(crate) fn next_autofocus_candidate(&self, document: DomHandle) -> Option<DomHandle> {
         self.document_autofocus
             .get(&document)
-            .map_or(&[], |state| state.candidates.as_slice())
+            .and_then(|state| state.candidates.front().copied())
     }
 
-    pub(crate) fn take_autofocus_candidates(&mut self, document: DomHandle) -> Vec<DomHandle> {
+    pub(crate) fn pop_autofocus_candidate(&mut self, document: DomHandle) -> Option<DomHandle> {
         self.document_autofocus
             .get_mut(&document)
-            .map(|state| std::mem::take(&mut state.candidates))
-            .unwrap_or_default()
+            .and_then(|state| state.candidates.pop_front())
     }
 
-    /// Return the Documents whose insertion-ordered candidate lists changed.
-    /// Registration is explicit, so connectedness alone cannot admit an inert
-    /// Document or reset an existing Document's one-time decision.
-    pub(crate) fn queue_autofocus_candidates_in_subtrees(
-        &mut self,
-        roots: &[DomHandle],
-    ) -> Vec<DomHandle> {
-        if roots
-            .first()
-            .and_then(|root| self.dom_host.owner_document_handle(*root))
-            .is_none_or(|document| self.autofocus_processed(document))
-        {
-            return Vec::new();
+    pub(crate) fn clear_autofocus_candidates(&mut self, document: DomHandle) {
+        if let Some(state) = self.document_autofocus.get_mut(&document) {
+            state.candidates.clear();
         }
-        let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
-        let mut documents = Vec::new();
+    }
+
+    /// The caller resolves the active top-level Document and the inserted
+    /// subtree's policy. All its descendant Documents share connection order
+    /// and a one-time decision, even when a candidate moves between them.
+    pub(crate) fn queue_autofocus_candidates_in_subtree(
+        &mut self,
+        top_document: DomHandle,
+        root: DomHandle,
+    ) -> bool {
+        let Some(state) = self
+            .document_autofocus
+            .get_mut(&top_document)
+            .filter(|state| !state.processed)
+        else {
+            return false;
+        };
+        let mut pending = vec![root];
+        let mut changed = false;
         while let Some(handle) = pending.pop() {
             if self.dom_host.is_connected(handle)
-                && let Some(document) = self.dom_host.owner_document_handle(handle)
-                && let Some(state) = self.document_autofocus.get_mut(&document)
-                && !state.processed
                 && self
                     .dom_host
                     .node(handle)
@@ -71,14 +75,12 @@ impl DocumentRuntime {
                     })
             {
                 state.candidates.retain(|candidate| *candidate != handle);
-                state.candidates.push(handle);
-                if !documents.contains(&document) {
-                    documents.push(document);
-                }
+                state.candidates.push_back(handle);
+                changed = true;
             }
             pending.extend(self.dom_host.child_handles_reversed(handle));
         }
-        documents
+        changed
     }
 
     pub(crate) fn mark_autofocus_processed(&mut self, document: DomHandle) {
