@@ -653,8 +653,8 @@ async fn window_timer_uses_webidl_callback_function_semantics() {
 
 #[tokio::test]
 async fn request_animation_frame_callbacks_share_one_timestamp_per_batch() {
-    let mut vm = new_storage_test_vm("https://example.com/");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
     vm.eval(
         r#"
         globalThis.__animationFrameTimestamps = [];
@@ -701,9 +701,237 @@ async fn request_animation_frame_callbacks_share_one_timestamp_per_batch() {
 }
 
 #[tokio::test]
-async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+async fn animation_frame_cancellation_has_a_separate_handle_namespace() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for source in [
+        "const handle = setTimeout(() => { callbackRan = true; }, 0); cancelAnimationFrame(handle)",
+        "const handle = requestAnimationFrame(() => { callbackRan = true; }); clearTimeout(handle)",
+    ] {
+        let mut vm = new_page_task_executor_test_vm_with_loader(
+            "https://animation-frame-handle-namespace.test/",
+            &loader,
+        );
+        vm.eval("globalThis.callbackRan = false").unwrap();
+        vm.eval(source).unwrap();
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .unwrap();
+        assert_eq!(vm.eval("String(callbackRan)").unwrap(), "true", "{source}");
+    }
+}
+
+#[tokio::test]
+async fn animation_frame_document_open_preserves_the_current_batch_and_handle_counter() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-document-open.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.frameTimes = [];
+const firstHandle = requestAnimationFrame(timestamp => {
+  frameTimes.push(timestamp);
+  document.open();
+  document.write('<!doctype html><body>replacement');
+  document.close();
+});
+const secondHandle = requestAnimationFrame(timestamp => {
+  frameTimes.push(timestamp);
+  globalThis.thirdHandle = requestAnimationFrame(next => frameTimes.push(next));
+});
+"queued"
+"#,
+    )
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(vm.eval("frameTimes.length === 3 && frameTimes[0] === frameTimes[1] && frameTimes[2] > frameTimes[1] && thirdHandle > secondHandle").unwrap(), "true");
+}
+
+#[tokio::test]
+async fn animation_frames_consume_rejected_autofocus_candidates() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (setup, expected) in [
+        ("manual.focus()", "manual||"),
+        ("candidate.disabled = true", "||candidate"),
+    ] {
+        let mut vm = new_page_task_executor_test_vm_with_loader(
+            "https://animation-frame-autofocus-retry.test/",
+            &loader,
+        );
+        vm.eval(
+            r#"
+globalThis.focusHistory = [];
+const manual = document.createElement('input');
+manual.id = 'manual';
+const candidate = document.createElement('input');
+candidate.id = 'candidate';
+candidate.autofocus = true;
+document.body.append(manual, candidate);
+"#,
+        )
+        .unwrap();
+        vm.eval(setup).unwrap();
+        vm.eval(
+            r#"
+requestAnimationFrame(() => {
+  focusHistory.push(document.activeElement.id);
+  manual.blur();
+  candidate.disabled = false;
+  requestAnimationFrame(() => {
+    focusHistory.push(document.activeElement.id);
+    candidate.remove();
+    document.body.append(candidate);
+    requestAnimationFrame(() => focusHistory.push(document.activeElement.id));
+  });
+});
+"#,
+        )
+        .unwrap();
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .unwrap();
+        assert_eq!(
+            vm.eval("focusHistory.join('|')").unwrap(),
+            expected,
+            "{setup}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn animation_frame_autofocus_listener_can_replace_document() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-autofocus-document-open.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.focusHistory = [];
+globalThis.focusListenerRan = false;
+const candidate = document.createElement('input');
+candidate.autofocus = true;
+candidate.addEventListener('focus', () => {
+  focusListenerRan = true;
+  document.open();
+  document.write('<!doctype html><body><input id="replacement" autofocus>');
+  document.close();
+});
+document.body.append(candidate);
+requestAnimationFrame(() => {
+  focusHistory.push(document.activeElement.id);
+  requestAnimationFrame(() => focusHistory.push(document.activeElement.id));
+});
+"#,
+    )
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(vm.eval("focusHistory.join('|')").unwrap(), "|");
+    assert_eq!(vm.eval("String(focusListenerRan)").unwrap(), "true");
+}
+
+#[tokio::test]
+async fn animation_frame_reports_errors_and_checkpoints_before_the_next_callback() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-error-order.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.frameOrder = [];
+addEventListener('error', event => {
+  event.preventDefault();
+  frameOrder.push('error');
+});
+requestAnimationFrame(() => {
+  frameOrder.push('callback');
+  queueMicrotask(() => frameOrder.push('microtask'));
+  throw new Error('animation frame failure');
+});
+requestAnimationFrame(() => frameOrder.push('next-callback'));
+"#,
+    )
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("frameOrder.join('|')").unwrap(),
+        "callback|error|microtask|next-callback"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn animation_frame_watchdog_recovers_before_the_next_callback() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let _timeout = crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+        crate::v8_execution_watchdog::V8ExecutionWatchdogKind::AnimationFrameCallback,
+        std::time::Duration::from_millis(100),
+    );
+    for source in [
+        "requestAnimationFrame(() => { runawayEntered = true; for (;;) {} })",
+        "requestAnimationFrame(() => { queueMicrotask(() => { runawayEntered = true; for (;;) {} }) })",
+    ] {
+        let mut vm = new_page_task_executor_test_vm_with_loader(
+            "https://animation-frame-watchdog.test/",
+            &loader,
+        );
+        vm.eval("globalThis.runawayEntered = false; globalThis.nextFrameCallbackRan = false")
+            .unwrap();
+        vm.eval(source).unwrap();
+        vm.eval("requestAnimationFrame(() => { nextFrameCallbackRan = true; })")
+            .unwrap();
+        let started = std::time::Instant::now();
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .unwrap();
+        assert_eq!(
+            vm.eval("String(runawayEntered && nextFrameCallbackRan)")
+                .unwrap(),
+            "true",
+            "{source}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    }
+}
+
+#[tokio::test]
+async fn animation_frame_timestamp_does_not_read_author_performance_property() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-native-timeline.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+const nativePerformance = performance;
+globalThis.frameTimestampIsRelative = false;
+Object.defineProperty(window, 'performance', {
+  get() { throw new Error('must not read the author performance getter'); }
+});
+requestAnimationFrame(timestamp => {
+  frameTimestampIsRelative = timestamp >= 0 &&
+    timestamp <= nativePerformance.now() && timestamp < nativePerformance.timeOrigin;
+});
+"#,
+    )
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(vm.eval("String(frameTimestampIsRelative)").unwrap(), "true");
+}
+
+#[tokio::test]
+async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
     vm.eval(
         r#"
         for (let index = 0; index < 3; index++) {
@@ -737,8 +965,11 @@ async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
 
 #[tokio::test]
 async fn request_animation_frame_uses_webidl_callback_function_semantics() {
-    let mut vm = new_storage_test_vm("https://animation-frame-webidl-callback.test/");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-webidl-callback.test/",
+        &loader,
+    );
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -747,9 +978,18 @@ async fn request_animation_frame_uses_webidl_callback_function_semantics() {
         "#,
     )
     .expect("animation frame callback-realm setup");
-    materialize_single_child_default_realm_for_test(
-        &mut vm,
-        "animation frame callback-realm setup",
+    assert_eq!(
+        vm.eval("String(document.querySelector('iframe').contentWindow !== null)")
+            .unwrap(),
+        "true"
+    );
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            crate::frame_owner_model::ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader,
+        )
+        .await
+        .unwrap()
     );
 
     vm.eval(
@@ -800,8 +1040,11 @@ async fn request_animation_frame_uses_webidl_callback_function_semantics() {
 
 #[tokio::test]
 async fn request_animation_frame_retires_with_its_callback_realm() {
-    let mut vm = new_storage_test_vm("https://animation-frame-callback-retirement.test/");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://animation-frame-callback-retirement.test/",
+        &loader,
+    );
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -811,9 +1054,18 @@ async fn request_animation_frame_retires_with_its_callback_realm() {
         "#,
     )
     .expect("animation frame callback retirement setup");
-    materialize_single_child_default_realm_for_test(
-        &mut vm,
-        "animation frame callback retirement setup",
+    assert_eq!(
+        vm.eval("String(document.querySelector('iframe').contentWindow !== null)")
+            .unwrap(),
+        "true"
+    );
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            crate::frame_owner_model::ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader,
+        )
+        .await
+        .unwrap()
     );
 
     vm.eval(
