@@ -3426,7 +3426,7 @@ impl JsContextHost {
             if is_new_document {
                 self.register_autofocus_document(document_handle);
                 if self.document_allows_autofocus(document_handle) {
-                    self.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+                    self.queue_autofocus_candidates_in_subtree(document_handle, document_handle);
                 }
             }
             return Some(document_handle);

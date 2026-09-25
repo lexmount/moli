@@ -8078,7 +8078,7 @@ async fn webdriver_classic_clear_disabled_form_cases_ported_from_chromium_wpt() 
 }
 
 #[tokio::test]
-async fn webdriver_classic_active_element_uses_current_browsing_context() {
+async fn webdriver_classic_active_element_uses_current_browsing_context_after_child_autofocus() {
     let app = build_router(test_state());
     let session = classic_request_json(app.clone(), Method::POST, "/session").await;
     let session_id = session["value"]["sessionId"]
@@ -8095,6 +8095,19 @@ async fn webdriver_classic_active_element_uses_current_browsing_context() {
     .await;
     assert_eq!(navigated, json!({ "value": null }));
 
+    // Navigation completion may precede autofocus's rendering opportunity.
+    let rendered = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/async"),
+        json!({
+            "script": "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => done(null));",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(rendered, json!({ "value": null }));
+
     let (active_status, active) = classic_request_status_and_json(
         app.clone(),
         Method::GET,
@@ -8104,14 +8117,21 @@ async fn webdriver_classic_active_element_uses_current_browsing_context() {
     assert_eq!(active_status, StatusCode::OK, "{active:?}");
     let active_id = active["value"]["element-6066-11e4-a52e-4f735466cecf"]
         .as_str()
-        .unwrap_or_else(|| panic!("active element should return body: {active:?}"));
+        .unwrap_or_else(|| panic!("active element should return the focused iframe: {active:?}"));
     let active_tag = classic_request_json(
         app.clone(),
         Method::GET,
         &format!("/session/{session_id}/element/{active_id}/name"),
     )
     .await;
-    assert_eq!(active_tag, json!({ "value": "body" }));
+    assert_eq!(active_tag, json!({ "value": "iframe" }));
+    let active_property = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{active_id}/property/id"),
+    )
+    .await;
+    assert_eq!(active_property, json!({ "value": "child" }));
 
     let focused = classic_request_json_with_body(
         app.clone(),

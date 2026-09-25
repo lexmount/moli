@@ -293,7 +293,7 @@ impl DocumentRuntime {
         self.dom_content_loaded_dispatched = false;
         // document.open() replaces the input stream, not the Document object.
         // Its one-time autofocus decision survives along with its frame callbacks.
-        self.take_autofocus_candidates(self.document_handle());
+        self.clear_autofocus_candidates(self.document_handle());
         self.pending_inspector_issues.clear();
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;

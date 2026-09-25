@@ -140,7 +140,7 @@ impl DocumentRuntime {
                 .permissions_policy
                 .focus_without_user_activation_enabled()
         {
-            runtime.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+            runtime.queue_autofocus_candidates_in_subtree(document_handle, document_handle);
         }
         runtime
     }

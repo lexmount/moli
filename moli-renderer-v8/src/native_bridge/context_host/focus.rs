@@ -35,26 +35,59 @@ impl JsContextHost {
             let Some(document) = self.dom_host().owner_document_handle(root) else {
                 continue;
             };
-            if self.autofocus_processed(document) || !self.document_allows_autofocus(document) {
+            let Some(top_document) = self.top_level_document_for_document(document) else {
                 continue;
-            }
-            if self
-                .queue_autofocus_candidates_in_subtrees(&[root])
-                .is_empty()
+            };
+            if self.autofocus_processed(top_document)
+                || !self.document_allows_autofocus(document)
+                || !self.queue_autofocus_candidates_in_subtree(top_document, root)
             {
                 continue;
             }
-            // Parsing admits after DOMContentLoaded and its checkpoint. Late
-            // insertion must also publish work without requiring an author rAF.
-            if document == self.document_handle() {
-                if self.dom_content_loaded_dispatched()
-                    && let Some(owner) = self.current_main_document_task_owner()
-                {
-                    let _ = self.queue_main_document_post_parse_autofocus(owner);
-                }
-            } else if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
-                self.queue_lightweight_popup_post_parse_autofocus(popup_id);
+            self.queue_top_document_post_parse_autofocus(top_document);
+        }
+    }
+
+    pub(super) fn queue_top_document_post_parse_autofocus(&mut self, document: DomHandle) {
+        // Parsing admits after DOMContentLoaded and its checkpoint. Later
+        // insertion or child stylesheet completion also publishes rendering work.
+        if document == self.document_handle() {
+            if self.dom_content_loaded_dispatched()
+                && let Some(owner) = self.current_main_document_task_owner()
+            {
+                let _ = self.queue_main_document_post_parse_autofocus(owner);
             }
+        } else if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
+            self.queue_lightweight_popup_post_parse_autofocus(popup_id);
+        }
+    }
+
+    pub(crate) fn autofocus_document_has_blocking_stylesheets(&self, document: DomHandle) -> bool {
+        if let Some(child) = self.child_browsing_context_host_for_document_handle(document) {
+            return self
+                .current_child_document_task_owner(child)
+                .is_some_and(|owner| {
+                    self.frame_document_blocking_stylesheets
+                        .has_pending(owner.document_owner())
+                });
+        }
+        self.has_blocking_stylesheets_for_document(document)
+    }
+
+    pub(crate) fn autofocus_ancestor_has_target(&self, mut document: DomHandle) -> bool {
+        loop {
+            if self.dom_host().document_target_element(document).is_some() {
+                return true;
+            }
+            let Some(PendingWindowMessageEndpoint::ChildWindow(container)) =
+                self.window_endpoint_for_document(document)
+            else {
+                return false;
+            };
+            let Some(parent) = self.dom_host().owner_document_handle(container) else {
+                return false;
+            };
+            document = parent;
         }
     }
 
@@ -77,6 +110,9 @@ impl JsContextHost {
                 PendingWindowMessageEndpoint::TopWindow
                 | PendingWindowMessageEndpoint::LightweightPopup(_) => return Some(document),
                 PendingWindowMessageEndpoint::ChildWindow(container) => {
+                    if !self.dom_host().is_connected(container) {
+                        return None;
+                    }
                     document = self.dom_host().owner_document_handle(container)?;
                 }
             }

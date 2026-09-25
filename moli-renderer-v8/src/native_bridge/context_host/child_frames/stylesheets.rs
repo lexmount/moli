@@ -335,6 +335,11 @@ impl JsContextHost {
         );
 
         let document_owner = completion.owner.document_owner();
+        if let Some(document) = self.child_browsing_context_document_handle(completion.child_handle)
+            && let Some(top_document) = self.top_level_document_for_document(document)
+        {
+            self.queue_top_document_post_parse_autofocus(top_document);
+        }
         if self
             .child_document_parsers
             .is_suspended_on_parser_created_stylesheet(document_owner)
