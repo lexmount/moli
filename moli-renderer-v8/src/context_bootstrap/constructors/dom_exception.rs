@@ -541,13 +541,22 @@ pub(crate) fn new_dom_exception_value<'s>(
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(prototype) = scope
+    let prototype = scope
         .get_current_context()
         .get_slot::<DomExceptionPrototypeSlot>()
-    {
+        .map(|cached| v8::Local::new(scope, &cached.prototype))
+        .or_else(|| {
+            // A retained native method can throw after its WindowProxy was
+            // detached, before DOMException was ever read in that realm.
+            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+                scope,
+                "DOMException",
+            )
+            .ok()
+        });
+    if let Some(prototype) = prototype {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
-        let prototype = v8::Local::new(scope, &prototype.prototype);
         let _ = exception.set_prototype(scope, prototype.into());
         return exception.into();
     }

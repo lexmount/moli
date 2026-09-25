@@ -1,4 +1,4 @@
-use super::input::{normalize_request_method, normalize_request_referrer};
+use super::input::{normalize_fetch_request_method, normalize_request_referrer};
 use super::*;
 use crate::webidl;
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestMode, RequestRedirectMode};
@@ -156,7 +156,7 @@ pub(crate) fn parse_fetch_init<'s>(
         })?;
     let method = init
         .method
-        .map(|s| normalize_request_method(&s))
+        .map(|s| normalize_fetch_request_method(&s))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
