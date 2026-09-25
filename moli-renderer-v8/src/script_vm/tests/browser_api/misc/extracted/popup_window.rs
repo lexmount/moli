@@ -3588,3 +3588,42 @@ fn window_open_named_reuse_before_first_commit_keeps_history_pending() {
         "true|false|1"
     );
 }
+
+#[test]
+fn response_csp_sandbox_separates_main_and_initial_popup_origins() {
+    let document_url = Url::parse("https://sandboxed-popup.test/page.html").expect("document URL");
+    let mut vm = new_storage_test_vm(document_url.as_str());
+    assert_eq!(
+        vm.eval("origin").expect("initial Window origin"),
+        "https://sandboxed-popup.test"
+    );
+
+    vm.set_main_navigation_policy_container(
+        crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+            &[(
+                "Content-Security-Policy".to_owned(),
+                b"sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox".to_vec(),
+            )],
+            &document_url,
+        ),
+    );
+    assert_eq!(vm.eval("origin").expect("sandboxed Window origin"), "null");
+    assert_eq!(
+        vm.eval("location.href").expect("sandboxed Window location"),
+        "https://sandboxed-popup.test/page.html"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+  const popup = open("about:blank");
+  try {
+    return popup.origin;
+  } catch (error) {
+    return error.name;
+  }
+})()"#,
+        )
+        .expect("initial popup origin access"),
+        "SecurityError"
+    );
+}

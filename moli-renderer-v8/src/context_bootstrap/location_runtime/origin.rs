@@ -30,6 +30,25 @@ pub(super) fn install<'s>(scope: &mut v8::PinScope<'s, '_>, location: v8::Local<
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, location, move || drop(origin));
 }
 
+pub(super) fn refresh_from_current_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+) {
+    let location = location_target(scope, location);
+    let Some(origin) = WindowSecurityOrigin::for_context(scope.get_current_context()) else {
+        return;
+    };
+    let Some(value) = location.get_internal_field(scope, SECURITY_ORIGIN_FIELD) else {
+        return;
+    };
+    let Ok(external) = v8::Local::<v8::External>::try_from(value) else {
+        return;
+    };
+    // The finalizer owns this Box; replacing its value preserves the Location
+    // object's stable identity while updating its access-check snapshot.
+    *unsafe { &mut *external.value().cast::<WindowSecurityOrigin>() } = origin;
+}
+
 fn for_target(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,

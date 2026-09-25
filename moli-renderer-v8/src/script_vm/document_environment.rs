@@ -92,38 +92,30 @@ impl ScriptVm {
         &mut self,
         policy: crate::document_runtime::DocumentPolicyContainer,
     ) {
-        let was_opaque = self
-            .document_runtime
-            .document_sandbox_policy()
-            .forces_opaque_origin;
         self.document_runtime
             .set_main_navigation_policy_container(policy);
-        // The main context exists before its navigation response policy is applied.
-        // Refresh its token so a CSP sandbox cannot retain the URL's tuple token.
-        let _ = self.with_default_context_scope(|scope, host_ptr| {
-            let key = unsafe { &*host_ptr }.main_default_world_security_token_key();
-            let context = scope.get_current_context();
-            if !crate::native_bridge::set_window_security_token(scope, context, key.as_deref()) {
-                tracing::warn!(
-                    "failed to refresh main Window security token; using unique context token"
-                );
-            }
-            let host = unsafe { &*host_ptr };
-            let is_opaque = host.document_sandbox_policy().forces_opaque_origin;
-            if was_opaque != is_opaque {
-                let origin = if is_opaque {
-                    "null".into()
-                } else {
-                    moli_url::origin_ascii_serialization(host.document_url())
-                };
-                crate::context_bootstrap::set_window_origin_runtime_state(
-                    scope,
-                    context.global(scope),
-                    &origin,
-                )?;
-            }
-            Ok(())
-        });
+        self.refresh_main_document_origin_after_policy_change()
+            .expect("main Window origin must reflect the navigation policy container");
+    }
+
+    fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
+        let host = self._context_host.borrow();
+        let origin = host
+            .window_document_origin(crate::native_bridge::OwnerDispatchScope::Top)
+            .ok_or_else(|| anyhow!("main Window has no origin"))?;
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &self.page_default_context);
+                if !host.refresh_main_default_world_security_origin(scope, context) {
+                    return Err(anyhow!("failed to update the main Window security token"));
+                }
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::context_bootstrap::refresh_global_location_security_origin(scope);
+                let window = context.global(scope);
+                crate::context_bootstrap::set_window_origin_runtime_state(scope, window, &origin)
+            })
     }
 
     pub(crate) fn document_content_security_policies(&self) -> Vec<String> {

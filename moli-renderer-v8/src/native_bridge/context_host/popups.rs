@@ -188,6 +188,18 @@ struct LightweightPopupWindowStateDeclaration {
     name: (),
 }
 
+#[derive(Default, WebApiObject)]
+#[webapi(fragment)]
+struct LightweightPopupWindowOriginDeclaration {
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = lightweight_popup_window_origin_getter,
+        setter = lightweight_popup_window_origin_setter
+    )]
+    origin: (),
+}
+
 #[derive(WebApiObject)]
 #[webapi(fragment)]
 struct LightweightPopupWindowOpenerDeclaration<'scope> {
@@ -1008,6 +1020,18 @@ impl JsContextHost {
         };
         let initial_base_url = lightweight_popup_initial_base_url(&initial_url, creator_base_url);
         let initial_referrer = creator_policy_container.document_referrer.clone();
+        let mut initial_policy_container = creator_policy_container;
+        // Local popup documents inherit the creator's CSP. iframe sandboxing
+        // flags reach the popup only when it does not escape the sandbox.
+        initial_policy_container.sandbox =
+            DocumentSandboxPolicy::from_response_content_security_policies(
+                &initial_policy_container.document_content_security_policies,
+            );
+        inherit_lightweight_popup_opener_sandbox(
+            &mut initial_policy_container.sandbox,
+            opener_sandbox_policy,
+        );
+        let initial_forces_opaque_origin = initial_policy_container.sandbox.forces_opaque_origin;
         let opener_endpoint =
             lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
         let creator_resource_authority = self
@@ -1019,7 +1043,7 @@ impl JsContextHost {
             opener,
             opener_child_handle,
             &initial_url,
-            opener_sandbox_policy.is_some_and(|policy| policy.forces_opaque_origin),
+            initial_forces_opaque_origin,
         );
         let initiator_name = opener
             .and_then(|window| lightweight_popup_id_from_window(scope, window))
@@ -1077,6 +1101,9 @@ impl JsContextHost {
         LightweightPopupWindowStateDeclaration::default()
             .initialize(scope, window)
             .ok()?;
+        LightweightPopupWindowOriginDeclaration::default()
+            .initialize(scope, window)
+            .ok()?;
         LightweightPopupWindowOpenerDeclaration {
             popup_id: popup_id_private_value,
             opener: (),
@@ -1117,37 +1144,30 @@ impl JsContextHost {
                 popup_id,
                 local_window_id: initial_local_window_id,
             };
-        let initial_origin =
-            if opener_sandbox_policy.is_some_and(|policy| policy.forces_opaque_origin) {
-                super::window_security_tokens::WindowAccessOrigin::opaque(
-                    initial_execution_context_owner,
-                )
-            } else if moli_url::is_about_blank(&initial_url)
-                && let Some(inherited) = opener_endpoint.and_then(|endpoint| {
-                    self.window_access_origin_for_dispatch_scope(endpoint.dispatch_scope())
-                })
-            {
-                inherited
-            } else if storage_scope.origin() == "null" {
-                super::window_security_tokens::WindowAccessOrigin::opaque(
-                    initial_execution_context_owner,
-                )
-            } else {
-                super::window_security_tokens::WindowAccessOrigin::from_serialized_origin(
-                    storage_scope.origin().to_owned(),
-                    None,
-                )?
-            };
-        let mut initial_policy_container = creator_policy_container;
-        inherit_lightweight_popup_opener_sandbox(
-            &mut initial_policy_container.sandbox,
-            opener_sandbox_policy,
-        );
+        let initial_origin = if initial_forces_opaque_origin {
+            super::window_security_tokens::WindowAccessOrigin::opaque(
+                initial_execution_context_owner,
+            )
+        } else if moli_url::is_about_blank(&initial_url)
+            && let Some(inherited) = opener_endpoint.and_then(|endpoint| {
+                self.window_access_origin_for_dispatch_scope(endpoint.dispatch_scope())
+            })
+        {
+            inherited
+        } else if storage_scope.origin() == "null" {
+            super::window_security_tokens::WindowAccessOrigin::opaque(
+                initial_execution_context_owner,
+            )
+        } else {
+            super::window_security_tokens::WindowAccessOrigin::from_serialized_origin(
+                storage_scope.origin().to_owned(),
+                None,
+            )?
+        };
         let initial_document_state =
             LightweightPopupDocumentState::new(initial_base_url.clone(), initial_policy_container);
         let initial_resource_origin = initial_origin.serialized_origin();
-        let initial_domain = if !opener_sandbox_policy
-            .is_some_and(|policy| policy.forces_opaque_origin)
+        let initial_domain = if !initial_forces_opaque_origin
             && moli_url::is_about_blank(&initial_url)
         {
             opener_endpoint
@@ -1335,6 +1355,12 @@ impl JsContextHost {
         }
         let mut navigation_state =
             LightweightPopupDocumentState::new(initial_base_url, creator_policy_container);
+        navigation_state.policy_container.sandbox =
+            DocumentSandboxPolicy::from_response_content_security_policies(
+                &navigation_state
+                    .policy_container
+                    .document_content_security_policies,
+            );
         let opener_sandbox_policy = self
             .lightweight_popup_record(popup_id)
             .and_then(|record| record.opener_sandbox_policy);
@@ -1342,6 +1368,10 @@ impl JsContextHost {
             &mut navigation_state.policy_container.sandbox,
             opener_sandbox_policy,
         );
+        let navigation_forces_opaque_origin = navigation_state
+            .policy_container
+            .sandbox
+            .forces_opaque_origin;
         let initiator_endpoint =
             lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
         let previous_url =
@@ -1384,7 +1414,7 @@ impl JsContextHost {
                 opener,
                 opener_child_handle,
                 &target_url,
-                opener_sandbox_policy.is_some_and(|policy| policy.forces_opaque_origin),
+                navigation_forces_opaque_origin,
             );
             navigation_state.reset_for_empty_document(target_url.clone());
             if !self.commit_lightweight_popup_document(
@@ -1393,9 +1423,7 @@ impl JsContextHost {
                 LightweightPopupDocumentCommit {
                     owner: document_owner,
                     location_url: target_url.clone(),
-                    origin: if opener_sandbox_policy
-                        .is_some_and(|policy| policy.forces_opaque_origin)
-                    {
+                    origin: if navigation_forces_opaque_origin {
                         LightweightPopupDocumentCommitOrigin::FromNavigationResponse(
                             "null".to_owned(),
                         )
@@ -5814,6 +5842,54 @@ fn lightweight_popup_window_name_getter<'s>(
     {
         rv.set(v8::String::new(scope, &record.name.get()).unwrap().into());
     }
+}
+
+fn lightweight_popup_window_origin_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let window = args.this();
+    let Some(popup_id) = lightweight_popup_id_from_window(scope, window) else {
+        throw_type_error(
+            scope,
+            "Window.origin getter called on incompatible receiver.",
+        );
+        return;
+    };
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, window, false) {
+        return;
+    }
+    let origin = context_host_ptr_from_global_bridge(scope)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.lightweight_popup_origin(popup_id))
+        .unwrap_or_else(|| "null".to_owned());
+    if let Some(value) = v8_string(scope, &origin) {
+        rv.set(value.into());
+    }
+}
+
+fn lightweight_popup_window_origin_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let window = args.this();
+    if lightweight_popup_id_from_window(scope, window).is_none() {
+        throw_type_error(
+            scope,
+            "Window.origin setter called on incompatible receiver.",
+        );
+        return;
+    }
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, window, false) {
+        return;
+    }
+    crate::context_bootstrap::define_replaceable_window_property(
+        scope,
+        window,
+        "origin",
+        args.get(0),
+    );
 }
 
 fn lightweight_popup_window_name_setter<'s>(

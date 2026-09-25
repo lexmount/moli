@@ -549,6 +549,24 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn refresh_main_default_world_security_origin(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        context: v8::Local<'_, v8::Context>,
+    ) -> bool {
+        self.install_window_context_security_origin(
+            scope,
+            context,
+            OwnerDispatchScope::Top,
+            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+        );
+        set_window_security_token(
+            scope,
+            context,
+            self.main_default_world_security_token_key().as_deref(),
+        )
+    }
+
     fn child_effective_origin_document_domain_override(
         &self,
         handle: DomHandle,
