@@ -139,23 +139,13 @@ impl DocumentRuntime {
         )
     }
 
-    pub(crate) fn queue_window_animation_frame_callback<'s>(
+    pub(crate) fn queue_window_animation_frame_wake(
         &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        callback: moli_webidl_callback::WebIdlCallbackFunction,
-        target_receiver: v8::Local<'s, v8::Object>,
-        timestamp: f64,
-        delay_ms: u32,
-        owner: HostTimerOwner,
-    ) -> u32 {
-        self.timeouts.queue_window_animation_frame_callback(
-            scope,
-            callback,
-            target_receiver,
-            timestamp,
-            delay_ms,
-            owner,
-        )
+        scope: &mut v8::PinScope<'_, '_>,
+        binding: crate::native_bridge::WindowExecutionContextBinding,
+    ) {
+        self.timeouts
+            .queue_window_animation_frame_wake(scope, binding);
     }
 
     pub(crate) fn queue_window_idle_callback<'s>(

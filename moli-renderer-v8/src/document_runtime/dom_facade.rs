@@ -822,6 +822,10 @@ impl DocumentRuntime {
         &self.autofocus_candidates
     }
 
+    pub(crate) fn take_autofocus_candidates(&mut self) -> Vec<DomHandle> {
+        std::mem::take(&mut self.autofocus_candidates)
+    }
+
     /// Returns whether this insertion added or reordered an autofocus candidate.
     pub(crate) fn queue_autofocus_candidates_in_subtrees(&mut self, roots: &[DomHandle]) -> bool {
         if self.autofocus_processed {

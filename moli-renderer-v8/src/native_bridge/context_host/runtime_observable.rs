@@ -393,6 +393,7 @@ impl JsContextHost {
         &mut self,
         owner: WindowExecutionContextOwner,
     ) -> bool {
+        self.animation_frames.retire_owner(owner);
         self.storage_event_recipients.remove(&owner);
         self.retire_event_callbacks_for_execution_context(owner);
         self.close_watcher_managers.remove(&owner);
@@ -427,6 +428,7 @@ impl JsContextHost {
         context_token: RuntimeObservableContextToken,
         resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
+        self.animation_frames.retire_realm(context_token);
         let revoked_blob_object_url_count =
             crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
@@ -442,6 +444,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.animation_frames.retire_owner(owner);
             self.storage_event_recipients.remove(&owner);
             self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
@@ -483,6 +486,7 @@ impl JsContextHost {
         context_token: RuntimeObservableContextToken,
         resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
+        self.animation_frames.retire_realm(context_token);
         self.retire_close_watcher_realm(context_token);
         let revoked_blob_object_url_count =
             crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);

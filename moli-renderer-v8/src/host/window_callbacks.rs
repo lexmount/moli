@@ -1,7 +1,7 @@
 //! Typed user-callback payloads that are scheduled on the Window timer heap.
 //!
 //! The timer heap is only the current delay/deadline transport. It does not
-//! turn animation-frame, idle, or Geolocation callbacks into timer callback
+//! turn idle or Geolocation callbacks into timer callback
 //! algorithms.
 //! This residence keeps the page-supplied Web IDL callback and its exact
 //! callback Realm separate from browser-created timer functions.
@@ -20,14 +20,13 @@ use crate::{
 /// shared timer heap.
 ///
 /// `Timer` consumes the task's stored extra arguments and uses the target
-/// Window as `this`. Animation-frame, idle, and Geolocation callbacks use Web
+/// Window as `this`. Idle and Geolocation callbacks use Web
 /// IDL's `undefined` callback this value. Geolocation deliberately records its
 /// watch identity here because `clearWatch()` owns cancellation while the
 /// timer heap remains only the lightweight asynchronous transport.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum WindowWebIdlCallbackTaskKind {
     Timer,
-    AnimationFrame { timestamp: f64 },
     Idle { timeout_deadline_ms: f64 },
     Geolocation { watch_id: Option<i32> },
 }
@@ -77,7 +76,6 @@ impl ScheduledWindowWebIdlCallback {
                 timeout_deadline_ms,
             } => timeout_deadline_ms < 0.0 || now_ms < timeout_deadline_ms,
             WindowWebIdlCallbackTaskKind::Timer
-            | WindowWebIdlCallbackTaskKind::AnimationFrame { .. }
             | WindowWebIdlCallbackTaskKind::Geolocation { .. } => false,
         }
     }
@@ -113,11 +111,6 @@ impl ScheduledWindowWebIdlCallback {
                 );
                 v8::Local::new(scope, &self.target_receiver).into()
             }
-            WindowWebIdlCallbackTaskKind::AnimationFrame { timestamp } => {
-                crate::window_host::finish_animation_frame_callback_batch(scope, timestamp);
-                arguments.push(v8::Number::new(scope, timestamp).into());
-                v8::undefined(scope).into()
-            }
             WindowWebIdlCallbackTaskKind::Idle {
                 timeout_deadline_ms,
             } => {
@@ -145,11 +138,6 @@ impl ScheduledWindowWebIdlCallback {
             WindowWebIdlCallbackTaskKind::Timer => {
                 ("callback", "host callback threw", "timer callback")
             }
-            WindowWebIdlCallbackTaskKind::AnimationFrame { .. } => (
-                "requestAnimationFrame callback",
-                "host callback threw",
-                "requestAnimationFrame callback",
-            ),
             WindowWebIdlCallbackTaskKind::Idle { .. } => (
                 "requestIdleCallback callback",
                 "host callback threw",

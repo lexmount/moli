@@ -1,14 +1,11 @@
 use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
     context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
-    context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
-    context_bootstrap::dom_time_since_origin_millis,
     context_bootstrap::event_initialized,
     context_bootstrap::event_is_dispatching,
     context_bootstrap::event_is_mouse_event,
     context_bootstrap::increment_performance_event_count,
     context_bootstrap::mark_event_trusted,
-    context_bootstrap::performance_slot_number,
     context_bootstrap::require_same_origin_window_receiver,
     context_bootstrap::set_event_trusted,
     context_bootstrap::simple_event_target_add_event_listener_callback,
@@ -59,13 +56,10 @@ use url::Url;
 
 const WINDOW_SCROLL_X_SLOT: &str = "__moliWindowScrollX";
 const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
-const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
-    "__moliWindowPendingAnimationFrameTimestamp";
 const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
-const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
 
 #[derive(WebApiObject)]
@@ -767,10 +761,24 @@ pub(super) fn window_cancel_animation_frame_callback<'s>(
     if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+        scope,
+        args.this(),
+        unsafe { &*host_ptr },
+    ) {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            error.throw(scope);
+            return;
+        }
+    };
     let Some(parsed) = webidl::parse_args::<WindowCancelAnimationFrameArgs>(scope, &args) else {
         return;
     };
-    cancel_window_timer_for_receiver(scope, args.this(), parsed.handle);
+    unsafe { &mut *host_ptr }.cancel_window_animation_frame(receiver, parsed.handle);
 }
 
 pub(super) fn window_cancel_idle_callback<'s>(
@@ -814,37 +822,24 @@ pub(super) fn window_request_animation_frame_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
+    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+        scope,
+        args.this(),
+        unsafe { &*host_ptr },
+    ) {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            error.throw(scope);
+            return;
+        }
+    };
     let Some(parsed) = webidl::parse_args::<WindowRequestAnimationFrameArgs>(scope, &args) else {
         return;
     };
 
-    let global = scope.get_current_context().global(scope);
-    let now = current_animation_frame_time_ms(scope);
-    let target_timestamp =
-        get_private_value(scope, global, WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT)
-            .and_then(|value| value.number_value(scope))
-            .filter(|timestamp| *timestamp > now)
-            .unwrap_or_else(|| {
-                let timestamp = now + WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS as f64;
-                set_private_value(
-                    scope,
-                    global,
-                    WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT,
-                    v8::Number::new(scope, timestamp).into(),
-                );
-                timestamp
-            });
-    let delay_ms = (target_timestamp - now).ceil().clamp(0.0, u32::MAX as f64) as u32;
     let runtime = unsafe { &mut *host_ptr };
-    let timeout_id = runtime.queue_window_animation_frame_callback(
-        scope,
-        parsed.callback,
-        args.this(),
-        target_timestamp,
-        delay_ms,
-        crate::host::HostTimerOwner::Window,
-    );
-    rv.set_uint32(timeout_id);
+    let handle = runtime.request_window_animation_frame(scope, receiver, parsed.callback);
+    rv.set_uint32(handle);
 }
 
 pub(super) fn window_request_idle_callback<'s>(
@@ -2071,24 +2066,6 @@ fn parse_idle_callback_timeout_ms(
     Some(raw.min(u32::MAX as f64) as u32)
 }
 
-pub(crate) fn finish_animation_frame_callback_batch(
-    scope: &mut v8::PinScope<'_, '_>,
-    timestamp: f64,
-) {
-    let global = scope.get_current_context().global(scope);
-    let pending_timestamp =
-        get_private_value(scope, global, WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT)
-            .and_then(|value| value.number_value(scope));
-    if pending_timestamp == Some(timestamp) {
-        set_private_value(
-            scope,
-            global,
-            WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT,
-            v8::undefined(scope).into(),
-        );
-    }
-}
-
 pub(crate) fn build_window_idle_deadline<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     did_timeout: bool,
@@ -2159,18 +2136,6 @@ pub(crate) fn current_time_ms() -> f64 {
         .unwrap_or(Duration::ZERO)
         .as_secs_f64()
         * 1000.0
-}
-
-fn current_animation_frame_time_ms(scope: &mut v8::PinScope<'_, '_>) -> f64 {
-    let global = scope.get_current_context().global(scope);
-    global
-        .get(scope, v8str(scope, "performance").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|performance| {
-            performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
-        })
-        .map(dom_time_since_origin_millis)
-        .unwrap_or_else(current_time_ms)
 }
 
 fn dom_handle_from_marker_value(
