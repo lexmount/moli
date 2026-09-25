@@ -42,12 +42,13 @@ pub(crate) enum RendererPublicationRoute {
 }
 
 /// A current Page can project its complete renderer stream. A replaced Page
-/// remains routable only for final Network facts whose request correlations
-/// are retained by the target; every other historical record is stale.
+/// remains routable for final Network facts and terminal Inspector responses
+/// whose exact correlations are retained by the target/session. Other
+/// historical records must not affect the replacement document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationProjection {
     CurrentOwner,
-    RetiringNetworkOnly,
+    RetiringNetworkAndResponses,
 }
 
 impl RendererPublicationRoute {
@@ -155,7 +156,7 @@ impl RendererPublicationOwner {
                             *renderer_page,
                             page_owner.page_attachment_id(),
                         ) {
-                            Some(RendererPublicationProjection::RetiringNetworkOnly)
+                            Some(RendererPublicationProjection::RetiringNetworkAndResponses)
                         } else {
                             None
                         }

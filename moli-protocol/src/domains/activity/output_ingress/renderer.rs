@@ -171,16 +171,31 @@ async fn project_renderer_output_records_for_owner(
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
-        let (renderer_cause, item) = record.into_parts();
-        if projection == RendererPublicationProjection::RetiringNetworkOnly
-            && !matches!(
-                &item,
+        let (renderer_cause, mut item) = record.into_parts();
+        if projection == RendererPublicationProjection::RetiringNetworkAndResponses {
+            match &mut item {
                 RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::Network { .. }
-                )
-            )
-        {
-            continue;
+                    moli_core::RendererProtocolObservation::Network { .. },
+                ) => {}
+                RendererOutputItem::Observation(
+                    moli_core::RendererProtocolObservation::RuntimeInspector(batch),
+                ) => {
+                    // A completed command can reach ingress after its Page was
+                    // replaced. Let the session's exact call/attachment correlation
+                    // authorize that response, without reviving old notifications.
+                    batch.messages.retain(|message| {
+                        matches!(
+                            message,
+                            moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
+                                if message.renderer_call_id().is_some()
+                        )
+                    });
+                    if batch.messages.is_empty() {
+                        continue;
+                    }
+                }
+                _ => continue,
+            }
         }
         match item {
             RendererOutputItem::OwnerAction(action) => {
@@ -253,11 +268,172 @@ async fn project_renderer_output_records_for_owner(
 
 #[cfg(test)]
 mod tests {
-    use moli_core::RendererRuntimeCommandCausalIdentity;
+    use moli_core::{
+        PageId, RendererOutputCursor, RendererOutputItem, RendererOutputRecord,
+        RendererOutputStreamIdentity, RendererProtocolObservation,
+        RendererRuntimeCommandCausalIdentity,
+        page::{
+            DevToolsSessionKey, RendererAgentAttachmentId, RendererRuntimeInspectorMessage,
+            RendererRuntimeInspectorMessageBatch,
+        },
+    };
+    use moli_page_types::RendererInspectorResponseDelivery;
+    use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
+    use crate::conn::{
+        BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope, ParsedCdpCommand,
+        RendererCommandDescriptor,
+    };
 
-    use super::renderer_owner_action_owner;
+    use super::{
+        RendererPublicationProjection, RuntimeCommandOutputBarriers,
+        project_renderer_output_records_for_owner, renderer_owner_action_owner,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retiring_page_ingress_preserves_only_correlated_inspector_responses() {
+        let mut conn = CdpConnection::new();
+        let page = conn
+            .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
+            .await
+            .expect("replacement page should load");
+        let mut browser_context = BrowserContext::new("BID-retiring-output".to_owned());
+        browser_context.set_active_target_id("TID-retiring-output");
+        browser_context.attach_active_session("SID-retiring-output");
+        let _ = browser_context
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(page));
+        conn.install_browser_context_fixture_for_test(browser_context);
+
+        let retired_attachment = RendererAgentAttachmentId::allocate();
+        let frontend = ParsedCdpCommand::parse_str(
+            r#"{"id":901002,"method":"Runtime.evaluate","sessionId":"SID-retiring-output","params":{"expression":"({ oldDocument: true })"}}"#,
+        )
+        .expect("frontend command");
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-retiring-output"),
+                901_002,
+                Some(retired_attachment),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                    RendererInspectorResponseDelivery::SessionSink,
+                ),
+            )
+            .expect("pending command on the retired attachment");
+        let renderer_call_id = prepared.correlation().renderer_call_id().get();
+        drop(prepared);
+
+        let stream =
+            RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(91));
+        let response = |attachment, call_id| {
+            let mut batch = RendererRuntimeInspectorMessageBatch::new(
+                stream.renderer_agent(),
+                DevToolsSessionKey::Primary,
+                vec![
+                    RendererRuntimeInspectorMessage::protocol(json!({
+                        "method": "Runtime.consoleAPICalled",
+                        "params": {"type": "log", "args": [], "executionContextId": 1},
+                    })),
+                    RendererRuntimeInspectorMessage::protocol(json!({
+                        "id": call_id,
+                        "result": {"result": {"type": "object", "objectId": "retired-object"}},
+                    })),
+                ],
+            );
+            batch.bind_renderer_agent_attachment(attachment);
+            RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
+                RendererProtocolObservation::RuntimeInspector(batch),
+            ))
+        };
+        let owner = CommandOwnerScope::for_session("SID-retiring-output");
+        let mut barriers = RuntimeCommandOutputBarriers::default();
+        let mut command_context = CommandDispatchContext::default();
+
+        project_renderer_output_records_for_owner(
+            &mut conn,
+            &owner,
+            vec![
+                response(RendererAgentAttachmentId::allocate(), renderer_call_id),
+                response(retired_attachment, renderer_call_id + 1),
+            ],
+            RendererOutputCursor::new_for_test(stream, 1),
+            RendererPublicationProjection::RetiringNetworkAndResponses,
+            &mut barriers,
+            &mut command_context,
+        )
+        .await;
+        assert!(command_context.take_protocol_events().is_empty());
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+                .is_some(),
+            "a mismatched attachment or call id must not consume the pending response"
+        );
+
+        let terminal = response(retired_attachment, renderer_call_id);
+        project_renderer_output_records_for_owner(
+            &mut conn,
+            &owner,
+            vec![
+                RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
+                    RendererProtocolObservation::RuntimeLifecycleError {
+                        text: "retired document error".to_owned(),
+                        execution_context_id: None,
+                    },
+                )),
+                terminal.clone(),
+            ],
+            RendererOutputCursor::new_for_test(stream, 2),
+            RendererPublicationProjection::RetiringNetworkAndResponses,
+            &mut barriers,
+            &mut command_context,
+        )
+        .await;
+        let messages = command_context
+            .take_protocol_events()
+            .into_iter()
+            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec![json!({
+                "id": 901_002,
+                "sessionId": "SID-retiring-output",
+                "result": {"result": {"type": "object", "objectId": "retired-object"}},
+            })],
+            "the terminal response must survive retirement without stale notifications"
+        );
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+                .is_none(),
+            "the exact response must consume the correlation"
+        );
+        assert_eq!(
+            conn.runtime_remote_object_group_for_session_owner(
+                Some("SID-retiring-output"),
+                "retired-object",
+            ),
+            None,
+            "retired objects must not be registered on the replacement document"
+        );
+
+        project_renderer_output_records_for_owner(
+            &mut conn,
+            &owner,
+            vec![terminal],
+            RendererOutputCursor::new_for_test(stream, 3),
+            RendererPublicationProjection::RetiringNetworkAndResponses,
+            &mut barriers,
+            &mut command_context,
+        )
+        .await;
+        assert!(
+            command_context.take_protocol_events().is_empty(),
+            "a duplicate terminal response must not be delivered twice"
+        );
+    }
 
     #[test]
     fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause() {
