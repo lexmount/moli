@@ -490,6 +490,7 @@ impl JsContextHost {
         bootstrap: ChildBrowsingContextBootstrap,
         initiator_url: Option<Url>,
         reflects_window_state: bool,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> Option<crate::frame_owner_model::FrameDocumentNavigationLoadBinding> {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
@@ -507,10 +508,21 @@ impl JsContextHost {
             );
             return None;
         };
+        let javascript_initiator_origin = match &bootstrap {
+            ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
+                initiator.and_then(|source| self.window_access_origin_for_dispatch_scope(source))
+            }
+            _ => None,
+        };
         let entry = self.child_browsing_contexts.get_mut(&handle)?;
         entry.set_document_permissions_policy(permissions_policy);
         entry.set_ancestor_origins_referrer_policy_snapshot(ancestor_origins_referrer_policy);
-        entry.set_pending_navigation(bootstrap, initiator_url, reflects_window_state);
+        entry.set_pending_navigation(
+            bootstrap,
+            initiator_url,
+            reflects_window_state,
+            javascript_initiator_origin,
+        );
         self.note_child_frame_load_started_for_parent(handle);
         Some(navigation)
     }

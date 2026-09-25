@@ -489,6 +489,21 @@ impl JsContextHost {
                             document_policy_container.clone(),
                         )
                     });
+                let pending_javascript_initiator_origin = if is_new || attribute_bootstrap_changed {
+                    match &attribute_bootstrap {
+                        ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
+                            self.owner_dispatch_scope_for_node(handle)
+                                .and_then(|source| {
+                                    self.window_access_origin_for_dispatch_scope(source)
+                                })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    existing
+                        .as_ref()
+                        .and_then(|entry| entry.pending_javascript_initiator_origin())
+                };
                 self.child_browsing_contexts.insert(
                     handle,
                     ChildBrowsingContextEntry {
@@ -509,6 +524,7 @@ impl JsContextHost {
                         attribute_bootstrap,
                         ignored_attribute_bootstrap,
                         pending_attribute_bootstrap_commit,
+                        pending_javascript_initiator_origin,
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
                             entry.pending_live_navigation_for_refresh(attribute_bootstrap_changed)
                         }),

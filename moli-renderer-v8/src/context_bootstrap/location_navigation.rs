@@ -886,10 +886,12 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             let initiator_url =
                 explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
             if is_javascript_url {
+                let initiator = location_navigation_initiator_scope(scope, host);
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     handle,
                     resolved.as_str(),
                     initiator_url,
+                    Some(initiator),
                 );
             } else {
                 // A cross-document navigation only prepares the next history
@@ -1086,11 +1088,14 @@ fn location_navigation_initiator_scope(
 ) -> crate::native_bridge::OwnerDispatchScope {
     let incumbent = scope
         .get_incumbent_context()
-        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
-        .map(|identity| identity.dispatch_scope());
-    // Popup callbacks share the main realm, but a real child realm keeps its
-    // own source identity when it calls a popup ancestor's Location binding.
-    if let Some(source @ crate::native_bridge::OwnerDispatchScope::Child(_)) = incumbent {
+        .and_then(|context| host.window_dispatch_scope_for_context(scope, context));
+    // A popup can share its opener's concrete realm. Preserve its own source
+    // identity, as well as that of a real child calling an ancestor's binding.
+    if let Some(
+        source @ (crate::native_bridge::OwnerDispatchScope::Child(_)
+        | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)),
+    ) = incumbent
+    {
         return source;
     }
     if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
