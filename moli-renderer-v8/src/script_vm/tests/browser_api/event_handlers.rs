@@ -189,3 +189,5 @@ fn parser_inserted_frameset_window_event_handlers_reflect_on_window() {
         r#"{"beforeInvocation":["function","function",true,true],"loadResult":true,"errorResult":"message|source|3|4|error"}"#,
     );
 }
+
+mod node_compilation;

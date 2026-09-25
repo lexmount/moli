@@ -116,11 +116,11 @@ fn exception_stack_property<'s>(
     local_value_to_string(scope, stack).filter(|stack| !stack.is_empty())
 }
 
-pub(super) fn build_event_handler_exception_report<'s>(
+/// Build parse-error diagnostics without evaluating author-provided stack hooks.
+pub(super) fn build_exception_report_without_stack<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: Option<v8::Local<'s, v8::Value>>,
     message: Option<v8::Local<'s, v8::Message>>,
-    stack_value: Option<v8::Local<'s, v8::Value>>,
 ) -> V8ExceptionReport {
     // Prefer v8::Message when it exists because it carries richer source text, but do not
     // assume it is present or complete for every exception path.
@@ -149,24 +149,31 @@ pub(super) fn build_event_handler_exception_report<'s>(
         .and_then(|message| message.get_source_line(scope))
         .map(|line| line.to_rust_string_lossy(scope))
         .filter(|line| !line.is_empty());
-    let stack = stack_value
-        .and_then(|value| local_value_to_string(scope, value))
-        .filter(|stack| !stack.is_empty())
-        .or_else(|| exception.and_then(|exception| exception_stack_property(scope, exception)));
-
-    let mut report = V8ExceptionReport {
+    V8ExceptionReport {
         summary,
         source,
         line,
         column,
         source_line,
-        stack,
+        stack: None,
         callback_context: None,
         exception: exception.map(|exception| v8::Global::new(scope, exception)),
-    };
+    }
+}
+
+pub(super) fn build_event_handler_exception_report<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    exception: Option<v8::Local<'s, v8::Value>>,
+    message: Option<v8::Local<'s, v8::Message>>,
+    stack_value: Option<v8::Local<'s, v8::Value>>,
+) -> V8ExceptionReport {
+    let mut report = build_exception_report_without_stack(scope, exception, message);
+    report.stack = stack_value
+        .and_then(|value| local_value_to_string(scope, value))
+        .filter(|stack| !stack.is_empty())
+        .or_else(|| exception.and_then(|exception| exception_stack_property(scope, exception)));
     if let Some(stack_trace) = v8::StackTrace::current_stack_trace(scope, 32) {
-        // Use the current stack only to fill holes; when v8::Message already gave us a
-        // location, keep that as the primary source of truth.
+        // Preserve the existing diagnostic fallback for callers that request a stack.
         fill_location_from_stack_trace(scope, &mut report, stack_trace);
     }
     report

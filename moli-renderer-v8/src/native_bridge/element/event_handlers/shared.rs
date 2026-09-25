@@ -1,7 +1,7 @@
 use crate::{
     context_bootstrap::dispatch_window_error_event_with_details,
     document_runtime::DomHandle,
-    exception_reporting::build_event_handler_exception_report,
+    exception_reporting::build_exception_report_without_stack,
     native_bridge::{JsContextHost, OwnerDispatchScope},
     util::{create_script_origin_with_base_url, v8_string},
 };
@@ -126,8 +126,9 @@ fn compile_event_attribute_function<'s>(
 
     let exception = scope.exception();
     let message = scope.message();
-    let stack_trace = scope.stack_trace();
-    let report = build_event_handler_exception_report(&mut scope, exception, message, stack_trace);
+    // Reporting a parse error must not invoke an author's Error.prepareStackTrace
+    // hook. ErrorEvent only needs the exception and its native source location.
+    let report = build_exception_report_without_stack(&mut scope, exception, message);
     scope.reset();
 
     let error_value = report
