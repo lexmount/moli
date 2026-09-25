@@ -2,8 +2,7 @@ use super::ordering::point_order_handles;
 use super::*;
 use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::element::{
-    StyleMode, observable_sources_with_fragments,
-    style_property_value,
+    StyleMode, observable_sources_with_fragments, style_property_value,
 };
 use crate::util::string_from_utf16_units_lossy;
 use std::{cmp::Ordering, collections::HashSet};
