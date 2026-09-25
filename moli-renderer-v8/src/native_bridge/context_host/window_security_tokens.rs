@@ -176,6 +176,20 @@ impl JsContextHost {
             .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
     }
 
+    pub(crate) fn window_dispatch_scope_for_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        context: v8::Local<'s, v8::Context>,
+    ) -> Option<OwnerDispatchScope> {
+        super::popups::active_lightweight_popup_id_for_context(scope, context)
+            .map(OwnerDispatchScope::LightweightPopup)
+            .or_else(|| {
+                self.window_execution_context_identity_for_access_check(context)
+                    .map(|identity| identity.dispatch_scope())
+            })
+
+    }
+
     pub(crate) fn window_security_origin_for_context<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
