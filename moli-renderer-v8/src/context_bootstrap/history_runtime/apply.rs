@@ -189,6 +189,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 child_handle,
                 &applied.url,
                 None,
+                None,
             );
         }
     }
