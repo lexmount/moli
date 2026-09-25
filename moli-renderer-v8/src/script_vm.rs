@@ -4693,6 +4693,7 @@ impl ScriptVm {
     // parser step.
     pub(crate) fn create_and_construct_parser_custom_element_direct_in_default_context(
         &mut self,
+        construction: &moli_dom::native::ParserConstruction,
         document_handle: DomHandle,
         document_has_body: bool,
         local_name: &str,
@@ -4727,6 +4728,7 @@ impl ScriptVm {
                         intended_parent,
                         |document_handle, local_name, namespace, prefix| {
                             document_runtime.create_parser_element_for_document_without_attributes_in_live_dom_host(
+                                construction,
                                 document_handle,
                                 local_name,
                                 namespace,

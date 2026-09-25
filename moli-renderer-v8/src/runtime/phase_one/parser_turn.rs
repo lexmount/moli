@@ -221,6 +221,7 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
 
     fn create_parser_element_for_document_without_attributes(
         &mut self,
+        construction: &moli_dom::native::ParserConstruction,
         document_handle: NativeNodeId,
         local_name: String,
         namespace: String,
@@ -229,6 +230,7 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
         self.vm
             .document_runtime
             .create_parser_element_for_document_without_attributes_in_live_dom_host(
+                construction,
                 document_handle,
                 local_name,
                 namespace,
@@ -334,28 +336,13 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .mark_script_already_started_for_parser_in_live_dom_host(node_id);
     }
 
-    fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
-        let _ = self
-            .vm
-            .document_runtime
-            .dom_host_mut()
-            .finish_parsing_script_children(node_id);
-    }
-
-    fn finish_parsing_link_children(&mut self, node_id: NativeNodeId) {
-        let _ = self
-            .vm
-            .document_runtime
-            .dom_host_mut()
-            .finish_parsing_link_children(node_id);
-    }
-
-    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
-        let effects = self
-            .vm
-            .document_runtime
-            .dom_host_mut()
-            .finish_parsing_style_children_effects(node_id);
+    fn finish_parsing_children(
+        &mut self,
+        construction: &moli_dom::native::ParserConstruction,
+        node_id: NativeNodeId,
+    ) {
+        let effects =
+            construction.finish_children(self.vm.document_runtime.dom_host_mut(), node_id);
         self.consume_parser_mutation_effects(effects);
     }
 
@@ -387,6 +374,7 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
             .is_some();
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
+                request.construction,
                 request.document_handle,
                 document_has_body,
                 request.local_name,

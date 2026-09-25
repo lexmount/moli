@@ -713,24 +713,15 @@ impl DomHost {
         let document_element = match self.document_element_handle() {
             Some(document_element) => document_element,
             None => {
-                let html = self.create_parser_element(
-                    "html".to_owned(),
-                    "http://www.w3.org/1999/xhtml".to_owned(),
-                    None,
-                    Vec::new(),
-                );
-                let head = self.create_parser_element(
-                    "head".to_owned(),
-                    "http://www.w3.org/1999/xhtml".to_owned(),
-                    None,
-                    Vec::new(),
-                );
-                let body = self.create_parser_element(
-                    "body".to_owned(),
-                    "http://www.w3.org/1999/xhtml".to_owned(),
-                    None,
-                    Vec::new(),
-                );
+                let html = self
+                    .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "html")
+                    .expect("valid HTML element");
+                let head = self
+                    .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "head")
+                    .expect("valid HTML element");
+                let body = self
+                    .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "body")
+                    .expect("valid HTML element");
                 let _ = self.append_child(self.document_handle(), html);
                 let _ = self.append_child(html, head);
                 let _ = self.append_child(html, body);
@@ -744,12 +735,9 @@ impl DomHost {
 
         let body = self.ensure_html_document_body()?;
         if self.document_head_handle().is_none() {
-            let head = self.create_parser_element(
-                "head".to_owned(),
-                "http://www.w3.org/1999/xhtml".to_owned(),
-                None,
-                Vec::new(),
-            );
+            let head = self
+                .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "head")
+                .expect("valid HTML element");
             let _ = self.insert_before(document_element, head, Some(body));
         }
         Some(body)
@@ -770,12 +758,9 @@ impl DomHost {
             return None;
         }
 
-        let body = self.create_parser_element(
-            "body".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
+        let body = self
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "body")
+            .expect("valid HTML element");
         let _ = self.append_child(document_element, body);
         Some(body)
     }

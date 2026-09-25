@@ -1045,13 +1045,15 @@ mod tests {
 
         fn create_parser_element_for_document_without_attributes(
             &mut self,
+            construction: &moli_dom::native::ParserConstruction,
             document_handle: NativeNodeId,
             local_name: String,
             namespace: String,
             prefix: Option<String>,
         ) -> NativeNodeId {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            unsafe { &mut *self.host }.create_parser_element_without_attributes_for_document(
+            construction.create_element(
+                unsafe { &mut *self.host },
                 document_handle,
                 local_name,
                 namespace,
@@ -1169,19 +1171,13 @@ mod tests {
             let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
         }
 
-        fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
+        fn finish_parsing_children(
+            &mut self,
+            construction: &moli_dom::native::ParserConstruction,
+            node_id: NativeNodeId,
+        ) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            let _ = unsafe { &mut *self.host }.finish_parsing_script_children(node_id);
-        }
-
-        fn finish_parsing_link_children(&mut self, node_id: NativeNodeId) {
-            // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            let _ = unsafe { &mut *self.host }.finish_parsing_link_children(node_id);
-        }
-
-        fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
-            // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            let effects = unsafe { &mut *self.host }.finish_parsing_style_children_effects(node_id);
+            let effects = construction.finish_children(unsafe { &mut *self.host }, node_id);
             self.effects.merge(effects);
         }
 

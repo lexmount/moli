@@ -1568,6 +1568,10 @@ impl DocumentSink {
             .pop_pending_blocking_stylesheet_pause()
     }
 
+    pub(super) fn finish_construction(&self) {
+        self.target.borrow().finish_construction();
+    }
+
     pub(super) fn begin_tree_builder_finish(&self) {
         self.target.borrow_mut().begin_tree_builder_finish();
     }
@@ -1619,7 +1623,9 @@ impl TreeSink for DocumentSink {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
-        self.target.into_inner()
+        let target = self.target.into_inner();
+        target.finish_construction();
+        target
     }
 
     fn parse_error(&self, err: Cow<'static, str>) {

@@ -4,7 +4,10 @@ use super::*;
 fn style_element_initialization_waits_for_parser_and_preserves_prepared_sources() {
     let mut host = test_host();
     let document = host.document_handle();
-    let owner = host.create_parser_element_without_attributes(
+    let construction = moli_dom::native::ParserConstruction::default();
+    let owner = construction.create_element(
+        &mut host,
+        document,
         "style".into(),
         "http://www.w3.org/1999/xhtml".into(),
         None,
@@ -16,7 +19,8 @@ fn style_element_initialization_waits_for_parser_and_preserves_prepared_sources(
     engine.initialize_style_element_sources_with_host(&host, document);
     assert!(engine.owner_style_sheet_processing_source(owner).is_none());
 
-    let completion = host.finish_parsing_style_children_effects(owner);
+    let completion = construction.finish_children(&mut host, owner);
+    construction.finish();
     engine
         .apply_stylesheet_owner_changes_with_host(&host, completion.stylesheet_owners().changes());
     let first = engine.owner_style_sheet_processing_source(owner).unwrap();

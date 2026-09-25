@@ -491,6 +491,7 @@ impl XmlParserSession {
         debug_assert!(input_buffer.is_empty());
         tokenizer.end();
         let mut target = tokenizer.sink.inner.sink.target.borrow_mut();
+        target.common.finish_construction();
         target.present_unstyled_top_level_document_if_needed();
         ParserFinishDiscoverySignals {
             parser_created_null_registry_elements: target
@@ -588,7 +589,9 @@ impl TreeSink for XmlStreamDocumentSink {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
-        self.target.into_inner()
+        let target = self.target.into_inner();
+        target.common.finish_construction();
+        target
     }
 
     fn parse_error(&self, error: Cow<'static, str>) {

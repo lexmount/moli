@@ -361,19 +361,19 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
 
     fn create_parser_element_for_document_without_attributes(
         &mut self,
+        construction: &moli_dom::native::ParserConstruction,
         document_handle: DomHandle,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> DomHandle {
-        self.host
-            .dom_host_mut()
-            .create_parser_element_without_attributes_for_document(
-                document_handle,
-                local_name,
-                namespace,
-                prefix,
-            )
+        construction.create_element(
+            self.host.dom_host_mut(),
+            document_handle,
+            local_name,
+            namespace,
+            prefix,
+        )
     }
 
     fn add_attrs_if_missing_for_parser(&mut self, node_id: DomHandle, attrs: Vec<Attribute>) {
@@ -466,28 +466,15 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .set_script_already_started(node_id, true);
     }
 
-    fn finish_parsing_script_children(&mut self, node_id: DomHandle) {
-        let _ = self
-            .host
-            .dom_host_mut()
-            .finish_parsing_script_children(node_id);
-    }
-
-    fn finish_parsing_link_children(&mut self, node_id: DomHandle) {
-        let _ = self
-            .host
-            .dom_host_mut()
-            .finish_parsing_link_children(node_id);
-    }
-
-    fn finish_parsing_style_children(&mut self, node_id: DomHandle) {
+    fn finish_parsing_children(
+        &mut self,
+        construction: &moli_dom::native::ParserConstruction,
+        node_id: DomHandle,
+    ) {
         if !self.targets_current_document() {
             return;
         }
-        let effects = self
-            .host
-            .dom_host_mut()
-            .finish_parsing_style_children_effects(node_id);
+        let effects = construction.finish_children(self.host.dom_host_mut(), node_id);
         self.consume_parser_mutation_effects(effects);
     }
 
@@ -541,14 +528,13 @@ impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             request.attributes,
             request.intended_parent,
             |document_handle, local_name, namespace, prefix| {
-                self.host
-                    .dom_host_mut()
-                    .create_parser_element_without_attributes_for_document(
-                        document_handle,
-                        local_name,
-                        namespace,
-                        prefix,
-                    )
+                request.construction.create_element(
+                    self.host.dom_host_mut(),
+                    document_handle,
+                    local_name,
+                    namespace,
+                    prefix,
+                )
             },
         )
     }

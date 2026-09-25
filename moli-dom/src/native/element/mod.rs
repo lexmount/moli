@@ -94,6 +94,8 @@ impl Element {
         )
     }
 
+    /// Record parser provenance (including script preparation semantics).
+    /// Child construction is started separately by `ParserConstruction`.
     pub fn new_parser_created(
         local_name: String,
         namespace: String,
@@ -132,21 +134,6 @@ impl Element {
             )
         {
             rare_data.control_state_mut().note_parser_created_script();
-        }
-        if creation_source == ElementCreationSource::Parser
-            && local_name == "link"
-            && namespace == "http://www.w3.org/1999/xhtml"
-        {
-            rare_data.control_state_mut().note_parser_created_link();
-        }
-        if creation_source == ElementCreationSource::Parser
-            && local_name == "style"
-            && matches!(
-                namespace.as_str(),
-                "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
-            )
-        {
-            rare_data.control_state_mut().note_parser_created_style();
         }
         Self {
             local_name: LocalName::from(local_name),
@@ -777,6 +764,18 @@ impl Element {
         }
         self.control_state_mut()
             .finish_parsing_script_children(source)
+    }
+
+    pub(in crate::native) fn begin_parsing_children(&mut self) -> bool {
+        if self.is_inline_style_element() {
+            self.control_state_mut().begin_parsing_style_children();
+            true
+        } else if self.is_html_element("link") {
+            self.control_state_mut().begin_parsing_link_children();
+            true
+        } else {
+            self.is_script_element()
+        }
     }
 
     pub fn finish_parsing_link_children(&mut self) -> bool {

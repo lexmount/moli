@@ -5,6 +5,7 @@ mod host;
 mod html_serialization;
 mod markdown;
 mod node;
+mod parser_construction;
 mod queries;
 mod scripts;
 
@@ -36,6 +37,7 @@ pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
     ProcessingInstruction, Text,
 };
+pub use parser_construction::ParserConstruction;
 
 // Node IDs remain dense indexes, while immutable page snapshots share complete
 // chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write
@@ -2955,12 +2957,9 @@ mod tests {
     #[test]
     fn ensure_html_document_body_synthesizes_missing_body_without_replacing_frameset() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
-        let html = host.create_parser_element(
-            "html".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
+        let html = host
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "html")
+            .expect("valid HTML element");
         assert!(host.append_child(host.document_handle(), html));
 
         let body = host
@@ -2970,23 +2969,18 @@ mod tests {
         assert_eq!(host.node(body).and_then(Node::parent_node), Some(html));
         assert!(
             host.node(body)
-                .is_some_and(|node| node.flags().parser_created())
+                .is_some_and(|node| !node.flags().parser_created()),
+            "synthesizing a missing body is ordinary DOM construction"
         );
         assert_eq!(host.ensure_html_document_body(), Some(body));
 
         let mut frameset_host = DomHost::from_dom(NativeDom::new_html(test_url()));
-        let frameset_html = frameset_host.create_parser_element(
-            "html".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
-        let frameset = frameset_host.create_parser_element(
-            "frameset".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
+        let frameset_html = frameset_host
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "html")
+            .expect("valid HTML element");
+        let frameset = frameset_host
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "frameset")
+            .expect("valid HTML element");
         assert!(frameset_host.append_child(frameset_host.document_handle(), frameset_html));
         assert!(frameset_host.append_child(frameset_html, frameset));
 
@@ -3012,6 +3006,12 @@ mod tests {
         assert!(host.is_html_element_named(html, "html"));
         assert!(host.is_html_element_named(head, "head"));
         assert!(host.is_html_element_named(body, "body"));
+        for generated in [html, head, body] {
+            assert!(
+                !host.node(generated).unwrap().flags().parser_created(),
+                "generated document shells do not enter parser construction"
+            );
+        }
         assert_eq!(
             host.node(doctype).and_then(Node::parent_node),
             Some(host.document_handle())
@@ -3029,18 +3029,12 @@ mod tests {
     #[test]
     fn ensure_html_document_shell_inserts_missing_head_before_body() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
-        let html = host.create_parser_element(
-            "html".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
-        let body = host.create_parser_element(
-            "body".to_owned(),
-            "http://www.w3.org/1999/xhtml".to_owned(),
-            None,
-            Vec::new(),
-        );
+        let html = host
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "html")
+            .expect("valid HTML element");
+        let body = host
+            .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "body")
+            .expect("valid HTML element");
         assert!(host.append_child(host.document_handle(), html));
         assert!(host.append_child(html, body));
 

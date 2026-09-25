@@ -25,18 +25,8 @@ impl DomHost {
         }
     }
 
-    pub fn create_parser_element(
-        &mut self,
-        local_name: String,
-        namespace: String,
-        prefix: Option<String>,
-        attributes: Vec<crate::dom::native::Attribute>,
-    ) -> DomHandle {
-        let node_id = self.create_parser_element_without_attributes(local_name, namespace, prefix);
-        self.add_attrs_if_missing_for_parser(node_id, attributes);
-        node_id
-    }
-
+    /// Allocate parser provenance without starting child construction. Active
+    /// parsers allocate through `ParserConstruction` instead.
     pub fn create_parser_element_without_attributes(
         &mut self,
         local_name: String,
@@ -51,6 +41,8 @@ impl DomHost {
         )
     }
 
+    /// Allocate an element with parser provenance only. An active parser must
+    /// use `ParserConstruction::create_element` to also own child completion.
     pub fn create_parser_element_without_attributes_for_document(
         &mut self,
         document_handle: DomHandle,
@@ -59,6 +51,12 @@ impl DomHost {
         prefix: Option<String>,
     ) -> DomHandle {
         self.allocate_element_for_document(document_handle, local_name, namespace, prefix, true)
+    }
+
+    pub(in crate::native) fn begin_parsing_children(&mut self, node: DomHandle) -> bool {
+        self.node_mut(node)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(Element::begin_parsing_children)
     }
 
     pub fn parser_template_contents_handle(&self, node_id: DomHandle) -> Option<DomHandle> {

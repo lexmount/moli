@@ -15,7 +15,9 @@ use xml5ever::{
 };
 
 use super::{html_chunks, xml_tree_viewer::transform_document_to_xml_tree_view};
-use moli_dom::native::{Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node};
+use moli_dom::native::{
+    Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node, ParserConstruction,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct XmlParser;
@@ -57,6 +59,7 @@ impl DerefMut for XmlDomHost<'_> {
 }
 
 struct XmlLiveTreeSinkTarget<'a> {
+    construction: ParserConstruction,
     dom_host: XmlDomHost<'a>,
     document_handle: NativeNodeId,
 }
@@ -145,6 +148,7 @@ impl XmlLiveTreeSinkTarget<'static> {
         let dom_host = DomHost::from_dom(NativeDom::new_xml(final_url));
         let document_handle = dom_host.document_handle();
         Self {
+            construction: ParserConstruction::default(),
             dom_host: XmlDomHost::Owned(Box::new(dom_host)),
             document_handle,
         }
@@ -169,6 +173,7 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
             return None;
         }
         Some(Self {
+            construction: ParserConstruction::default(),
             dom_host: XmlDomHost::Borrowed(dom_host),
             document_handle,
         })
@@ -197,14 +202,13 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
                 )
             })
             .collect::<Vec<_>>();
-        let node_id = self
-            .dom_host
-            .create_parser_element_without_attributes_for_document(
-                self.document_handle,
-                name.local.to_string(),
-                name.ns.to_string(),
-                name.prefix.as_ref().map(|prefix| prefix.to_string()),
-            );
+        let node_id = self.construction.create_element(
+            &mut self.dom_host,
+            self.document_handle,
+            name.local.to_string(),
+            name.ns.to_string(),
+            name.prefix.as_ref().map(|prefix| prefix.to_string()),
+        );
         self.dom_host
             .add_attrs_if_missing_for_parser(node_id, attributes);
         XmlParseHandle::new(node_id, Some(element_name))
@@ -467,7 +471,9 @@ impl<'host> XmlTreeSinkBase for XmlDocumentSink<'host> {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
-        self.target.into_inner()
+        let target = self.target.into_inner();
+        target.construction.finish();
+        target
     }
 
     fn parse_error(&self, err: Cow<'static, str>) {
@@ -556,13 +562,10 @@ impl<'host> XmlTreeSinkBase for XmlDocumentSink<'host> {
     }
 
     fn pop(&self, node: &Self::Handle) {
-        // This inert sink has no renderer consumer. Complete parser state here
-        // so a later document handoff can prepare the finished stylesheet.
-        let _ = self
-            .target
-            .borrow_mut()
-            .dom_host
-            .finish_parsing_style_children_effects(node.node_id);
+        let target = &mut *self.target.borrow_mut();
+        let _ = target
+            .construction
+            .finish_children(&mut target.dom_host, node.node_id);
     }
 
     fn set_quirks_mode(&self, mode: XmlQuirksMode) {

@@ -2468,6 +2468,50 @@ fn parser_style_waits_for_complete_source_in_main_and_child_documents() {
 }
 
 #[test]
+fn parser_style_completion_follows_the_creating_parser_and_preserves_abort() {
+    let mut vm = new_parsed_test_vm(
+        "https://parser-style-ownership.test/",
+        "<!doctype html><body><div id=probe>probe</div></body>",
+    );
+    let result = vm.eval(r#"
+(() => {
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const d = frame.contentDocument;
+  d.open();
+  d.write('<!doctype html><head><style>#probe { color: rgb(1, 2, 3) }');
+  const moved = d.querySelector('style');
+  document.head.appendChild(moved);
+  const pending = moved.sheet === null;
+  d.write('</style>');
+  d.close();
+  const complete = [!!moved.sheet, getComputedStyle(document.getElementById('probe')).color];
+  moved.remove();
+
+  d.open();
+  d.write('<!doctype html><head><style>#probe { color: red }');
+  const aborted = d.querySelector('style');
+  d.open();
+  d.write('<!doctype html><body>replacement</body>');
+  d.close();
+  document.head.appendChild(aborted);
+  aborted.textContent = '#probe { color: blue }';
+  const afterAbort = [aborted.sheet === null, getComputedStyle(document.getElementById('probe')).color];
+  aborted.remove();
+  frame.remove();
+  return JSON.stringify({pending, complete, afterAbort});
+})()
+"#).expect("moving a style preserves parser ownership, while cancellation cannot complete it");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "pending": true,
+            "complete": [true, "rgb(1, 2, 3)"],
+            "afterAbort": [true, "rgb(0, 0, 0)"]
+        }),
+    );
+}
+
+#[test]
 fn parser_style_finishes_at_eof_in_main_and_child_documents() {
     let mut vm = new_parsed_test_vm(
         "https://parser-style-eof.test/",

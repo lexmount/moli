@@ -410,6 +410,8 @@ fn parser_created_link_processing_state_is_consumed_at_children_finish() {
         None,
         Vec::new(),
     );
+    assert!(!parser_created.link_created_by_parser());
+    assert!(parser_created.begin_parsing_children());
     assert!(parser_created.link_created_by_parser());
     assert!(parser_created.finish_parsing_link_children());
     assert!(!parser_created.link_created_by_parser());

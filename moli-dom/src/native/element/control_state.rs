@@ -622,7 +622,7 @@ impl ElementControlState {
             .is_some_and(ScriptElementState::note_parser_created)
     }
 
-    pub fn note_parser_created_link(&mut self) -> bool {
+    pub fn begin_parsing_link_children(&mut self) -> bool {
         if self.link_created_by_parser {
             return false;
         }
@@ -634,7 +634,7 @@ impl ElementControlState {
         self.style_children_parsing
     }
 
-    pub fn note_parser_created_style(&mut self) {
+    pub fn begin_parsing_style_children(&mut self) {
         self.style_children_parsing = true;
     }
 

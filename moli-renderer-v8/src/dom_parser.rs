@@ -223,13 +223,13 @@ fn materialize_xml_parser_error_document(parsed: NativeDom) -> NativeDom {
     for child in host.child_handles(document).collect::<Vec<_>>() {
         let _ = host.remove_child(document, child);
     }
-    let html = host.create_parser_element_without_attributes_for_document(
+    let html = host.create_element_without_attributes_for_document(
         document,
         "html".to_owned(),
         HTML_NAMESPACE.to_owned(),
         None,
     );
-    let body = host.create_parser_element_without_attributes_for_document(
+    let body = host.create_element_without_attributes_for_document(
         document,
         "body".to_owned(),
         HTML_NAMESPACE.to_owned(),
@@ -246,7 +246,7 @@ fn create_dom_parser_error_element(
     document: NativeNodeId,
     error_detail: &str,
 ) -> NativeNodeId {
-    let parser_error = host.create_parser_element_without_attributes_for_document(
+    let parser_error = host.create_element_without_attributes_for_document(
         document,
         "parsererror".to_owned(),
         HTML_NAMESPACE.to_owned(),
@@ -283,7 +283,7 @@ fn create_dom_parser_error_child(
     local_name: &str,
     style: Option<&str>,
 ) -> NativeNodeId {
-    let element = host.create_parser_element_without_attributes_for_document(
+    let element = host.create_element_without_attributes_for_document(
         document,
         local_name.to_owned(),
         HTML_NAMESPACE.to_owned(),

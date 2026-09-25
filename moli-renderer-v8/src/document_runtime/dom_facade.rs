@@ -286,18 +286,19 @@ impl DocumentRuntime {
 
     pub(crate) fn create_parser_element_for_document_without_attributes_in_live_dom_host(
         &mut self,
+        construction: &moli_dom::native::ParserConstruction,
         document_handle: DomHandle,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> DomHandle {
-        self.dom_host_mut_for_active_parser_step()
-            .create_parser_element_without_attributes_for_document(
-                document_handle,
-                local_name,
-                namespace,
-                prefix,
-            )
+        construction.create_element(
+            self.dom_host_mut_for_active_parser_step(),
+            document_handle,
+            local_name,
+            namespace,
+            prefix,
+        )
     }
 
     pub(crate) fn add_attrs_if_missing_for_parser_in_live_dom_host(

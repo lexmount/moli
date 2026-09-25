@@ -394,7 +394,7 @@ fn trusted_types_default_policy_can_make_changed_empty_script_sources_executable
         assert!(
             vm.document_runtime
                 .dom_host_mut()
-                .finish_parsing_script_children(script)
+                .set_script_text_internal_slot(script, ";")
         );
         assert!(
             vm.document_runtime

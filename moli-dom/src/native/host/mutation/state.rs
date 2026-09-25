@@ -857,7 +857,7 @@ impl DomHost {
         did_change
     }
 
-    pub fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
+    pub(in crate::native) fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
         let Some(source) = self.dom.direct_text_content(handle) else {
             return false;
         };
@@ -876,7 +876,7 @@ impl DomHost {
         did_change
     }
 
-    pub fn finish_parsing_link_children(&mut self, handle: DomHandle) -> bool {
+    fn finish_parsing_link_children(&mut self, handle: DomHandle) -> bool {
         let did_change = {
             let Some(element) = self
                 .node_mut(handle)
@@ -894,10 +894,7 @@ impl DomHost {
 
     /// Finish a parser-created style at its closing tag or EOF. Report the
     /// lifecycle transition without producing child or text mutation records.
-    pub fn finish_parsing_style_children_effects(
-        &mut self,
-        handle: DomHandle,
-    ) -> DomMutationEffects {
+    fn finish_parsing_style_children_effects(&mut self, handle: DomHandle) -> DomMutationEffects {
         let did_change = self
             .node_mut(handle)
             .and_then(|node| node.data_mut().as_element_mut())
@@ -912,6 +909,24 @@ impl DomHost {
             self.dom.stylesheet_candidate_tree_scope_for_node(handle),
         );
         effects
+    }
+
+    pub(in crate::native) fn finish_parsing_children_effects(
+        &mut self,
+        handle: DomHandle,
+    ) -> DomMutationEffects {
+        if self
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(Element::is_script_element)
+        {
+            self.finish_parsing_script_children(handle);
+        } else if self.is_html_element_named(handle, "link") {
+            self.finish_parsing_link_children(handle);
+        } else {
+            return self.finish_parsing_style_children_effects(handle);
+        }
+        DomMutationEffects::default()
     }
 
     pub fn set_cryptographic_nonce(&mut self, handle: DomHandle, nonce: Option<String>) -> bool {

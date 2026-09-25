@@ -186,7 +186,7 @@ impl JsContextHost {
                 .create_document_type_for_document(document_handle, "html", "", "");
         let html = self
             .dom_host_mut()
-            .create_parser_element_without_attributes_for_document(
+            .create_element_without_attributes_for_document(
                 document_handle,
                 "html".to_owned(),
                 "http://www.w3.org/1999/xhtml".to_owned(),
@@ -194,7 +194,7 @@ impl JsContextHost {
             );
         let head = self
             .dom_host_mut()
-            .create_parser_element_without_attributes_for_document(
+            .create_element_without_attributes_for_document(
                 document_handle,
                 "head".to_owned(),
                 "http://www.w3.org/1999/xhtml".to_owned(),
@@ -202,7 +202,7 @@ impl JsContextHost {
             );
         let body = self
             .dom_host_mut()
-            .create_parser_element_without_attributes_for_document(
+            .create_element_without_attributes_for_document(
                 document_handle,
                 "body".to_owned(),
                 "http://www.w3.org/1999/xhtml".to_owned(),
