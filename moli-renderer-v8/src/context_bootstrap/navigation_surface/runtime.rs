@@ -107,6 +107,14 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
         NAVIGATION_EVENT_LISTENERS_SLOT,
         false,
     );
+    super::super::shared_event_targets::install_handlers(scope, navigation, false);
+    let owner = history_window_owner(scope, window);
+    if window_has_shared_history(scope, window)
+        && let Some(canonical) =
+            super::super::navigation_window::window_navigation_for_holder(scope, owner)
+    {
+        super::super::shared_event_targets::bind_shared_target(scope, navigation, canonical);
+    }
     install_navigation_activation_runtime_state(
         scope,
         navigation,

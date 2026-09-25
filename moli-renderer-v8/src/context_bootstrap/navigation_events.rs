@@ -32,6 +32,8 @@ use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
 const NAVIGATION_DESTINATION_ENTRY_SLOT: &str = "__lmNavigationDestinationEntry";
+const NAVIGATION_DESTINATION_BACKING_SLOT: &str = "__moliNavigationDestinationBacking";
+const NAVIGATION_DESTINATION_WRAPPERS_SLOT: &str = "__moliNavigationDestinationWrappers";
 const NAVIGATION_TRACKED_DESTINATIONS_SLOT: &str = "__lmNavigationTrackedDestinations";
 const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
@@ -930,6 +932,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     else {
         return NavigationDispatchOutcome::proceed();
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1176,6 +1179,7 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
     else {
         return true;
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1271,6 +1275,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     else {
         return NavigationDispatchOutcome::proceed();
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1355,6 +1360,75 @@ fn create_navigation_destination<'s>(
     )
     .bind(scope)
     .expect("NavigationDestination declaration should bind")
+}
+
+pub(super) fn navigation_destination_for_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    destination: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let destination =
+        crate::util::get_private_object(scope, destination, NAVIGATION_DESTINATION_BACKING_SLOT)
+            .unwrap_or(destination);
+    let global = scope.get_current_context().global(scope);
+    let wrappers = get_private_value(scope, destination, NAVIGATION_DESTINATION_WRAPPERS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+        .unwrap_or_else(|| {
+            let map = v8::Map::new(scope);
+            set_private_value(
+                scope,
+                destination,
+                NAVIGATION_DESTINATION_WRAPPERS_SLOT,
+                map.into(),
+            );
+            map
+        });
+    if let Some(wrapper) = wrappers
+        .get(scope, global.into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        return Some(wrapper);
+    }
+    let wrapper = create_navigation_destination(scope, "", false, -1, None);
+    set_private_value(
+        scope,
+        wrapper,
+        NAVIGATION_DESTINATION_BACKING_SLOT,
+        destination.into(),
+    );
+    for property in ["url", "key", "id", "index", "sameDocument"] {
+        let getter = v8::Function::builder(navigation_destination_view_getter)
+            .data(v8str(scope, property).into())
+            .build(scope)?;
+        crate::definitions::define_get_set_property(
+            scope,
+            wrapper,
+            v8str(scope, property).into(),
+            getter.into(),
+            v8::undefined(scope).into(),
+            v8::PropertyAttribute::NONE,
+            "NavigationDestination view",
+        )
+        .ok()?;
+    }
+    let _ = wrappers.set(scope, global.into(), wrapper.into());
+    Some(wrapper)
+}
+
+fn navigation_destination_view_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(backing) =
+        crate::util::get_private_object(scope, args.this(), NAVIGATION_DESTINATION_BACKING_SLOT)
+    else {
+        return;
+    };
+    if let Some(key) = args.data().to_string(scope)
+        && let Some(value) = backing.get(scope, key.into())
+    {
+        rv.set(value);
+    }
 }
 
 fn create_navigation_destination_for_entry<'s>(
@@ -1467,6 +1541,9 @@ fn navigation_destination_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     destination: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let destination =
+        crate::util::get_private_object(scope, destination, NAVIGATION_DESTINATION_BACKING_SLOT)
+            .unwrap_or(destination);
     get_private_value(scope, destination, NAVIGATION_DESTINATION_STATE_SLOT)
         .filter(|value| !value.is_undefined())
 }

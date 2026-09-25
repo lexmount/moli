@@ -110,15 +110,6 @@ fn mutate_history_object<'s>(
     let Some(snapshot) = serialize_history_state(scope, parsed.state) else {
         return;
     };
-    // Argument conversion/serialization belongs to the caller. Entry objects
-    // and navigation events belong to the Window, regardless of the caller's world.
-    let Some(context) = owner.get_creation_context(scope) else {
-        return;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(state) = deserialize_history_state(scope, &snapshot) else {
-        return;
-    };
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;
     };
@@ -158,6 +149,16 @@ fn mutate_history_object<'s>(
         return;
     }
 
+    // Web IDL conversion, serialization and URL validation must create errors in
+    // the binding's realm. Only the Window's commit/dispatch machinery runs in
+    // its owning context; listeners enter their own callback realms.
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(state) = deserialize_history_state(scope, &snapshot) else {
+        return;
+    };
     let mut navigate_outcome = None;
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         let _ = cancel_active_navigation_event(scope, navigation);

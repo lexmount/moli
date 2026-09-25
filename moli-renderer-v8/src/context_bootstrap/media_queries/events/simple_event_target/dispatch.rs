@@ -123,14 +123,31 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                     continue;
                 };
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
+                let callback_target =
+                    crate::context_bootstrap::shared_event_targets::target_in_realm(
+                        scope,
+                        target,
+                        listener.relevant_context(),
+                    );
+                let Some(callback_event) =
+                    crate::context_bootstrap::navigation_event_worlds::event_in_realm(
+                        scope,
+                        target,
+                        event,
+                        event_type,
+                        listener.relevant_context(),
+                    )
+                else {
+                    continue;
+                };
                 let outcome = invoke_simple_event_listener_collecting_errors(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
                     &listener,
-                    target.into(),
-                    &[event.into()],
-                    event,
+                    callback_target.into(),
+                    &[callback_event.into()],
+                    callback_event,
                     callback_errors.as_deref_mut(),
                 );
                 dispatched |= outcome.invoked;

@@ -4,6 +4,7 @@ pub(in crate::context_bootstrap) fn set_event_default_prevented(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) {
+    let event = super::base::event_backing(scope, event);
     let key = v8str(scope, "defaultPrevented");
     let value = v8::Boolean::new(scope, true).into();
     let _ = event.define_own_property(scope, key.into(), value, Default::default());

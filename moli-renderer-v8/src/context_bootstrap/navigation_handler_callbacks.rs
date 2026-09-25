@@ -35,6 +35,7 @@ pub(in crate::context_bootstrap) const NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT: &s
     "__lmNavigateEventDeferredHandlers";
 pub(in crate::context_bootstrap) const NAVIGATE_EVENT_ADDED_HANDLERS_SLOT: &str =
     "__lmNavigateEventAddedHandlers";
+const HANDLER_EVENT_VIEW_SLOT: &str = "__moliNavigationHandlerEventView";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context_bootstrap) enum NavigationHandlerResidenceFailure {
@@ -54,6 +55,8 @@ pub(in crate::context_bootstrap) fn push_navigation_handler<'s>(
     callback: WebIdlCallbackFunction,
 ) -> Result<(), NavigationHandlerResidenceFailure> {
     let callback = V8TracedWindowWebIdlCallbackFunction::new(scope, callback).into_object();
+    set_private_value(scope, callback, HANDLER_EVENT_VIEW_SLOT, event.into());
+    let event = super::events::event_backing(scope, event);
     let handlers = get_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
         .unwrap_or_else(|| {
@@ -178,13 +181,21 @@ fn invoke_navigation_handler<'s>(
     carrier: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
+    let view =
+        crate::util::get_private_object(scope, carrier, HANDLER_EVENT_VIEW_SLOT).unwrap_or(event);
+    let arguments: Vec<_> = arguments
+        .iter()
+        .map(|argument| {
+            super::events::navigation_precommit_controller_for_event(scope, *argument, view)
+        })
+        .collect();
     let callback = V8TracedWindowWebIdlCallbackFunction::from_object(carrier)
         .prepare(scope, unsafe { &*host_ptr });
     match callback.invoke(
         scope,
         unsafe { &*host_ptr },
-        event.into(),
-        arguments,
+        view.into(),
+        &arguments,
         |scope, callback, receiver, arguments| {
             let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
             let mut scope = try_catch.init();

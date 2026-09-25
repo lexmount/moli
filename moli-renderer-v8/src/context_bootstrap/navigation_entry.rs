@@ -165,6 +165,7 @@ pub(in crate::context_bootstrap) fn wrap_native_navigation_entry<'s>(
         NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
         false,
     );
+    super::shared_event_targets::install_handlers(scope, entry, true);
     entry
 }
 

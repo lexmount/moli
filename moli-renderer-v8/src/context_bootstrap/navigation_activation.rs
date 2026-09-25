@@ -193,6 +193,13 @@ pub(super) fn create_navigation_activation_object<'s>(
         .and_then(|value| v8_string(scope, value))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
+    let context = scope.get_current_context();
+    let entry = super::history_runtime::native::entry_in_realm(scope, entry, context);
+    let from = if let Ok(from) = v8::Local::<v8::Object>::try_from(from) {
+        super::history_runtime::native::entry_in_realm(scope, from, context).into()
+    } else {
+        from
+    };
     NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
         .bind(scope)
         .expect("NavigationActivation declaration should bind")
@@ -206,9 +213,12 @@ pub(super) fn install_navigation_activation_runtime_state<'s>(
     activation: Option<&NavigationActivationSeed>,
 ) {
     let activation_value = create_navigation_activation_object(scope, current_entry, activation);
-    let transition_value = v8::null(scope).into();
     set_navigation_activation_value(scope, navigation, activation_value);
-    set_navigation_transition_value(scope, navigation, transition_value);
+    if super::shared_event_targets::shared_target_owner(scope, navigation)
+        .strict_equals(navigation.into())
+    {
+        set_navigation_transition_value(scope, navigation, v8::null(scope).into());
+    }
 }
 
 pub(super) fn install_navigation_transition<'s>(
@@ -224,6 +234,10 @@ pub(super) fn install_navigation_transition<'s>(
     let committed_resolver = v8::PromiseResolver::new(scope)?;
     let committed = committed_resolver.get_promise(scope);
     suppress_unhandled_rejection(scope, committed);
+    let context = scope.get_current_context();
+    let from = super::history_runtime::native::entry_in_realm(scope, from, context);
+    let to =
+        to.and_then(|to| super::navigation_events::navigation_destination_for_realm(scope, to));
     let transition = NavigationTransitionObjectDeclaration {
         from,
         to: to
@@ -246,6 +260,11 @@ pub(super) fn resolve_navigation_transition_committed<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     if let Some(resolver) = take_navigation_transition_committed_resolver(scope, navigation) {
+        let context = resolver
+            .get_promise(scope)
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let value = super::history_runtime::native::entry_value_in_realm(scope, value, context);
         let _ = resolver.resolve(scope, value);
     }
 }
@@ -366,7 +385,9 @@ pub(super) fn navigation_current_entry_value<'s>(
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let owner = runtime_window_owner(scope, navigation);
-    super::navigation_entry::navigation_current_entry(scope, owner).map(Into::into)
+    let entry = super::navigation_entry::navigation_current_entry(scope, owner)?;
+    let context = navigation.get_creation_context(scope)?;
+    Some(super::history_runtime::native::entry_in_realm(scope, entry, context).into())
 }
 
 pub(super) fn navigation_activation_value<'s>(
@@ -381,15 +402,20 @@ pub(super) fn navigation_transition_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, navigation, NAVIGATION_TRANSITION_SLOT)
-        .filter(|value| !value.is_undefined())
+    let context = navigation.get_creation_context(scope)?;
+    let Some(transition) = navigation_transition_object(scope, navigation) else {
+        return Some(v8::null(scope).into());
+    };
+    super::navigation_transition_worlds::transition_in_realm(scope, transition, context)
+        .map(Into::into)
 }
 
 fn navigation_transition_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    navigation_transition_value(scope, navigation)
+    let navigation = super::shared_event_targets::shared_target_owner(scope, navigation);
+    get_private_value(scope, navigation, NAVIGATION_TRANSITION_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
@@ -406,6 +432,7 @@ fn set_navigation_transition_value<'s>(
     navigation: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) {
+    let navigation = super::shared_event_targets::shared_target_owner(scope, navigation);
     set_private_value(scope, navigation, NAVIGATION_TRANSITION_SLOT, value);
 }
 

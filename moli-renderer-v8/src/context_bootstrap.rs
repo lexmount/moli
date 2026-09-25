@@ -55,6 +55,7 @@ mod navigation_cancellation;
 mod navigation_cross_document;
 mod navigation_entry;
 mod navigation_entry_state;
+mod navigation_event_worlds;
 mod navigation_events;
 mod navigation_handler_callbacks;
 mod navigation_history_pruning;
@@ -67,6 +68,7 @@ mod navigation_result;
 mod navigation_seed;
 mod navigation_serialize;
 mod navigation_surface;
+mod navigation_transition_worlds;
 mod navigation_traversal;
 mod navigation_traversal_coordinator;
 mod navigation_traversal_execution;
@@ -74,6 +76,7 @@ mod navigation_traversal_plan;
 mod navigation_window;
 mod navigator_runtime;
 mod session_history;
+mod shared_event_targets;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,

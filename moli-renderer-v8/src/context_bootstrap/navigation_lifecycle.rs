@@ -119,8 +119,7 @@ pub(super) fn settle_navigation_committed<'s>(
     resolve: v8::Local<'s, v8::Function>,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let receiver = v8::undefined(scope).into();
-    let _ = resolve.call(scope, receiver, &[value]);
+    settle_navigation_finished_resolved_immediately(scope, resolve, value);
     resolve_navigation_transition_committed(scope, navigation, value);
 }
 
@@ -129,6 +128,10 @@ pub(super) fn settle_navigation_finished_resolved_immediately<'s>(
     resolve: v8::Local<'s, v8::Function>,
     value: v8::Local<'s, v8::Value>,
 ) {
+    let context = resolve
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let value = super::history_runtime::native::entry_value_in_realm(scope, value, context);
     let receiver = v8::undefined(scope).into();
     let _ = resolve.call(scope, receiver, &[value]);
 }
@@ -285,8 +288,7 @@ fn schedule_navigation_finished_resolve<'s>(
         .data(data.into())
         .build(scope)
     else {
-        let receiver = v8::undefined(scope).into();
-        let _ = resolve.call(scope, receiver, &[value]);
+        settle_navigation_finished_resolved_immediately(scope, resolve, value);
         return;
     };
     enqueue_navigation_lifecycle_microtask(scope, callback);
@@ -307,8 +309,7 @@ fn navigation_finished_resolve_callback<'s>(
     };
     let value = get_private_value(scope, data, NAVIGATION_FINISH_VALUE_SLOT)
         .unwrap_or_else(|| v8::undefined(scope).into());
-    let receiver = v8::undefined(scope).into();
-    let _ = resolve.call(scope, receiver, &[value]);
+    settle_navigation_finished_resolved_immediately(scope, resolve, value);
 }
 
 fn navigation_finished_reject_callback<'s>(

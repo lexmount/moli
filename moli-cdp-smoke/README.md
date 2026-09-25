@@ -25,6 +25,16 @@ observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
 
+The `history-worlds` group was calibrated on 2026-09-25 against macOS Google
+Chrome 154.0.8037.57 using a fresh headless profile. It uses a real CDP WebSocket
+and `Page.createIsolatedWorld` to cover the PR #818 regressions: entry wrapper
+identity and expando/method isolation, one `currententrychange` in each world,
+isolated `navigate` cancellation, and the realm of History `SecurityError`s.
+It also verifies that a later main-world mutation updates the isolated world's
+structured state and preserves its local state cache. Run it with
+`uv run moli-cdp-smoke --group history-worlds`, or add `--endpoint URL` to use an
+existing browser process.
+
 The detailed `emulation-storage` locale/timezone matrix was calibrated on
 2026-09-01 against Debian Chromium 145.0.7632.116. In addition to resolved
 locale, timezone, local getters, and formatted strings, the executable probe

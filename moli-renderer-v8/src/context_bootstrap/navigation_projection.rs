@@ -32,7 +32,7 @@ pub(super) fn visible_navigation_index_for_entry<'s>(
 ) -> Option<u32> {
     visible_navigation_entries(scope, entries, current_entry)
         .into_iter()
-        .position(|entry| entry.strict_equals(target_entry.into()))
+        .position(|entry| super::history_runtime::native::same_entry(scope, entry, target_entry))
         .map(|index| index as u32)
 }
 
@@ -114,7 +114,7 @@ fn entry_is_hidden_for_owner<'s>(
     if !runtime_window_owner(scope, entry).strict_equals(owner.into()) {
         return true;
     }
-    !entry.strict_equals(current_entry.into())
+    !super::history_runtime::native::same_entry(scope, entry, current_entry)
         && navigation_entry_url_value(scope, entry)
             .is_some_and(|url| url.split('#').next() == Some("about:blank"))
 }

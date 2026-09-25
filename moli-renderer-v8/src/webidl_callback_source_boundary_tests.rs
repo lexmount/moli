@@ -99,7 +99,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/navigation_lifecycle.rs",
-        6,
+        // Committed and deferred fulfillment share one realm-aware settlement
+        // helper. The other two calls reject browser-owned Promise capabilities.
+        3,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

@@ -69,6 +69,19 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
     };
     let current_entry = navigation_current_entry(scope, owner);
     let copied = build_visible_navigation_entries_array(scope, entries, current_entry);
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    for index in 0..copied.length() {
+        if let Some(entry) = copied
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            let wrapper =
+                super::super::history_runtime::native::entry_in_realm(scope, entry, context);
+            let _ = copied.set_index(scope, index, wrapper.into());
+        }
+    }
     rv.set(copied.into());
 }
 

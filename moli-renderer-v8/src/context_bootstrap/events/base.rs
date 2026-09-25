@@ -15,6 +15,88 @@ const EVENT_INITIALIZED_SLOT: &str = "__moliEventInitialized";
 const EVENT_TRUSTED_PRIVATE_SLOT: &str = "__moliEventTrusted";
 const EVENT_TIMESTAMP_PRIVATE_SLOT: &str = "__moliEventTimeStamp";
 const EVENT_IS_TRUSTED_GETTER_FUNCTION_SLOT: &str = "__moliEventIsTrustedGetterFunction";
+const EVENT_BACKING_SLOT: &str = "__moliEventBacking";
+
+pub(in crate::context_bootstrap) fn event_backing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'_, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let event = v8::Local::new(scope, event);
+    crate::util::get_private_object(scope, event, EVENT_BACKING_SLOT).unwrap_or(event)
+}
+
+/// A projected Event has its own prototype and expandos, but all its views
+/// observe the same dispatch, cancellation and propagation flags.
+pub(in crate::context_bootstrap) fn bind_event_backing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    set_private_value(scope, wrapper, EVENT_BACKING_SLOT, event.into());
+    for property in [
+        "type",
+        "target",
+        "srcElement",
+        "currentTarget",
+        "eventPhase",
+        "bubbles",
+        "cancelable",
+        "defaultPrevented",
+        "composed",
+        "info",
+    ] {
+        if property == "info"
+            && event.has_own_property(scope, v8str(scope, property).into()) != Some(true)
+        {
+            continue;
+        }
+        let getter = v8::Function::builder(shared_event_attribute_getter)
+            .data(v8str(scope, property).into())
+            .build(scope)
+            .expect("event attribute getter");
+        crate::definitions::define_get_set_property(
+            scope,
+            wrapper,
+            v8str(scope, property).into(),
+            getter.into(),
+            v8::undefined(scope).into(),
+            v8::PropertyAttribute::NONE,
+            "shared Event attribute",
+        )
+        .expect("shared Event attribute");
+    }
+}
+
+fn shared_event_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let wrapper = args.this();
+    let property = args.data().to_rust_string_lossy(scope);
+    let value = shared_event_attribute_value(scope, wrapper, &property);
+    rv.set(value.unwrap_or_else(|| v8::undefined(scope).into()));
+}
+
+fn shared_event_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let event = event_backing(scope, wrapper);
+    let key = v8_string(scope, property)?;
+    let value = event.get(scope, key.into())?;
+    if matches!(property, "target" | "srcElement" | "currentTarget")
+        && let Ok(target) = v8::Local::<v8::Object>::try_from(value)
+        && let Some(context) = wrapper.get_creation_context(scope)
+    {
+        return Some(
+            crate::context_bootstrap::shared_event_targets::target_in_realm(scope, target, context)
+                .into(),
+        );
+    }
+    Some(value)
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
@@ -131,6 +213,7 @@ pub(crate) fn event_initialized<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<bool> {
+    let event = event_backing(scope, event);
     get_private_value(scope, event, EVENT_INITIALIZED_SLOT).map(|value| value.boolean_value(scope))
 }
 
@@ -152,6 +235,7 @@ pub(in crate::context_bootstrap) fn set_event_dispatch_fields<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) {
+    let event = event_backing(scope, event);
     let _ = event.set(scope, v8str(scope, "target").into(), target.into());
     let _ = event.set(scope, v8str(scope, "srcElement").into(), target.into());
     let _ = event.set(scope, v8str(scope, "currentTarget").into(), target.into());
@@ -167,6 +251,7 @@ pub(in crate::context_bootstrap) fn clear_event_dispatch_fields(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) {
+    let event = event_backing(scope, event);
     let _ = event.set(
         scope,
         v8str(scope, "currentTarget").into(),
@@ -185,6 +270,7 @@ pub(crate) fn event_internal_bool_flag<'s>(
     event: v8::Local<'s, v8::Object>,
     key: &'static str,
 ) -> bool {
+    let event = event_backing(scope, event);
     get_private_value(scope, event, key).is_some_and(|value| value.is_true())
 }
 
@@ -194,6 +280,7 @@ pub(crate) fn set_event_internal_flag(
     key: &'static str,
     value: bool,
 ) {
+    let event = event_backing(scope, event);
     set_private_value(scope, event, key, v8::Boolean::new(scope, value).into());
 }
 
@@ -201,6 +288,15 @@ pub(crate) fn event_composed_path_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
+    let backing = event_backing(scope, event);
+    if !backing.strict_equals(event.into()) {
+        let target = event.get(scope, v8str(scope, "target").into());
+        return if event_is_dispatching(scope, backing) {
+            v8::Array::new_with_elements(scope, &target.into_iter().collect::<Vec<_>>()).into()
+        } else {
+            v8::Array::new(scope, 0).into()
+        };
+    }
     get_private_value(scope, event, EVENT_COMPOSED_PATH_SLOT)
         .unwrap_or_else(|| v8::Array::new(scope, 0).into())
 }
@@ -210,6 +306,7 @@ pub(crate) fn set_event_composed_path<'s>(
     event: v8::Local<'s, v8::Object>,
     path: v8::Local<'s, v8::Array>,
 ) {
+    let event = event_backing(scope, event);
     set_private_value(scope, event, EVENT_COMPOSED_PATH_SLOT, path.into());
 }
 
@@ -234,10 +331,11 @@ fn event_is_trusted_getter_function<'s>(
     rv.set(v8::Boolean::new(scope, trusted).into());
 }
 
-pub(super) fn event_trusted<'s>(
+pub(in crate::context_bootstrap) fn event_trusted<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let event = event_backing(scope, event);
     get_private_value(scope, event, EVENT_TRUSTED_PRIVATE_SLOT)
         .map(|value| value.boolean_value(scope))
         .unwrap_or(false)
@@ -255,6 +353,7 @@ pub(crate) fn set_event_trusted(
     event: v8::Local<'_, v8::Object>,
     trusted: bool,
 ) {
+    let event = event_backing(scope, event);
     set_private_value(
         scope,
         event,
@@ -271,6 +370,7 @@ pub(super) fn event_time_stamp<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> f64 {
+    let event = event_backing(scope, event);
     get_private_value(scope, event, EVENT_TIMESTAMP_PRIVATE_SLOT)
         .and_then(|value| value.number_value(scope))
         .or_else(|| {
@@ -376,6 +476,13 @@ fn event_core_attribute_getter<'s>(
 ) {
     if event_initialized(scope, receiver).is_none() {
         throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+
+    let backing = event_backing(scope, receiver);
+    if !backing.strict_equals(receiver.into()) {
+        let value = shared_event_attribute_value(scope, receiver, key);
+        rv.set(value.unwrap_or_else(|| v8::undefined(scope).into()));
         return;
     }
 

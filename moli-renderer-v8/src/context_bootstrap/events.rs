@@ -228,6 +228,7 @@ pub(crate) use base::{
     event_internal_bool_flag, event_is_dispatching, initialize_event_object, mark_event_trusted,
     set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
+pub(in crate::context_bootstrap) use base::{bind_event_backing, event_backing, event_trusted};
 fn event_subclass_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -347,9 +348,11 @@ pub(super) use methods::{
     event_stop_immediate_propagation_callback, event_stop_propagation_callback,
     event_time_stamp_getter_function, set_event_default_prevented,
 };
-pub(in crate::context_bootstrap) use subclasses::run_navigate_event_precommit_handlers;
 pub(super) use subclasses::{
     build_event_subclass_template, pointer_event_get_predicted_events_callback,
+};
+pub(in crate::context_bootstrap) use subclasses::{
+    navigation_precommit_controller_for_event, run_navigate_event_precommit_handlers,
 };
 
 pub(in crate::context_bootstrap) fn finalize_pointer_event_realm_bindings<'s>(

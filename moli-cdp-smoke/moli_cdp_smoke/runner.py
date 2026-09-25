@@ -36,6 +36,7 @@ from .groups.document_content import run_document_content_group
 from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
+from .groups.history_worlds import run_history_worlds_group
 from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_screenshot import run_layout_screenshot_group
@@ -199,6 +200,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "Raw CDP command/reply flows that avoid Playwright helper follow-up commands.",
         "raw",
         run_raw_protocol_group,
+    ),
+    SmokeGroup(
+        "history-worlds",
+        "Native history with isolated-world entries, Navigation listeners, cancellation, and errors.",
+        "raw",
+        run_history_worlds_group,
     ),
 )
 

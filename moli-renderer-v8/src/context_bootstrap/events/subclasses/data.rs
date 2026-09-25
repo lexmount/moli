@@ -39,6 +39,7 @@ const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT: &str =
 const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionResolver";
 const PRECOMMIT_CONTROLLER_EVENT_SLOT: &str = "__lmPrecommitControllerEvent";
+const PRECOMMIT_CONTROLLER_BACKING_SLOT: &str = "__moliPrecommitControllerBacking";
 const PRECOMMIT_CONTROLLER_ACTIVE_SLOT: &str = "__lmPrecommitControllerActive";
 
 #[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
@@ -905,6 +906,8 @@ fn navigate_event_intercept_callback<'s>(
         navigate_event_throw_synthetic_security_error(scope);
         return;
     };
+    let view = event;
+    let event = crate::context_bootstrap::events::event_backing(scope, view);
     let options = match webidl::parse_dictionary::<NavigationInterceptOptionsMembers>(
         scope,
         args.get(0),
@@ -951,7 +954,7 @@ fn navigate_event_intercept_callback<'s>(
         set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_PRECOMMIT_SEEN_SLOT, true);
         if push_navigation_handler(
             scope,
-            event,
+            view,
             NAVIGATE_EVENT_PRECOMMIT_HANDLERS_SLOT,
             precommit_handler,
         )
@@ -964,7 +967,7 @@ fn navigate_event_intercept_callback<'s>(
         // This is the final intercept step. A failed residence write leaves a
         // JavaScript exception pending as this callback returns.
         let _residence =
-            push_navigation_handler(scope, event, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT, handler);
+            push_navigation_handler(scope, view, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT, handler);
     }
 }
 
@@ -1079,7 +1082,10 @@ fn precommit_controller_event<'s>(
     data: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let controller = v8::Local::<v8::Object>::try_from(data).ok()?;
-    if !get_private_value(scope, controller, PRECOMMIT_CONTROLLER_ACTIVE_SLOT)
+    let backing =
+        crate::util::get_private_object(scope, controller, PRECOMMIT_CONTROLLER_BACKING_SLOT)
+            .unwrap_or(controller);
+    if !get_private_value(scope, backing, PRECOMMIT_CONTROLLER_ACTIVE_SLOT)
         .is_some_and(|value| value.is_true())
     {
         navigate_event_throw_invalid_state(scope);
@@ -1092,6 +1098,31 @@ fn precommit_controller_event<'s>(
         return None;
     }
     Some(event)
+}
+
+pub(in crate::context_bootstrap) fn navigation_precommit_controller_for_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    argument: v8::Local<'s, v8::Value>,
+    view: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Value> {
+    let Ok(controller) = v8::Local::<v8::Object>::try_from(argument) else {
+        return argument;
+    };
+    if get_private_value(scope, controller, PRECOMMIT_CONTROLLER_EVENT_SLOT).is_none() {
+        return argument;
+    }
+    let Some(context) = view.get_creation_context(scope) else {
+        return argument;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let wrapper = create_precommit_controller(scope, view);
+    set_private_value(
+        scope,
+        wrapper,
+        PRECOMMIT_CONTROLLER_BACKING_SLOT,
+        controller.into(),
+    );
+    wrapper.into()
 }
 
 fn precommit_controller_add_handler_callback<'s>(
@@ -1127,6 +1158,7 @@ fn precommit_controller_redirect_callback<'s>(
     let Some(event) = precommit_controller_event(scope, args.data()) else {
         return;
     };
+    let event = crate::context_bootstrap::events::event_backing(scope, event);
     let navigation_type = event
         .get(scope, v8str(scope, "navigationType").into())
         .and_then(|value| value.to_string(scope))
@@ -1241,6 +1273,7 @@ fn navigate_event_defer_page_swap_callback<'s>(
         navigate_event_throw_synthetic_security_error(scope);
         return;
     };
+    let event = crate::context_bootstrap::events::event_backing(scope, event);
     if !navigate_event_can_use_navigation_api(scope, event) {
         navigate_event_throw_synthetic_security_error(scope);
         return;
@@ -1259,6 +1292,7 @@ fn navigate_event_scroll_callback<'s>(
         navigate_event_throw_synthetic_security_error(scope);
         return;
     };
+    let event = crate::context_bootstrap::events::event_backing(scope, event);
     if !navigate_event_can_use_navigation_api(scope, event) {
         navigate_event_throw_synthetic_security_error(scope);
         return;

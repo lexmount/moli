@@ -26,6 +26,7 @@ const SIMPLE_EVENT_TARGET_LISTENER_ABORT_ALGORITHM_SLOT: &str =
     "__moliSimpleEventTargetListenerAbortAlgorithm";
 const SIMPLE_EVENT_TARGET_LISTENER_TYPE_ORDER_SLOT: &str =
     "__moliSimpleEventTargetListenerTypeOrder";
+const HANDLER_TARGET_SLOT: &str = "__moliSimpleEventHandlerTarget";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -435,6 +436,7 @@ fn simple_object_event_listener_registry<'s>(
     slot_name: &str,
     create: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let target = crate::context_bootstrap::shared_event_targets::shared_target_owner(scope, target);
     if let Some(registry) = get_private_object(scope, target, slot_name) {
         return Some(registry);
     }
@@ -574,6 +576,7 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
             };
             if simple_object_event_listener_handler_slot(scope, candidate).as_deref()
                 == Some(handler_slot_name)
+                && handler_belongs_to_target(scope, candidate, target)
             {
                 if let Ok(entry) = v8::Local::<v8::Object>::try_from(candidate) {
                     set_private_value(
@@ -613,6 +616,7 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
             relevant_context_anchor,
             incumbent_context_anchor,
         );
+        set_private_value(scope, entry, HANDLER_TARGET_SLOT, target.into());
         let _ = listeners.set_index(scope, listeners.length(), entry.into());
         ensure_simple_object_event_type_order(scope, target, slot_name, event_type);
         return;
@@ -625,6 +629,7 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
         };
         if simple_object_event_listener_handler_slot(scope, candidate).as_deref()
             == Some(handler_slot_name)
+            && handler_belongs_to_target(scope, candidate, target)
         {
             continue;
         }
@@ -638,6 +643,17 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
             remove_simple_object_event_type_order(scope, registry, event_type);
         }
     }
+}
+
+fn handler_belongs_to_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    candidate: v8::Local<'s, v8::Value>,
+    target: v8::Local<'s, v8::Object>,
+) -> bool {
+    v8::Local::<v8::Object>::try_from(candidate)
+        .ok()
+        .and_then(|entry| get_private_value(scope, entry, HANDLER_TARGET_SLOT))
+        .is_some_and(|owner| owner.strict_equals(target.into()))
 }
 
 pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn simple_event_target_uses_ordered_handlers<

@@ -295,7 +295,7 @@ pub(super) fn event_init_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let event = args.this();
+    let event = super::events::event_backing(scope, args.this());
     if event_is_dispatching(scope, event) {
         return;
     }

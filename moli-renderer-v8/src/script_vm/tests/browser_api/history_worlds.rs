@@ -1,5 +1,330 @@
 use super::*;
 
+#[test]
+fn history_worlds_navigation_entries_keep_their_own_wrappers() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        navigation.updateCurrentEntry({state: {value: 7, map: new Map([['x', 2n]])}});
+        navigation.currentEntry.expando = 'page';
+        navigation.currentEntry.getState = () => 'page-override';
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("entries", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"JSON.stringify([
+        navigation.currentEntry instanceof NavigationHistoryEntry,
+        navigation.currentEntry.expando === undefined,
+        navigation.currentEntry.getState().value,
+        navigation.currentEntry.getState().map instanceof Map,
+        navigation.currentEntry.getState().map.get('x') === 2n,
+        navigation.entries().includes(navigation.currentEntry),
+        navigation.currentEntry.index === navigation.entries().length - 1,
+        navigation.currentEntry === navigation.currentEntry
+    ])"#
+        )
+        .unwrap(),
+        "[true,true,7,true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn history_worlds_navigation_listeners_share_notifications_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.changes = 0;
+        globalThis.navigates = 0;
+        navigation.addEventListener('currententrychange', () => changes++);
+        navigation.addEventListener('navigate', () => navigates++);
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("events", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        globalThis.changes = 0;
+        navigation.addEventListener('currententrychange', () => changes++);
+        history.pushState({value: 1}, '', '#next');
+        String(changes)
+    "##
+        )
+        .unwrap(),
+        "1"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        const before = location.href;
+        const length = history.length;
+        let seen = 0;
+        navigation.addEventListener('navigate', event => {
+            seen++;
+            event.preventDefault();
+        }, {once: true});
+        history.pushState({}, '', '#should-not-commit');
+        JSON.stringify([seen, location.href === before, history.length === length, changes])
+    "##
+        )
+        .unwrap(),
+        "[1,true,true,1]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify([changes, navigates])").unwrap(),
+        "[1,2]"
+    );
+    vm.eval("history.pushState({}, '', '#page'); 'pushed'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "String(changes)")
+            .unwrap(),
+        "2"
+    );
+}
+
+#[test]
+fn history_worlds_security_errors_belong_to_the_binding_realm() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    let isolated = vm.create_isolated_world("errors", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"JSON.stringify(
+        ['pushState', 'replaceState'].flatMap(method => {
+            try { history[method]({}, '', 'https://other.test/'); }
+            catch (error) { return [error.name, error instanceof DOMException,
+                Object.getPrototypeOf(error) === DOMException.prototype]; }
+            return ['did not throw'];
+        })
+    )"#
+        )
+        .unwrap(),
+        r#"["SecurityError",true,true,"SecurityError",true,true]"#
+    );
+}
+
+#[test]
+fn history_worlds_navigation_events_use_local_views_and_one_dispatch_state() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.pageEvents = [];
+        globalThis.pageEntry = navigation.currentEntry;
+        navigation.addEventListener('navigate', function (event) {
+            pageEvents.push([this === navigation, event.target === navigation,
+                event instanceof NavigateEvent, event.defaultPrevented]);
+            event.expando = 'page';
+            event.preventDefault = () => { throw new Error('page override'); };
+            event.destination.getState = () => 'page override';
+        });
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("event-views", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        globalThis.initialEntry = navigation.currentEntry;
+        globalThis.savedEvent = null;
+        globalThis.seen = [];
+        navigation.addEventListener('navigate', function (event) {
+            savedEvent = event;
+            try {
+            seen.push([this === navigation, event.target === navigation,
+                event.currentTarget === navigation, event instanceof NavigateEvent,
+                event.composedPath()[0] === navigation, event.expando === undefined,
+                Object.getPrototypeOf(event.destination.getState) === Function.prototype,
+                Object.getPrototypeOf(event.destination.getState()) === Object.prototype]);
+            } catch (error) { seen.push(String(error)); }
+            event.preventDefault();
+        }, {once: true});
+        history.pushState({value: 1}, '', '#cancelled');
+        JSON.stringify([seen, savedEvent.defaultPrevented, savedEvent.currentTarget,
+            savedEvent.eventPhase, savedEvent.composedPath().length,
+            location.hash, navigation.currentEntry === initialEntry])
+    "##
+        )
+        .unwrap(),
+        r#"[[[true,true,true,true,true,true,true,true]],true,null,0,0,"",true]"#
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(pageEvents)").unwrap(),
+        "[[true,true,true,false]]"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        globalThis.from = null;
+        navigation.oncurrententrychange = function (event) {
+            from = event.from;
+            seen.push([this === navigation, event.currentTarget === navigation,
+                event instanceof NavigationCurrentEntryChangeEvent,
+                event.from instanceof NavigationHistoryEntry,
+                event.from === initialEntry]);
+        };
+        history.pushState({}, '', '#committed');
+        JSON.stringify(seen[1])
+    "##
+        )
+        .unwrap(),
+        "[true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn history_worlds_navigation_handlers_and_dispose_listeners_share_target_identity() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.pageCalls = 0;
+        globalThis.pageDisposed = 0;
+        navigation.oncurrententrychange = () => pageCalls++;
+        navigation.currentEntry.ondispose = () => pageDisposed++;
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("handlers", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        const entry = navigation.currentEntry;
+        let disposed = 0;
+        let calls = 0;
+        let handler = () => calls++;
+        navigation.oncurrententrychange = handler;
+        entry.addEventListener('dispose', function (event) {
+            if (this === entry && event.target === entry && event instanceof Event) disposed++;
+        }, {once: true});
+        entry.ondispose = () => disposed++;
+        history.replaceState({}, '', '#replaced');
+        navigation.oncurrententrychange = null;
+        history.pushState({}, '', '#pushed');
+        JSON.stringify([calls, disposed, navigation.oncurrententrychange, entry.index])
+    "##
+        )
+        .unwrap(),
+        "[1,2,null,-1]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify([pageCalls, pageDisposed])")
+            .unwrap(),
+        "[2,1]"
+    );
+}
+
+#[test]
+fn history_worlds_navigation_results_and_transition_use_the_callers_wrappers() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    let isolated = vm.create_isolated_world("results", false).unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r##"
+        globalThis.facts = [];
+        const from = navigation.currentEntry;
+        navigation.addEventListener('navigate', event => {
+            event.intercept({handler() {
+                const transition = navigation.transition;
+                facts.push([transition instanceof NavigationTransition,
+                    transition.from === from, transition.to === event.destination,
+                    transition.committed instanceof Promise,
+                    transition.finished instanceof Promise, this === event]);
+            }});
+        }, {once: true});
+        const result = navigation.navigate('#next');
+        result.committed.then(entry => facts.push(['committed',
+            entry instanceof NavigationHistoryEntry, entry === navigation.currentEntry]));
+        result.finished.then(entry => facts.push(['finished',
+            entry instanceof NavigationHistoryEntry, entry === navigation.currentEntry]));
+        String(result.committed instanceof Promise && result.finished instanceof Promise)
+    "##
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap(),
+        r#"[[true,true,true,true,true,true],["committed",true,true],["finished",true,true]]"#
+    );
+}
+
+#[test]
+fn history_worlds_navigation_listener_order_cancellation_and_event_reuse_are_shared() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.order = [];
+        navigation.addEventListener('navigate', event => {
+            order.push('first:' + event.defaultPrevented);
+        });
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("ordered-dispatch", false).unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.saved = null;
+        navigation.addEventListener('navigate', event => {
+            saved = event;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }, {once: true});
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.eval(r#"
+        navigation.addEventListener('navigate', event => order.push('last:' + event.defaultPrevented));
+        history.pushState({}, '', '#blocked');
+        'pushed'
+    "#).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([order, location.hash])").unwrap(),
+        r#"[["first:false"],""]"#
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        const trusted = saved.isTrusted;
+        saved.initEvent('probe', false, true);
+        let calls = 0;
+        navigation.addEventListener('probe', event => {
+            if (event === saved && event.target === navigation && !event.isTrusted) calls++;
+            event.preventDefault();
+        });
+        const result = navigation.dispatchEvent(saved);
+        JSON.stringify([trusted, calls, result, saved.defaultPrevented,
+            saved.currentTarget, saved.eventPhase, saved.composedPath().length])
+    "#
+        )
+        .unwrap(),
+        "[true,1,false,true,null,0,0]"
+    );
+    vm.eval("history.pushState({}, '', '#allowed'); 'pushed'")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([order, location.hash])").unwrap(),
+        r##"[["first:false","first:false","last:false"],"#allowed"]"##
+    );
+}
+
 #[tokio::test]
 async fn history_worlds_share_mutations_but_keep_wrappers_and_state_caches_separate() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

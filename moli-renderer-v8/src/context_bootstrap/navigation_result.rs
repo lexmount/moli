@@ -479,6 +479,9 @@ pub(super) fn navigation_immediate_result_with_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolved_value: v8::Local<'s, v8::Value>,
 ) -> v8::Local<'s, v8::Object> {
+    let context = scope.get_current_context();
+    let resolved_value =
+        super::history_runtime::native::entry_value_in_realm(scope, resolved_value, context);
     let Some(committed_resolver) = v8::PromiseResolver::new(scope) else {
         return navigation_result_fallback_object(scope);
     };
