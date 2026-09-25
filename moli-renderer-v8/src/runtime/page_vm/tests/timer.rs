@@ -7,6 +7,61 @@ use crate::page_task_queue::{
 
 const ANY_READY_TIMER: RendererPageTimerSelection = RendererPageTimerSelection::AnyReady;
 
+#[tokio::test(flavor = "current_thread")]
+async fn popup_animation_frame_flushes_autofocus_before_its_callback_snapshot() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _queue, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://example.com/popup-frame-autofocus")?,
+        );
+        page_vm.vm_mut().eval(r#"
+globalThis.popup=open();
+const d=popup.document;
+d.open();
+d.write('<!doctype html><body><input id=candidate autofocus>');
+globalThis.order=[];
+const candidate=d.getElementById('candidate');
+candidate.addEventListener('focus',()=>{
+  order.push('focus');
+  queueMicrotask(()=>order.push('microtask'));
+  popup.requestAnimationFrame(()=>order.push('from-focus'));
+});
+popup.requestAnimationFrame(()=>order.push(d.activeElement===candidate?'frame-focused':'frame-unfocused'));
+'scheduled'
+"#)?;
+        assert!(page_vm.claim_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::RenderingUpdate,
+        ).is_none(), "the open parser has not dispatched DOMContentLoaded");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?, "");
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::RenderingUpdate, &loader,
+        ).await?);
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?,
+            "focus|microtask|frame-focused|from-focus");
+
+        page_vm.vm_mut().eval(r#"
+candidate.blur();
+d.open();
+d.write('<!doctype html><body><input id=replacement autofocus>');
+popup.requestAnimationFrame(()=>order.push(d.activeElement===d.body?'processed-preserved':'focused-again'));
+'reopened'
+"#)?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::RenderingUpdate, &loader,
+        ).await?);
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?,
+            "focus|microtask|frame-focused|from-focus|processed-preserved");
+        page_vm.vm_mut().eval("popup.close()")?;
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("popup rendering must flush its own Document's autofocus");
+}
+
 fn due_timer_deadline(page_vm: &PageVm) -> Instant {
     match page_vm
         .due_page_timer_ready_descriptor(ANY_READY_TIMER)
