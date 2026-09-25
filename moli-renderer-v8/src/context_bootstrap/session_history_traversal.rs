@@ -31,8 +31,9 @@ pub(super) fn apply_entry(
         reject_canceled_history_traversal_results(scope, &traversal.results);
         return;
     };
-    // An earlier traversal may have committed this entry after the API call
-    // selected it. This queued method never starts a navigation of its own.
+    // Trackers registered before an earlier traversal's navigate event are
+    // adopted by that traversal. A reentrant call registered during the event
+    // remains upcoming, and rejects if its queued task finds the entry active.
     if !traversal.results.is_empty()
         && let Some(key) = traversal.target_key.as_deref()
         && navigation_current_entry(scope, owner)
@@ -44,7 +45,11 @@ pub(super) fn apply_entry(
             "The traversal target is already the active history entry",
             "InvalidStateError",
         );
-        super::history_runtime::reject_pending_navigation_results(scope, &traversal.results, error);
+        super::history_runtime::results::reject_pending_navigation_results(
+            scope,
+            &traversal.results,
+            error,
+        );
         return;
     }
     let step = traversal.joint_step.or_else(|| {
@@ -117,8 +122,14 @@ pub(super) fn apply_step(
     host.retain_active_history_delta_position(binding.popup);
     let accepted = if let Some(index) = root {
         let target = &plan.targets[index];
-        let pending = window_task_target_for_runtime_owner(scope, host, target.owner)
-            .zip(history_entry_seed_for_traversal(scope, target.owner, target.current_index, target.target_index));
+        let pending = window_task_target_for_runtime_owner(scope, host, target.owner).zip(
+            history_entry_seed_for_traversal(
+                scope,
+                target.owner,
+                target.current_index,
+                target.target_index,
+            ),
+        );
         if let Some((exact, (_url, mut seed))) = pending {
             seed.session_history.target_step = Some(step);
             let key = history_entries(scope, target.history)
