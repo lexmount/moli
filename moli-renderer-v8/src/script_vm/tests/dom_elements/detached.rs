@@ -8034,7 +8034,7 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
     descriptorOwner(htmlProto, "fonts") === Document.prototype,
     descriptorOwner(htmlProto, "implementation") === Document.prototype,
     htmlProto === HTMLDocument.prototype,
-    xmlProto === XMLDocument.prototype
+    xmlProto === Document.prototype
   ].join(",");
 
   return [
@@ -8867,7 +8867,7 @@ fn detached_document_content_type_controls_element_creation_after_root_mutations
 }
 
 #[test]
-fn domparser_xml_preserves_requested_content_type_for_success_and_error_documents() {
+fn domparser_xml_preserves_content_type_and_document_interface_for_success_and_errors() {
     let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
 
     let result = vm
@@ -8886,7 +8886,11 @@ fn domparser_xml_preserves_requested_content_type_for_success_and_error_document
     return [
       valid.contentType,
       invalid.contentType,
-      invalid.documentElement.localName
+      invalid.documentElement.localName,
+      Object.getPrototypeOf(valid) === Document.prototype,
+      valid instanceof XMLDocument,
+      Object.getPrototypeOf(invalid) === Document.prototype,
+      invalid instanceof XMLDocument
     ];
   }));
 })()
@@ -8896,7 +8900,7 @@ fn domparser_xml_preserves_requested_content_type_for_success_and_error_document
 
     assert_eq!(
         result,
-        r#"[["text/xml","text/xml","html"],["application/xml","application/xml","html"],["application/xhtml+xml","application/xhtml+xml","html"],["image/svg+xml","image/svg+xml","html"]]"#
+        r#"[["text/xml","text/xml","html",true,false,true,false],["application/xml","application/xml","html",true,false,true,false],["application/xhtml+xml","application/xhtml+xml","html",true,false,true,false],["image/svg+xml","image/svg+xml","html",true,false,true,false]]"#
     );
 }
 
