@@ -318,7 +318,8 @@ fn input_surface_hit_test_in_tree(
         .dom_host()
         .dom()
         .document_element_handle_for_document(child_document)
-        != Some(child_tree.source_root())
+        .unwrap_or(child_document)
+        != child_tree.source_root()
     {
         return Err(LayoutError::NoLayoutSnapshot);
     }

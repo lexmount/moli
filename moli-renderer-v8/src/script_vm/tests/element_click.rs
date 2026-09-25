@@ -19,7 +19,7 @@ fn native_element_click_initializes_layout_once() {
 }
 
 #[test]
-fn native_element_click_refreshes_stale_layout_after_dom_and_style_changes() {
+fn native_element_click_reads_explicitly_republished_layout_after_dom_and_style_changes() {
     for mutation in [
         "target.style.left='300px'",
         "const veil=document.createElement('div');veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.appendChild(veil)",
@@ -55,11 +55,18 @@ fn native_element_click_refreshes_stale_layout_after_dom_and_style_changes() {
                 "(()=>{{const target=document.getElementById('target');{mutation}}})()"
             ))
             .expect("mutate live DOM/style before preparing another click");
+            let _ = vm.prepare_element_click(target);
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + 1,
+                "click preparation must not publish changed DOM or style"
+            );
+            publish_layout_for_test(&mut vm);
             let prepared = vm.prepare_element_click(target);
             let prepared_passes = vm.layout_pass_observability_for_test().1;
             assert!(
                 prepared_passes > before + 1,
-                "a changed DOM or style must refresh the shared geometry snapshot: {mutation}"
+                "explicit publication must refresh the shared geometry snapshot: {mutation}"
             );
             if mutation != "target.style.left='300px'" {
                 assert!(
@@ -107,8 +114,8 @@ fn native_element_click_refreshes_stale_layout_after_dom_and_style_changes() {
             }
             let passes = vm.layout_pass_observability_for_test().1 - before;
             assert_eq!(
-                passes, 1,
-                "the entire mouse sequence must reuse one snapshot: {mutation}"
+                passes, 2,
+                "the entire mouse sequence must reuse the republished snapshot: {mutation}"
             );
             let events = vm.eval("JSON.stringify([clicks,events])").unwrap();
             if let Some((existing_passes, existing_events)) = &reference {
