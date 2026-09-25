@@ -316,6 +316,11 @@ fn navigate_element_popup_target<'s>(
         navigation_initiator.outgoing_referrer()
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
+    let source_child_handle = match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
+        _ => None,
+    };
+    let opener_child_handle = opener.and(source_child_handle);
     let runtime = unsafe { &mut *runtime_ptr };
     if let Some(navigation_owner) = runtime.auxiliary_page_navigation_owner() {
         let child_handle = match dispatch_scope {
@@ -386,7 +391,8 @@ fn navigate_element_popup_target<'s>(
         scope,
         runtime_ptr,
         opener,
-        None,
+        opener_child_handle,
+        Some(dispatch_scope),
         target_name,
         Some(resolved_url),
         creator.base_url,
@@ -508,15 +514,20 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         .unwrap_or_default()
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let (_, root_document, source) =
+    let (_, root_document, window_document_source) =
         runtime.renderer_window_document_source_for_dispatch_scope(source)?;
     let opener = (!relations.suppress_opener).then_some(creator.opener);
+    let source_child_handle = match source {
+        OwnerDispatchScope::Child(handle) => Some(handle),
+        _ => None,
+    };
+    let opener_child_handle = opener.and(source_child_handle);
     let opened = match named_target {
         Some(OwnerDispatchScope::LightweightPopup(id)) => runtime.reuse_lightweight_popup_window(
             scope,
             id,
             opener,
-            None,
+            opener_child_handle,
             None,
             creator.base_url,
             creator.policy_container,
@@ -525,7 +536,8 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             scope,
             runtime_ptr,
             opener,
-            None,
+            opener_child_handle,
+            Some(source),
             target_name,
             None,
             creator.base_url,
@@ -538,7 +550,7 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
     let id = opened.popup_id;
     let activation = RendererPendingPopupActivation::window(
         root_document,
-        source,
+        window_document_source,
         !relations.suppress_opener,
         Some(id),
         destination.to_string(),
