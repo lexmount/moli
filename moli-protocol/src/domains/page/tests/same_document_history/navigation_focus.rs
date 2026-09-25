@@ -162,6 +162,7 @@ async fn navigation_focus_reset_respects_document_policy_and_manual_focus() {
             .await;
             // Establish the parent's focus with real input even though its
             // policy also denies script-initiated focus without activation.
+            page.command("Page.captureScreenshot", json!({})).await;
             for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
                 page.command("Input.dispatchMouseEvent", json!({
                     "type": kind, "x": 310, "y": 10, "button": "left", "buttons": buttons, "clickCount": 1,
@@ -201,6 +202,7 @@ async fn navigation_focus_reset_preserves_trusted_initiation_after_activation_ex
         "{PROBE}\nsetupNavigationFocusProbe(true, \"'none'\")"
     ))
     .await;
+    page.command("Page.captureScreenshot", json!({})).await;
     for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
         page.command("Input.dispatchMouseEvent", json!({
             "type": kind, "x": 20, "y": 20, "button": "left", "buttons": buttons, "clickCount": 1,
