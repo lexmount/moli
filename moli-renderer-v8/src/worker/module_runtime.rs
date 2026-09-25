@@ -3110,6 +3110,22 @@ fn queue_worker_dynamic_import<'s>(
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
+    // HostLoadImportedModule forbids dynamic imports in service workers,
+    // including modules already present in the static graph. Reject before
+    // resolving the specifier or scheduling any graph fetch.
+    if super::global_scope::get_worker_state(scope).is_some_and(|state| {
+        matches!(
+            state.borrow().global_kind,
+            super::thread::WorkerGlobalKind::Service { .. }
+        )
+    }) {
+        reject_worker_dynamic_import_resolver(
+            scope,
+            resolver,
+            "import() is disallowed on ServiceWorkerGlobalScope.",
+        );
+        return Some(promise);
+    }
     let context = scope.get_current_context();
     let specifier = specifier.to_rust_string_lossy(scope);
     let attributes = worker_import_attributes_key(scope, import_attributes);
