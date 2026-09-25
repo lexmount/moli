@@ -444,10 +444,12 @@ fn first_autofocus_candidate(runtime: &PageScriptHost) -> Option<DomHandle> {
 /// Whether the current Document has post-parse autofocus work worth
 /// admitting to the rendering-update task source.
 ///
-/// The selected rendering task checks whether the Document still has author
-/// focus. Script can blur that element between admission and execution.
+/// Do not check candidate focusability here: the inserting script can enable
+/// or reveal an element before the rendering task runs. The selected task
+/// resolves the candidate because script can also remove it or move focus
+/// between publication and execution.
 pub(crate) fn post_parse_autofocus_is_pending(runtime: &PageScriptHost) -> bool {
-    !runtime.autofocus_processed() && first_autofocus_candidate(runtime).is_some()
+    !runtime.autofocus_processed() && !runtime.autofocus_candidates().is_empty()
 }
 
 pub(crate) fn process_post_parse_autofocus(
