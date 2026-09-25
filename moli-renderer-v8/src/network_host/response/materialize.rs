@@ -4,6 +4,7 @@ use super::super::fetch_surface::{
     response_slot_number,
 };
 use super::*;
+use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
 use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
@@ -585,7 +586,7 @@ pub(crate) fn materialize_response_object_head<'s>(
         response_slot_string(scope, response, RESPONSE_STATUS_TEXT_SLOT).unwrap_or_default();
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)
         .map(|headers| {
-            moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+            moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
                 .expect("Headers contain ByteStrings")
         })
         .unwrap_or_default();
@@ -619,7 +620,7 @@ pub(crate) fn materialize_response_object_head_for_service_worker_respond_with<'
                 .unwrap_or_default();
         head.headers = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
             .map(|headers| {
-                moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+                moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
                     .expect("Headers contain ByteStrings")
             })
             .unwrap_or_default();

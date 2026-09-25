@@ -1,6 +1,4 @@
-use super::headers::{
-    build_headers_object, headers_entries, mark_headers_immutable, normalized_headers_entries,
-};
+use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
 use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
@@ -188,7 +186,7 @@ pub(crate) fn request_headers_entries<'s>(
     request: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
     request_slot_object(scope, request, REQUEST_HEADERS_SLOT)
-        .map(|headers| headers_entries(scope, headers))
+        .map(|headers| headers_list(scope, headers))
         .unwrap_or_default()
 }
 
@@ -462,10 +460,8 @@ fn response_content_type<'s>(
 ) -> Option<String> {
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)?;
     moli_web_mime::response_header_value(
-        &moli_fetch::headers_from_byte_strings(&normalized_headers_entries(&headers_entries(
-            scope, headers,
-        )))
-        .expect("Headers contain ByteStrings"),
+        &moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+            .expect("Headers contain ByteStrings"),
         "content-type",
     )
 }

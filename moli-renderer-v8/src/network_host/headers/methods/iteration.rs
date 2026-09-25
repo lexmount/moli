@@ -1,4 +1,4 @@
-use super::super::store::{headers_entries, normalized_headers_entries};
+use super::super::store::headers_entries;
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
@@ -129,7 +129,7 @@ pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
     let mut index = 0;
     loop {
         // Script can change both the values and the sorted pair order.
-        let entries = normalized_headers_entries(&headers_entries(scope, this));
+        let entries = headers_entries(scope, this);
         let Some((name, value)) = entries.get(index) else {
             break;
         };
@@ -212,7 +212,7 @@ fn headers_iterator_next_callback<'s>(
         return;
     };
     let index = index_value.integer_value(scope).unwrap_or(0).max(0) as usize;
-    let entries = normalized_headers_entries(&headers_entries(scope, target));
+    let entries = headers_entries(scope, target);
     if index >= entries.len() {
         let result = HeadersIteratorResultDeclaration::new(true, v8::undefined(scope).into())
             .bind(scope)

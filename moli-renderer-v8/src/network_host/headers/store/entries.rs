@@ -246,19 +246,22 @@ fn is_http_whitespace(ch: char) -> bool {
     matches!(ch, '\t' | '\n' | '\r' | ' ')
 }
 
+/// The sorted, combined view used by public iteration and header consumers.
 pub(crate) fn headers_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
-    headers_entries_if_present(scope, obj).unwrap_or_default()
+    normalized_headers_entries(&headers_list(scope, obj))
 }
 
-pub(in crate::network_host) fn headers_entries_if_present<'s>(
+/// The internal header list, before the public sort-and-combine projection.
+pub(in crate::network_host) fn headers_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
-) -> Option<Vec<(String, String)>> {
+) -> Vec<(String, String)> {
     private_string_value(scope, obj, HEADERS_ENTRIES_SLOT)
         .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+        .unwrap_or_default()
 }
 
 fn private_string_value<'s>(
