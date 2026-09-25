@@ -194,6 +194,14 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
         rv.set(opener.into());
         return;
     }
+    if let Some(host_ptr) = window_host_ptr(scope, receiver)
+        && window_child_context_handle(scope, receiver).is_none()
+        && lightweight_popup_id_from_window(scope, receiver).is_none()
+        && let Some(opener) = unsafe { &*host_ptr }.top_window_opener(scope)
+    {
+        rv.set(opener.into());
+        return;
+    }
     rv.set_null();
 }
 
@@ -238,6 +246,8 @@ pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
                 host.clear_lightweight_popup_opener(popup_id);
             } else if let Some(handle) = window_child_context_handle(scope, receiver) {
                 host.clear_child_browsing_context_opener(handle);
+            } else {
+                host.clear_top_window_opener();
             }
         }
         return;

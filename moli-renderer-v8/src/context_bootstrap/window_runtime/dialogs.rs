@@ -301,26 +301,22 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
-    if !suppress_opener
-        && let Some((target_handle, target_window)) = existing_named_child_window_for_window_open(
+    let named_target = if suppress_opener {
+        None
+    } else {
+        unsafe { &mut *host_ptr }.browsing_context_target_by_name_for_navigation(
             scope,
-            host_ptr,
-            receiver.dispatch_scope(),
             &parsed.target_name,
+            receiver.dispatch_scope(),
         )
-    {
+    };
+    if let Some(target) = named_target {
         let host = unsafe { &*host_ptr };
         let source = window_open_entry_scope(scope, host);
         if url
             .as_deref()
             .and_then(|url| Url::parse(url).ok())
-            .is_some_and(|url| {
-                host.blocks_ancestor_navigation(
-                    source,
-                    OwnerDispatchScope::Child(target_handle),
-                    &url,
-                )
-            })
+            .is_some_and(|url| host.blocks_ancestor_navigation(source, target, &url))
         {
             rv.set(v8::null(scope).into());
             return;
@@ -332,22 +328,66 @@ pub(crate) fn window_open_callback<'s>(
                 PendingWindowMessageEndpoint::LightweightPopup(id)
             }
         };
-        unsafe { &mut *host_ptr }.set_child_browsing_context_opener(
-            scope,
-            target_handle,
-            opener_endpoint,
-            args.this(),
-        );
-        if url
-            .as_deref()
-            .is_none_or(|url| navigate_iframe_target(scope, host_ptr, target_handle, url, None))
-        {
-            rv.set(target_window.into());
-            return;
+        match target {
+            OwnerDispatchScope::Top => {
+                let host = unsafe { &mut *host_ptr };
+                let window = host
+                    .current_registered_window_execution_context_identity(target)
+                    .and_then(|identity| {
+                        host.window_execution_context(scope, identity.owner(), target)
+                    })
+                    .map(|(_, context)| context.global(scope));
+                let Some(window) = window else {
+                    rv.set_null();
+                    return;
+                };
+                host.set_top_window_opener(scope, opener_endpoint, args.this());
+                match navigate_existing_browsing_context_target(
+                    scope,
+                    host_ptr,
+                    source,
+                    target,
+                    window,
+                    SpecialBrowsingContextTarget::Current,
+                    url.as_deref(),
+                ) {
+                    Some(window) => rv.set(window.into()),
+                    None => rv.set_null(),
+                }
+                return;
+            }
+            OwnerDispatchScope::Child(handle) => {
+                let host = unsafe { &mut *host_ptr };
+                let Ok(context) = host.ensure_prebootstrapped_child_default_context(scope, handle)
+                else {
+                    rv.set_null();
+                    return;
+                };
+                let window = context.global(scope);
+                host.set_child_browsing_context_opener(scope, handle, opener_endpoint, args.this());
+                if url
+                    .as_deref()
+                    .is_none_or(|url| navigate_iframe_target(scope, host_ptr, handle, url, None))
+                {
+                    rv.set(window.into());
+                } else {
+                    rv.set_null();
+                }
+                return;
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                unsafe { &mut *host_ptr }.set_lightweight_popup_opener(
+                    scope,
+                    id,
+                    opener_endpoint,
+                    args.this(),
+                );
+            }
         }
     }
     let host = unsafe { &mut *host_ptr };
-    if let Some(popup_id) = host.named_lightweight_popup_id(&parsed.target_name)
+    if named_target.is_none()
+        && let Some(popup_id) = host.named_lightweight_popup_id(&parsed.target_name)
         && let Some(destination) = url.as_deref().and_then(|url| Url::parse(url).ok())
         && host.blocks_ancestor_navigation(
             window_open_entry_scope(scope, host),
@@ -397,18 +437,32 @@ pub(crate) fn window_open_callback<'s>(
         )
         | None => crate::RendererPopupDisposition::Foreground,
     };
-    if popup_target_can_use_lightweight_window(&parsed.target_name, popup_url)
-        && let Some(opened_popup) = host.open_lightweight_popup_window(
-            scope,
-            host_ptr,
-            opener,
-            opener_child_handle,
-            &parsed.target_name,
-            url.as_deref(),
-            entered_base_url,
-            creator_policy_container,
-        )
-    {
+    let opened_popup = if popup_target_can_use_lightweight_window(&parsed.target_name, popup_url) {
+        match named_target {
+            Some(OwnerDispatchScope::LightweightPopup(id)) => host.reuse_lightweight_popup_window(
+                scope,
+                id,
+                opener,
+                opener_child_handle,
+                url.as_deref(),
+                entered_base_url,
+                creator_policy_container,
+            ),
+            _ => host.open_lightweight_popup_window(
+                scope,
+                host_ptr,
+                opener,
+                opener_child_handle,
+                &parsed.target_name,
+                url.as_deref(),
+                entered_base_url,
+                creator_policy_container,
+            ),
+        }
+    } else {
+        None
+    };
+    if let Some(opened_popup) = opened_popup {
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
@@ -656,40 +710,6 @@ fn navigate_window_open_self<'s>(
         None,
     );
     rv.set(receiver.into());
-}
-
-fn existing_named_child_window_for_window_open<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
-    receiver: OwnerDispatchScope,
-    target_name: &str,
-) -> Option<(DomHandle, v8::Local<'s, v8::Object>)> {
-    if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {
-        return None;
-    }
-    let host = unsafe { &mut *host_ptr };
-    let document = match receiver {
-        OwnerDispatchScope::Top => host.document_handle(),
-        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle)?,
-        OwnerDispatchScope::LightweightPopup(id) => host.lightweight_popup_document_handle(id)?,
-    };
-    // Blink searches the receiver's frame tree. URL resolution and referrer
-    // still use the entry Window, which may differ for a borrowed method.
-    let handle = host
-        .child_browsing_context_handle_by_name_for_navigation_from_document(
-            scope,
-            target_name,
-            document,
-        )
-        .or_else(|| {
-            host.child_browsing_context_handle_by_name_for_navigation(scope, target_name)
-        })?;
-    // Selecting a navigable does not authorize reading or rebinding its
-    // WindowProxy from the caller's realm.
-    let context = host
-        .ensure_prebootstrapped_child_default_context(scope, handle)
-        .ok()?;
-    Some((handle, context.global(scope)))
 }
 
 fn open_dialog(

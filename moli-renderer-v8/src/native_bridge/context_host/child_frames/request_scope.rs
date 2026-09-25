@@ -419,6 +419,10 @@ impl JsContextHost {
     ) -> String {
         self.child_browsing_context_parent_handle(handle)
             .and_then(|parent| self.child_browsing_context_network_partition_origin(parent))
+            .or_else(|| {
+                self.child_browsing_context_popup_owner_id(handle)
+                    .and_then(|popup_id| self.lightweight_popup_origin(popup_id))
+            })
             .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
     }
 

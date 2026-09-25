@@ -288,6 +288,9 @@ impl JsContextHost {
         key: &str,
         document: DomHandle,
     ) -> Option<DomHandle> {
+        if document == self.document_handle() {
+            return self.child_browsing_context_handle_by_name(key);
+        }
         if !self.child_browsing_context_name_exists(key) {
             return None;
         }
@@ -301,15 +304,6 @@ impl JsContextHost {
                 .get(handle)
                 .is_some_and(|entry| entry.matches_browsing_context_name(key))
         })
-    }
-
-    pub(crate) fn child_browsing_context_handle_by_name_for_navigation(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        key: &str,
-    ) -> Option<DomHandle> {
-        self.sync_child_browsing_context_subtree(scope, self.document_handle());
-        self.child_browsing_context_handle_by_name(key)
     }
 
     pub(crate) fn child_browsing_context_handle_by_name_for_navigation_from_document(
@@ -331,6 +325,152 @@ impl JsContextHost {
         }
         self.sync_child_browsing_context_subtree(scope, document);
         self.child_browsing_context_handle_by_name_in_document_order_from_document(key, document)
+    }
+
+    /// Search the receiver's inclusive subtree, its whole page, then related pages.
+    /// Window.name is replaceable, so all name reads use native entries or private slots.
+    pub(crate) fn browsing_context_target_by_name_for_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        name: &str,
+        receiver: OwnerDispatchScope,
+    ) -> Option<OwnerDispatchScope> {
+        if name.is_empty()
+            || crate::native_bridge::element::SpecialBrowsingContextTarget::parse(name).is_some()
+        {
+            return None;
+        }
+        let root = match receiver {
+            OwnerDispatchScope::Child(handle) => self.child_browsing_context_root_scope(handle)?,
+            _ => receiver,
+        };
+        let mut roots = vec![receiver];
+        if root != receiver {
+            roots.push(root);
+        }
+        if root != OwnerDispatchScope::Top {
+            roots.push(OwnerDispatchScope::Top);
+        }
+        let mut popup_ids = self
+            .lightweight_popup_browsing_contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        popup_ids.sort_unstable();
+        roots.extend(popup_ids.into_iter().filter_map(|id| {
+            let popup = OwnerDispatchScope::LightweightPopup(id);
+            (popup != root && self.lightweight_popup_is_open(id)).then_some(popup)
+        }));
+        for candidate in roots {
+            let related_to = (candidate != receiver && candidate != root).then_some(receiver);
+            if let Some(target) =
+                self.browsing_context_target_in_subtree(scope, name, candidate, related_to)
+            {
+                return Some(target);
+            }
+        }
+        None
+    }
+
+    fn browsing_context_target_in_subtree(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        name: &str,
+        root: OwnerDispatchScope,
+        related_to: Option<OwnerDispatchScope>,
+    ) -> Option<OwnerDispatchScope> {
+        let (document, root_window) = match root {
+            OwnerDispatchScope::Top => {
+                let identity = self.current_registered_window_execution_context_identity(root)?;
+                let (_, context) = self.window_execution_context(scope, identity.owner(), root)?;
+                (self.document_handle(), Some(context.global(scope)))
+            }
+            OwnerDispatchScope::Child(handle) => {
+                (self.child_browsing_context_document_handle(handle)?, None)
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                if !self.lightweight_popup_is_open(id) {
+                    return None;
+                }
+                (
+                    self.lightweight_popup_document_handle(id)?,
+                    self.lightweight_popup_window(scope, id),
+                )
+            }
+        };
+        if let Some(window) = root_window
+            && crate::util::get_private_value(
+                scope,
+                window,
+                crate::context_bootstrap::WINDOW_NAME_SLOT,
+            )
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+            .is_some_and(|value| value.to_rust_string_lossy(scope) == name)
+            && related_to.is_none_or(|source| self.browsing_contexts_are_familiar(source, root))
+        {
+            return Some(root);
+        }
+        if let Some(source) = related_to {
+            self.sync_child_browsing_context_subtree(scope, document);
+            let mut handles = Vec::new();
+            self.collect_child_browsing_context_handles_in_document_order_from_document(
+                document,
+                &mut handles,
+            );
+            return handles.into_iter().find_map(|handle| {
+                let target = OwnerDispatchScope::Child(handle);
+                (self
+                    .child_browsing_contexts
+                    .get(&handle)
+                    .is_some_and(|entry| entry.matches_browsing_context_name(name))
+                    && self.browsing_contexts_are_familiar(source, target))
+                .then_some(target)
+            });
+        }
+        self.child_browsing_context_handle_by_name_for_navigation_from_document(
+            scope, name, document,
+        )
+        .map(OwnerDispatchScope::Child)
+    }
+
+    fn browsing_contexts_are_familiar(
+        &self,
+        source: OwnerDispatchScope,
+        mut target: OwnerDispatchScope,
+    ) -> bool {
+        let source_root = match source {
+            OwnerDispatchScope::Child(handle) => self.child_browsing_context_root_scope(handle),
+            _ => Some(source),
+        };
+        let mut visited = HashSet::new();
+        while visited.insert(target) {
+            if source_root == Some(target) {
+                return true;
+            }
+            let mut ancestor = Some(target);
+            while let Some(owner) = ancestor {
+                if source == owner || self.window_scopes_have_same_origin(source, owner) {
+                    return true;
+                }
+                ancestor = match owner {
+                    OwnerDispatchScope::Child(handle) => self.owner_dispatch_scope_for_node(handle),
+                    _ => None,
+                };
+            }
+            // An auxiliary context can be familiar through its opener. Its
+            // cross-origin descendants do not inherit that relationship.
+            let OwnerDispatchScope::LightweightPopup(id) = target else {
+                return false;
+            };
+            if !self.lightweight_popup_is_open(id) {
+                return false;
+            }
+            let Some(opener) = self.lightweight_popup_opener_endpoint(id) else {
+                return false;
+            };
+            target = opener.dispatch_scope();
+        }
+        false
     }
 
     pub(crate) fn child_browsing_context_handle_by_document_handle(

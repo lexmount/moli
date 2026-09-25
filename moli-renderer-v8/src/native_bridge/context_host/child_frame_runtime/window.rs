@@ -1454,6 +1454,29 @@ impl JsContextHost {
             .set_browsing_context_opener(scope, handle, endpoint, opener);
     }
 
+    pub(crate) fn set_top_window_opener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        endpoint: PendingWindowMessageEndpoint,
+        opener: v8::Local<'_, v8::Object>,
+    ) {
+        self.top_window_opener = Some((endpoint, v8::Global::new(scope, opener)));
+    }
+
+    pub(crate) fn top_window_opener<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let (endpoint, opener) = self.top_window_opener.as_ref()?;
+        let opener = v8::Local::new(scope, opener);
+        self.window_opener_endpoint_is_live(scope, *endpoint, opener)
+            .then_some(opener)
+    }
+
+    pub(crate) fn clear_top_window_opener(&mut self) {
+        self.top_window_opener = None;
+    }
+
     pub(crate) fn clear_child_browsing_context_opener(&mut self, handle: DomHandle) {
         self.child_window_proxy_records
             .clear_browsing_context_opener(handle);
@@ -3152,8 +3175,29 @@ fn cross_origin_window_top_getter_callback<'s>(
 fn cross_origin_window_opener_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if let Ok(storage) = v8::Local::<v8::Object>::try_from(args.data())
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let host = unsafe { &*host_ptr };
+        let opener = if let Some(id) = cross_origin_lightweight_popup_id(scope, storage) {
+            Some(host.lightweight_popup_opener_window(scope, id))
+        } else if let Some(handle) = child_handle_from_object(scope, storage) {
+            Some(host.child_browsing_context_opener(scope, handle))
+        } else if is_cross_origin_top_window_proxy(scope, storage) {
+            Some(host.top_window_opener(scope))
+        } else {
+            None
+        };
+        if let Some(opener) = opener {
+            let value = opener.map_or_else(|| v8::null(scope).into(), Into::into);
+            rv.set(CrossOriginWindowAccessor::project_related_window(
+                scope, value,
+            ));
+            return;
+        }
+    }
     cross_origin_window_stored_value_getter(scope, args, rv, CROSS_ORIGIN_WINDOW_OPENER_SLOT);
 }
 

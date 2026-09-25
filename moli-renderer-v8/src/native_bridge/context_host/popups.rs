@@ -853,24 +853,17 @@ impl JsContextHost {
         creator_policy_container: DocumentPolicyContainer,
     ) -> Option<OpenedLightweightPopup<'s>> {
         if let Some(popup_id) = self.named_lightweight_popup_id(target_name)
-            && let Some(window) = match href {
-                Some(href) => self.reopen_lightweight_popup_window(
-                    scope,
-                    popup_id,
-                    opener,
-                    opener_child_handle,
-                    href,
-                    creator_base_url.clone(),
-                    creator_policy_container.clone(),
-                ),
-                None => self.lightweight_popup_window(scope, popup_id),
-            }
-        {
-            return Some(OpenedLightweightPopup {
-                window,
+            && let Some(opened) = self.reuse_lightweight_popup_window(
+                scope,
                 popup_id,
-                created_new_browsing_context: false,
-            });
+                opener,
+                opener_child_handle,
+                href,
+                creator_base_url.clone(),
+                creator_policy_container.clone(),
+            )
+        {
+            return Some(opened);
         }
         let (window, popup_id) = self.create_lightweight_popup_window(
             scope,
@@ -888,6 +881,38 @@ impl JsContextHost {
             window,
             popup_id,
             created_new_browsing_context: true,
+        })
+    }
+
+    pub(crate) fn reuse_lightweight_popup_window<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        opener: Option<v8::Local<'s, v8::Object>>,
+        opener_child_handle: Option<DomHandle>,
+        href: Option<&str>,
+        creator_base_url: Url,
+        creator_policy_container: DocumentPolicyContainer,
+    ) -> Option<OpenedLightweightPopup<'s>> {
+        if !self.lightweight_popup_is_open(popup_id) {
+            return None;
+        }
+        let window = match href {
+            Some(href) => self.reopen_lightweight_popup_window(
+                scope,
+                popup_id,
+                opener,
+                opener_child_handle,
+                href,
+                creator_base_url,
+                creator_policy_container,
+            ),
+            None => self.lightweight_popup_window(scope, popup_id),
+        }?;
+        Some(OpenedLightweightPopup {
+            window,
+            popup_id,
+            created_new_browsing_context: false,
         })
     }
 
@@ -969,7 +994,7 @@ impl JsContextHost {
         let initial_window_name =
             trackable_lightweight_popup_window_name(target_name).unwrap_or_default();
         let initial_window_name = v8_string(scope, &initial_window_name)?;
-        set_object_slot(scope, window, WINDOW_NAME_SLOT, initial_window_name.into());
+        set_private_value(scope, window, WINDOW_NAME_SLOT, initial_window_name.into());
         LightweightPopupWindowNameDeclaration::default()
             .initialize(scope, window)
             .ok()?;
@@ -1355,6 +1380,21 @@ impl JsContextHost {
         };
         record.opener = None;
         record.opener_window = None;
+    }
+
+    pub(crate) fn set_lightweight_popup_opener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        endpoint: super::PendingWindowMessageEndpoint,
+        opener: v8::Local<'_, v8::Object>,
+    ) {
+        if let Some(record) = self.lightweight_popup_browsing_contexts.get_mut(&popup_id)
+            && record.is_open()
+        {
+            record.opener = Some(endpoint);
+            record.opener_window = Some(v8::Global::new(scope, opener));
+        }
     }
 
     pub(crate) fn lightweight_popup_origin(&self, popup_id: u64) -> Option<String> {
@@ -5341,8 +5381,7 @@ fn lightweight_popup_window_name_getter<'s>(
         throw_type_error(scope, "Window.name getter called on incompatible receiver.");
         return;
     }
-    let value = window
-        .get(scope, v8str(scope, WINDOW_NAME_SLOT).into())
+    let value = get_private_value(scope, window, WINDOW_NAME_SLOT)
         .filter(|value| value.is_string())
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
@@ -5362,7 +5401,7 @@ fn lightweight_popup_window_name_setter<'s>(
         return;
     };
     let next_string = next.to_rust_string_lossy(scope);
-    set_object_slot(scope, window, WINDOW_NAME_SLOT, next.into());
+    set_private_value(scope, window, WINDOW_NAME_SLOT, next.into());
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next_string);
     }

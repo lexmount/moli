@@ -467,7 +467,7 @@ struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     persistent: u32,
     #[webapi(data_property = "webkitStorageInfo")]
     webkit_storage_info: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = WINDOW_NAME_SLOT)]
+    #[webapi(slot = WINDOW_NAME_SLOT)]
     window_name: &'static str,
     #[webapi(data_property = "console")]
     public_console: v8::Local<'scope, v8::Object>,
@@ -847,7 +847,7 @@ fn window_name_runtime_getter<'s>(
     if !require_same_origin_window_receiver(scope, receiver, false) {
         return;
     }
-    let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
+    let value = get_private_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
 }
@@ -864,13 +864,13 @@ fn window_name_runtime_setter<'s>(
     let Some(next) = args.get(0).to_string(scope) else {
         return;
     };
-    let next = next.to_rust_string_lossy(scope);
     if let Some(handle) = child_context_handle_from_owner(scope, receiver)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+        unsafe { &mut *host_ptr }
+            .set_child_browsing_context_name(handle, next.to_rust_string_lossy(scope));
     }
-    define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
+    set_private_value(scope, receiver, WINDOW_NAME_SLOT, next.into());
 }
 
 fn window_status_runtime_getter<'s>(
