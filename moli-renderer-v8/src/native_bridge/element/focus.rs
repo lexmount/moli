@@ -327,20 +327,18 @@ fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<
     first_delegates_focus_target(runtime, root)
 }
 
-/// Whether the current Document has post-parse autofocus work worth
+/// Whether the Document has post-parse autofocus work worth
 /// admitting to the rendering-update task source.
 ///
-/// Do not check candidate focusability here: the inserting script can enable
-/// or reveal an element before the rendering task runs. The selected task
-/// resolves the candidate because script can also remove it or move focus
-/// between publication and execution.
+/// Current focus and candidate focusability are resolved during rendering:
+/// script can blur, remove or enable an element before the selected task runs.
+/// A Document that still has author focus must consume its candidates and
+/// complete its one-time autofocus decision at that rendering opportunity.
 pub(crate) fn post_parse_autofocus_is_pending(
     runtime: &JsContextHost,
     document: DomHandle,
 ) -> bool {
-    !runtime.autofocus_processed(document)
-        && runtime.document_focused_area(document).is_none()
-        && !runtime.autofocus_candidates(document).is_empty()
+    !runtime.autofocus_processed(document) && !runtime.autofocus_candidates(document).is_empty()
 }
 
 pub(crate) fn process_post_parse_autofocus(
