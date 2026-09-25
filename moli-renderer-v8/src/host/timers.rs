@@ -51,6 +51,10 @@ enum ScheduledTimerCallback {
     Networking(ScheduledTimerFunction),
     WindowWebIdl(ScheduledWindowWebIdlCallback),
     Source(ScheduledTimerSource),
+    AnimationFrameWake {
+        context: v8::Global<v8::Context>,
+        owner: WindowExecutionContextOwner,
+    },
     ResourceTimingBufferFull {
         context: v8::Global<v8::Context>,
         performance: v8::Global<v8::Object>,
@@ -68,7 +72,8 @@ impl ScheduledTimerCallback {
                 .relevant_context(scope)
                 .expect("a scheduled Window Web IDL callback must retain its relevant context"),
             Self::Source(source) => v8::Local::new(scope, &source.context),
-            Self::ResourceTimingBufferFull { context, .. } => v8::Local::new(scope, context),
+            Self::ResourceTimingBufferFull { context, .. }
+            | Self::AnimationFrameWake { context, .. } => v8::Local::new(scope, context),
         }
     }
 
@@ -79,7 +84,7 @@ impl ScheduledTimerCallback {
             | Self::Networking(function) => Some(function.realm_token),
             Self::WindowWebIdl(callback) => callback.realm_token(),
             Self::Source(source) => source.realm_token,
-            Self::ResourceTimingBufferFull { .. } => None,
+            Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => None,
         }
     }
 
@@ -89,7 +94,9 @@ impl ScheduledTimerCallback {
             | Self::InternalFunction(function)
             | Self::Networking(function) => function.relevant_identity,
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
-            Self::Source(_) | Self::ResourceTimingBufferFull { .. } => None,
+            Self::Source(_)
+            | Self::ResourceTimingBufferFull { .. }
+            | Self::AnimationFrameWake { .. } => None,
         }
     }
 
@@ -119,6 +126,9 @@ impl ScheduledTimerCallback {
             }
             Self::Source(_) => target_binding.map(WindowExecutionContextBinding::dispatch_scope),
             Self::ResourceTimingBufferFull { .. } => None,
+            Self::AnimationFrameWake { .. } => {
+                target_binding.map(WindowExecutionContextBinding::dispatch_scope)
+            }
         }
     }
 
@@ -138,7 +148,9 @@ impl ScheduledTimerCallback {
             Self::Function(_) | Self::InternalFunction(_) | Self::Networking(_) => {
                 self.context(scope)
             }
-            Self::ResourceTimingBufferFull { .. } => self.context(scope),
+            Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => {
+                self.context(scope)
+            }
         }
     }
 }
@@ -384,25 +396,31 @@ impl HostTimeoutScheduler {
         )
     }
 
-    pub(crate) fn queue_window_animation_frame_callback<'s>(
+    pub(crate) fn queue_window_animation_frame_wake(
         &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        callback: moli_webidl_callback::WebIdlCallbackFunction,
-        target_receiver: v8::Local<'s, v8::Object>,
-        timestamp: f64,
-        delay_ms: u32,
-        owner: HostTimerOwner,
-    ) -> u32 {
-        self.queue_window_webidl(
-            scope,
-            callback,
-            target_receiver,
-            WindowWebIdlCallbackTaskKind::AnimationFrame { timestamp },
-            delay_ms,
-            owner,
-            false,
-            Vec::new(),
-        )
+        scope: &mut v8::PinScope<'_, '_>,
+        binding: WindowExecutionContextBinding,
+    ) {
+        let context = binding.context(scope);
+        let window_owner = binding.owner();
+        let owner = ScheduledTimerOwner::Window(ScheduledWindowTimerTarget::new(
+            binding.owner(),
+            binding.dispatch_scope(),
+            Some(binding),
+        ));
+        self.scheduler.schedule_after(
+            ScheduledTimerTask {
+                callback: ScheduledTimerCallback::AnimationFrameWake {
+                    context: v8::Global::new(scope, context),
+                    owner: window_owner,
+                },
+                owner,
+                is_interval: false,
+                extra_args: Vec::new(),
+            },
+            16,
+            Instant::now(),
+        );
     }
 
     pub(crate) fn queue_window_idle_callback<'s>(
@@ -901,7 +919,9 @@ impl HostTimeoutScheduler {
             id: timer_id,
             internal: matches!(
                 timer.payload.callback,
-                ScheduledTimerCallback::InternalFunction(_) | ScheduledTimerCallback::Networking(_)
+                ScheduledTimerCallback::InternalFunction(_)
+                    | ScheduledTimerCallback::Networking(_)
+                    | ScheduledTimerCallback::AnimationFrameWake { .. }
             ),
             window_owner: target_binding.map(WindowExecutionContextBinding::owner),
             target_realm_token: target_binding.map(WindowExecutionContextBinding::realm_token),
@@ -963,7 +983,9 @@ impl HostTimeoutScheduler {
         let pending_matches = self.scheduler.active_payload(id).is_some_and(|task| {
             !matches!(
                 task.callback,
-                ScheduledTimerCallback::InternalFunction(_) | ScheduledTimerCallback::Networking(_)
+                ScheduledTimerCallback::InternalFunction(_)
+                    | ScheduledTimerCallback::Networking(_)
+                    | ScheduledTimerCallback::AnimationFrameWake { .. }
             ) && task
                 .owner
                 .window_target()
@@ -1346,6 +1368,12 @@ fn run_window_timer_callback(
             );
             Ok(HostTimeoutRunResult::Consumed)
         }
+        ScheduledTimerCallback::AnimationFrameWake { owner, .. } => {
+            if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+                unsafe { &mut *host_ptr }.publish_animation_frame_rendering_update(*owner);
+            }
+            Ok(HostTimeoutRunResult::Consumed)
+        }
     }
 }
 
@@ -1406,7 +1434,7 @@ fn run_window_timer_source(
     }
 }
 
-fn report_window_timer_exception<'s>(
+pub(crate) fn report_window_timer_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     callback: Option<v8::Local<'s, v8::Function>>,
