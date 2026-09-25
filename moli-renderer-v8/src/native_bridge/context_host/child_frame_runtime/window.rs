@@ -70,12 +70,28 @@ impl<'s> CrossOriginWindowAccessor<'s> {
         let Ok(window) = v8::Local::<v8::Object>::try_from(value) else {
             return value;
         };
+        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+            return value;
+        };
+        if let Some(context) = window.get_creation_context(scope)
+            && window.strict_equals(context.global(scope).into())
+            && unsafe { &*host_ptr }
+                .window_execution_context_identity_for_access_check(context)
+                .is_some_and(|identity| {
+                    identity.dispatch_scope() == super::super::OwnerDispatchScope::Top
+                })
+            && context
+                .get_slot::<WindowCrossOriginAccessSurface>()
+                .is_none()
+        {
+            // A popup child can reach the main Window through top.opener
+            // without ever using the main Window as its own parent or top.
+            let target_scope = &mut v8::ContextScope::new(scope, context);
+            install_top_window_cross_origin_access_surface(target_scope, window);
+        }
         let Some(popup_id) = cross_origin_lightweight_popup_id(scope, window)
             .or_else(|| crate::native_bridge::lightweight_popup_id_from_window(scope, window))
         else {
-            return value;
-        };
-        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return value;
         };
         let host = unsafe { &mut *host_ptr };

@@ -14,13 +14,12 @@ use super::slots::{
     clear_location_ancestor_origins_slot, location_ancestor_origins_slot,
     location_empty_ancestor_origins_slot, location_href_slot, location_relevant_document_id_slot,
     location_relevant_local_window_id_slot, set_location_ancestor_origins_slot,
-    set_location_empty_ancestor_origins_slot, set_location_relevant_document_id_slot,
-    set_location_relevant_local_window_id_slot, sync_location_object_fields,
+    set_location_empty_ancestor_origins_slot, set_location_href_slot,
+    set_location_relevant_document_id_slot, set_location_relevant_local_window_id_slot,
 };
 use super::*;
 use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
 use crate::context_bootstrap::indexed_db::new_dom_string_list;
-use crate::util::{callback_data_index_value, callback_data_item};
 use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
@@ -39,13 +38,14 @@ enum LocationAttribute {
     Port,
 }
 
-#[derive(Default, WebApiObject)]
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Location, receiver)]
-struct LocationOwnSurfaceDeclaration {
+struct LocationOwnSurfaceDeclaration<'s> {
+    location: v8::Local<'s, v8::Object>,
     #[webapi(
         accessor_property,
         getter = location_readonly_attribute_getter_callback,
-        data = callback_data_index_value(scope, 0),
+        data = location_attribute_data(scope, self.location, 0),
         enumerable,
         dont_delete
     )]
@@ -53,7 +53,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         accessor_property,
         getter = location_readonly_attribute_getter_callback,
-        data = callback_data_index_value(scope, 1),
+        data = location_attribute_data(scope, self.location, 1),
         enumerable,
         dont_delete
     )]
@@ -62,7 +62,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 0),
+        data = location_attribute_data(scope, self.location, 0),
         enumerable,
         dont_delete
     )]
@@ -71,7 +71,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 1),
+        data = location_attribute_data(scope, self.location, 1),
         enumerable,
         dont_delete
     )]
@@ -80,7 +80,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 2),
+        data = location_attribute_data(scope, self.location, 2),
         enumerable,
         dont_delete
     )]
@@ -89,7 +89,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 3),
+        data = location_attribute_data(scope, self.location, 3),
         enumerable,
         dont_delete
     )]
@@ -98,7 +98,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 4),
+        data = location_attribute_data(scope, self.location, 4),
         enumerable,
         dont_delete
     )]
@@ -107,7 +107,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 5),
+        data = location_attribute_data(scope, self.location, 5),
         enumerable,
         dont_delete
     )]
@@ -116,7 +116,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 6),
+        data = location_attribute_data(scope, self.location, 6),
         enumerable,
         dont_delete
     )]
@@ -125,7 +125,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
-        data = callback_data_index_value(scope, 7),
+        data = location_attribute_data(scope, self.location, 7),
         enumerable,
         dont_delete
     )]
@@ -133,6 +133,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_assign_callback,
+        data = self.location,
         length = 1,
         enumerable,
         readonly,
@@ -151,6 +152,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_reload_callback,
+        data = self.location,
         length = 0,
         enumerable,
         readonly,
@@ -160,6 +162,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_to_string_callback,
+        data = self.location,
         length = 0,
         enumerable,
         readonly,
@@ -208,6 +211,7 @@ fn configure_location_instance_template(
             .getter(location_same_origin_named_property_getter)
             .flags(v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS),
     );
+    template.set_internal_field_count(super::origin::INTERNAL_FIELD_COUNT);
     template.set_immutable_proto();
     super::access::install_access_check(template);
 }
@@ -233,16 +237,23 @@ pub(in crate::context_bootstrap) fn install_location_runtime_state<'s>(
     href: &str,
 ) -> Result<()> {
     let location = super::access::location_target(scope, location);
-    sync_location_object_fields(scope, location, href);
+    set_location_href_slot(scope, location, href);
     // Location's legacy-unforgeable own properties are non-configurable.
     // Window resets refresh the backing slots on the existing object without
     // redefining the fixed shape.
     if !location_own_surface_installed(scope, location) {
-        LocationOwnSurfaceDeclaration::default()
+        LocationOwnSurfaceDeclaration::new(location)
             .initialize(scope, location)
             .map_err(|error| anyhow!("failed to initialize Location own surface: {error}"))?;
+        crate::util::set_private_value(
+            scope,
+            location,
+            "__moliLocationOwnSurfaceInstalled",
+            v8::Boolean::new(scope, true).into(),
+        );
     }
     install_location_ancestor_origins_state(scope, location);
+    super::origin::install(scope, location);
     Ok(())
 }
 
@@ -367,11 +378,8 @@ pub(in crate::context_bootstrap) fn location_has_relevant_document<'s>(
             // A Location retained from the old Window must remain inactive.
             location_belongs_to_current_local_window(scope, location)
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            // Popup shells share the opener realm. Their own document record,
-            // rather than that realm, determines when close destroys them.
-            host.current_lightweight_popup_document_owner(popup_id)
-                .is_some()
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => {
+            location_belongs_to_current_local_window(scope, location)
         }
     }
 }
@@ -423,13 +431,32 @@ fn location_ancestor_origins_for_holder<'s>(
     empty
 }
 
-fn location_own_surface_installed(
-    scope: &mut v8::PinScope<'_, '_>,
-    location: v8::Local<'_, v8::Object>,
+fn location_own_surface_installed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
 ) -> bool {
-    location
-        .has_own_property(scope, v8str(scope, "href").into())
-        .unwrap_or(false)
+    crate::util::get_private_value(scope, location, "__moliLocationOwnSurfaceInstalled")
+        .is_some_and(|value| value.is_true())
+}
+
+fn location_attribute_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    index: i32,
+) -> v8::Local<'s, v8::Value> {
+    let index = v8::Integer::new(scope, index);
+    v8::Array::new_with_elements(scope, &[index.into(), location.into()]).into()
+}
+
+fn location_attribute_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    attributes: &[LocationAttribute],
+) -> Option<(LocationAttribute, v8::Local<'s, v8::Object>)> {
+    let data = v8::Local::<v8::Array>::try_from(args.data()).ok()?;
+    let index = data.get_index(scope, 0)?.uint32_value(scope)? as usize;
+    let callee = v8::Local::<v8::Object>::try_from(data.get_index(scope, 1)?).ok()?;
+    Some((*attributes.get(index)?, callee))
 }
 
 fn location_readonly_attribute_getter_callback<'s>(
@@ -437,16 +464,13 @@ fn location_readonly_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(attribute) = callback_data_item(
-        scope,
-        &args,
-        LOCATION_READONLY_ATTRIBUTES,
-        "Location readonly attributes",
-    ) else {
+    let Some((attribute, callee)) =
+        location_attribute_from_data(scope, &args, LOCATION_READONLY_ATTRIBUTES)
+    else {
         rv.set_undefined();
         return;
     };
-    location_attribute_getter(scope, args.this(), attribute, &mut rv);
+    location_attribute_getter(scope, args.this(), callee, attribute, &mut rv);
 }
 
 fn location_writable_attribute_getter_callback<'s>(
@@ -454,25 +478,23 @@ fn location_writable_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(attribute) = callback_data_item(
-        scope,
-        &args,
-        LOCATION_WRITABLE_ATTRIBUTES,
-        "Location writable attributes",
-    ) else {
+    let Some((attribute, callee)) =
+        location_attribute_from_data(scope, &args, LOCATION_WRITABLE_ATTRIBUTES)
+    else {
         rv.set_undefined();
         return;
     };
-    location_attribute_getter(scope, args.this(), attribute, &mut rv);
+    location_attribute_getter(scope, args.this(), callee, attribute, &mut rv);
 }
 
 fn location_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
+    callee: v8::Local<'s, v8::Object>,
     attribute: LocationAttribute,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !super::access::require_same_origin(scope, holder)
+    if !super::access::require_same_origin(scope, holder, callee)
         || !super::access::require_entry_origin(scope, holder)
     {
         return;
@@ -551,18 +573,15 @@ fn location_writable_attribute_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(attribute) = callback_data_item(
-        scope,
-        &args,
-        LOCATION_WRITABLE_ATTRIBUTES,
-        "Location writable attributes",
-    ) else {
+    let Some((attribute, callee)) =
+        location_attribute_from_data(scope, &args, LOCATION_WRITABLE_ATTRIBUTES)
+    else {
         rv.set_undefined();
         return;
     };
     let holder = args.this();
     if !matches!(attribute, LocationAttribute::Href)
-        && !super::access::require_same_origin(scope, holder)
+        && !super::access::require_same_origin(scope, holder, callee)
     {
         return;
     }

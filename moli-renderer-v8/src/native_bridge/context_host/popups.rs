@@ -59,7 +59,11 @@ use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
 use moli_url::origin_ascii_serialization;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 use url::Url;
 
 mod document_stream;
@@ -438,7 +442,7 @@ struct LightweightPopupDocumentRecord {
     // document.open() preserves whether navigation initialized Navigation entries.
     has_committed_navigation: bool,
     url: Url,
-    access_origin: super::window_security_tokens::WindowAccessOrigin,
+    access_origin: Rc<RefCell<super::window_security_tokens::WindowAccessOrigin>>,
     state: LightweightPopupDocumentState,
     storage_scope: LightweightPopupStorageScope,
     wrapper: Option<v8::Global<v8::Object>>,
@@ -975,13 +979,6 @@ impl JsContextHost {
         }
         .initialize(scope, window)
         .ok()?;
-        install_window_location_history_navigation_runtime_state(
-            scope,
-            window,
-            initial_url.as_str(),
-        )
-        .ok()?;
-        sync_window_location_history_navigation_runtime_surface(scope, window);
         set_object_slot(scope, window, "__moliWindowSelf", window.into());
         set_object_slot(scope, window, "__moliWindowParent", window.into());
         set_object_slot(scope, window, "__moliWindowTop", window.into());
@@ -1070,7 +1067,7 @@ impl JsContextHost {
                         is_initial_empty_document: true,
                         has_committed_navigation: false,
                         url: initial_url.clone(),
-                        access_origin: initial_origin,
+                        access_origin: Rc::new(RefCell::new(initial_origin)),
                         state: initial_document_state.clone(),
                         storage_scope,
                         wrapper: None,
@@ -1093,6 +1090,13 @@ impl JsContextHost {
                 navigation_id: LightweightPopupNavigationId::new(1),
             },
         );
+        install_window_location_history_navigation_runtime_state(
+            scope,
+            window,
+            initial_url.as_str(),
+        )
+        .ok()?;
+        sync_window_location_history_navigation_runtime_surface(scope, window);
         crate::context_bootstrap::install_window_bar_props(
             scope,
             window,
@@ -1363,7 +1367,19 @@ impl JsContextHost {
         popup_id: u64,
     ) -> Option<super::window_security_tokens::WindowAccessOrigin> {
         self.lightweight_popup_document_record(popup_id)
-            .map(|document| document.access_origin.clone())
+            .map(|document| document.access_origin.borrow().clone())
+    }
+
+    pub(crate) fn lightweight_popup_security_origin(
+        &self,
+        popup_id: u64,
+    ) -> Option<super::window_security_tokens::WindowSecurityOrigin> {
+        self.lightweight_popup_document_record(popup_id)
+            .map(|document| {
+                super::window_security_tokens::WindowSecurityOrigin::for_popup(
+                    document.access_origin.clone(),
+                )
+            })
     }
 
     pub(crate) fn lightweight_popup_bound_web_storage_scope(
@@ -2173,7 +2189,8 @@ impl JsContextHost {
                 .expect("synthetic popup Document requires its previous exact authority")
                 .clone()
             });
-        let retained_access_origin = current_document.access_origin.clone();
+        let retained_access_origin = current_document.access_origin.borrow().clone();
+        let retained_origin_state = current_document.access_origin.clone();
         let current_local_window_id = if changed_document {
             self.allocate_lightweight_popup_local_window_id()
         } else {
@@ -2205,6 +2222,12 @@ impl JsContextHost {
             }
         };
         let resource_context_origin = access_origin.serialized_origin();
+        let access_origin = if changed_document {
+            Rc::new(RefCell::new(access_origin))
+        } else {
+            *retained_origin_state.borrow_mut() = access_origin;
+            retained_origin_state
+        };
         let transition = {
             let Some(record) = self.lightweight_popup_record_mut(popup_id) else {
                 return false;
@@ -2279,7 +2302,7 @@ impl JsContextHost {
             self.register_committed_document_resource_loader(
                 crate::network::context::DocumentFetchContext::new(
                     super::WindowDocumentOwner::LightweightPopup(commit.owner),
-                    committed_document_url,
+                    committed_document_url.clone(),
                     committed_base_url,
                     resource_context_origin,
                 ),
@@ -2291,6 +2314,22 @@ impl JsContextHost {
             self.refresh_lightweight_popup_navigator(scope, popup_id, window);
         }
         self.refresh_lightweight_popup_indexed_db_factory(scope, popup_id, window);
+        // Every committed LocalWindow needs its own Location, including
+        // history restores and blank navigations that bypass parser bootstrap.
+        let location_result = if let Some(context) = window.get_creation_context(scope) {
+            let target_scope = &mut v8::ContextScope::new(scope, context);
+            crate::context_bootstrap::reset_window_location_runtime_state(
+                target_scope,
+                window,
+                committed_document_url.as_str(),
+            )
+        } else {
+            return false;
+        };
+        if let Err(error) = location_result {
+            tracing::warn!(%error, "failed to initialize committed popup Location");
+            return false;
+        }
         tracing::debug!(
             retired_owner = ?transition.retired_owner,
             owner = ?commit.owner,
@@ -3081,7 +3120,7 @@ impl JsContextHost {
     ) -> bool {
         let Some(serialized_origin) = self
             .lightweight_popup_document_record(popup_id)
-            .map(|document| document.access_origin.serialized_origin())
+            .map(|document| document.access_origin.borrow().serialized_origin())
         else {
             return false;
         };
@@ -3097,7 +3136,7 @@ impl JsContextHost {
             return false;
         };
         document.state.document_domain_override = Some(domain);
-        document.access_origin = access_origin;
+        *document.access_origin.borrow_mut() = access_origin;
         true
     }
 
@@ -5153,7 +5192,14 @@ pub(crate) fn lightweight_popup_id_from_window<'s>(
 }
 
 pub(crate) fn active_lightweight_popup_id(scope: &mut v8::PinScope<'_, '_>) -> Option<u64> {
-    let global = scope.get_current_context().global(scope);
+    active_lightweight_popup_id_for_context(scope, scope.get_current_context())
+}
+
+pub(super) fn active_lightweight_popup_id_for_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<u64> {
+    let global = context.global(scope);
     let value = get_private_value(scope, global, ACTIVE_LIGHTWEIGHT_POPUP_ID_SLOT)?;
     lightweight_popup_id_from_value(scope, value)
 }
@@ -5338,7 +5384,12 @@ fn lightweight_popup_window_opener_getter<'s>(
         return;
     };
     match unsafe { &*host_ptr }.lightweight_popup_opener_window(scope, popup_id) {
-        Some(opener) => rv.set(opener.into()),
+        Some(opener) => rv.set(
+            super::child_frame_runtime::CrossOriginWindowAccessor::project_related_window(
+                scope,
+                opener.into(),
+            ),
+        ),
         None => rv.set_null(),
     }
 }
@@ -5487,13 +5538,11 @@ fn sync_lightweight_popup_document_window_slots<'s>(
     referrer: &str,
 ) {
     sync_document_location_runtime_state_from_window(scope, document, window);
-    if let Some(href) = window
-        .get(scope, v8str(scope, "location").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|location| location.get(scope, v8str(scope, "href").into()))
+    if let Some(href) = crate::context_bootstrap::window_location_href(scope, window)
+        .and_then(|href| v8_string(scope, &href))
     {
-        set_object_slot(scope, document, "URL", href);
-        set_object_slot(scope, document, "documentURI", href);
+        set_object_slot(scope, document, "URL", href.into());
+        set_object_slot(scope, document, "documentURI", href.into());
     }
     if let Some(referrer) = v8_string(scope, referrer) {
         set_object_slot(scope, document, "referrer", referrer.into());
@@ -5763,13 +5812,7 @@ fn lightweight_popup_location_href<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<Url> {
-    let location = window
-        .get(scope, v8str(scope, "location").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let href = location
-        .get(scope, v8str(scope, "href").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))?;
+    let href = crate::context_bootstrap::window_location_href(scope, window)?;
     Url::parse(&href).ok()
 }
 

@@ -21,7 +21,7 @@ pub(super) fn location_assign_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !super::access::require_same_origin(scope, args.this()) {
+    if !require_method_origin(scope, &args) {
         return;
     }
     let Some(parsed) = webidl::parse_args::<LocationAssignArgs>(scope, &args) else {
@@ -64,7 +64,7 @@ pub(super) fn location_reload_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !super::access::require_same_origin(scope, args.this())
+    if !require_method_origin(scope, &args)
         || !super::access::require_entry_origin(scope, args.this())
         || require_location_href_slot(scope, args.this()).is_none()
     {
@@ -83,7 +83,7 @@ pub(super) fn location_to_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !super::access::require_same_origin(scope, args.this())
+    if !require_method_origin(scope, &args)
         || !super::access::require_entry_origin(scope, args.this())
     {
         return;
@@ -92,4 +92,14 @@ pub(super) fn location_to_string_callback<'s>(
         return;
     };
     set_return_string(scope, &mut rv, &href);
+}
+
+fn require_method_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> bool {
+    let Ok(callee) = v8::Local::<v8::Object>::try_from(args.data()) else {
+        return false;
+    };
+    super::access::require_same_origin(scope, args.this(), callee)
 }
