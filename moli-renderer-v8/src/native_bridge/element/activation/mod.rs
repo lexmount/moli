@@ -16,8 +16,6 @@ pub(crate) use text_input::perform_text_input;
 pub(crate) use clipboard::perform_clipboard_key_default_action;
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
-#[cfg(test)]
-pub(crate) use default_action::activate_handle_via_click;
 #[cfg(feature = "ace-protocol")]
 pub(crate) use default_action::activate_handle_via_click_with_detail_and_modifiers;
 pub(super) use default_action::dispatch_click_event;
@@ -41,5 +39,8 @@ pub(crate) use default_action::{
 pub(in crate::native_bridge) use targets::choose_form_navigation_target;
 pub(crate) use targets::{
     NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    navigate_iframe_target,
 };
+
+#[cfg(test)]
+pub(crate) use default_action::activate_handle_via_click;
