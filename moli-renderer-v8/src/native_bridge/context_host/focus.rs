@@ -9,7 +9,26 @@ pub(super) struct DocumentFocusChangeState {
 }
 
 impl JsContextHost {
+    pub(crate) fn focused_viewport_document(&self) -> Option<DomHandle> {
+        self.focused_viewport_document.filter(|document| {
+            self.active_element_handle().is_none()
+                && self.top_level_document_for_document(*document).is_some()
+        })
+    }
+
+    pub(crate) fn set_focused_viewport_document(&mut self, document: Option<DomHandle>) {
+        // An unfocused element leaves a concrete Document viewport. Its iframe
+        // remains the active element exposed by ancestor Documents during blur.
+        self.focused_viewport_document = document;
+    }
+
     pub(crate) fn clear_disconnected_document_focus(&mut self) {
+        if self
+            .focused_viewport_document
+            .is_some_and(|document| self.top_level_document_for_document(document).is_none())
+        {
+            self.focused_viewport_document = None;
+        }
         let documents = self
             .document_focus_changes
             .iter()
