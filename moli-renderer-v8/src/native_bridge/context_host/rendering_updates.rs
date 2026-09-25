@@ -27,7 +27,7 @@ pub(super) struct PendingEnvironmentChange {
 pub(crate) enum PostParseAutofocusAdmission {
     /// The exact lifecycle owner was replaced before admission.
     StaleOwner,
-    /// Focus already exists or the Document has no eligible candidate.
+    /// Autofocus is processed, focus already exists, or no candidates remain.
     NotNeeded,
     /// One exact rendering-update entry owns the pending flush.
     Published,
@@ -43,10 +43,10 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 
 impl JsContextHost {
     /// Publish post-parse autofocus as a rendering update for the exact main
-    /// Document that just completed DOMContentLoaded.
+    /// Document after DOMContentLoaded or a subsequent candidate insertion.
     ///
-    /// DOMContentLoaded listeners and their microtasks run before this
-    /// admission. Re-checking the exact owner here prevents a listener's
+    /// The DOMContentLoaded completion caller admits after its listeners and
+    /// microtasks. Re-checking the exact owner here prevents a listener's
     /// `document.open()` from retargeting old lifecycle work to the replacement
     /// Document.
     pub(crate) fn queue_main_document_post_parse_autofocus(

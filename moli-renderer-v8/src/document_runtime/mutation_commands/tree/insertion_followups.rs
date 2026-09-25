@@ -19,7 +19,8 @@ impl DocumentRuntime {
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
-        self.queue_autofocus_candidates_in_subtrees(insertion_plan.insertion_roots);
+        let queued_autofocus_candidate =
+            self.queue_autofocus_candidates_in_subtrees(insertion_plan.insertion_roots);
         let attribute_reaction_policy = match profile.reaction_policy {
             TreeReactionDispatchPolicy::DispatchNow => AttributeChangedReactionPolicy::DispatchNow,
             TreeReactionDispatchPolicy::AppendToCurrentQueue => {
@@ -49,6 +50,15 @@ impl DocumentRuntime {
                     profile,
                 );
             }
+        }
+        // Parser-time candidates use the DOMContentLoaded admission. Later
+        // insertions need another rendering update, including those made
+        // while subresources still delay load or from a load listener.
+        if queued_autofocus_candidate
+            && self.dom_content_loaded_dispatched()
+            && let Some(owner) = unsafe { &*host_ptr }.current_main_document_task_owner()
+        {
+            let _ = unsafe { &mut *host_ptr }.queue_main_document_post_parse_autofocus(owner);
         }
     }
 

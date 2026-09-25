@@ -5362,6 +5362,157 @@ defaultFocus.addEventListener("focus", () => {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn late_autofocus_insertion_queues_a_rendering_update_across_load_boundaries() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        for phase in ["before-load", "load-listener", "after-load"] {
+            let document_url = Url::parse("https://example.com/late-autofocus").unwrap();
+            let (mut page_vm, _resource_source, _owner_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+
+            let owner =
+                dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+            assert!(
+                page_vm
+                    .claim_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate,
+                    )
+                    .is_none(),
+                "a Document without candidates has no autofocus rendering task"
+            );
+
+            page_vm.vm_mut().eval(
+                r#"
+let lateFocus;
+function insertLateAutofocus() {
+  lateFocus = document.createElement('input');
+  lateFocus.autofocus = true;
+  lateFocus.disabled = true;
+  document.body.appendChild(lateFocus);
+  // Focusability must be resolved after the inserting task's checkpoint.
+  Promise.resolve().then(() => { lateFocus.disabled = false; });
+}
+"installed"
+"#,
+            )?;
+            if phase == "load-listener" {
+                page_vm
+                    .vm_mut()
+                    .eval("addEventListener('load', insertLateAutofocus, {once: true})")?;
+            }
+            if phase != "before-load" {
+                execute_main_document_lifecycle_on_owner_local_task(
+                    &mut page_vm,
+                    MainDocumentLifecycleBody::WindowLoad { owner },
+                )
+                .await?;
+                assert_eq!(page_vm.vm_mut().eval("document.readyState")?, "complete");
+            } else {
+                assert_eq!(page_vm.vm_mut().eval("document.readyState")?, "interactive");
+            }
+            if phase != "load-listener" {
+                page_vm.vm_mut().eval("insertLateAutofocus()")?;
+            }
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("document.activeElement === lateFocus")?,
+                "false",
+                "{phase}: insertion must queue autofocus instead of focusing synchronously"
+            );
+
+            let claimed = page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .unwrap_or_else(|| panic!("{phase}: insertion should publish the late candidate"));
+            let (selected_owner, selected_kind) = claimed
+                .rendering_update_owner_and_kind()
+                .expect("rendering selector must retain the exact task identity");
+            assert_eq!(
+                selected_owner.target().owner(),
+                crate::native_bridge::WindowDocumentOwner::Frame(owner)
+            );
+            assert_eq!(
+                selected_kind,
+                RendererPageRenderingUpdateTaskKind::PostParseAutofocus
+            );
+            page_vm
+                .run_claimed_selected_page_task_for_test(claimed, &loader)
+                .await?;
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("document.activeElement === lateFocus")?,
+                "true",
+                "{phase}: an input enabled before the rendering update must receive focus"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("late autofocus rendering-update test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn late_autofocus_rendering_update_coalesces_and_rechecks_candidates() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        for mutation in ["first.remove()", "manual.focus()"] {
+            let document_url = Url::parse("https://example.com/late-autofocus-recheck").unwrap();
+            let (mut page_vm, _resource_source, _owner_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+            dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+            page_vm.vm_mut().eval(
+                r#"
+const first = document.createElement('input');
+const second = document.createElement('input');
+const manual = document.createElement('input');
+first.autofocus = second.autofocus = true;
+document.body.append(first);
+document.body.append(second, manual);
+"installed"
+"#,
+            )?;
+            let claimed = page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .expect("late insertions should publish one autofocus task");
+            assert!(
+                page_vm
+                    .claim_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate
+                    )
+                    .is_none(),
+                "repeated insertions must share the pending rendering update"
+            );
+            page_vm.vm_mut().eval(mutation)?;
+            page_vm
+                .run_claimed_selected_page_task_for_test(claimed, &loader)
+                .await?;
+            let expected = if mutation == "first.remove()" {
+                "second"
+            } else {
+                "manual"
+            };
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval(&format!("document.activeElement === {expected}"))?,
+                "true",
+                "{mutation}: execution must observe candidate removal or author focus"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("late autofocus revalidation test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn domcontentloaded_microtask_focus_prevents_autofocus_task_admission() {
     run_page_vm_async_test(async move {
         let loader =

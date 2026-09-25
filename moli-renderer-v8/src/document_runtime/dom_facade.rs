@@ -822,12 +822,14 @@ impl DocumentRuntime {
         &self.autofocus_candidates
     }
 
-    pub(crate) fn queue_autofocus_candidates_in_subtrees(&mut self, roots: &[DomHandle]) {
+    /// Returns whether this insertion added or reordered an autofocus candidate.
+    pub(crate) fn queue_autofocus_candidates_in_subtrees(&mut self, roots: &[DomHandle]) -> bool {
         if self.autofocus_processed {
-            return;
+            return false;
         }
         let document = self.dom_host.document_handle();
         let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
+        let mut queued = false;
         while let Some(handle) = pending.pop() {
             if self.dom_host.is_connected(handle)
                 && self.dom_host.owner_document_handle(handle) == Some(document)
@@ -840,9 +842,11 @@ impl DocumentRuntime {
                 self.autofocus_candidates
                     .retain(|candidate| *candidate != handle);
                 self.autofocus_candidates.push(handle);
+                queued = true;
             }
             pending.extend(self.dom_host.child_handles_reversed(handle));
         }
+        queued
     }
 
     pub(crate) fn mark_autofocus_processed(&mut self) {
