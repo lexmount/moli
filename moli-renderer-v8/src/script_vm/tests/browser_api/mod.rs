@@ -90,6 +90,7 @@ mod speech_synthesis;
 mod speech_synthesis_events;
 mod storage_access;
 mod storage_event_init;
+mod storage_events_across_pages;
 mod structured_clone;
 mod stylesheet_init;
 mod transferable_streams;

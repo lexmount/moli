@@ -436,6 +436,7 @@ impl JsContextHost {
             return;
         }
         let previous = self.window_execution_contexts.insert(owner, binding);
+        self.register_storage_event_recipient(owner, current_dispatch_scope);
         if let Some(previous) = previous.as_ref()
             && previous.realm_token() != current_realm
         {
@@ -522,6 +523,7 @@ impl JsContextHost {
         owner: WindowExecutionContextOwner,
     ) -> bool {
         self.retire_font_face_loads_for_execution_context_owner(owner);
+        self.storage_event_recipients.remove(&owner);
         self.retire_event_callbacks_for_execution_context(owner);
         self.close_watcher_managers.remove(&owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
@@ -582,6 +584,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.storage_event_recipients.remove(&owner);
             self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }

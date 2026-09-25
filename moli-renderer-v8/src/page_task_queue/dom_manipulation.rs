@@ -371,7 +371,6 @@ impl RendererPageDomManipulationRoute {
             .map_err(|_| RendererPageDomManipulationRouteClosed)
     }
 
-    #[cfg(test)]
     pub(super) fn same_route_as(&self, other: &Self) -> bool {
         self.task_route.same_route_as(&other.task_route)
     }
