@@ -187,6 +187,15 @@ pub(crate) fn sync_global_location_runtime_state(scope: &mut v8::PinScope<'_, '_
     sync_location_object(scope, location, href);
 }
 
+pub(crate) fn refresh_global_location_security_origin(scope: &mut v8::PinScope<'_, '_>) {
+    let Some(location) = global_location_slot_value(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    super::origin::refresh_from_current_context(scope, location);
+}
+
 pub(crate) fn sync_window_location_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,

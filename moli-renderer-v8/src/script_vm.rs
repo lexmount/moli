@@ -5113,6 +5113,28 @@ impl ScriptVm {
     ) {
         self.document_runtime
             .set_main_navigation_policy_container(policy);
+        self.refresh_main_document_origin_after_policy_change()
+            .expect("main Window origin must reflect the navigation policy container");
+    }
+
+    fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
+        let host = self._context_host.borrow();
+        let origin = host
+            .window_document_origin(crate::native_bridge::OwnerDispatchScope::Top)
+            .ok_or_else(|| anyhow!("main Window has no origin"))?;
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &self.page_default_context);
+                if !host.refresh_main_default_world_security_origin(scope, context) {
+                    return Err(anyhow!("failed to update the main Window security token"));
+                }
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::context_bootstrap::refresh_global_location_security_origin(scope);
+                let window = context.global(scope);
+                crate::context_bootstrap::set_window_origin_runtime_state(scope, window, &origin)
+            })
     }
 
     pub(super) fn document_content_security_policies(&self) -> Vec<String> {

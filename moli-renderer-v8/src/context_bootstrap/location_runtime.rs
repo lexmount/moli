@@ -25,6 +25,7 @@ pub(super) use navigation::{
     is_same_document_fragment_navigation, resolve_location_navigation_target,
 };
 pub(super) use slots::{location_href_slot, sync_location_object};
+pub(crate) use surface::refresh_global_location_security_origin;
 pub(crate) use surface::sync_global_location_runtime_state;
 pub(crate) use surface::{
     install_constructed_document_location_runtime_state,

@@ -343,6 +343,7 @@ pub(crate) use self::javascript_url::{
     arm_internal_javascript_url_eval, consume_internal_javascript_url_eval,
     restore_internal_javascript_url_eval,
 };
+pub(crate) use self::location_runtime::refresh_global_location_security_origin;
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
 pub(crate) use self::location_runtime::{
     install_constructed_document_location_runtime_state,
@@ -418,6 +419,7 @@ use self::range_live::{
     update_live_ranges_for_detached_child_insertion, update_live_ranges_for_detached_text_split,
     update_live_ranges_for_text_split,
 };
+pub(crate) use self::runtime_state::define_replaceable_window_property;
 pub(super) use self::runtime_state::finish_context_bootstrap;
 pub(crate) use self::runtime_state::install_child_window_eval_runtime_state;
 pub(crate) use self::runtime_state::install_webassembly_runtime_state;

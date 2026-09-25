@@ -551,7 +551,7 @@ fn document_fullscreen_enabled_lenient_setter<'s>(
 ) {
 }
 
-pub(in crate::context_bootstrap) fn define_replaceable_window_property(
+pub(crate) fn define_replaceable_window_property(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
     name: &'static str,

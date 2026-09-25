@@ -28821,7 +28821,7 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
     if expected_popup_origin_prefix == "null" {
         assert_eq!(
             result,
-            r#"[{"origin":"null","data":{"origin":"null"},"sourceIsFrame":true}]"#
+            r#"[{"origin":"null","data":{"origin":"null","initialPopupAccessible":false},"sourceIsFrame":true}]"#
         );
     } else {
         assert!(
@@ -28831,6 +28831,10 @@ async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
         assert!(
             result.contains(expected_popup_origin_prefix),
             "escaped popup should report non-opaque opener event origin: {result}"
+        );
+        assert!(
+            result.contains(r#""initialPopupAccessible":true"#),
+            "escaped popup's initial about:blank should retain its opener's origin: {result}"
         );
     }
 }
@@ -29242,6 +29246,45 @@ async fn loaded_lightweight_popup_can_replace_itself_from_javascript_url_string_
         )
         .expect("self-replaced popup document should remain observable"),
         "self replaced"
+    );
+}
+
+#[test]
+fn response_csp_sandbox_separates_main_and_initial_popup_origins() {
+    let document_url = Url::parse("https://sandboxed-popup.test/page.html").expect("document URL");
+    let mut vm = new_storage_test_vm(document_url.as_str());
+    assert_eq!(
+        vm.eval("origin").expect("initial Window origin"),
+        "https://sandboxed-popup.test"
+    );
+
+    vm.set_main_navigation_policy_container(
+        crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+            &[(
+                "Content-Security-Policy".to_owned(),
+                b"sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox".to_vec(),
+            )],
+            &document_url,
+        ),
+    );
+    assert_eq!(vm.eval("origin").expect("sandboxed Window origin"), "null");
+    assert_eq!(
+        vm.eval("location.href").expect("sandboxed Window location"),
+        "https://sandboxed-popup.test/page.html"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+  const popup = open("about:blank");
+  try {
+    return popup.origin;
+  } catch (error) {
+    return error.name;
+  }
+})()"#,
+        )
+        .expect("initial popup origin access"),
+        "SecurityError"
     );
 }
 
@@ -30828,10 +30871,15 @@ async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle
     opener.postMessage(undefined, "*");
     self.close();
   } else {
+    var initialPopupAccessible = false;
     onmessage = function (e) {
-      parent.postMessage({ data: e.data, origin: e.origin }, "*");
+      parent.postMessage({ data: e.data, origin: e.origin, initialPopupAccessible }, "*");
     };
     var popupWin = window.open();
+    try {
+      popupWin.origin;
+      initialPopupAccessible = true;
+    } catch (_) {}
     popupWin.location.href = location.href;
   }
 </script>"#;
