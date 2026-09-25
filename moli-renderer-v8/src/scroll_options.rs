@@ -72,24 +72,33 @@ pub(crate) fn coordinates<'s>(
     // Keep the catch here so native layout failures remain visible to callers.
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    let parsed = if args.length() >= 2 {
-        webidl::try_parse_args::<ScrollNumericArgs>(&mut scope, args).map(|args| {
+    let parsed = try_coordinates(&mut scope, args);
+    if scope.has_caught() {
+        scope.reset();
+        return None;
+    }
+    parsed.ok()
+}
+
+/// Convert shared ScrollToOptions without consuming a pending exception.
+/// Window promise bindings propagate conversion failures in the callee realm.
+pub(crate) fn try_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Result<ScrollCoordinates, webidl::WebIdlError> {
+    if args.length() >= 2 {
+        webidl::try_parse_args::<ScrollNumericArgs>(scope, args).map(|args| {
             ScrollCoordinates {
                 left: Some(args.x),
                 top: Some(args.y),
             }
         })
     } else {
-        webidl::try_parse_args::<ScrollToArgs>(&mut scope, args).map(|args| ScrollCoordinates {
+        webidl::try_parse_args::<ScrollToArgs>(scope, args).map(|args| ScrollCoordinates {
             left: args.options.left,
             top: args.options.top,
         })
-    };
-    if scope.has_caught() {
-        scope.reset();
-        return None;
     }
-    parsed.ok()
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
