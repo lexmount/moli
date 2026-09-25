@@ -18,11 +18,17 @@ pub(crate) fn queue_text_control_selection_change_event(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
-    let _ = unsafe { &mut *runtime_ptr }.queue_user_interaction_event_task(
-        scope,
-        RendererPageUserInteractionEventKind::TextControlSelectionChange,
-        handle,
-    );
+    let runtime = unsafe { &mut *runtime_ptr };
+    let dom = runtime.dom_host();
+    let in_shadow_tree = dom
+        .root_node_handle(handle)
+        .is_some_and(|root| dom.is_shadow_root(root));
+    let kind = if in_shadow_tree {
+        RendererPageUserInteractionEventKind::DocumentSelectionChange
+    } else {
+        RendererPageUserInteractionEventKind::TextControlSelectionChange
+    };
+    let _ = runtime.queue_user_interaction_event_task(scope, kind, handle);
 }
 
 pub(crate) fn queue_text_control_document_selection_change_event(

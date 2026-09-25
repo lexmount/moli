@@ -894,13 +894,17 @@ fn update_focus_from_previous_with_previous_focus_within(
     } else {
         viewport_document.or(previous_viewport)
     });
-    if let Some(handle) = next.filter(|handle| is_text_control(runtime, *handle)) {
-        runtime.note_text_control_selection(handle);
-    }
     if viewport_document.is_none() || next.is_some() {
         runtime.mark_focus_changed(previous, next);
     }
     runtime.note_focus_style_activity(None, next);
+    if let Some(handle) = next {
+        let _ = crate::context_bootstrap::focus_text_control_selection(scope, runtime_ptr, handle);
+        let runtime = unsafe { &mut *runtime_ptr };
+        if is_text_control(runtime, handle) {
+            runtime.note_text_control_selection(handle);
+        }
+    }
     let previous_value = same_document
         .then(|| wrap_handle_value(scope, runtime_ptr, previous))
         .flatten();

@@ -236,7 +236,7 @@ pub(crate) use self::submission::{
 };
 pub(crate) use self::text_control::{
     dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, replace_text_control_selection,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
     replace_text_control_selection_for_insert_html, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
 };
