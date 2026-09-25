@@ -1023,9 +1023,12 @@ fn websocket_stream_readable_cancel_and_writable_abort_close_with_websocket_erro
     });
 }
 
-#[tokio::test]
-async fn websocket_stream_writer_abort_close_info_matches_wpt() {
-    run_page_vm_async_test(async move {
+#[test]
+fn websocket_stream_writer_abort_close_info_matches_wpt() {
+    // Nested stream promise reactions use the same local-runtime owner lane
+    // as the adjacent cancel/abort cases.
+    run_page_vm_local_runtime_test("page-vm-ws-stream-writer-abort", || async {
+        run_page_vm_async_test(async move {
         async fn run_case(action_expression: &str) -> String {
             let (url, server) = spawn_text_echo_websocket_server().await;
             let url_literal = serde_json::to_string(&url).expect("serialize websocket url");
@@ -1091,6 +1094,7 @@ async fn websocket_stream_writer_abort_close_info_matches_wpt() {
         );
     })
     .await;
+    });
 }
 
 #[test]
