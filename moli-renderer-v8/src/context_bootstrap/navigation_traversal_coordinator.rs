@@ -12,9 +12,7 @@ use super::navigation_events::{
 };
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_seed::history_entry_seed_for_traversal;
-use super::navigation_traversal_execution::{
-    TraversalTarget,
-};
+use super::navigation_traversal_execution::TraversalTarget;
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
@@ -46,7 +44,9 @@ impl TraversalParticipantOutcome {
     fn capture(scope: &mut v8::PinScope<'_, '_>, outcome: &NavigationDispatchOutcome<'_>) -> Self {
         Self {
             intercepted: outcome.intercepted,
-            destination: outcome.destination.map(|value| v8::Global::new(scope, value)),
+            destination: outcome
+                .destination
+                .map(|value| v8::Global::new(scope, value)),
             signal: outcome.signal.map(|value| v8::Global::new(scope, value)),
             event: outcome
                 .precommit_event
@@ -63,7 +63,10 @@ impl TraversalParticipantOutcome {
     fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> NavigationDispatchOutcome<'s> {
         let mut outcome = NavigationDispatchOutcome::proceed();
         outcome.intercepted = self.intercepted;
-        outcome.destination = self.destination.as_ref().map(|value| v8::Local::new(scope, value));
+        outcome.destination = self
+            .destination
+            .as_ref()
+            .map(|value| v8::Local::new(scope, value));
         outcome.signal = self
             .signal
             .as_ref()
@@ -116,8 +119,31 @@ pub(super) fn execute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     plan: JointTraversalPlan<'s>,
     initiator_info: Option<v8::Local<'s, v8::Value>>,
-    results: Vec<PendingNavigationResult>,
+    mut results: Vec<PendingNavigationResult>,
 ) {
+    let mut upcoming_info = None;
+    if results.is_empty()
+        && let Some(target) = plan
+            .targets
+            .iter()
+            .find(|target| target.owner.strict_equals(plan.owner.into()))
+        && let Some(entry) = entry_reference(scope, target.history, target.target_index)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(target) = window_task_target_for_runtime_owner(scope, host, target.owner)
+            && let Some((info, upcoming)) =
+                host.take_upcoming_history_traversal_tracker(target, entry.key.as_str())
+        {
+            upcoming_info = info;
+            results = upcoming;
+        }
+    }
+    let initiator_info = initiator_info.or_else(|| {
+        upcoming_info
+            .as_ref()
+            .map(|info| v8::Local::new(scope, info))
+    });
     let captured = capture_participants(scope, &plan).and_then(|participants| {
         let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
         let owner = window_task_target_for_runtime_owner(scope, host, plan.owner)?.owner();
@@ -149,15 +175,18 @@ pub(super) fn execute<'s>(
         )
         .is_some()
         {
-            if let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, target.owner)
+            if let Some(handle) =
+                child_browsing_context_handle_for_runtime_owner(scope, target.owner)
                 && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
             {
-                unsafe { &mut *host_ptr }.dispatch_child_document_tree_beforeunload_for_traversal(scope, handle);
+                unsafe { &mut *host_ptr }
+                    .dispatch_child_document_tree_beforeunload_for_traversal(scope, handle);
             } else if let Some(popup_id) =
                 crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
                 && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
             {
-                unsafe { &mut *host_ptr }.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
+                unsafe { &mut *host_ptr }
+                    .dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
             } else {
                 dispatch_beforeunload_for_runtime_owner(scope, target.owner);
             }
@@ -167,7 +196,9 @@ pub(super) fn execute<'s>(
             }
             if let Some(navigation) = &admission.participants[index].navigation {
                 let navigation = v8::Local::new(scope, navigation);
-                super::navigation_result::cancel_active_cross_document_navigation(scope, navigation, None);
+                super::navigation_result::cancel_active_cross_document_navigation(
+                    scope, navigation, None,
+                );
             }
         }
         if validate(scope, &admission).is_none() {
@@ -215,15 +246,23 @@ pub(super) fn execute<'s>(
             return;
         }
         if let Some((url, _)) = history_entry_seed_for_traversal(
-            scope, target.owner, target.current_index, target.target_index,
-        ) && let Some(navigation) = navigation {
+            scope,
+            target.owner,
+            target.current_index,
+            target.target_index,
+        ) && let Some(navigation) = navigation
+        {
             let results = if target.owner.strict_equals(plan.owner.into()) {
                 admission.results.as_slice()
             } else {
                 &[]
             };
             super::navigation_result::track_cross_document_traversal_navigation(
-                scope, navigation, outcome.signal, url.as_str(), results,
+                scope,
+                navigation,
+                outcome.signal,
+                url.as_str(),
+                results,
             );
         }
         if let Some(promise) = outcome.precommit_result {
@@ -285,7 +324,11 @@ fn validate<'s>(
     if !admission.active.get() || !navigation_document_is_active(scope, owner) {
         return None;
     }
-    let targets = super::navigation_traversal_plan::project_traversal_participants(scope, owner, &admission.plan)?;
+    let targets = super::navigation_traversal_plan::project_traversal_participants(
+        scope,
+        owner,
+        &admission.plan,
+    )?;
     if targets.len() != admission.participants.len() {
         return None;
     }
@@ -348,14 +391,19 @@ fn settle_aborted_admission<'s>(
         if participant.outcome.signal.is_none() {
             continue;
         }
-        let navigation = participant.navigation.as_ref().map(|value| v8::Local::new(scope, value));
+        let navigation = participant
+            .navigation
+            .as_ref()
+            .map(|value| v8::Local::new(scope, value));
         let transition_resolver = participant.outcome.event.as_ref().and_then(|event| {
             let event = v8::Local::new(scope, event);
             precommit_transition_resolver_from_event(scope, event)
         });
         let committed_resolver = navigation.and_then(|navigation| {
             transition_resolver
-                .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
+                .filter(|resolver| {
+                    navigation_transition_matches_resolver(scope, navigation, *resolver)
+                })
                 .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation))
         });
         if let Some(signal) = &participant.outcome.signal {
@@ -368,13 +416,19 @@ fn settle_aborted_admission<'s>(
         }
         if let Some(navigation) = navigation {
             super::navigation_lifecycle::finish_navigation_error_events(
-                scope, navigation, error, &participant.source_url,
+                scope,
+                navigation,
+                error,
+                &participant.source_url,
             );
             if let Some(resolver) = committed_resolver {
                 let _ = resolver.reject(scope, error);
             }
             super::navigation_lifecycle::settle_navigation_transition_finished_local(
-                scope, navigation, transition_resolver, Some(error),
+                scope,
+                navigation,
+                transition_resolver,
+                Some(error),
             );
         }
     }
@@ -549,7 +603,17 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     };
     let applied = prepared
         .into_iter()
-        .map(|(index, entry)| (index, apply::commit_prepared_history_entry(scope, entry, Some("other"))))
+        .map(|(index, entry)| {
+            let kind = if admission.participants[index].outcome.intercepted {
+                "other"
+            } else {
+                "fragment"
+            };
+            (
+                index,
+                apply::commit_prepared_history_entry(scope, entry, Some(kind)),
+            )
+        })
         .collect::<Vec<_>>();
     deactivate(scope, admission);
     if delta != 0 {

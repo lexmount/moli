@@ -241,7 +241,7 @@ async fn joint_history_traversal_precommit_rejection_aborts_the_whole_step() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn joint_history_traversal_stop_during_pagehide_cancels_after_precommit() {
+async fn joint_history_traversal_stop_during_pagehide_preserves_accepted_commit() {
     assert_joint_history_precommit("stop-pagehide").await;
 }
 
