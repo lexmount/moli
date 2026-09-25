@@ -233,8 +233,8 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
-    /// Advance Page timers only through the production selected-task
-    /// dispatcher.
+    /// Advance Page timers and the rendering tasks they publish through the
+    /// production selected-task dispatcher.
     ///
     /// `PageVmTaskExecutorTestHarness` dereferences to `ScriptVm` for
     /// synchronous domain setup. Without this explicit proxy, method
@@ -248,6 +248,9 @@ impl PageVmTaskExecutorTestHarness {
             .checked_add(std::time::Duration::from_millis(3_200))
             .unwrap_or_else(std::time::Instant::now);
         for _ in 0..10_000 {
+            if self.run_one_rendering_update_executor_turn(loader).await? {
+                continue;
+            }
             if let Some(crate::page_task_queue::RendererPageReadyDescriptor::Timer {
                 deadline,
                 selection,
