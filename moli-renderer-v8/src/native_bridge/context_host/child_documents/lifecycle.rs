@@ -1108,15 +1108,14 @@ impl PageScriptHost {
                     document,
                     unsafe { &mut *host_ptr }.enter_document_unload(document),
                 ));
-                if cancel_navigation {
-                    if let Some(window) = unsafe { &mut *host_ptr }
+                if cancel_navigation
+                    && let Some(window) = unsafe { &mut *host_ptr }
                         .existing_child_browsing_context_window_wrapper(scope, handle)
-                    {
-                        crate::context_bootstrap::inform_about_canceled_navigation_for_window(
-                            scope, window,
-                            crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
-                        );
-                    }
+                {
+                    crate::context_bootstrap::inform_about_canceled_navigation_for_window(
+                        scope, window,
+                        crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
+                    );
                 }
                 if unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)
                     == Some(document)
