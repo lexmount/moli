@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn element_focusability_uses_parsed_tabindex_and_native_defaults() {
+    let mut vm = new_storage_test_vm("https://focusability.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/element-focusability.js"
+        ))
+        .expect("element focusability should be observable"),
+        ""
+    );
+}
+
+#[test]
+fn foreign_element_focus_methods_validate_native_receivers_before_options() {
+    let mut vm = new_storage_test_vm("https://foreign-focus-receivers.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/foreign-focus-receivers.js"
+        ))
+        .expect("foreign focus methods should validate receivers"),
+        ""
+    );
+}
+
+#[test]
+fn tab_navigation_uses_native_defaults_and_shared_integer_parsing() {
+    let mut vm = new_streamed_parser_test_vm(
+        "https://focusability-navigation.test/",
+        r##"<!doctype html><body>
+<input id="start"><a id="nonlink"></a><a id="link" href="#" tabindex="invalid"></a>
+<div tabindex="&#xA0;0"></div><div tabindex="&#xB;0"></div><div tabindex="2147483648"></div>
+<details open><summary id="summary"></summary><summary></summary></details>
+<div id="editing" contenteditable></div>
+<svg><a id="svg-link" href="#"></a><defs><rect tabindex="0"></rect></defs><rect id="rect" tabindex="0"></rect></svg>
+<math><a id="math-link" href="#"></a><mrow id="row" tabindex="0"></mrow></math>
+<button id="end"></button>
+</body>"##,
+    );
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const ids = ['start', 'link', 'summary', 'editing', 'svg-link', 'rect', 'math-link', 'row', 'end'];
+  const failures = [];
+  for (const reverse of [false, true]) {
+    const order = reverse ? ids.slice().reverse() : ids;
+    document.getElementById(order[0]).focus();
+    for (const id of order.slice(1)) {
+      __moliDispatchTrustedKey('keydown', 'Tab', 'Tab', false, false, false, reverse);
+      if (document.activeElement.id !== id) failures.push(`${reverse}: ${document.activeElement.id} != ${id}`);
+    }
+  }
+  return failures.join(',');
+})()
+"#).expect("Tab navigation should share programmatic focus eligibility"),
+        ""
+    );
+}
+
+#[test]
 fn post_parse_autofocus_uses_connection_order_after_reinsert() {
     let mut vm = new_storage_test_vm("https://autofocus-reinsert.test/");
     vm.eval(
