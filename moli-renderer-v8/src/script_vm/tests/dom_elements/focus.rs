@@ -1,6 +1,107 @@
 use super::*;
 
 #[test]
+fn text_control_focus_projects_selection_without_replacing_retained_ranges() {
+    let mut vm = new_storage_test_vm("https://focus-selection.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/text-control-focus-selection.js"
+        ))
+        .expect("text control focus should update Selection natively"),
+        ""
+    );
+}
+
+#[test]
+fn text_control_focus_selection_uses_owner_realm_and_rescopes_shadow_boundaries() {
+    let mut vm = new_storage_test_vm("https://focus-selection-realms.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/text-control-focus-selection-realms.js"
+        ))
+        .expect("focus selection should respect owner realms and shadow roots"),
+        ""
+    );
+}
+
+#[tokio::test]
+async fn text_control_focus_selectionchange_is_queued_and_coalesced_for_native_targets() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://focus-selection-events.test/",
+        &loader,
+    );
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<input id="a"><input id="b"><button id="reset">reset</button><div id="host"></div>';
+  const a = document.getElementById('a');
+  const b = document.getElementById('b');
+  const c = document.getElementById('host').attachShadow({mode: 'closed'})
+    .appendChild(document.createElement('input'));
+  globalThis.control = c;
+  globalThis.focusSelectionEvents = [];
+  a.focus();
+  b.focus();
+  b.focus();
+  c.focus();
+  c.blur();
+  c.focus();
+  // Register after focus to check that event scheduling does not depend on
+  // whether a listener existed when the selection changed.
+  document.addEventListener('selectionchange', event => {
+    focusSelectionEvents.push([
+      event.target === document ? 'document' : event.target.id,
+      event.bubbles, event.composed
+    ].join(':'));
+  });
+  return focusSelectionEvents.length;
+})()
+"#).expect("focus should queue selection changes"),
+        "0"
+    );
+    for _ in 0..16 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("focus selection events should dispatch")
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval("focusSelectionEvents.join('|')")
+            .expect("focus selection event targets should be observable"),
+        "a:true:false|b:true:false|document:false:false"
+    );
+    vm.eval(
+        r#"
+focusSelectionEvents.length = 0;
+document.getElementById('reset').focus();
+control.focus();
+control.focus();
+"#,
+    )
+    .expect("refocusing should retain selection");
+    for _ in 0..16 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("refocus tasks should run")
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval("focusSelectionEvents.length")
+            .expect("unchanged selection should not dispatch an event"),
+        "0"
+    );
+}
+
+#[test]
 fn element_focusability_uses_parsed_tabindex_and_native_defaults() {
     let mut vm = new_storage_test_vm("https://focusability.test/");
     assert_eq!(

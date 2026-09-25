@@ -346,8 +346,8 @@ pub(crate) use forms::{
 };
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
-    queue_text_control_document_selection_change_event, replace_text_control_selection,
-    text_control_set_selection_range_internal,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event,
+    replace_text_control_selection, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};

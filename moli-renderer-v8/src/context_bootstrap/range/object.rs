@@ -40,9 +40,7 @@ fn new_range_for_document_in_current_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global.get(scope, v8str(scope, "Range").into())?;
-    let ctor = v8::Local::<v8::Function>::try_from(ctor).ok()?;
+    let ctor = super::super::ensure_intrinsic_interface_constructor(scope, "Range").ok()?;
     let range = ctor.new_instance(scope, &[])?;
     initialize_range_object(scope, range, document);
     Some(range)

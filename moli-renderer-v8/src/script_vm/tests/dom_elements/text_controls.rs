@@ -1003,7 +1003,7 @@ async fn text_control_clone_resets_selection_but_still_queues_select_event() {
     );
 }
 #[tokio::test]
-async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targets_document() {
+async fn shadow_text_control_selectionchange_and_exec_delete_target_document() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://forms-selectionchange-shadow-text-control.test/",
@@ -1064,7 +1064,7 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
             "globalThis.__shadowTextControlInputEvents.join(',') + '|' + globalThis.__shadowTextControlDocumentEvents.join(',')",
         )
         .expect("shadow selectionchange event log should evaluate"),
-        "true|bubble"
+        "|document"
     );
 
     let result = vm
