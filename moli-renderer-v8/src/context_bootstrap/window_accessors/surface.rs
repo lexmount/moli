@@ -145,12 +145,15 @@ fn set_receiver_related_window_alias<'s>(
         rv.set_null();
         return;
     }
-    let context = receiver.get_creation_context(scope).unwrap_or_else(|| scope.get_current_context());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    rv.set(
+    let value = {
+        let context = receiver
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         window_hidden_value(scope, receiver, slot)
-            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
-    );
+            .unwrap_or_else(|| context.global(scope).into())
+    };
+    rv.set(CrossOriginWindowAccessor::project_related_window(scope, value));
 }
 
 pub(crate) fn window_opener_getter<'s>(
