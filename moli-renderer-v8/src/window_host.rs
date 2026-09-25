@@ -1127,41 +1127,72 @@ pub(crate) fn target_origin_matches(
 pub(super) fn window_scroll_to_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let global = scope.get_current_context().global(scope);
-    let current_x = scroll_x(scope, global);
-    let current_y = scroll_y(scope, global);
-    let (x, y) = coordinates.resolve(current_x, current_y, false);
-    scroll_window_to(scope, host_ptr, x, y);
-    rv.set_undefined();
+    window_scroll_callback(scope, args, rv, false);
 }
 
 pub(super) fn window_scroll_by_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
+    window_scroll_callback(scope, args, rv, true);
+}
+
+fn window_scroll_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    relative: bool,
+) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
-    };
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_undefined();
         return;
     };
-    let global = scope.get_current_context().global(scope);
-    let current_x = scroll_x(scope, global);
-    let current_y = scroll_y(scope, global);
-    let (x, y) = coordinates.resolve(current_x, current_y, true);
-    scroll_window_to(scope, host_ptr, x, y);
-    rv.set_undefined();
+    let receiver =
+        match WindowOperationReceiver::capture_and_authorize(scope, args.this(), unsafe {
+            &*host_ptr
+        }) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                error.throw(scope);
+                return;
+            }
+        };
+    // Conversion runs in the function's realm, before entering the receiver's
+    // Window. A getter can scroll, remove or navigate that Window.
+    let Some(options) = crate::scroll_options::try_coordinates(scope, &args).map_err(|error| webidl::throw_error(scope, &error)).ok() else {
+        return;
+    };
+    let promise = if let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) {
+        binding
+            .with_current_scope(scope, host_ptr, |scope, _| {
+                let (current_x, current_y) = current_window_scroll_position(scope);
+                let (x, y) = options.resolve(current_x, current_y, relative);
+                scroll_window_to(scope, host_ptr, x, y);
+                resolved_scroll_promise(scope)
+            })
+            .flatten()
+    } else {
+        // There is no active viewport after removal or Window replacement.
+        resolved_scroll_promise(scope)
+    };
+    if let Some(promise) = promise {
+        rv.set(v8::Local::new(scope, promise).into());
+    }
+}
+
+fn resolved_scroll_promise(scope: &mut v8::PinScope<'_, '_>) -> Option<v8::Global<v8::Promise>> {
+    // Scrolling currently completes synchronously. Successful operations use
+    // the receiver's realm; the binding rejects conversion errors in the
+    // function's realm before entering the receiver.
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let undefined = v8::undefined(scope);
+    resolver.resolve(scope, undefined.into())?;
+    Some(v8::Global::new(scope, resolver.get_promise(scope)))
 }
 
 pub(crate) fn scroll_window_to(
@@ -1200,8 +1231,8 @@ pub(crate) fn scroll_window_to(
             .and_then(|node| node.data_mut().as_element_mut())
             .is_some_and(|element| element.set_scroll_left(x) | element.set_scroll_top(y))
     });
-    let global = scope.get_current_context().global(scope);
-    if !set_scroll_position(scope, global, x, y) && !scrolling_element_changed {
+    let window = current_scroll_window(scope);
+    if !set_scroll_position(scope, window, x, y) && !scrolling_element_changed {
         return;
     }
     queue_scroll_observable_effects(scope, host_ptr, document, true);
@@ -1223,6 +1254,22 @@ impl GetComputedStyleArgs<'_> {
             moli_selector::get_computed_style_pseudo_element,
         ))
     }
+}
+
+pub(crate) fn current_window_scroll_position(scope: &mut v8::PinScope<'_, '_>) -> (f64, f64) {
+    let window = current_scroll_window(scope);
+    (scroll_x(scope, window), scroll_y(scope, window))
+}
+
+fn current_scroll_window<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    // Lightweight popups share a concrete V8 context with their creator, but
+    // the scroll state belongs to their own canonical Window.
+    active_lightweight_popup_id(scope)
+        .and_then(|popup_id| {
+            let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+            unsafe { &*host_ptr }.lightweight_popup_window(scope, popup_id)
+        })
+        .unwrap_or_else(|| scope.get_current_context().global(scope))
 }
 
 pub(crate) fn window_get_computed_style_callback<'s>(
