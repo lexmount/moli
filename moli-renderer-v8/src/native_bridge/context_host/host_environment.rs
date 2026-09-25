@@ -438,8 +438,10 @@ impl JsContextHost {
     /// backend replacement must leave a live Document's storage identity
     /// untouched.
     pub(crate) fn set_web_storage_handles(&mut self, handles: &RendererWebStorageHandles) {
+        self.storage_event_recipients.clear();
         self.web_storage_store = handles.local_storage();
         self.session_storage_store = handles.session_storage();
+        self.refresh_storage_event_recipients();
     }
 
     pub(crate) fn set_stored_document_start_scripts(
