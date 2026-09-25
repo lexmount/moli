@@ -51,8 +51,6 @@ struct ChildWindowProxyRecord {
     browsing_context_parent_window: Option<v8::Global<v8::Object>>,
     browsing_context_top_window: Option<v8::Global<v8::Object>>,
     browsing_context_opener: Option<ChildWindowProxyOpener>,
-    cross_origin_endpoint_projections:
-        HashMap<PendingWindowMessageEndpoint, v8::Global<v8::Object>>,
     realm_top_window_wrapper: Option<v8::Global<v8::Object>>,
     live_window_exposed_to_top: bool,
     cross_origin_window_proxy: Option<v8::Global<v8::Object>>,
@@ -110,10 +108,6 @@ impl ChildWindowProxyRecords {
     ) {
         let record = self.record_mut(handle);
         record.facade_context = Some(context);
-        // Endpoint projections are wrappers in the accessing child realm. A
-        // replacement LocalWindow gets fresh wrappers even though the stable
-        // target WindowProxy identities remain the same.
-        record.cross_origin_endpoint_projections.clear();
     }
 
     pub(in crate::native_bridge::context_host) fn take_facade_context(
@@ -215,31 +209,6 @@ impl ChildWindowProxyRecords {
             .browsing_context_opener
             .as_ref()?;
         Some((opener.endpoint, v8::Local::new(scope, &opener.window)))
-    }
-
-    fn cross_origin_endpoint_projection<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-        endpoint: PendingWindowMessageEndpoint,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.records
-            .get(&handle)?
-            .cross_origin_endpoint_projections
-            .get(&endpoint)
-            .map(|projection| v8::Local::new(scope, projection))
-    }
-
-    fn set_cross_origin_endpoint_projection(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        endpoint: PendingWindowMessageEndpoint,
-        projection: v8::Local<'_, v8::Object>,
-    ) {
-        self.record_mut(handle)
-            .cross_origin_endpoint_projections
-            .insert(endpoint, v8::Global::new(scope, projection));
     }
 
     pub(in crate::native_bridge::context_host) fn set_realm_top(
@@ -618,14 +587,36 @@ const CROSS_ORIGIN_TOP_WINDOW_PROXY_SLOT: &str = "__moliCrossOriginTopWindowProx
 const CROSS_ORIGIN_LIGHTWEIGHT_POPUP_ID_SLOT: &str = "__moliCrossOriginLightweightPopupId";
 const CROSS_ORIGIN_WINDOW_NAMED_CHILD_SLOTS: &str = "__moliCrossOriginWindowNamedChildSlots";
 
+const SYNTHETIC_WINDOW_ACCESS_INITIALIZED_SLOT: &str = "__moliSyntheticWindowAccessInitialized";
+
 const CROSS_ORIGIN_ACCESS_ERROR: &str =
     "Blocked a frame with a different origin from accessing a cross-origin frame.";
 
 pub(crate) fn install_child_window_proxy_access_check_handlers(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
 ) {
+    install_window_access_check_handlers(global_template, window_access_check_callback);
+}
+
+pub(crate) fn mark_popup_window_access_check_initialized(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+) {
+    set_private_value(scope, window, SYNTHETIC_WINDOW_ACCESS_INITIALIZED_SLOT, v8::Boolean::new(scope, true).into());
+}
+
+pub(crate) fn install_synthetic_window_access_check_handlers(
+    template: v8::Local<'_, v8::ObjectTemplate>,
+) {
+    install_window_access_check_handlers(template, synthetic_window_access_check_callback);
+}
+
+fn install_window_access_check_handlers(
+    global_template: v8::Local<'_, v8::ObjectTemplate>,
+    access_check: v8::AccessCheckCallback,
+) {
     global_template.set_security_token_access_check_and_handlers(
-        window_access_check_callback,
+        access_check,
         v8::NamedPropertyHandlerConfiguration::new()
             .getter(child_window_cross_origin_named_getter)
             .setter(child_window_cross_origin_named_setter)
@@ -639,6 +630,48 @@ pub(crate) fn install_child_window_proxy_access_check_handlers(
             .enumerator(child_window_cross_origin_indexed_enumerator)
             .descriptor(child_window_cross_origin_indexed_descriptor),
     );
+}
+
+unsafe extern "C" fn synthetic_window_access_check_callback(
+    accessing_context: v8::Local<'_, v8::Context>,
+    accessed_object: v8::Local<'_, v8::Object>,
+    _data: v8::Local<'_, v8::Value>,
+) -> bool {
+    let scope = std::pin::pin!(unsafe { v8::CallbackScope::new(accessing_context) });
+    let scope = &mut scope.init();
+    // A synthetic shell is initialized before it is exposed to script. Its
+    // private access surface marks the end of that native initialization.
+    if get_private_value(
+        scope,
+        accessed_object,
+        SYNTHETIC_WINDOW_ACCESS_INITIALIZED_SLOT,
+    )
+    .is_none()
+    {
+        return true;
+    }
+    synthetic_window_context_can_access(scope, accessing_context, accessed_object)
+}
+
+pub(crate) fn synthetic_window_context_can_access<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    accessing_context: v8::Local<'s, v8::Context>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, window)
+    else {
+        return true;
+    };
+    let Ok(host_ptr) = crate::native_bridge::runtime_ptr_from_object(scope, window) else {
+        return false;
+    };
+    if crate::util::context_host_ptr_from_context_slot(accessing_context) != Some(host_ptr) {
+        return false;
+    }
+    let host = unsafe { &*host_ptr };
+    host.window_security_origin_for_context(scope, accessing_context)
+        .zip(host.lightweight_popup_security_origin(popup_id))
+        .is_some_and(|(source, target)| source.can_access(&target))
 }
 
 unsafe extern "C" fn window_access_check_callback(
@@ -674,6 +707,9 @@ pub(crate) fn caller_can_access_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> bool {
+    if crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some() {
+        return synthetic_window_context_can_access(scope, cross_origin_accessing_context(scope), window);
+    }
     let Some(accessed) = window.get_creation_context(scope) else {
         return false;
     };
@@ -730,7 +766,7 @@ struct CrossOriginWindowMethodsDeclaration {
     post_message: (),
     #[webapi(method, callback = cross_origin_window_noop_callback, readonly, dont_delete)]
     blur: (),
-    #[webapi(method, callback = cross_origin_window_noop_callback, readonly, dont_delete)]
+    #[webapi(method, callback = cross_origin_window_close_callback, readonly, dont_delete)]
     close: (),
     #[webapi(method, callback = cross_origin_window_noop_callback, readonly, dont_delete)]
     focus: (),
@@ -1546,31 +1582,18 @@ impl JsContextHost {
     fn popup_window_for_child_realm<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
+        _handle: DomHandle,
         popup_id: u64,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        if self.child_window_can_access_lightweight_popup(handle, popup_id) {
-            return self.lightweight_popup_window(scope, popup_id);
-        }
-        self.cross_origin_window_endpoint_projection_for_child(
-            scope,
-            handle,
-            PendingWindowMessageEndpoint::LightweightPopup(popup_id),
-        )
+        self.lightweight_popup_window(scope, popup_id)
     }
 
     fn cross_origin_window_endpoint_projection_for_child<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        accessing_handle: DomHandle,
+        _accessing_handle: DomHandle,
         endpoint: PendingWindowMessageEndpoint,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        if let Some(projection) = self
-            .child_window_proxy_records
-            .cross_origin_endpoint_projection(scope, accessing_handle, endpoint)
-        {
-            return Some(projection);
-        }
         match endpoint {
             PendingWindowMessageEndpoint::TopWindow => {
                 let dispatch = super::super::OwnerDispatchScope::Top;
@@ -1582,31 +1605,7 @@ impl JsContextHost {
                 self.child_browsing_context_cross_origin_window_proxy(scope, handle)
             }
             PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
-                let projection = build_cross_origin_popup_window_proxy(scope, popup_id)?;
-                self.child_window_proxy_records
-                    .set_cross_origin_endpoint_projection(
-                        scope,
-                        accessing_handle,
-                        endpoint,
-                        projection,
-                    );
-                let opener = if let Some(opener_endpoint) =
-                    self.lightweight_popup_opener_endpoint(popup_id)
-                    && opener_endpoint != endpoint
-                {
-                    self.cross_origin_window_endpoint_projection_for_child(
-                        scope,
-                        accessing_handle,
-                        opener_endpoint,
-                    )
-                    .map(v8::Local::<v8::Value>::from)
-                    .unwrap_or_else(|| v8::null(scope).into())
-                } else {
-                    v8::null(scope).into()
-                };
-                let storage = cross_origin_proxy_storage_object(scope, projection);
-                set_cross_origin_object_slot(scope, storage, "opener", opener);
-                Some(projection)
+                self.lightweight_popup_window(scope, popup_id)
             }
         }
     }
@@ -1838,75 +1837,6 @@ fn build_detached_cross_origin_window_index_proxy<'s>(
     set_cross_origin_object_slot(scope, window, "window", proxy.into());
     set_cross_origin_object_slot(scope, window, "globalThis", proxy.into());
     set_cross_origin_object_slot(scope, window, "frames", proxy.into());
-    Some(proxy)
-}
-
-fn build_cross_origin_popup_window_proxy<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    popup_id: u64,
-) -> Option<v8::Local<'s, v8::Object>> {
-    build_cross_origin_top_level_window_proxy(
-        scope,
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id),
-    )
-}
-
-fn build_cross_origin_top_level_window_proxy<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    endpoint: PendingWindowMessageEndpoint,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let location = build_detached_cross_origin_location_proxy(scope)?;
-    let window = new_null_prototype_object(scope);
-    match endpoint {
-        PendingWindowMessageEndpoint::TopWindow => set_private_value(
-            scope,
-            window,
-            window_host::TOP_WINDOW_MESSAGE_ENDPOINT_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        ),
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id) => set_private_value(
-            scope,
-            window,
-            CROSS_ORIGIN_LIGHTWEIGHT_POPUP_ID_SLOT,
-            v8::BigInt::new_from_u64(scope, popup_id).into(),
-        ),
-        PendingWindowMessageEndpoint::ChildWindow(_) => {
-            unreachable!("top-level Window projection cannot target a child frame")
-        }
-    }
-    set_private_value(
-        scope,
-        window,
-        DETACHED_CROSS_ORIGIN_WINDOW_PROXY_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-    set_private_value(
-        scope,
-        window,
-        CROSS_ORIGIN_TOP_WINDOW_PROXY_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-    set_cross_origin_object_slot(
-        scope,
-        window,
-        "closed",
-        v8::Boolean::new(scope, false).into(),
-    );
-    set_cross_origin_object_slot(scope, window, "then", v8::undefined(scope).into());
-    location::set_slot(
-        scope,
-        window,
-        CROSS_ORIGIN_WINDOW_LOCATION_SLOT,
-        location.into(),
-    )?;
-    CrossOriginWindowLiveAccessorsDeclaration::default()
-        .initialize(scope, window)
-        .ok()?;
-    install_cross_origin_window_methods(scope, window)?;
-    install_cross_origin_denied_accessors(scope, window, CROSS_ORIGIN_DENIED_WINDOW_PROPERTIES)?;
-    install_cross_origin_symbol_slots(scope, window);
-    let proxy = wrap_cross_origin_window_with_has_trap(scope, window)?;
-    set_cross_origin_window_self_identity_slots(scope, window, proxy);
     Some(proxy)
 }
 
@@ -2424,6 +2354,18 @@ fn cross_origin_location_proxy_set_callback<'s>(
     };
     let navigated = cross_origin_location_navigate(scope, receiver, args.get(2));
     rv.set(v8::Boolean::new(scope, navigated).into());
+}
+
+fn cross_origin_window_close_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if crate::native_bridge::lightweight_popup_id_from_window(scope, args.this()).is_some() {
+        super::super::popups::lightweight_popup_close_callback(scope, args, rv);
+    } else {
+        crate::context_bootstrap::window_close_callback(scope, args, rv);
+    }
 }
 
 fn cross_origin_window_noop_callback<'s>(
