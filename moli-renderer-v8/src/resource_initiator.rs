@@ -11,15 +11,15 @@ use url::Url;
 const SEPARATOR: char = '\0';
 
 pub(crate) fn anchor<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::String>> {
-    let data =
-        v8::Local::<v8::String>::try_from(scope.get_continuation_preserved_embedder_data()).ok()?;
+    let data = v8::Local::<v8::String>::try_from(crate::script_continuation::base_url_value(scope))
+        .ok()?;
     let data = data.to_rust_string_lossy(scope);
     let (_, anchor) = data.split_once(SEPARATOR)?;
     v8_string(scope, anchor)
 }
 
 pub(crate) fn base_url_value<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Value> {
-    let data = scope.get_continuation_preserved_embedder_data();
+    let data = crate::script_continuation::base_url_value(scope);
     if let Ok(value) = v8::Local::<v8::String>::try_from(data)
         && let Some((base, _)) = value.to_rust_string_lossy(scope).split_once(SEPARATOR)
     {
@@ -47,10 +47,11 @@ pub(crate) fn with_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base: v8::Local<'s, v8::Value>,
 ) -> v8::Local<'s, v8::Value> {
-    match anchor(scope) {
+    let data = match anchor(scope) {
         Some(anchor) => data_with_anchor(scope, base, anchor),
         None => base,
-    }
+    };
+    crate::script_continuation::with_base_url(scope, data)
 }
 
 pub(crate) fn classic_data<'s>(
@@ -88,7 +89,8 @@ pub(crate) fn classic_data<'s>(
         ),
     )
     .expect("resource initiator URLs must fit in a V8 string");
-    data_with_anchor(scope, base, anchor)
+    let data = data_with_anchor(scope, base, anchor);
+    crate::script_continuation::with_base_url(scope, data)
 }
 
 pub(crate) fn current_url(scope: &mut v8::PinScope<'_, '_>, origin: &WebOrigin) -> String {
@@ -193,6 +195,7 @@ pub(crate) fn with_callback_anchor<'s, R>(
     let previous = scope.get_continuation_preserved_embedder_data();
     let base = base_url_value(scope);
     let data = data_with_anchor(scope, base, anchor);
+    let data = crate::script_continuation::with_base_url(scope, data);
     scope.set_continuation_preserved_embedder_data(data);
     let result = invoke(scope);
     scope.set_continuation_preserved_embedder_data(previous);

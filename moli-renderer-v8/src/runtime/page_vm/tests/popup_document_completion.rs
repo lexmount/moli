@@ -1024,7 +1024,7 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
         );
         assert!(!queue.has_ready_completion());
         assert!(
-            page_vm
+            !page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::PopupDocumentLifecycle,
@@ -1032,14 +1032,14 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
                     &loader,
                 )
                 .await?,
-            "the failed fetch must consume its queued completion without requiring a Document",
+            "a failed response must not queue a lifecycle event on the initial Document",
         );
         assert_eq!(
             page_vm
                 .vm_mut()
                 .eval("JSON.stringify(__failedPopupEvents)")?,
             "[]",
-            "a popup with no materialized Document must not dispatch load events for its opener",
+            "a failed navigation must not dispatch load events on the initial Document",
         );
         Ok::<_, anyhow::Error>(())
     })
