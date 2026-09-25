@@ -49,9 +49,6 @@ impl DocumentRuntime {
         removal_plan: &TreeRemovalPlan,
     ) {
         self.reset_non_dirty_textarea_selection_after_child_list_change(removal_plan.parent);
-        if let Some((x, y)) = removal_plan.scroll_anchor_adjustment {
-            crate::window_host::scroll_window_to(scope, host_ptr, x, y);
-        }
         if let Some(removal_index) = removal_plan.live_range_removal_index {
             context_bootstrap::live_ranges_child_removal(
                 scope,

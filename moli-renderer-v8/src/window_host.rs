@@ -1037,11 +1037,6 @@ pub(crate) fn scroll_window_to(
     queue_scroll_observable_effects(scope, host_ptr, document, true);
 }
 
-pub(crate) fn current_window_scroll_position(scope: &mut v8::PinScope<'_, '_>) -> (f64, f64) {
-    let global = scope.get_current_context().global(scope);
-    (scroll_x(scope, global), scroll_y(scope, global))
-}
-
 pub(crate) fn window_get_computed_style_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

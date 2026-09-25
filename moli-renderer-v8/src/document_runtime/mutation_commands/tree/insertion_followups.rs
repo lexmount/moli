@@ -58,9 +58,6 @@ impl DocumentRuntime {
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
         self.reset_non_dirty_textarea_selection_after_child_list_change(insertion_plan.parent);
-        if let Some((x, y)) = insertion_plan.scroll_anchor_adjustment {
-            crate::window_host::scroll_window_to(scope, host_ptr, x, y);
-        }
         if let Some(live_range_plan) = insertion_plan.live_range_plan.as_ref() {
             self.apply_live_range_pre_insert_plan(scope, host_ptr, live_range_plan);
             apply_live_ranges_child_insertion(

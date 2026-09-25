@@ -54,13 +54,6 @@ impl DocumentRuntime {
             Some(handles) => handles,
             None => std::slice::from_ref(&child),
         };
-        let scroll_anchor_adjustment = self
-            .window_scroll_anchor_adjustment_for_connected_roots_moved_to_disconnected_parent(
-                scope,
-                host_ptr,
-                parent,
-                insertion_roots,
-            );
         let insertion_plan = self.tree_insertion_plan(
             parent,
             insertion_roots,
@@ -68,7 +61,6 @@ impl DocumentRuntime {
             TreeInsertionPlanOptions::insert(
                 None,
                 fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
-                scroll_anchor_adjustment,
                 TreeInsertionSelectednessPolicy::Skip,
             ),
         );
@@ -96,13 +88,6 @@ impl DocumentRuntime {
             Some(handles) => handles,
             None => std::slice::from_ref(&child),
         };
-        let scroll_anchor_adjustment = self
-            .window_scroll_anchor_adjustment_for_connected_roots_moved_to_disconnected_parent(
-                scope,
-                host_ptr,
-                parent,
-                insertion_roots,
-            );
         let insertion_plan = self.tree_insertion_plan(
             parent,
             insertion_roots,
@@ -110,7 +95,6 @@ impl DocumentRuntime {
             TreeInsertionPlanOptions::insert(
                 reference_child,
                 fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
-                scroll_anchor_adjustment,
                 TreeInsertionSelectednessPolicy::Skip,
             ),
         );
@@ -308,7 +292,7 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
     ) {
-        let removal_plan = self.tree_removal_plan(scope, host_ptr, parent, child);
+        let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
         let effects = self.parser_remove_child_effects_in_structural_scope(parent, child);
         self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &effects);
         self.assert_active_parser_document_incarnation();

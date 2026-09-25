@@ -7,9 +7,7 @@ use moli_layout::{
 };
 
 use super::client_rect::{ClientRect, client_rect_from_quad, union_client_rect, zero_client_rect};
-use super::mock::{
-    answer_queries as answer_mock_queries, compute_mock_scroll_adjusted_client_rect,
-};
+use super::mock::answer_queries as answer_mock_queries;
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 fn query_source(
@@ -172,24 +170,6 @@ pub(crate) fn read_box_model(
         Some(LayoutQueryAnswer::BoxModel(model)) => Ok(model),
         None => Ok(None),
         _ => Err(provider_contract_error("box model")),
-    }
-}
-
-/// Resolve one viewport-relative box for scroll anchoring. Real layout already
-/// projects root scrolling into viewport coordinates; the explicit adjustment
-/// is retained only inside the legacy Mock provider.
-pub(crate) fn observable_scroll_adjusted_client_rect(
-    runtime: &JsContextHost,
-    source: DomHandle,
-    scroll_x: f64,
-    scroll_y: f64,
-) -> Result<ClientRect, LayoutError> {
-    if runtime.layout_policy().uses_real_layout() {
-        read_bounding_client_rect(runtime, source)
-    } else {
-        Ok(compute_mock_scroll_adjusted_client_rect(
-            runtime, source, scroll_x, scroll_y,
-        ))
     }
 }
 

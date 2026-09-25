@@ -88,17 +88,6 @@ impl DocumentRuntime {
         let fragment_us = fragment_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
-        let scroll_started = cpu_profile_enabled.then(std::time::Instant::now);
-        let scroll_anchor_adjustment = self
-            .window_scroll_anchor_adjustment_for_connected_roots_moved_to_disconnected_parent(
-                scope,
-                host_ptr,
-                parent,
-                insertion_roots,
-            );
-        let scroll_us = scroll_started
-            .map(|started| started.elapsed().as_micros())
-            .unwrap_or_default();
         let plan_started = cpu_profile_enabled.then(std::time::Instant::now);
         let insertion_plan = self.tree_insertion_plan(
             parent,
@@ -107,7 +96,6 @@ impl DocumentRuntime {
             TreeInsertionPlanOptions::insert(
                 None,
                 fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
-                scroll_anchor_adjustment,
                 TreeInsertionSelectednessPolicy::CaptureAndRestore,
             ),
         );
@@ -199,7 +187,6 @@ impl DocumentRuntime {
                     subtree_node_count,
                     parent_connected = self.dom_host.is_connected(parent),
                     fragment_us,
-                    scroll_us,
                     plan_us,
                     focus_us,
                     effects_us,
@@ -360,13 +347,6 @@ impl DocumentRuntime {
             Some(handles) => handles,
             None => std::slice::from_ref(&child),
         };
-        let scroll_anchor_adjustment = self
-            .window_scroll_anchor_adjustment_for_connected_roots_moved_to_disconnected_parent(
-                scope,
-                host_ptr,
-                parent,
-                insertion_roots,
-            );
         let insertion_plan = self.tree_insertion_plan(
             parent,
             insertion_roots,
@@ -374,7 +354,6 @@ impl DocumentRuntime {
             TreeInsertionPlanOptions::insert(
                 reference_child,
                 fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
-                scroll_anchor_adjustment,
                 TreeInsertionSelectednessPolicy::CaptureAndRestore,
             ),
         );

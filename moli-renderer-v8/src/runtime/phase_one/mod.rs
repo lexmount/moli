@@ -10330,7 +10330,7 @@ window.parserPendingPointerCaptureReparent =
     }
 
     #[test]
-    fn parser_remove_applies_scroll_anchor_adjustment_like_js_remove() {
+    fn parser_remove_preserves_scroll_like_js_remove() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -10344,61 +10344,61 @@ window.parserPendingPointerCaptureReparent =
                 .evaluate_expression(
                     r#"
 const jsTarget = document.createElement('div');
-jsTarget.id = 'js-scroll-anchor-remove';
+jsTarget.id = 'js-scroll-preservation-remove';
 jsTarget.style.height = '20px';
 const parserTarget = document.createElement('div');
-parserTarget.id = 'parser-scroll-anchor-remove';
+parserTarget.id = 'parser-scroll-preservation-remove';
 parserTarget.style.height = '20px';
 document.body.style.minHeight = '2000px';
 document.body.append(jsTarget, parserTarget);
 window.scrollTo(0, 30);
 document.body.removeChild(jsTarget);
-window.parserScrollAnchorJsOffset = window.pageYOffset;
+window.parserScrollJsOffset = window.pageYOffset;
 window.scrollTo(0, 30);
-window.parserScrollAnchorTarget = parserTarget;
+window.parserScrollTarget = parserTarget;
 "#,
                 )
-                .expect("scroll-anchor remove setup should evaluate");
+                .expect("scroll-preservation remove setup should evaluate");
 
             let parser_target = page_vm
                 .vm()
                 .document_runtime
-                .get_element_by_id("parser-scroll-anchor-remove")
-                .expect("parser scroll-anchor target should exist");
+                .get_element_by_id("parser-scroll-preservation-remove")
+                .expect("parser scroll-preservation target should exist");
             let custom_element_reaction_roots = apply_parser_dom_mutation_for_test(
                 &mut page_vm,
                 ParserDomMutation::RemoveChild {
                     parent: body,
                     child: parser_target,
                 },
-                "parser scroll-anchor remove mutation should apply",
+                "parser scroll-preservation remove mutation should apply",
             );
             if !custom_element_reaction_roots.is_empty() {
                 page_vm
                     .vm_mut()
                     .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(custom_element_reaction_roots)
-                    .expect("parser scroll-anchor remove reactions should dispatch");
+                    .expect("parser scroll-preservation remove reactions should dispatch");
             }
 
             let result = page_vm
                 .evaluate_expression(
                     r#"JSON.stringify({
-  jsOffset: window.parserScrollAnchorJsOffset,
+  jsOffset: window.parserScrollJsOffset,
   parserOffset: window.pageYOffset,
-  parserParent: window.parserScrollAnchorTarget.parentNode
+  parserParent: window.parserScrollTarget.parentNode
 })"#,
                 )
-                .expect("scroll-anchor remove result should evaluate");
+                .expect("scroll-preservation remove result should evaluate");
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"{"jsOffset":10,"parserOffset":10,"parserParent":null}"#),
-                "parser RemoveChild should apply the same scroll-anchor adjustment as JS removeChild"
+                Some(r#"{"jsOffset":30,"parserOffset":30,"parserParent":null}"#),
+                "parser RemoveChild should preserve the scroll offset like JS removeChild"
             );
         }));
     }
 
     #[test]
-    fn parser_reparent_applies_scroll_anchor_adjustment_like_js_reparent_to_disconnected_parent() {
+    fn parser_reparent_preserves_scroll_like_js_reparent_to_disconnected_parent() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -10412,31 +10412,31 @@ window.parserScrollAnchorTarget = parserTarget;
                 .evaluate_expression(
                     r#"
 const jsTarget = document.createElement('div');
-jsTarget.id = 'js-scroll-anchor-reparent';
+jsTarget.id = 'js-scroll-preservation-reparent';
 jsTarget.style.height = '20px';
 const jsDetachedParent = document.createElement('div');
 const parserTarget = document.createElement('div');
-parserTarget.id = 'parser-scroll-anchor-reparent';
+parserTarget.id = 'parser-scroll-preservation-reparent';
 parserTarget.style.height = '20px';
 document.body.style.minHeight = '2000px';
 document.body.append(jsTarget, parserTarget);
 window.scrollTo(0, 30);
 jsDetachedParent.appendChild(jsTarget);
-window.parserScrollAnchorReparentJsState = {
+window.parserScrollReparentJsState = {
   offset: window.pageYOffset,
   parentIsDetached: jsTarget.parentNode === jsDetachedParent
 };
 window.scrollTo(0, 30);
-window.parserScrollAnchorReparentTarget = parserTarget;
+window.parserScrollReparentTarget = parserTarget;
 "#,
                 )
-                .expect("scroll-anchor reparent setup should evaluate");
+                .expect("scroll-preservation reparent setup should evaluate");
 
             let parser_target = page_vm
                 .vm()
                 .document_runtime
-                .get_element_by_id("parser-scroll-anchor-reparent")
-                .expect("parser scroll-anchor reparent target should exist");
+                .get_element_by_id("parser-scroll-preservation-reparent")
+                .expect("parser scroll-preservation reparent target should exist");
             let parser_detached_parent = {
                 let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
                 dom_host.create_parser_element_without_attributes(
@@ -10451,23 +10451,23 @@ window.parserScrollAnchorReparentTarget = parserTarget;
                     parent: parser_detached_parent,
                     child: parser_target,
                 },
-                "parser scroll-anchor reparent mutation should apply",
+                "parser scroll-preservation reparent mutation should apply",
             );
             if !custom_element_reaction_roots.is_empty() {
                 page_vm
                     .vm_mut()
                     .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(custom_element_reaction_roots)
-                    .expect("parser scroll-anchor reparent reactions should dispatch");
+                    .expect("parser scroll-preservation reparent reactions should dispatch");
             }
 
             let result = page_vm
                 .evaluate_expression(
                     r#"JSON.stringify({
-  js: window.parserScrollAnchorReparentJsState,
+  js: window.parserScrollReparentJsState,
   parserOffset: window.pageYOffset
 })"#,
                 )
-                .expect("scroll-anchor reparent result should evaluate");
+                .expect("scroll-preservation reparent result should evaluate");
             assert_eq!(
                 page_vm
                     .vm()
@@ -10476,18 +10476,18 @@ window.parserScrollAnchorReparentTarget = parserTarget;
                     .node(parser_target)
                     .and_then(Node::parent_node),
                 Some(parser_detached_parent),
-                "parser reparent should move the scroll-anchor target under the native detached parent"
+                "parser reparent should move the scroll-preservation target under the native detached parent"
             );
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"{"js":{"offset":10,"parentIsDetached":true},"parserOffset":10}"#),
-                "parser reparent to a disconnected parent should apply the same scroll-anchor adjustment as JS reparent"
+                Some(r#"{"js":{"offset":30,"parentIsDetached":true},"parserOffset":30}"#),
+                "parser reparent to a disconnected parent should preserve the scroll offset like JS reparent"
             );
         }));
     }
 
     #[test]
-    fn parser_insert_before_reparent_applies_scroll_anchor_adjustment_like_js() {
+    fn parser_insert_before_reparent_preserves_scroll_like_js() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -10501,19 +10501,19 @@ window.parserScrollAnchorReparentTarget = parserTarget;
                 .evaluate_expression(
                     r#"
 const jsTarget = document.createElement('div');
-jsTarget.id = 'js-scroll-anchor-insert-before';
+jsTarget.id = 'js-scroll-preservation-insert-before';
 jsTarget.style.height = '20px';
 const jsDetachedParent = document.createElement('div');
 const jsReference = document.createElement('span');
 jsDetachedParent.appendChild(jsReference);
 const parserTarget = document.createElement('div');
-parserTarget.id = 'parser-scroll-anchor-insert-before';
+parserTarget.id = 'parser-scroll-preservation-insert-before';
 parserTarget.style.height = '20px';
 document.body.style.minHeight = '2000px';
 document.body.append(jsTarget, parserTarget);
 window.scrollTo(0, 30);
 jsDetachedParent.insertBefore(jsTarget, jsReference);
-window.parserScrollAnchorInsertBeforeJsState = {
+window.parserScrollInsertBeforeJsState = {
   offset: window.pageYOffset,
   parentIsDetached: jsTarget.parentNode === jsDetachedParent,
   nextIsReference: jsTarget.nextSibling === jsReference
@@ -10521,13 +10521,13 @@ window.parserScrollAnchorInsertBeforeJsState = {
 window.scrollTo(0, 30);
 "#,
                 )
-                .expect("scroll-anchor insertBefore setup should evaluate");
+                .expect("scroll-preservation insertBefore setup should evaluate");
 
             let parser_target = page_vm
                 .vm()
                 .document_runtime
-                .get_element_by_id("parser-scroll-anchor-insert-before")
-                .expect("parser scroll-anchor insertBefore target should exist");
+                .get_element_by_id("parser-scroll-preservation-insert-before")
+                .expect("parser scroll-preservation insertBefore target should exist");
             let (parser_detached_parent, parser_reference) = {
                 let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
                 let detached_parent = dom_host.create_parser_element_without_attributes(
@@ -10550,23 +10550,23 @@ window.scrollTo(0, 30);
                     child: parser_target,
                     reference_child: Some(parser_reference),
                 },
-                "parser scroll-anchor insertBefore reparent mutation should apply",
+                "parser scroll-preservation insertBefore reparent mutation should apply",
             );
             if !custom_element_reaction_roots.is_empty() {
                 page_vm
                     .vm_mut()
                     .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(custom_element_reaction_roots)
-                    .expect("parser scroll-anchor insertBefore reparent reactions should dispatch");
+                    .expect("parser scroll-preservation insertBefore reparent reactions should dispatch");
             }
 
             let result = page_vm
                 .evaluate_expression(
                     r#"JSON.stringify({
-  js: window.parserScrollAnchorInsertBeforeJsState,
+  js: window.parserScrollInsertBeforeJsState,
   parserOffset: window.pageYOffset
 })"#,
                 )
-                .expect("scroll-anchor insertBefore result should evaluate");
+                .expect("scroll-preservation insertBefore result should evaluate");
             let parser_children = page_vm
                 .vm()
                 .document_runtime
@@ -10576,14 +10576,14 @@ window.scrollTo(0, 30);
             assert_eq!(
                 parser_children,
                 vec![parser_target, parser_reference],
-                "parser insertBefore should move the scroll-anchor target before the native reference child"
+                "parser insertBefore should move the scroll-preservation target before the native reference child"
             );
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"js":{"offset":10,"parentIsDetached":true,"nextIsReference":true},"parserOffset":10}"#
+                    r#"{"js":{"offset":30,"parentIsDetached":true,"nextIsReference":true},"parserOffset":30}"#
                 ),
-                "parser InsertBefore reparent to a disconnected parent should apply the same scroll-anchor adjustment as JS insertBefore"
+                "parser InsertBefore reparent to a disconnected parent should preserve the scroll offset like JS insertBefore"
             );
         }));
     }

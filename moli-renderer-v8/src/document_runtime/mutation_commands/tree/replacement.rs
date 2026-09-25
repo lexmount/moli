@@ -100,7 +100,7 @@ impl DocumentRuntime {
             insertion_plan.insertion_roots,
             inserted_was_connected,
         );
-        let removal_plan = self.tree_removal_plan(scope, host_ptr, parent, old_child);
+        let removal_plan = self.tree_removal_plan(host_ptr, parent, old_child);
         let (inserted, removed, prepublished_removals) = if unsafe { &*host_ptr }
             .has_dom_debugger_dom_breakpoints()
         {

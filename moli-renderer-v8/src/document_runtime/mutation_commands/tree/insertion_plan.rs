@@ -16,7 +16,6 @@ pub(super) struct TreeInsertionPlan<'a> {
     pub(super) lifecycle_connected_roots_before_insert: Vec<DomHandle>,
     pub(super) adoption: TreeAdoptionPlan,
     pub(super) focus_reset_handle_before_insert: Option<DomHandle>,
-    pub(super) scroll_anchor_adjustment: Option<(f64, f64)>,
     pub(super) live_range_plan: Option<LiveRangePreInsertPlan>,
     pub(super) node_iterator_plan: Vec<NodeIteratorRemovalPlan>,
     pub(super) subtree_plan: InsertionSubtreePlan,
@@ -40,7 +39,6 @@ pub(super) enum TreeInsertionSelectednessPolicy {
 pub(super) struct TreeInsertionPlanOptions {
     live_range_mode: TreeInsertionLiveRangeMode,
     inserting_fragment_children: bool,
-    scroll_anchor_adjustment: Option<(f64, f64)>,
     selectedness_policy: TreeInsertionSelectednessPolicy,
 }
 
@@ -69,13 +67,11 @@ impl TreeInsertionPlanOptions {
     pub(super) fn insert(
         reference_child: Option<DomHandle>,
         inserting_fragment_children: bool,
-        scroll_anchor_adjustment: Option<(f64, f64)>,
         selectedness_policy: TreeInsertionSelectednessPolicy,
     ) -> Self {
         Self {
             live_range_mode: TreeInsertionLiveRangeMode::Insert { reference_child },
             inserting_fragment_children,
-            scroll_anchor_adjustment,
             selectedness_policy,
         }
     }
@@ -84,7 +80,6 @@ impl TreeInsertionPlanOptions {
         Self {
             live_range_mode: TreeInsertionLiveRangeMode::Replace { old_child },
             inserting_fragment_children,
-            scroll_anchor_adjustment: None,
             selectedness_policy: TreeInsertionSelectednessPolicy::CaptureAndRestore,
         }
     }
@@ -147,7 +142,6 @@ impl DocumentRuntime {
             lifecycle_connected_roots_before_insert,
             adoption,
             focus_reset_handle_before_insert,
-            scroll_anchor_adjustment: options.scroll_anchor_adjustment,
             live_range_plan,
             node_iterator_plan,
             subtree_plan,

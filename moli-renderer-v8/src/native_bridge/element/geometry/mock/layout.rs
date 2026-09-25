@@ -451,20 +451,6 @@ fn mock_offset_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomH
     None
 }
 
-pub(crate) fn compute_mock_scroll_adjusted_client_rect(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    scroll_x: f64,
-    scroll_y: f64,
-) -> ClientRect {
-    let mut rect = runtime.cached_mock_client_rect(handle, mock_client_rect);
-    rect.left -= scroll_x;
-    rect.right -= scroll_x;
-    rect.top -= scroll_y;
-    rect.bottom -= scroll_y;
-    rect
-}
-
 pub(crate) fn compute_mock_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
     let trace_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
     let rect = runtime.cached_mock_client_rect(handle, mock_client_rect);

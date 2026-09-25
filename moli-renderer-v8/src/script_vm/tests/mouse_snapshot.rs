@@ -322,3 +322,64 @@ fn document_scroll_readback_matches_live_window_offsets() {
     assert_eq!(vm.eval(geometry).unwrap(), frozen);
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
 }
+
+#[test]
+fn dom_mutations_preserve_scroll_without_refreshing_layout() {
+    // Cover nodes above, crossing, and spanning the viewport. Their removal
+    // must not estimate a scroll adjustment from the old frozen rectangle.
+    for (top, height) in [(300, 200), (800, 200), (800, 2000)] {
+        for (mutation, remaining_height) in [
+            ("target.remove()", 0),
+            ("target.replaceWith(replacement)", 1500),
+            ("document.body.replaceChild(replacement,target)", 1500),
+            ("document.createDocumentFragment().appendChild(target)", 0),
+            (
+                "const detached=document.createElement('div'); detached.appendChild(document.createElement('span')); detached.insertBefore(target,detached.firstChild)",
+                0,
+            ),
+        ] {
+            let mut vm = new_parsed_test_vm(
+                "https://scroll-preservation.test/",
+                &format!(
+                    r#"<!doctype html><body style="margin:0;width:3000px">
+                    <div style="height:{top}px">before</div>
+                    <div id="target" style="height:{height}px">replace</div>
+                    <div id="marker" style="height:5000px">kept</div>"#
+                ),
+            );
+            refresh_layout_for_test(&mut vm);
+            vm.eval(
+                r#"scrollTo(120,900);
+                window.replacement=document.createDocumentFragment();
+                const added=document.createElement('div'); added.style.height='1500px';
+                replacement.appendChild(added);"#,
+            )
+            .unwrap();
+            refresh_layout_for_test(&mut vm);
+            let layouts = vm.layout_pass_observability_for_test().1;
+            let offsets = "JSON.stringify([scrollX,scrollY,document.scrollingElement.scrollLeft,document.scrollingElement.scrollTop])";
+            let marker_top = "String(marker.getBoundingClientRect().top)";
+            let frozen_top = (top + height - 900).to_string();
+            assert_eq!(vm.eval(offsets).unwrap(), "[120,900,120,900]");
+            assert_eq!(vm.eval(marker_top).unwrap(), frozen_top);
+
+            vm.eval(mutation).unwrap();
+            assert_eq!(
+                vm.eval(offsets).unwrap(),
+                "[120,900,120,900]",
+                "top={top}, height={height}, mutation={mutation}"
+            );
+            assert_eq!(vm.eval(marker_top).unwrap(), frozen_top);
+            assert_eq!(vm.layout_pass_observability_for_test().1, layouts);
+
+            // Publishing the new layout changes geometry without introducing
+            // automatic scroll anchoring at publication time either.
+            refresh_layout_for_test(&mut vm);
+            assert_eq!(vm.eval(offsets).unwrap(), "[120,900,120,900]");
+            assert_eq!(
+                vm.eval(marker_top).unwrap(),
+                (top + remaining_height - 900).to_string()
+            );
+        }
+    }
+}
