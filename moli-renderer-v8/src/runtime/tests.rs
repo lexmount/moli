@@ -1775,10 +1775,13 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
                     "globalThis.__xmlViewerDcl = null;",
                     "document.addEventListener('DOMContentLoaded', () => {",
                     "  const source = document.getElementById('source');",
+                    "  const style = document.getElementById('xml-viewer-style');",
                     "  globalThis.__xmlViewerDcl = [",
                     "    document.documentElement.localName,",
                     "    source && source.parentNode && source.parentNode.id,",
-                    "    source && source.textContent",
+                    "    source && source.textContent,",
+                    "    !!(style && style.sheet),",
+                    "    getComputedStyle(source.parentNode).display",
                     "  ];",
                     "});",
                 )
@@ -1834,7 +1837,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
     assert_eq!(
         renderer_json_value(reply),
         Some(serde_json::json!(
-            r#"["html","http://www.w3.org/1999/xhtml",["html","webkit-xml-viewer-source-xml","xml-ready"]]"#
+            r#"["html","http://www.w3.org/1999/xhtml",["html","webkit-xml-viewer-source-xml","xml-ready",true,"none"]]"#
         ))
     );
     page.close_async()

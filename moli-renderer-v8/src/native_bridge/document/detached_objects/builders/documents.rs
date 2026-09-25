@@ -180,8 +180,7 @@ fn import_detached_document_children_from_host_with_reaction_policy<'s>(
             adopt_attached_imported_node_as_detached(scope, document, imported_object, document)?;
         }
     }
-    unsafe { &mut *runtime_ptr }
-        .sync_owner_style_sheet_texts_for_document_tree_scopes(document_handle);
+    unsafe { &mut *runtime_ptr }.initialize_style_element_sources_for_document(document_handle);
     Some(())
 }
 

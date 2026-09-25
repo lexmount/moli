@@ -1366,6 +1366,7 @@ impl DocumentRuntime {
             let should_queue = match change.kind() {
                 DomStylesheetOwnerChangeKind::Registered
                 | DomStylesheetOwnerChangeKind::Contents
+                | DomStylesheetOwnerChangeKind::ParsingFinished
                 | DomStylesheetOwnerChangeKind::OwnerDocumentChanged
                 | DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: true } => true,
                 DomStylesheetOwnerChangeKind::Unregistered
@@ -1837,6 +1838,9 @@ fn connected_style_owner_kind(
     element: &crate::dom::native::Element,
 ) -> Option<ConnectedStyleOwnerKind> {
     if super::is_inline_style_element(element) {
+        if element.style_children_parsing() {
+            return None;
+        }
         return if is_declarative_css_module_style_element(element) {
             Some(ConnectedStyleOwnerKind::DeclarativeCssModule)
         } else if crate::style_engine::stylesheet_owner_type_is_supported(element) {

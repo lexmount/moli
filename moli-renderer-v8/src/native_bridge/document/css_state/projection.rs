@@ -275,6 +275,7 @@ fn owner_change_projects_css(host: &JsContextHost, change: &DomStylesheetOwnerCh
         DomStylesheetOwnerChangeKind::Registered
         | DomStylesheetOwnerChangeKind::Unregistered
         | DomStylesheetOwnerChangeKind::Contents
+        | DomStylesheetOwnerChangeKind::ParsingFinished
         | DomStylesheetOwnerChangeKind::OwnerDocumentChanged
         | DomStylesheetOwnerChangeKind::TreeConnectionChanged { .. } => true,
     }

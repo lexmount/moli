@@ -1027,15 +1027,20 @@ mod tests {
             self.effects.merge(effects);
         }
 
-        fn create_parser_element_without_attributes(
+        fn create_element_for_document_without_attributes(
             &mut self,
+            document_handle: NativeNodeId,
             local_name: String,
             namespace: String,
             prefix: Option<String>,
         ) -> NativeNodeId {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            unsafe { &mut *self.host }
-                .create_parser_element_without_attributes(local_name, namespace, prefix)
+            unsafe { &mut *self.host }.create_element_without_attributes_for_document(
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
+            )
         }
 
         fn create_parser_element_for_document_without_attributes(
@@ -1172,6 +1177,12 @@ mod tests {
         fn finish_parsing_link_children(&mut self, node_id: NativeNodeId) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             let _ = unsafe { &mut *self.host }.finish_parsing_link_children(node_id);
+        }
+
+        fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
+            // SAFETY: the test keeps the DomHost alive for this parser pump step.
+            let effects = unsafe { &mut *self.host }.finish_parsing_style_children_effects(node_id);
+            self.effects.merge(effects);
         }
 
         fn attach_declarative_shadow_for_parser(
@@ -2470,6 +2481,59 @@ mod tests {
                 .is_empty(),
             "a parser checkpoint must be consumed exactly once"
         );
+    }
+
+    #[test]
+    fn parser_style_reports_parsing_finished_only_after_its_closing_tag() {
+        use moli_dom::native::DomStylesheetOwnerChangeKind;
+
+        for prefix in ["<!doctype html><head>", "<!doctype html><body><svg>"] {
+            let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://example.test/style-stream").unwrap(),
+            );
+            let mut host = stream.take_parser_stream_dom_host();
+            host.set_mutation_observer_records_enabled(true);
+            let mut effects = DomMutationEffects::default();
+            let mut consumer = TestMutationEffectCollector {
+                host: &mut host,
+                effects: &mut effects,
+                interrupt_when_body_text_is: None,
+            };
+            stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+                &format!("{prefix}<style id=sheet>"),
+                &mut consumer,
+            );
+            let style = host.elements_by_tag_name(host.document_handle(), "style", true)[0];
+            *consumer.effects = DomMutationEffects::default();
+            // Separate feeds and line breaks both split tokenizer text. Neither
+            // may publish growing stylesheet prefixes to the renderer.
+            let chunk = ".rule { color: red; }\n".repeat(64);
+            for _ in 0..8 {
+                stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+                    &chunk,
+                    &mut consumer,
+                );
+                assert!(consumer.effects.stylesheet_owners().changes().is_empty());
+                assert!(!consumer.effects.observer_records().records().is_empty());
+                *consumer.effects = DomMutationEffects::default();
+            }
+            stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+                "</style>",
+                &mut consumer,
+            );
+            let changes = consumer.effects.stylesheet_owners().changes();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].owner(), style);
+            assert!(matches!(
+                changes[0].kind(),
+                DomStylesheetOwnerChangeKind::ParsingFinished
+            ));
+            assert!(consumer.effects.observer_records().records().is_empty());
+            assert!(!host.is_style_element_parsing_children(style));
+            assert_eq!(host.text_content(style).unwrap(), chunk.repeat(8));
+            stream.restore_parser_stream_dom_host(host);
+            stream.finish();
+        }
     }
 
     #[test]

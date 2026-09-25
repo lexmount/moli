@@ -546,6 +546,7 @@ impl OwnerStyleSheetSource {
         Self { owner, source }
     }
 
+    #[cfg(test)]
     pub(in crate::style_engine) fn matches_processing_input(
         &self,
         css_text: &str,

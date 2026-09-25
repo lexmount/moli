@@ -892,6 +892,28 @@ impl DomHost {
         did_change
     }
 
+    /// Finish a parser-created style at its closing tag or EOF. Report the
+    /// lifecycle transition without producing child or text mutation records.
+    pub fn finish_parsing_style_children_effects(
+        &mut self,
+        handle: DomHandle,
+    ) -> DomMutationEffects {
+        let did_change = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(Element::finish_parsing_style_children);
+        if !did_change {
+            return DomMutationEffects::default();
+        }
+        self.record_mutation(MutationScope::LocalState);
+        let mut effects = DomMutationEffects::changed();
+        effects.mark_stylesheet_owner_parsing_finished(
+            handle,
+            self.dom.stylesheet_candidate_tree_scope_for_node(handle),
+        );
+        effects
+    }
+
     pub fn set_cryptographic_nonce(&mut self, handle: DomHandle, nonce: Option<String>) -> bool {
         let did_change = {
             let Some(element) = self

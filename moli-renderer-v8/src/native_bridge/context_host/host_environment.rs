@@ -884,15 +884,13 @@ impl JsContextHost {
             .adopted_style_sheet_sources_for_document(document)
     }
 
-    pub(crate) fn sync_owner_style_sheet_text(&mut self, owner: DomHandle) {
-        let css_text = self.dom_host().text_content(owner).unwrap_or_default();
+    /// Initialize sources when taking ownership of an already constructed DOM.
+    /// Ordinary reads and synchronization only install lifecycle-prepared sources.
+    pub(crate) fn initialize_style_element_sources_for_document(&mut self, document: DomHandle) {
         let dom_host = self.dom_host() as *const _;
-        self.style_engine.sync_owner_style_sheet_text_with_host(
-            unsafe { &*dom_host },
-            owner,
-            css_text,
-        );
-        self.install_owner_live_stylesheet(owner);
+        self.style_engine
+            .initialize_style_element_sources_with_host(unsafe { &*dom_host }, document);
+        self.install_prepared_style_sheets_for_document(document);
     }
 
     pub(crate) fn apply_stylesheet_owner_changes(&mut self, changes: &[DomStylesheetOwnerChange]) {
@@ -904,19 +902,7 @@ impl JsContextHost {
         let mut linked_attribute_owners = Vec::new();
         for change in changes {
             let owner = change.owner();
-            let source_was_processed = match change.kind() {
-                DomStylesheetOwnerChangeKind::Registered
-                | DomStylesheetOwnerChangeKind::Contents => {
-                    unsafe { &*dom_host }.is_connected(owner)
-                }
-                DomStylesheetOwnerChangeKind::OwnerDocumentChanged => true,
-                DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected } => *connected,
-                DomStylesheetOwnerChangeKind::Unregistered
-                | DomStylesheetOwnerChangeKind::Attribute { .. } => false,
-            };
-            if unsafe { &*dom_host }.is_inline_style_sheet_owner(owner)
-                && source_was_processed
-                && !owners.contains(&owner)
+            if unsafe { &*dom_host }.is_inline_style_sheet_owner(owner) && !owners.contains(&owner)
             {
                 owners.push(owner);
             }
@@ -956,10 +942,7 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn sync_owner_style_sheet_texts_for_document_tree_scopes(
-        &mut self,
-        document: DomHandle,
-    ) {
+    pub(crate) fn install_prepared_style_sheets_for_document(&mut self, document: DomHandle) {
         let owners = {
             let host = self.dom_host();
             let mut owners = Vec::new();
@@ -977,7 +960,7 @@ impl JsContextHost {
             owners
         };
         for owner in owners {
-            self.sync_owner_style_sheet_text(owner);
+            self.install_owner_live_stylesheet(owner);
         }
     }
 
@@ -987,7 +970,7 @@ impl JsContextHost {
             runtime.take_style_source_document_sync_pending()
         };
         if pending {
-            self.sync_owner_style_sheet_texts_for_document_tree_scopes(self.document_handle());
+            self.install_prepared_style_sheets_for_document(self.document_handle());
         }
     }
 
@@ -1042,11 +1025,6 @@ impl JsContextHost {
             owner,
             stylesheet_id,
         ) {
-            self.style_engine
-                .mark_owner_live_stylesheet_cssom_authoritative_with_host(
-                    unsafe { &*dom_host },
-                    owner,
-                );
             let canceled_load_event_bindings =
                 unsafe { &mut *self.runtime }.invalidate_style_related_state(owner);
             for binding in canceled_load_event_bindings {

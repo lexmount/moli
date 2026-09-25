@@ -877,7 +877,9 @@ impl DomHost {
         effects: &mut DomMutationEffects,
         parent: DomHandle,
     ) {
-        if self.is_inline_style_sheet_owner(parent) {
+        if self.is_inline_style_sheet_owner(parent)
+            && !self.is_style_element_parsing_children(parent)
+        {
             effects.mark_stylesheet_owner_contents_change(
                 parent,
                 self.dom.stylesheet_candidate_tree_scope_for_node(parent),

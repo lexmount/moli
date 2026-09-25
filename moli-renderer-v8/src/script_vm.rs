@@ -2434,7 +2434,7 @@ impl ScriptVm {
         let document = self.document_runtime.document_handle();
         self._context_host
             .borrow_mut()
-            .sync_owner_style_sheet_texts_for_document_tree_scopes(document);
+            .install_prepared_style_sheets_for_document(document);
     }
 
     pub(super) fn computed_style_property_values_for_document_snapshot(

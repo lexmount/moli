@@ -2664,7 +2664,7 @@ impl JsContextHost {
                 self.dom_host_mut()
                     .set_document_fallback_base_url_for_handle(document_handle, Some(base_url));
             }
-            self.sync_owner_style_sheet_texts_for_document_tree_scopes(document_handle);
+            self.initialize_style_element_sources_for_document(document_handle);
             self.dom_host_mut()
                 .mark_subtree_connected_preserving_owner_document(document_handle);
             self.lightweight_popup_document_handles

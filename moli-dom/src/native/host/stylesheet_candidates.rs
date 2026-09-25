@@ -304,6 +304,12 @@ impl DomHost {
             .is_some_and(Element::is_inline_style_element)
     }
 
+    pub fn is_style_element_parsing_children(&self, handle: DomHandle) -> bool {
+        self.node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(Element::style_children_parsing)
+    }
+
     pub fn stylesheet_candidate_handles_for_tree_scope(
         &self,
         tree_scope: DomHandle,

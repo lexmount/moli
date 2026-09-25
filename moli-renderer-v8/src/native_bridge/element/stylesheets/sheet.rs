@@ -150,13 +150,6 @@ pub(crate) fn style_sheet_for_element<'s>(
     if !owner_is_connected {
         return None;
     }
-    if is_style && detached_owner && runtime.owner_style_sheet_source(handle).is_none() {
-        // DOMParser/createHTMLDocument trees do not pass through the active
-        // document's initial owner lifecycle. Install their source lazily into
-        // the existing owner-document style world instead of creating a
-        // text-only CSSStyleSheet shell.
-        runtime.sync_owner_style_sheet_text(handle);
-    }
     if is_style && runtime.owner_style_sheet_source(handle).is_none() {
         return None;
     }

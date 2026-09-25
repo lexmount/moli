@@ -124,7 +124,7 @@ impl StylesheetElementRead {
             parser_blocking_eligible: if element.is_html_element("link") {
                 element.link_created_by_parser()
             } else {
-                node.flags().parser_created()
+                node.flags().parser_created() && !element.style_children_parsing()
             },
             rel: element.attribute("rel").map(str::to_owned),
             href: element.attribute("href").map(str::to_owned),

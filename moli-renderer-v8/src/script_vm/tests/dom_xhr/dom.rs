@@ -2352,6 +2352,195 @@ fn document_point_queries_use_real_paint_order_geometry() {
 }
 
 #[test]
+fn style_source_sync_consumes_prepared_sources_and_preserves_cssom() {
+    let mut vm = new_parsed_test_vm(
+        "https://style-source-lifecycle.test/",
+        "<!doctype html><body></body>",
+    );
+    vm.eval(
+        r#"
+document.open();
+document.write('<!doctype html><head><style id=sheet>body { color: red; }');
+globalThis.pendingStyle = document.getElementById('sheet');
+"#,
+    )
+    .unwrap();
+
+    vm.sync_live_document_style_sources();
+    assert_eq!(
+        vm.eval("JSON.stringify([pendingStyle.sheet === null, document.styleSheets.length])")
+            .unwrap(),
+        "[true,0]",
+        "rendering synchronization must not create a source for an unfinished style",
+    );
+
+    vm.eval(
+        r#"
+document.write('</style></head><body>');
+globalThis.preparedSheet = pendingStyle.sheet;
+preparedSheet.insertRule('.added { color: blue; }', preparedSheet.cssRules.length);
+"#,
+    )
+    .unwrap();
+    vm.sync_live_document_style_sources();
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([pendingStyle.sheet === preparedSheet, preparedSheet.cssRules.length])"
+        )
+        .unwrap(),
+        "[true,2]",
+        "synchronization must preserve the prepared stylesheet and CSSOM edits",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+pendingStyle.textContent = 'body { color: green; }';
+document.close();
+JSON.stringify([pendingStyle.sheet !== preparedSheet,
+  pendingStyle.sheet.cssRules.length, getComputedStyle(document.body).color]);
+"#,
+        )
+        .unwrap(),
+        r#"[true,1,"rgb(0, 128, 0)"]"#,
+        "a real DOM content change must still replace the stylesheet",
+    );
+}
+
+#[test]
+fn parser_style_waits_for_complete_source_in_main_and_child_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://parser-style-completion.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  function exercise(w) {
+    const d = w.document;
+    d.open();
+    d.write('<!doctype html><head><style id=sheet>\n');
+    const style = d.getElementById('sheet');
+    const pending = () => [style.sheet === null, d.styleSheets.length];
+    const before = [pending()];
+    d.write('body { color: rgb(1, 2, 3); }\n');
+    before.push(pending());
+    d.write('.second { color: green; }\n');
+    style.type = 'text/css';
+    before.push(pending());
+    const clone = d.head.appendChild(style.cloneNode(true));
+    const cloneRules = clone.sheet.cssRules.length;
+    clone.remove();
+    d.write('</style></head><body>');
+    const sheet = style.sheet;
+    const complete = [sheet.cssRules.length, d.styleSheets.length,
+      w.getComputedStyle(d.body).color];
+    sheet.insertRule('.kept { color: blue; }', sheet.cssRules.length);
+    d.write('<p>unrelated parser work</p>');
+    const preserved = sheet === style.sheet && sheet.cssRules.length === 3;
+    style.firstChild.appendData('.third { color: black; }');
+    const changed = Array.from(style.sheet.cssRules, r => r.selectorText);
+    style.textContent = 'body { color: rgb(4, 5, 6); }';
+    const dynamicColor = w.getComputedStyle(d.body).color;
+    d.close();
+    return {before, cloneRules, complete, preserved, changed, dynamicColor};
+  }
+  const main = exercise(window);
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const child = exercise(frame.contentWindow);
+  return JSON.stringify([main, child]);
+})()
+"#,
+        )
+        .expect("parser style completion should preserve CSSOM and dynamic text updates");
+    let expected = serde_json::json!({
+        "before": [[true, 0], [true, 0], [true, 0]],
+        "cloneRules": 2,
+        "complete": [2, 1, "rgb(1, 2, 3)"],
+        "preserved": true,
+        "changed": ["body", ".second", ".third"],
+        "dynamicColor": "rgb(4, 5, 6)"
+    });
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([expected, expected]),
+    );
+}
+
+#[test]
+fn parser_style_finishes_at_eof_in_main_and_child_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://parser-style-eof.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  function exercise(w) {
+    const d = w.document;
+    d.open();
+    d.write('<!doctype html><body><style id=sheet>\nbody { color: rgb(7, 8, 9); }\n');
+    const style = d.getElementById('sheet');
+    const pending = style.sheet === null && d.styleSheets.length === 0;
+    d.close();
+    return [pending, style.sheet.cssRules.length, d.styleSheets.length,
+      w.getComputedStyle(d.body).color];
+  }
+  const main = exercise(window);
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const child = exercise(frame.contentWindow);
+  return JSON.stringify([main, child]);
+})()
+"#,
+        )
+        .expect("EOF should publish the complete unterminated style source");
+    let expected = serde_json::json!([true, 1, 1, "rgb(7, 8, 9)"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([expected, expected]),
+    );
+}
+
+#[test]
+fn parser_style_finishes_in_svg_and_detached_fragments() {
+    let mut vm = new_parsed_test_vm(
+        "https://parser-svg-style-completion.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm.eval(r#"
+(() => {
+  document.open();
+  document.write('<!doctype html><body><svg><style id=sheet>\n');
+  const style = document.getElementById('sheet');
+  document.write('body { color: rgb(1, 2, 3); }\n');
+  const pending = style.sheet === null && document.styleSheets.length === 0;
+  document.write('</style><style id=empty /></svg>');
+  const complete = [style.sheet.cssRules.length,
+    document.getElementById('empty').sheet.cssRules.length];
+  document.close();
+  const fragment = document.createElement('div');
+  fragment.innerHTML = '<style>body { color: rgb(4, 5, 6); }\n</style>';
+  document.body.appendChild(fragment);
+  const fragmentRules = fragment.firstChild.sheet.cssRules.length;
+  const parsed = new DOMParser().parseFromString(
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><style>body {color:red}</style></head></html>',
+    'application/xhtml+xml');
+  return JSON.stringify({pending, complete, fragmentRules,
+    color:getComputedStyle(document.body).color,
+    xmlRules:parsed.querySelector('style').sheet.cssRules.length});
+})()
+"#).expect("SVG, fragments and XML should all finish parser-created styles");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "pending": true, "complete": [1, 0], "fragmentRules": 1,
+            "color": "rgb(4, 5, 6)", "xmlRules": 1
+        }),
+    );
+}
+
+#[test]
 fn parser_coalesced_style_text_updates_main_and_child_hit_tests() {
     let mut vm = new_parsed_test_vm(
         "https://parser-style-hit-test.test/",

@@ -555,6 +555,16 @@ impl<'host> XmlTreeSinkBase for XmlDocumentSink<'host> {
         left == right
     }
 
+    fn pop(&self, node: &Self::Handle) {
+        // This inert sink has no renderer consumer. Complete parser state here
+        // so a later document handoff can prepare the finished stylesheet.
+        let _ = self
+            .target
+            .borrow_mut()
+            .dom_host
+            .finish_parsing_style_children_effects(node.node_id);
+    }
+
     fn set_quirks_mode(&self, mode: XmlQuirksMode) {
         self.quirks_mode.set(mode);
     }
@@ -647,6 +657,41 @@ mod tests {
         assert_eq!(child_attributes.len(), 1);
         assert_eq!(child_attributes[0].name(), "xmlns");
         assert_eq!(child_attributes[0].value(), "urn:nested");
+    }
+
+    #[test]
+    fn xml_parser_finishes_styles_in_owned_and_borrowed_documents() {
+        let url = Url::parse("https://example.test/style.xml").unwrap();
+        for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
+            for ending in [
+                "/>",
+                "><![CDATA[body { color: red; }]]></style>",
+                ">body { color: red; }",
+            ] {
+                let source = format!("<style xmlns='{namespace}'{ending}");
+                let parsed = XmlParser.parse(url.clone(), source.clone());
+                let style = document_element(&parsed);
+                assert!(
+                    !parsed
+                        .node(style)
+                        .and_then(Node::as_element)
+                        .unwrap()
+                        .style_children_parsing(),
+                    "owned XML parse must finish style children: {source}"
+                );
+
+                let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+                let document = host.create_detached_xml_document();
+                XmlParser
+                    .parse_inert_tree_into_document(&mut host, document, &source)
+                    .unwrap();
+                let style = host.child_handles(document).next().unwrap();
+                assert!(
+                    !host.is_style_element_parsing_children(style),
+                    "borrowed XML parse must finish style children: {source}"
+                );
+            }
+        }
     }
 
     #[test]

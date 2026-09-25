@@ -561,8 +561,9 @@ impl ParserDomMutation {
 pub trait ParserDomMutationConsumer {
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation);
 
-    fn create_parser_element_without_attributes(
+    fn create_element_for_document_without_attributes(
         &mut self,
+        document_handle: NativeNodeId,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
@@ -628,6 +629,10 @@ pub trait ParserDomMutationConsumer {
 
     fn finish_parsing_link_children(&mut self, node_id: NativeNodeId);
 
+    /// Finish constructing a style element's source and process the resulting
+    /// stylesheet lifecycle effects. This does not mutate its child nodes.
+    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId);
+
     fn attach_declarative_shadow_for_parser(
         &mut self,
         host_id: NativeNodeId,
@@ -642,6 +647,8 @@ pub trait ParserDomMutationConsumer {
 struct ParserDomMutationSink {
     data: NonNull<()>,
     apply: unsafe fn(NonNull<()>, ParserDomMutation),
+    create_element_for_document_without_attributes:
+        unsafe fn(NonNull<()>, NativeNodeId, String, String, Option<String>) -> NativeNodeId,
     create_parser_element_for_document_without_attributes:
         unsafe fn(NonNull<()>, NativeNodeId, String, String, Option<String>) -> NativeNodeId,
     add_attrs_if_missing_for_parser: unsafe fn(NonNull<()>, NativeNodeId, Vec<NativeAttribute>),
@@ -659,6 +666,7 @@ struct ParserDomMutationSink {
     mark_script_already_started_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_script_children: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_link_children: unsafe fn(NonNull<()>, NativeNodeId),
+    finish_parsing_style_children: unsafe fn(NonNull<()>, NativeNodeId),
     attach_declarative_shadow_for_parser:
         unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId, Vec<NativeAttribute>) -> bool,
     associate_parser_form_owner: unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId) -> bool,
@@ -673,6 +681,24 @@ impl ParserDomMutationSink {
             // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.apply_parser_dom_mutation(mutation);
+        }
+        unsafe fn create_element_for_document_without_attributes_impl<
+            T: ParserDomMutationConsumer,
+        >(
+            data: NonNull<()>,
+            document_handle: NativeNodeId,
+            local_name: String,
+            namespace: String,
+            prefix: Option<String>,
+        ) -> NativeNodeId {
+            // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }.create_element_for_document_without_attributes(
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
+            )
         }
         unsafe fn create_parser_element_for_document_without_attributes_impl<
             T: ParserDomMutationConsumer,
@@ -817,6 +843,14 @@ impl ParserDomMutationSink {
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.finish_parsing_link_children(node_id);
         }
+        unsafe fn finish_parsing_style_children_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            node_id: NativeNodeId,
+        ) {
+            // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }.finish_parsing_style_children(node_id);
+        }
         unsafe fn attach_declarative_shadow_for_parser_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
             host_id: NativeNodeId,
@@ -844,6 +878,8 @@ impl ParserDomMutationSink {
         Self {
             data: NonNull::from(consumer).cast(),
             apply: apply_impl::<T>,
+            create_element_for_document_without_attributes:
+                create_element_for_document_without_attributes_impl::<T>,
             create_parser_element_for_document_without_attributes:
                 create_parser_element_for_document_without_attributes_impl::<T>,
             add_attrs_if_missing_for_parser: add_attrs_if_missing_for_parser_impl::<T>,
@@ -859,6 +895,7 @@ impl ParserDomMutationSink {
             mark_script_already_started_for_parser: mark_script_already_started_for_parser_impl::<T>,
             finish_parsing_script_children: finish_parsing_script_children_impl::<T>,
             finish_parsing_link_children: finish_parsing_link_children_impl::<T>,
+            finish_parsing_style_children: finish_parsing_style_children_impl::<T>,
             attach_declarative_shadow_for_parser: attach_declarative_shadow_for_parser_impl::<T>,
             associate_parser_form_owner: associate_parser_form_owner_impl::<T>,
         }
@@ -868,6 +905,26 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.apply)(self.data, mutation) };
+    }
+
+    fn create_element_for_document_without_attributes(
+        self,
+        document_handle: NativeNodeId,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+    ) -> NativeNodeId {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe {
+            (self.create_element_for_document_without_attributes)(
+                self.data,
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
+            )
+        }
     }
 
     fn create_parser_element_for_document_without_attributes(
@@ -979,6 +1036,12 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.finish_parsing_link_children)(self.data, node_id) };
+    }
+
+    fn finish_parsing_style_children(self, node_id: NativeNodeId) {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe { (self.finish_parsing_style_children)(self.data, node_id) };
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -1404,16 +1467,20 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
         self.effects.merge(effects);
     }
 
-    fn create_parser_element_without_attributes(
+    fn create_element_for_document_without_attributes(
         &mut self,
+        document_handle: NativeNodeId,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> NativeNodeId {
-        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
-        // parser pump through this collector for the duration of the step.
-        unsafe { &mut *self.host }
-            .create_parser_element_without_attributes(local_name, namespace, prefix)
+        // SAFETY: tests keep the DomHost alive and exclusive for this parser step.
+        unsafe { &mut *self.host }.create_element_without_attributes_for_document(
+            document_handle,
+            local_name,
+            namespace,
+            prefix,
+        )
     }
 
     fn create_parser_element_for_document_without_attributes(
@@ -1545,6 +1612,13 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
         let _ = unsafe { &mut *self.host }.finish_parsing_link_children(node_id);
+    }
+
+    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let effects = unsafe { &mut *self.host }.finish_parsing_style_children_effects(node_id);
+        self.consume_parser_mutation_effects(effects);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -1775,16 +1849,20 @@ impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
         self.effects.merge(effects);
     }
 
-    fn create_parser_element_without_attributes(
+    fn create_element_for_document_without_attributes(
         &mut self,
+        document_handle: NativeNodeId,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> NativeNodeId {
-        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
-        // parser pump through this collector for the duration of the step.
-        unsafe { &mut *self.host }
-            .create_parser_element_without_attributes(local_name, namespace, prefix)
+        // SAFETY: tests keep the DomHost alive and exclusive for this parser step.
+        unsafe { &mut *self.host }.create_element_without_attributes_for_document(
+            document_handle,
+            local_name,
+            namespace,
+            prefix,
+        )
     }
 
     fn create_parser_element_for_document_without_attributes(
@@ -1916,6 +1994,13 @@ impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
         let _ = unsafe { &mut *self.host }.finish_parsing_link_children(node_id);
+    }
+
+    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let effects = unsafe { &mut *self.host }.finish_parsing_style_children_effects(node_id);
+        self.consume_parser_mutation_effects(effects);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -2589,7 +2674,18 @@ impl ParserStreamHtmlTreeSinkTarget {
             .iter()
             .rposition(|candidate| candidate.node_id == node_id)
         {
-            self.open_parser_elements.remove(index);
+            let element = self.open_parser_elements.remove(index);
+            if element.name.local.as_ref() == "style"
+                && matches!(
+                    element.name.ns.as_ref(),
+                    "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+                )
+            {
+                // Like Blink's StyleElement::FinishParsingChildren, process
+                // the complete source, not every growing tokenizer prefix.
+                self.finish_parsing_style_children(node_id);
+                self.note_blocking_stylesheet_pause_if_needed(node_id);
+            }
         }
         if self.read_is_html_element_named(node_id, "link") {
             let _ = self.capture_parser_blocking_stylesheet(node_id);
@@ -2649,21 +2745,6 @@ impl ParserStreamHtmlTreeSinkTarget {
         svg_script.then_some(node_id)
     }
 
-    pub(super) fn create_parser_element_without_attributes(
-        &mut self,
-        local_name: String,
-        namespace: String,
-        prefix: Option<String>,
-    ) -> NativeNodeId {
-        let document_handle = self.parser_owner_document_node_id();
-        self.create_parser_element_without_attributes_for_document(
-            document_handle,
-            local_name,
-            namespace,
-            prefix,
-        )
-    }
-
     fn create_parser_element_without_attributes_for_document(
         &mut self,
         document_handle: NativeNodeId,
@@ -2687,6 +2768,28 @@ impl ParserStreamHtmlTreeSinkTarget {
                     local_name,
                     namespace,
                     prefix,
+                )
+        }
+    }
+
+    /// Build generated DOM without entering the tokenizer's construction lifecycle.
+    pub(super) fn create_element_without_attributes(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+    ) -> NativeNodeId {
+        let document = self.parser_owner_document_node_id();
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .create_element_for_document_without_attributes(
+                    document, local_name, namespace, prefix,
+                )
+        } else {
+            self.dom_host_mut()
+                .create_element_without_attributes_for_document(
+                    document, local_name, namespace, prefix,
                 )
         }
     }
@@ -2861,6 +2964,19 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .finish_parsing_link_children(node_id);
         } else {
             let _ = self.dom_host_mut().finish_parsing_link_children(node_id);
+        }
+    }
+
+    /// Complete a parser-created style after the tree builder closes it.
+    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .finish_parsing_style_children(node_id);
+        } else {
+            let _ = self
+                .dom_host_mut()
+                .finish_parsing_style_children_effects(node_id);
         }
     }
 
@@ -3479,9 +3595,6 @@ impl ParserStreamHtmlTreeSinkTarget {
         if self.read_is_html_element_named(node_id, "template") {
             self.open_template_element_depth = self.open_template_element_depth.saturating_sub(1);
         }
-        if self.read_is_html_element_named(node_id, "style") {
-            self.note_blocking_stylesheet_pause_if_needed(node_id);
-        }
         self.note_parser_element_popped(node_id);
     }
 
@@ -3949,7 +4062,8 @@ fn parser_stream_runtime_dom_sinks_routes_parser_state_writes_through_sink() {
         script = target.with_runtime_dom_consumer_for_test(&mut collector, |target| {
             target.push_parse_error("state write through sink".to_owned());
             target.set_html_quirks_mode(QuirksMode::Quirks);
-            let script = target.create_parser_element_without_attributes(
+            let script = target.create_parser_element_without_attributes_for_document(
+                document,
                 "script".to_owned(),
                 "http://www.w3.org/1999/xhtml".to_owned(),
                 None,

@@ -476,7 +476,7 @@ impl JsContextHost {
             #[cfg(test)]
             style_observation_environment_resolutions: Cell::new(0),
         };
-        host.sync_owner_style_sheet_texts_for_document_tree_scopes(host.document_handle());
+        host.initialize_style_element_sources_for_document(host.document_handle());
         host
     }
 

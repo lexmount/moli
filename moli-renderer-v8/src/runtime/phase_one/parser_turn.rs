@@ -202,16 +202,20 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .apply_parser_dom_mutation_to_live_dom_host_in_default_context(mutation);
     }
 
-    fn create_parser_element_without_attributes(
+    fn create_element_for_document_without_attributes(
         &mut self,
+        document_handle: NativeNodeId,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> NativeNodeId {
         self.vm
             .document_runtime
-            .create_parser_element_without_attributes_in_live_dom_host(
-                local_name, namespace, prefix,
+            .create_element_for_document_without_attributes_in_live_dom_host(
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
             )
     }
 
@@ -344,6 +348,15 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .document_runtime
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn finish_parsing_style_children(&mut self, node_id: NativeNodeId) {
+        let effects = self
+            .vm
+            .document_runtime
+            .dom_host_mut()
+            .finish_parsing_style_children_effects(node_id);
+        self.consume_parser_mutation_effects(effects);
     }
 
     fn attach_declarative_shadow_for_parser(

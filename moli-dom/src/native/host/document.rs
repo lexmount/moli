@@ -1286,6 +1286,64 @@ impl DomHost {
         Some(self.child_handles(handle).collect())
     }
 
+    pub fn create_element_without_attributes_for_document(
+        &mut self,
+        document_handle: DomHandle,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+    ) -> DomHandle {
+        self.allocate_element_for_document(document_handle, local_name, namespace, prefix, false)
+    }
+
+    pub(super) fn allocate_element_for_document(
+        &mut self,
+        document_handle: DomHandle,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        parser_created: bool,
+    ) -> DomHandle {
+        let is_template = namespace == "http://www.w3.org/1999/xhtml" && local_name == "template";
+        let is_child_browsing_context_host_candidate =
+            is_html_frame_owner_candidate(&local_name, &namespace);
+        let element = if parser_created {
+            Element::new_parser_created(local_name, namespace, prefix, Vec::new())
+        } else {
+            Element::new(local_name, namespace, prefix, Vec::new())
+        };
+        let node_id = self.dom.create_node(
+            NodeData::Element(element),
+            Some(document_handle),
+            false,
+            false,
+        );
+        if let Some(node) = self.node_mut(node_id) {
+            node.set_parser_created(parser_created);
+        }
+        self.record_element_query_index_candidate(node_id);
+        if is_child_browsing_context_host_candidate {
+            let mut candidates = self.child_browsing_context_host_candidates.borrow_mut();
+            if !candidates.contains(&node_id) {
+                candidates.push(node_id);
+            }
+        }
+
+        if is_template {
+            let template_contents = self
+                .dom
+                .create_template_contents_fragment_for_document(document_handle);
+            if let Some(element) = self
+                .node_mut(node_id)
+                .and_then(|node| node.data_mut().as_element_mut())
+            {
+                element.set_template_contents(Some(template_contents));
+            }
+        }
+
+        node_id
+    }
+
     pub fn create_element(&mut self, local_name: &str) -> DomHandle {
         let handle = self.dom.create_element(local_name);
         self.record_element_query_index_candidate(handle);

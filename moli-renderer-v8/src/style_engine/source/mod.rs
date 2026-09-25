@@ -6,6 +6,7 @@ pub(super) mod inline;
 pub(super) mod linked;
 mod shared_cache;
 pub(super) mod store;
+mod style_element;
 
 use crate::{
     document_runtime::DomHandle,
@@ -160,6 +161,7 @@ impl MoliStyleEngine {
             .tracks_document(document)
     }
 
+    #[cfg(test)]
     pub(crate) fn set_owner_style_sheet_text_with_host(
         &mut self,
         host: &DomHost,
@@ -170,46 +172,7 @@ impl MoliStyleEngine {
         self.set_owner_style_sheet_source_with_parser_base(host, owner, css_text, parser_base);
     }
 
-    pub(crate) fn sync_owner_style_sheet_text_with_host(
-        &mut self,
-        host: &DomHost,
-        owner: DomHandle,
-        css_text: String,
-    ) {
-        if self.owner_document_world(host, owner).is_some_and(|world| {
-            world
-                .owner_style_sheet_sources
-                .borrow()
-                .cssom_source_is_authoritative(owner)
-        }) {
-            return;
-        }
-        self.set_owner_style_sheet_text_with_host(host, owner, css_text);
-    }
-
-    fn process_owner_style_sheet_text_with_host(
-        &mut self,
-        host: &DomHost,
-        owner: DomHandle,
-        css_text: String,
-    ) {
-        let Some(document) = owner_document_for_source_owner(host, owner) else {
-            return;
-        };
-        let previous_linked_documents = self.linked_stylesheet_owner_documents(owner);
-        self.remove_linked_stylesheet_owner_from_documents(host, owner, previous_linked_documents);
-        let previous_documents = self.move_owner_style_sheet_source_to_document(document, owner);
-        let parser_base = stylesheet_source_base_url(host, owner);
-        self.world_for_document(document)
-            .owner_style_sheet_sources
-            .borrow_mut()
-            .replace_processed_source(owner, css_text, parser_base);
-        self.invalidate_owner_stylesheet_set_for_owner_with_host(host, owner);
-        for previous_document in previous_documents {
-            self.mark_document_stylesheet_set_dirty(previous_document);
-        }
-    }
-
+    #[cfg(test)]
     fn set_owner_style_sheet_source_with_parser_base(
         &mut self,
         host: &DomHost,
@@ -298,21 +261,6 @@ impl MoliStyleEngine {
             self.invalidate_owner_stylesheet_set_for_owner_with_host(host, owner);
         }
         refreshed
-    }
-
-    pub(crate) fn mark_owner_live_stylesheet_cssom_authoritative_with_host(
-        &mut self,
-        host: &DomHost,
-        owner: DomHandle,
-    ) -> bool {
-        let Some(world) = self.owner_document_world(host, owner) else {
-            return false;
-        };
-        world
-            .owner_style_sheet_sources
-            .borrow_mut()
-            .mark_cssom_authoritative(owner);
-        true
     }
 
     pub(crate) fn owner_live_stylesheet_with_host(
@@ -506,45 +454,7 @@ impl MoliStyleEngine {
         for change in changes {
             let owner = change.owner();
             if host.is_inline_style_sheet_owner(owner) {
-                let should_sync = match change.kind() {
-                    DomStylesheetOwnerChangeKind::Registered
-                    | DomStylesheetOwnerChangeKind::Contents => host.is_connected(owner),
-                    DomStylesheetOwnerChangeKind::OwnerDocumentChanged => true,
-                    DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected } => *connected,
-                    DomStylesheetOwnerChangeKind::Unregistered
-                    | DomStylesheetOwnerChangeKind::Attribute { .. } => false,
-                };
-                if should_sync {
-                    self.process_owner_style_sheet_text_with_host(
-                        host,
-                        owner,
-                        host.text_content(owner).unwrap_or_default(),
-                    );
-                } else if matches!(
-                    change.kind(),
-                    DomStylesheetOwnerChangeKind::Attribute {
-                        namespace: None,
-                        local_name,
-                    } if local_name == "type"
-                ) {
-                    // The type attribute changes whether the already-parsed
-                    // owner source participates in its TreeScope. The source
-                    // text and identity stay stable, but retained worlds must
-                    // refresh their active stylesheet projection immediately.
-                    self.invalidate_owner_stylesheet_set_for_owner_with_host(host, owner);
-                } else if matches!(
-                    change.kind(),
-                    DomStylesheetOwnerChangeKind::Unregistered
-                        | DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: false }
-                ) {
-                    self.remove_owner_style_sheet_source(owner);
-                    let previous_documents = self.linked_stylesheet_owner_documents(owner);
-                    self.remove_linked_stylesheet_owner_from_documents(
-                        host,
-                        owner,
-                        previous_documents,
-                    );
-                }
+                self.apply_style_element_change_with_host(host, change);
                 continue;
             }
             if !host.is_html_element_named(owner, "link") {

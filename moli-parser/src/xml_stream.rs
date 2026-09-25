@@ -1093,6 +1093,19 @@ mod tests {
             .expect("viewer document element");
         assert_eq!(document_element.local_name(), "html");
         assert_eq!(document_element.namespace(), "http://www.w3.org/1999/xhtml");
+        let style = element_by_id(&document, "xml-viewer-style").expect("viewer stylesheet");
+        assert!(
+            !document.node(style).unwrap().flags().parser_created(),
+            "generated viewer nodes must use ordinary DOM construction"
+        );
+        assert!(
+            !document
+                .node(style)
+                .and_then(Node::as_element)
+                .unwrap()
+                .style_children_parsing(),
+            "the generated viewer stylesheet must finish construction before publication"
+        );
         let source_container = element_by_id(&document, "webkit-xml-viewer-source-xml")
             .expect("viewer source container");
         assert_eq!(

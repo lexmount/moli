@@ -59,10 +59,6 @@ impl InstalledOwnerStyleSheet {
 #[derive(Debug, Default)]
 pub(super) struct OwnerStyleSheetSources {
     sources_by_owner: HashMap<DomHandle, InstalledOwnerStyleSheet>,
-    // A CSSOM rule mutation does not rewrite the owning <style> text nodes.
-    // Parser/runtime reconciliation must therefore preserve this source until
-    // an actual DOM stylesheet-content mutation calls `set_source` again.
-    cssom_authoritative_owners: HashSet<DomHandle>,
     // Projection of DocumentRuntime's CSP disposition. This set only suppresses
     // retained/cascade sources; it is not queried for request or event policy.
     csp_suppressed_owners: HashSet<DomHandle>,
@@ -87,17 +83,16 @@ impl OwnerStyleSheetSources {
 
     pub(super) fn clear_all(&mut self) {
         self.sources_by_owner.clear();
-        self.cssom_authoritative_owners.clear();
         self.csp_suppressed_owners.clear();
     }
 
+    #[cfg(test)]
     pub(super) fn set_source(
         &mut self,
         owner: DomHandle,
         css_text: String,
         parser_base: url::Url,
     ) -> bool {
-        self.cssom_authoritative_owners.remove(&owner);
         if self.sources_by_owner.get(&owner).is_some_and(|existing| {
             existing
                 .processing_source
@@ -119,7 +114,6 @@ impl OwnerStyleSheetSources {
         css_text: String,
         parser_base: url::Url,
     ) {
-        self.cssom_authoritative_owners.remove(&owner);
         let processing_source = Arc::new(OwnerStyleSheetSource::new(owner, css_text, parser_base));
         self.sources_by_owner.insert(
             owner,
@@ -166,7 +160,6 @@ impl OwnerStyleSheetSources {
     }
 
     pub(super) fn remove_owner(&mut self, owner: DomHandle) -> bool {
-        self.cssom_authoritative_owners.remove(&owner);
         self.csp_suppressed_owners.remove(&owner);
         self.sources_by_owner.remove(&owner).is_some()
     }
@@ -181,14 +174,6 @@ impl OwnerStyleSheetSources {
 
     pub(super) fn is_csp_suppressed(&self, owner: DomHandle) -> bool {
         self.csp_suppressed_owners.contains(&owner)
-    }
-
-    pub(super) fn mark_cssom_authoritative(&mut self, owner: DomHandle) {
-        self.cssom_authoritative_owners.insert(owner);
-    }
-
-    pub(super) fn cssom_source_is_authoritative(&self, owner: DomHandle) -> bool {
-        self.cssom_authoritative_owners.contains(&owner)
     }
 
     pub(super) fn text(&self, owner: DomHandle) -> Option<&str> {

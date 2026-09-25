@@ -268,14 +268,20 @@ impl DocumentRuntime {
             .text_content(node_id)
     }
 
-    pub(crate) fn create_parser_element_without_attributes_in_live_dom_host(
+    pub(crate) fn create_element_for_document_without_attributes_in_live_dom_host(
         &mut self,
+        document_handle: DomHandle,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> DomHandle {
         self.dom_host_mut_for_active_parser_step()
-            .create_parser_element_without_attributes(local_name, namespace, prefix)
+            .create_element_without_attributes_for_document(
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
+            )
     }
 
     pub(crate) fn create_parser_element_for_document_without_attributes_in_live_dom_host(

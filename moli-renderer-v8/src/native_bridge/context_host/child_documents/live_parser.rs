@@ -5,7 +5,7 @@ use crate::{
     custom_elements,
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
-    dom::native::{Attribute, DomMutationEffects, Node},
+    dom::native::{Attribute, DomMutationEffects, DomStylesheetOwnerChange, Node},
     frame_owner_model::{
         DocumentId, FrameClassicDocumentScriptExecutionStart,
         FrameDocumentClassicCompletionFinishAction, FrameDocumentClassicParserResumeApplication,
@@ -70,9 +70,11 @@ struct ChildParserMutationEffects {
 }
 
 impl ParserMutationEffectsOwner for ChildParserMutationEffects {
-    type Prepared = ();
+    type Prepared = Vec<DomStylesheetOwnerChange>;
 
-    fn prepare_parser_mutation_effects(&mut self, _effects: &DomMutationEffects) {}
+    fn prepare_parser_mutation_effects(&mut self, effects: &DomMutationEffects) -> Self::Prepared {
+        effects.stylesheet_owners().changes().to_vec()
+    }
 
     fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
         if !self.reaction_queue_active {
@@ -85,9 +87,14 @@ impl ParserMutationEffectsOwner for ChildParserMutationEffects {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        _prepared: (),
+        prepared: Self::Prepared,
     ) {
         unsafe { &mut *host_ptr }.sync_child_browsing_context_subtree(scope, self.document_handle);
+        crate::native_bridge::document::apply_stylesheet_owner_css_projections(
+            scope,
+            unsafe { &*host_ptr },
+            &prepared,
+        );
     }
 }
 
@@ -335,15 +342,21 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
         self.consume_parser_mutation_effects(effects);
     }
 
-    fn create_parser_element_without_attributes(
+    fn create_element_for_document_without_attributes(
         &mut self,
+        document_handle: DomHandle,
         local_name: String,
         namespace: String,
         prefix: Option<String>,
     ) -> DomHandle {
         self.host
             .dom_host_mut()
-            .create_parser_element_without_attributes(local_name, namespace, prefix)
+            .create_element_without_attributes_for_document(
+                document_handle,
+                local_name,
+                namespace,
+                prefix,
+            )
     }
 
     fn create_parser_element_for_document_without_attributes(
@@ -465,6 +478,17 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .host
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn finish_parsing_style_children(&mut self, node_id: DomHandle) {
+        if !self.targets_current_document() {
+            return;
+        }
+        let effects = self
+            .host
+            .dom_host_mut()
+            .finish_parsing_style_children_effects(node_id);
+        self.consume_parser_mutation_effects(effects);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -1019,7 +1043,7 @@ impl JsContextHost {
         let _ = self
             .dom_host_mut()
             .update_document_target_from_url(document_handle);
-        self.sync_owner_style_sheet_texts_for_document_tree_scopes(document_handle);
+        self.install_prepared_style_sheets_for_document(document_handle);
         self.dom_host_mut()
             .mark_subtree_connected_preserving_owner_document(document_handle);
         let document_url = self.document_url_for_handle(document_handle);

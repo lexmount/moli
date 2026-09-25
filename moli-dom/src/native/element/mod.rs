@@ -139,6 +139,15 @@ impl Element {
         {
             rare_data.control_state_mut().note_parser_created_link();
         }
+        if creation_source == ElementCreationSource::Parser
+            && local_name == "style"
+            && matches!(
+                namespace.as_str(),
+                "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+            )
+        {
+            rare_data.control_state_mut().note_parser_created_style();
+        }
         Self {
             local_name: LocalName::from(local_name),
             namespace: Namespace::from(namespace),
@@ -775,6 +784,17 @@ impl Element {
             return false;
         }
         self.control_state_mut().finish_parsing_link_children()
+    }
+
+    pub fn style_children_parsing(&self) -> bool {
+        self.control_state().style_children_parsing()
+    }
+
+    pub fn finish_parsing_style_children(&mut self) -> bool {
+        if !self.style_children_parsing() {
+            return false;
+        }
+        self.control_state_mut().finish_parsing_style_children()
     }
 
     pub fn parser_associated_form_owner(&self) -> Option<NativeNodeId> {

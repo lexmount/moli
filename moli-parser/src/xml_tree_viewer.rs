@@ -152,7 +152,7 @@ fn materialize_transformed_viewer_node(
         .clone();
     let materialized = match data {
         NodeData::Element(element) => {
-            let handle = target.create_parser_element_without_attributes(
+            let handle = target.create_element_without_attributes(
                 element.local_name().to_owned(),
                 element.namespace().to_owned(),
                 element.prefix().map(str::to_owned),

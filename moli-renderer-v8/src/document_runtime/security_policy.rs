@@ -248,7 +248,8 @@ impl DocumentRuntime {
                 DomStylesheetOwnerChangeKind::Registered
                 | DomStylesheetOwnerChangeKind::OwnerDocumentChanged
                 | DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: true } => true,
-                DomStylesheetOwnerChangeKind::Contents => is_inline_style,
+                DomStylesheetOwnerChangeKind::Contents
+                | DomStylesheetOwnerChangeKind::ParsingFinished => is_inline_style,
                 DomStylesheetOwnerChangeKind::Attribute {
                     namespace,
                     local_name,
@@ -311,6 +312,9 @@ impl DocumentRuntime {
 
         for owner in stylesheet_owners {
             if self.dom_host.is_inline_style_sheet_owner(owner) {
+                if self.dom_host.is_style_element_parsing_children(owner) {
+                    continue;
+                }
                 self.apply_inline_style_element_csp_check(scope, host_ptr, owner);
             } else {
                 self.apply_link_style_element_csp_check(scope, host_ptr, owner);

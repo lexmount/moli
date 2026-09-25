@@ -44,7 +44,7 @@ impl DocumentRuntime {
             return DocumentWriteScriptRunOutcome::Complete;
         }
         unsafe { &mut *host_ptr }
-            .sync_owner_style_sheet_texts_for_document_tree_scopes(self.document_handle());
+            .install_prepared_style_sheets_for_document(self.document_handle());
 
         let Some(wrapper) = unsafe { &mut *host_ptr }
             .native_bridge_mut()

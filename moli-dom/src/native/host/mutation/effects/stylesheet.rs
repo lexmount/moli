@@ -53,6 +53,8 @@ pub enum DomStylesheetOwnerChangeKind {
         local_name: String,
     },
     Contents,
+    /// The parser has finished constructing this style element's children.
+    ParsingFinished,
     OwnerDocumentChanged,
     TreeConnectionChanged {
         connected: bool,
@@ -186,6 +188,18 @@ impl DomMutationEffects {
         self.mark_stylesheet_owner_change(DomStylesheetOwnerChange {
             owner,
             kind: DomStylesheetOwnerChangeKind::Contents,
+            tree_scopes: DomStylesheetOwnerTreeScopes::current(current_tree_scope),
+        });
+    }
+
+    pub(in crate::native::host::mutation) fn mark_stylesheet_owner_parsing_finished(
+        &mut self,
+        owner: DomHandle,
+        current_tree_scope: Option<DomHandle>,
+    ) {
+        self.mark_stylesheet_owner_change(DomStylesheetOwnerChange {
+            owner,
+            kind: DomStylesheetOwnerChangeKind::ParsingFinished,
             tree_scopes: DomStylesheetOwnerTreeScopes::current(current_tree_scope),
         });
     }
