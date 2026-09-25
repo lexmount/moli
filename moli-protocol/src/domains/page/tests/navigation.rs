@@ -535,7 +535,9 @@ async fn assert_joint_history_precommit(mode: &str) {
         "resolve" | "attach" => (json!(["top0", "a0", "/a0", 4, 4, 1]), 1, 4),
         "attach-single" => (json!(["top0", "a1", "/a1", 4, 4, 0]), 2, 4),
         "reject" => (json!(["top1", "a1", "/a1", 4, 4, 0]), 3, 4),
-        "stop-pagehide" => (json!(["top1", "a1", "/a1", 4, 4, 1]), 3, 4),
+        // pagehide runs at document commit, after admission has completed.
+        // Chromium also completes this traversal when pagehide calls stop().
+        "stop-pagehide" => (json!(["top0", "a0", "/a0", 4, 4, 1]), 1, 4),
         "replace-participant" => (json!(["top1", null, "/successor", 5, 5, 1]), 4, 5),
         _ => (json!(["top1", "a1", "/a1", 1, 1, 0]), 0, 1),
     };
