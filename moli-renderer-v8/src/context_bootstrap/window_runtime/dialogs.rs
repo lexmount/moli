@@ -419,9 +419,15 @@ pub(crate) fn window_open_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
+    // The entered Window identifies the creator even when `noopener` removes
+    // the opener relationship. Its child marker is more precise than the
+    // ambient dispatch scope while a child callback is running.
+    let source_child_handle = window_open_receiver_child_handle(scope, entered_window);
+    let popup_source_scope = source_child_handle
+        .map(OwnerDispatchScope::Child)
+        .unwrap_or(source_scope);
     let opener = (!suppress_opener).then_some(entered_window);
-    let opener_child_handle =
-        opener.and_then(|opener| window_open_receiver_child_handle(scope, opener));
+    let opener_child_handle = opener.and(source_child_handle);
     let popup_disposition = match host
         .current_input_event()
         .map(crate::native_bridge::CurrentInputEvent::navigation_policy)
@@ -453,6 +459,7 @@ pub(crate) fn window_open_callback<'s>(
                 host_ptr,
                 opener,
                 opener_child_handle,
+                Some(popup_source_scope),
                 &parsed.target_name,
                 url.as_deref(),
                 entered_base_url,

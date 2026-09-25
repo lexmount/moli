@@ -3476,3 +3476,17 @@ fn response_csp_sandbox_separates_main_and_initial_popup_origins() {
         "SecurityError"
     );
 }
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_inherits_sandbox() {
+    assert_sandbox_child_hyperlink_popup_origin("allow-scripts allow-popups", false).await;
+}
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_escapes_when_allowed() {
+    assert_sandbox_child_hyperlink_popup_origin(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+        true,
+    )
+    .await;
+}
