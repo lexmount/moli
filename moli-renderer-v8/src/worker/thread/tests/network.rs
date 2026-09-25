@@ -3201,8 +3201,9 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
             r#"{{"error":{{"name":"TimeoutError","message":"Failed to execute 'send' on 'XMLHttpRequest': Failed to load '{base_url}/worker/slow.txt'.","isDomException":true}},"readyState":4,"status":0,"responseText":"","events":["readystatechange:1"]}}"#
         )
     );
-    server
+    timeout(TIMEOUT, server)
         .await
+        .expect("slow sync worker xhr server should finish within test timeout")
         .expect("slow sync worker xhr server should finish");
 }
 
