@@ -85,7 +85,8 @@ fn specialized_element_methods_live_on_owner_prototypes() {
                 ["add", 1],
                 ["item", 1],
                 ["namedItem", 1],
-                ["remove", 0]
+                ["remove", 0],
+                ["showPicker", 0]
               ]) {
                 method(HTMLSelectElement.prototype, name, length);
               }
@@ -160,7 +161,7 @@ fn specialized_element_methods_live_on_owner_prototypes() {
                 [textarea, ["setSelectionRange", "setRangeText", "select", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
                 [meter, ["labels"]],
                 [progress, ["labels"]],
-                [select, ["add", "item", "namedItem", "remove", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
+                [select, ["add", "item", "namedItem", "remove", "showPicker", "labels", "validity", "validationMessage", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"]],
                 [tbody, ["insertRow", "deleteRow"]],
                 [row, ["insertCell", "deleteCell"]],
                 [image, ["decode"]],
