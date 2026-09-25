@@ -84,6 +84,11 @@ MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
+DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
+REMOTE_CONTEXT_EXECUTOR_PATH = (
+    "/html/browsers/browsing-the-web/remote-context-helper/resources/executor-window.py"
+)
+REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
 PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
 PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
 XHR_DOCUMENT_FIXTURES = {
@@ -1575,6 +1580,7 @@ class FetchStash:
 
     Every origin of one fixture server shares these namespaces. UUID
     normalization matches wptserve, including equivalent key spellings.
+    Counter and queue updates compose take/put while holding the same lock.
     """
 
     def __init__(self) -> None:
@@ -1604,6 +1610,19 @@ class FetchStash:
             value = int(self._values.get(parsed_key, 0)) + 1
             self._values[parsed_key] = value
             return value
+
+    def exchange_queue(self, key: str, value: bytes | None = None, *, path: str) -> bytes | None:
+        """Atomically append a message or take the oldest message in a stash queue."""
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            queue = self._values.pop(parsed_key, None) or []
+            if value is not None:
+                queue.append(value)
+                result = None
+            else:
+                result = queue.pop(0) if queue else None
+            self._values[parsed_key] = queue
+            return result
 
 
 class CspReportStore:
@@ -1684,6 +1703,8 @@ def _make_handler(
                     return self._serve_common_echo_resource
                 if path == IFRAME_STASH_PATH:
                     return self._serve_iframe_stash_resource
+                if path in REMOTE_CONTEXT_RESOURCE_PATHS:
+                    return self._serve_remote_context_resource
                 if path == PRELOAD_COUNT_PATH:
                     return self._serve_preload_count_resource
                 if path == FETCH_EMPTY_LOCATION_PATH:
@@ -1713,6 +1734,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_remote_context_resource():
+                return
             if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
@@ -1755,6 +1778,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_remote_context_resource():
+                return
             if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
@@ -1838,6 +1863,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_remote_context_resource():
+                return
             if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
@@ -1889,6 +1916,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_remote_context_resource():
+                return
             if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
@@ -2080,6 +2109,93 @@ def _make_handler(
             )
             return True
 
+        def _serve_remote_context_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path not in REMOTE_CONTEXT_RESOURCE_PATHS:
+                return False
+            # These handlers only read the upload for dispatcher POSTs that
+            # do not request show-headers. Do not wait for any other upload.
+            self.close_connection = True
+            request_headers: dict[str, list[str]] = {}
+            for name, value in self.headers.raw_items():
+                request_headers.setdefault(name.lower(), []).append(value)
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                if path == DISPATCHER_PATH:
+                    origin = ", ".join(request_headers.get("origin", [])) or "*"
+                    headers = [
+                        ("Access-Control-Allow-Credentials", "true"),
+                        ("Access-Control-Allow-Methods", "OPTIONS, GET, POST"),
+                        ("Access-Control-Allow-Headers", "Content-Type"),
+                        ("Access-Control-Allow-Origin", origin),
+                        ("Cache-Control", "max-age=31536000" if "cacheable" in params
+                         else "no-cache, no-store, must-revalidate"),
+                    ]
+                    if self.command == "OPTIONS":
+                        body = b""
+                    else:
+                        # Upstream takes the queue (and validates the UUID)
+                        # before reading request.body, so bad keys fail promptly.
+                        key = str(uuid.UUID(params["uuid"][0]))
+                        if "show-headers" in params:
+                            message = json.dumps({
+                                name: ", ".join(values) for name, values in request_headers.items()
+                            }).encode("utf-8")
+                            fetch_stash.exchange_queue(key, message, path="/common/dispatcher")
+                            body = b""
+                        elif self.command == "POST":
+                            message = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                            if message is None:
+                                return True
+                            fetch_stash.exchange_queue(key, message, path="/common/dispatcher")
+                            body = b"done"
+                        else:
+                            message = fetch_stash.exchange_queue(key, path="/common/dispatcher")
+                            body = b"not ready" if message is None else message
+                    status = 200
+                else:
+                    # Request.GET keeps blank values; urllib.parse.parse_qs in
+                    # executor-window.py separately drops them and decodes UTF-8.
+                    status = int(params["status"][0]) if "status" in params else 200
+                    query = parse_qs(parsed.query)
+                    executor_uuid = query["uuid"][0]
+                    start_on = query.get("startOn")
+                    start_on_js = f"'{start_on[0]}'" if start_on else "null"
+                    scripts = "\n".join(
+                        f"<script src='{html.escape(script)}'></script>"
+                        for script in query.get("script", [])
+                    )
+                    initialize_headers = ""
+                    for name, values in request_headers.items():
+                        js_name = json.dumps(name.encode("latin-1").decode("utf-8"))
+                        for value in values:
+                            js_value = json.dumps(value.encode("latin-1").decode("utf-8"))
+                            initialize_headers += f"window.__requestHeaders.append({js_name}, {js_value});\n"
+                    body = f"""
+<!DOCTYPE HTML>
+<base href="{html.escape(self._xhr_request_url())}">
+<script src="/common/dispatcher/dispatcher.js"></script>
+<script src="./executor-common.js"></script>
+<script src="./executor-window.js"></script>
+
+{scripts}
+<body>
+<script>
+window.__requestHeaders = new Headers();
+{initialize_headers}
+requestExecutor("{executor_uuid}", {start_on_js});
+</script>
+""".encode("utf-8")
+                    headers = [("Content-Type", "text/html")]
+            except (KeyError, ValueError, TypeError, AttributeError):
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(
+                path, parsed.query, body, headers=headers, status_code=status,
+            )
+            return True
+
         def _serve_iframe_stash_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != IFRAME_STASH_PATH:
@@ -2132,11 +2248,12 @@ def _make_handler(
         def _send_python_handler_response(
             self, path: str, query: str, body: bytes | None,
             *, headers: list[tuple[str, str]] | None = None,
+            status_code: int = 200,
         ) -> None:
             # FunctionHandler only applies pipes when main() returns a value.
             # In particular, an empty stash (None) differs from stored b"".
             headers = list(headers or [])
-            status, delay, auto_content_length = 200, 0.0, body is not None
+            status, delay, auto_content_length = status_code, 0.0, body is not None
             try:
                 for name, args in parse_pipe_commands(query) if body is not None else ():
                     if name == "header":
@@ -2185,6 +2302,8 @@ def _make_handler(
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if self._serve_remote_context_resource():
+                return
             if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():

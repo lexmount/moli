@@ -752,6 +752,24 @@ def _common_echo_handler_reference_patterns(directory: str) -> tuple[re.Pattern[
 
 
 @lru_cache(maxsize=None)
+def _remote_context_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for resource in (
+        "common/dispatcher/dispatcher.py",
+        "html/browsers/browsing-the-web/remote-context-helper/resources/executor-window.py",
+    ):
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
+
+@lru_cache(maxsize=None)
 def _iframe_stash_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     resource = "html/semantics/embedded-content/the-iframe-element/stash.py"
     relative = posixpath.relpath(resource, directory)
@@ -953,6 +971,7 @@ def _supported_wptserve_handler_references(
     if rel is not None:
         supported += _common_echo_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _iframe_stash_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _remote_context_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _preload_count_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
