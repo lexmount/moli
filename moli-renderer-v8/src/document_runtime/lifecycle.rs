@@ -215,6 +215,16 @@ impl DocumentRuntime {
         !self.stylesheet_lifecycle.fetches.has_any_pending_entries()
     }
 
+    pub(crate) fn has_blocking_stylesheets_for_document(&self, document: DomHandle) -> bool {
+        self.stylesheet_lifecycle
+            .fetches
+            .has_pending_entries_matching(|node| {
+                self.dom_host
+                    .owner_document_handle(DomHandle::new(node.index()))
+                    == Some(document)
+            })
+    }
+
     pub(crate) fn set_cookie_store(
         &mut self,
         cookie_store: moli_cookie_jar::SharedBrowserCookieStore,
@@ -283,7 +293,7 @@ impl DocumentRuntime {
         self.dom_content_loaded_dispatched = false;
         // document.open() replaces the input stream, not the Document object.
         // Its one-time autofocus decision survives along with its frame callbacks.
-        self.autofocus_candidates.clear();
+        self.take_autofocus_candidates(self.document_handle());
         self.pending_inspector_issues.clear();
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;

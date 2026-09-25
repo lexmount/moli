@@ -25,11 +25,18 @@ fn dialog_show_focuses_autofocus_descendant_only_once() {
     assert_eq!(result, r#"{"focusedOnShow":true,"activeAfterBlur":"body"}"#);
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
         assert!(
-            !crate::native_bridge::element::post_parse_autofocus_is_pending(unsafe {
-                &*runtime_ptr
-            })
+            !crate::native_bridge::element::post_parse_autofocus_is_pending(
+                unsafe { &*runtime_ptr },
+                unsafe { &*runtime_ptr }.document_handle()
+            )
         );
-        assert!(!crate::native_bridge::element::process_post_parse_autofocus(scope, runtime_ptr));
+        assert!(
+            !crate::native_bridge::element::process_post_parse_autofocus(
+                scope,
+                runtime_ptr,
+                unsafe { &*runtime_ptr }.document_handle()
+            )
+        );
         Ok(())
     })
     .expect("processed dialog autofocus should suppress post-parse autofocus");
@@ -69,11 +76,18 @@ fn dialog_show_without_focus_delegate_consumes_document_autofocus() {
     assert_eq!(result, r#"{"focusedDialog":true,"focusedLater":false}"#);
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
         assert!(
-            !crate::native_bridge::element::post_parse_autofocus_is_pending(unsafe {
-                &*runtime_ptr
-            })
+            !crate::native_bridge::element::post_parse_autofocus_is_pending(
+                unsafe { &*runtime_ptr },
+                unsafe { &*runtime_ptr }.document_handle()
+            )
         );
-        assert!(!crate::native_bridge::element::process_post_parse_autofocus(scope, runtime_ptr));
+        assert!(
+            !crate::native_bridge::element::process_post_parse_autofocus(
+                scope,
+                runtime_ptr,
+                unsafe { &*runtime_ptr }.document_handle()
+            )
+        );
         Ok(())
     })
     .expect("dialog focusing should consume later post-parse autofocus");

@@ -105,9 +105,10 @@ fn html_area_has_associated_image_map(runtime: &JsContextHost, handle: DomHandle
         ancestor = dom.parent_node(candidate);
     };
 
-    let mut stack = dom
-        .child_handles(runtime.document_handle())
-        .collect::<Vec<_>>();
+    let Some(document) = dom.owner_document_handle(handle) else {
+        return false;
+    };
+    let mut stack = dom.child_handles(document).collect::<Vec<_>>();
     while let Some(candidate) = stack.pop() {
         let Some(element) = dom.node(candidate).and_then(Node::as_element) else {
             stack.extend(dom.child_handles(candidate));
@@ -333,43 +334,46 @@ fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<
 /// or reveal an element before the rendering task runs. The selected task
 /// resolves the candidate because script can also remove it or move focus
 /// between publication and execution.
-pub(crate) fn post_parse_autofocus_is_pending(runtime: &JsContextHost) -> bool {
-    !runtime.autofocus_processed()
-        && runtime.active_element_handle().is_none()
-        && !runtime.autofocus_candidates().is_empty()
+pub(crate) fn post_parse_autofocus_is_pending(
+    runtime: &JsContextHost,
+    document: DomHandle,
+) -> bool {
+    !runtime.autofocus_processed(document)
+        && runtime.document_focused_area(document).is_none()
+        && !runtime.autofocus_candidates(document).is_empty()
 }
 
 pub(crate) fn process_post_parse_autofocus(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
+    document: DomHandle,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.autofocus_processed() || runtime.autofocus_candidates().is_empty() {
+    if runtime.autofocus_processed(document) || runtime.autofocus_candidates(document).is_empty() {
         return false;
     }
-    if runtime.active_element_handle().is_some()
+    if runtime.document_focused_area(document).is_some()
         || runtime
             .dom_host()
-            .document_target_element(runtime.document_handle())
+            .document_target_element(document)
             .is_some()
     {
-        runtime.mark_autofocus_processed();
+        runtime.mark_autofocus_processed(document);
         return false;
     }
     // A pending script-blocking stylesheet can still change focusability.
     // Preserve the candidates until its resource and imports have settled.
-    if !runtime.has_all_blocking_stylesheets_resolved() {
+    if runtime.has_blocking_stylesheets_for_document(document) {
         return false;
     }
     // Every examined candidate is consumed, including unfocusable elements.
     // A later rendering opportunity must not retry them without reinsertion.
     let target = runtime
-        .take_autofocus_candidates()
+        .take_autofocus_candidates(document)
         .into_iter()
         .filter(|handle| {
             runtime.dom_host().is_connected(*handle)
-                && runtime.dom_host().owner_document_handle(*handle)
-                    == Some(runtime.document_handle())
+                && runtime.dom_host().owner_document_handle(*handle) == Some(document)
         })
         .find_map(|candidate| {
             focusable_area_for_element(runtime, candidate)
@@ -380,7 +384,7 @@ pub(crate) fn process_post_parse_autofocus(
     };
     // Focus listeners can replace the Document. Complete this Document's
     // one-time autofocus state before running any author code.
-    runtime.mark_autofocus_processed();
+    runtime.mark_autofocus_processed(document);
     update_focus(scope, runtime_ptr, Some(target));
     true
 }
@@ -451,20 +455,28 @@ pub(super) fn run_dialog_focusing_steps(
     };
     focus_element(scope, runtime_ptr, target);
 
-    let should_mark_top_document_processed = {
+    let top_document = {
         let runtime = unsafe { &*runtime_ptr };
         let owner_document = runtime.dom_host().owner_document_handle(target);
-        owner_document == Some(runtime.document_handle())
+        let same_origin_with_top = owner_document == Some(runtime.document_handle())
+            || owner_document.is_some_and(|document| {
+                runtime
+                    .lightweight_popup_id_for_document_handle(document)
+                    .is_some()
+            })
             || owner_document
                 .and_then(|document| {
                     runtime.child_browsing_context_host_for_document_handle(document)
                 })
                 .is_some_and(|child| {
                     runtime.child_window_has_same_origin_with_its_top_level_origin(child)
-                })
+                });
+        owner_document
+            .filter(|_| same_origin_with_top)
+            .and_then(|document| runtime.top_level_document_for_document(document))
     };
-    if should_mark_top_document_processed {
-        unsafe { &mut *runtime_ptr }.mark_autofocus_processed();
+    if let Some(document) = top_document {
+        unsafe { &mut *runtime_ptr }.mark_autofocus_processed(document);
     }
 }
 

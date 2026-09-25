@@ -14,8 +14,8 @@ pub(crate) struct MutationNotificationTimings {
     pub(super) observer_us: u128,
 }
 
-/// Notifications derived entirely from the committed DOM changes. This layer
-/// does not need a DocumentRuntime or prepare scripts for any document owner.
+/// Notifications derived entirely from committed DOM changes, shared by the
+/// parser and DOM APIs. No author scripts execute at this notification boundary.
 pub(crate) fn notify_dom_mutation(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
@@ -23,6 +23,10 @@ pub(crate) fn notify_dom_mutation(
     effects: &DomMutationEffects,
 ) -> MutationNotificationTimings {
     let host = unsafe { &mut *host_ptr };
+    if !effects.tree().disconnected_roots().is_empty() {
+        host.clear_disconnected_document_focus();
+    }
+    host.note_inserted_autofocus_candidates(effects.tree().connected_roots());
     if !effects.stylesheet_owners().changes().is_empty() {
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());
     }

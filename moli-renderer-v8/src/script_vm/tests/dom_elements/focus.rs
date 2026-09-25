@@ -22,7 +22,8 @@ fn post_parse_autofocus_uses_connection_order_after_reinsert() {
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
         assert!(crate::native_bridge::element::process_post_parse_autofocus(
             scope,
-            runtime_ptr
+            runtime_ptr,
+            unsafe { &*runtime_ptr }.document_handle(),
         ));
         Ok(())
     })
@@ -69,13 +70,15 @@ fn image_map_area_focusability_supports_autofocus() {
 
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
         assert!(
-            crate::native_bridge::element::post_parse_autofocus_is_pending(unsafe {
-                &*runtime_ptr
-            })
+            crate::native_bridge::element::post_parse_autofocus_is_pending(
+                unsafe { &*runtime_ptr },
+                unsafe { &*runtime_ptr }.document_handle()
+            )
         );
         assert!(crate::native_bridge::element::process_post_parse_autofocus(
             scope,
-            runtime_ptr
+            runtime_ptr,
+            unsafe { &*runtime_ptr }.document_handle(),
         ));
         Ok(())
     })

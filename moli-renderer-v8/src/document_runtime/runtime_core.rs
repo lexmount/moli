@@ -124,8 +124,7 @@ impl DocumentRuntime {
             custom_element_reaction_depth: 0,
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,
-            autofocus_processed: false,
-            autofocus_candidates: Vec::new(),
+            document_autofocus: HashMap::new(),
             document_incarnation,
             document_input_stream_opened: false,
             next_document_write_external_script_load_id: 0,
@@ -134,7 +133,15 @@ impl DocumentRuntime {
             document_write_script_preloads: HashMap::new(),
             pending_parser_blocking_work: None,
         };
-        runtime.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+        runtime.register_autofocus_document(document_handle);
+        if runtime.policy_container.sandbox.allows_scripts
+            && runtime
+                .policy_container
+                .permissions_policy
+                .focus_without_user_activation_enabled()
+        {
+            runtime.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+        }
         runtime
     }
 
@@ -254,8 +261,7 @@ impl DocumentRuntime {
             custom_element_reaction_depth: _,
             structural_mutation_depth: _,
             dom_content_loaded_dispatched: _,
-            autofocus_processed: _,
-            autofocus_candidates: _,
+            document_autofocus: _,
             document_incarnation: _,
             document_input_stream_opened: _,
             next_document_write_external_script_load_id: _,

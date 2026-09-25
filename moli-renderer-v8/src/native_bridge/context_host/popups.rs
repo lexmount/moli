@@ -617,6 +617,7 @@ impl LightweightPopupDocumentState {
         self.policy_container.content_security_reporting_endpoints =
             response.content_security_reporting_endpoints;
         self.policy_container.sandbox = response.sandbox;
+        self.policy_container.permissions_policy = response.permissions_policy;
         self
     }
 }
@@ -3390,7 +3391,9 @@ impl JsContextHost {
                 scope, document,
             )
         {
-            if self.lightweight_popup_document_handle(popup_id) != Some(document_handle) {
+            let is_new_document =
+                self.lightweight_popup_document_handle(popup_id) != Some(document_handle);
+            if is_new_document {
                 self.forget_lightweight_popup_document_handle(popup_id);
             }
             let inherited_base_url = self
@@ -3420,6 +3423,12 @@ impl JsContextHost {
             if let Some(current_document) = self.lightweight_popup_document_record_mut(popup_id) {
                 current_document.handle = Some(document_handle);
             }
+            if is_new_document {
+                self.register_autofocus_document(document_handle);
+                if self.document_allows_autofocus(document_handle) {
+                    self.queue_autofocus_candidates_in_subtrees(&[document_handle]);
+                }
+            }
             return Some(document_handle);
         }
         None
@@ -3440,6 +3449,7 @@ impl JsContextHost {
         document_handle: DomHandle,
     ) {
         self.claimed_child_histories.remove(&document_handle);
+        self.retire_autofocus_document(document_handle);
         if self
             .lightweight_popup_document_handles
             .get(&document_handle)
@@ -5111,7 +5121,29 @@ impl JsContextHost {
             return;
         }
         document.dom_content_loaded = PopupDomContentLoadedState::Dispatched;
+        self.queue_lightweight_popup_post_parse_autofocus(popup_id);
         self.publish_lightweight_popup_load_event_if_ready(popup_id);
+    }
+
+    pub(crate) fn queue_lightweight_popup_post_parse_autofocus(&mut self, popup_id: u64) {
+        let Some(document) = self.lightweight_popup_document_record(popup_id) else {
+            return;
+        };
+        if !matches!(
+            document.dom_content_loaded,
+            PopupDomContentLoadedState::NotRequired | PopupDomContentLoadedState::Dispatched
+        ) {
+            return;
+        }
+        let Some(handle) = document.handle else {
+            return;
+        };
+        let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
+            super::OwnerDispatchScope::LightweightPopup(popup_id),
+        ) else {
+            return;
+        };
+        let _ = self.queue_document_post_parse_autofocus(target, handle);
     }
 
     fn queue_lightweight_popup_load_event(&mut self, task: LightweightPopupNavigationTaskToken) {

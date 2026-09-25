@@ -10,7 +10,7 @@ use crate::{
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
-    /// Flush the main Document's autofocus candidates after DOMContentLoaded.
+    /// Flush a top-level Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
     AnimationFrameCallbacks(super::WindowExecutionContextOwner),
@@ -57,13 +57,21 @@ impl JsContextHost {
         if !self.main_document_task_owner_is_current(owner) {
             return PostParseAutofocusAdmission::StaleOwner;
         }
-        if !super::super::element::post_parse_autofocus_is_pending(self) {
-            return PostParseAutofocusAdmission::NotNeeded;
-        }
         let target = WindowDocumentTaskTarget::new(
             WindowDocumentOwner::Frame(owner),
             OwnerDispatchScope::Top,
         );
+        self.queue_document_post_parse_autofocus(target, self.document_handle())
+    }
+
+    pub(super) fn queue_document_post_parse_autofocus(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        document: crate::document_runtime::DomHandle,
+    ) -> PostParseAutofocusAdmission {
+        if !super::super::element::post_parse_autofocus_is_pending(self, document) {
+            return PostParseAutofocusAdmission::NotNeeded;
+        }
         if self.queue_rendering_update(
             target,
             RendererPageRenderingUpdateTaskKind::PostParseAutofocus,
@@ -317,7 +325,11 @@ impl JsContextHost {
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
-        let focused = super::super::element::process_post_parse_autofocus(scope, host_ptr);
+        let focused = super::super::element::process_post_parse_autofocus(
+            scope,
+            host_ptr,
+            resolved.document_handle,
+        );
         dispatch_scope.restore(scope, previous_scope);
         focused
     }
