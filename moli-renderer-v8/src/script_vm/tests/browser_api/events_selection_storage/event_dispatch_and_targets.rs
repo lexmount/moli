@@ -1747,3 +1747,15 @@ fn before_unload_event_uses_its_string_return_value_interface() {
         r#"{"constructor":["function",true,"TypeError"],"initial":[true,true,false,""],"initialized":["beforeunload",true],"values":["null","undefined","object value","TypeError","object value"],"metadata":["get returnValue",0,"set returnValue",1,true,true],"receiverErrors":["TypeError","TypeError"]}"#
     );
 }
+
+#[test]
+fn selection_range_membership_uses_native_document_relationships() {
+    let mut vm = new_storage_test_vm("https://selection-native-membership.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../../tests/fixtures/selection-native-membership.js"
+        ))
+        .expect("selection membership should ignore author relationship properties"),
+        ""
+    );
+}
