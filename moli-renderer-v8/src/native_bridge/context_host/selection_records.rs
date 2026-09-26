@@ -1,6 +1,7 @@
 use super::range_records::RangeRecordRegistry;
 use super::*;
 use crate::dom::native::{DomHost, NodeType};
+use crate::native_bridge::element::contenteditable_editing_host_in_dom;
 use crate::range_boundary::RangeBoundaryPoint;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -28,6 +29,28 @@ pub(crate) enum SelectionBoundaryRole {
 pub(crate) struct SelectionBoundarySnapshot {
     pub(crate) container: DomHandle,
     pub(crate) offset: u32,
+}
+
+impl SelectionBoundarySnapshot {
+    fn new(dom: &DomHost, container: DomHandle, offset: u32) -> Option<Self> {
+        RangeBoundaryPoint::new(dom, container, offset)?;
+        Some(Self { container, offset })
+    }
+
+    fn update_text_boundary(
+        &mut self,
+        dom: &DomHost,
+        update: impl FnOnce(&mut RangeBoundaryPoint),
+    ) {
+        let Some(mut point) = RangeBoundaryPoint::new(dom, self.container, self.offset) else {
+            return;
+        };
+        update(&mut point);
+        if let Some(offset) = point.offset(dom) {
+            self.container = point.container();
+            self.offset = offset;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,8 +98,11 @@ struct SelectionRecord {
     anchor: Option<RangeBoundaryPoint>,
     focus: Option<RangeBoundaryPoint>,
     direction: SelectionDirection,
-    composed_start: Option<RangeBoundaryPoint>,
-    composed_end: Option<RangeBoundaryPoint>,
+    // Raw composed positions preserve their child offsets across insertions;
+    // they do not share the associated Range's child-before anchors. Text
+    // edits, text splits and removals adjust these positions explicitly.
+    composed_start: Option<SelectionBoundarySnapshot>,
+    composed_end: Option<SelectionBoundarySnapshot>,
 }
 
 pub(super) struct SelectionRangeBoundaryLink {
@@ -108,12 +134,30 @@ fn same_boundary_position(dom: &DomHost, a: RangeBoundaryPoint, b: RangeBoundary
     }
 }
 
+fn shadow_including_descendant_or_self(
+    dom: &DomHost,
+    node: DomHandle,
+    ancestor: DomHandle,
+) -> bool {
+    let mut current = Some(node);
+    while let Some(node) = current {
+        if node == ancestor {
+            return true;
+        }
+        current = dom.parent_node(node).or_else(|| {
+            dom.is_shadow_root(node)
+                .then(|| dom.shadow_root_host(node))
+                .flatten()
+        });
+    }
+    false
+}
+
 impl SelectionRecordRegistry {
     pub(super) fn linked_range_boundaries(
         &self,
         dom: &DomHost,
         ranges: &RangeRecordRegistry,
-        include_composed: bool,
     ) -> Vec<SelectionRangeBoundaryLink> {
         let mut links = Vec::new();
         for (&selection, record) in &self.records {
@@ -125,25 +169,13 @@ impl SelectionRecordRegistry {
             for (role, point) in [
                 (SelectionBoundaryRole::Anchor, record.anchor),
                 (SelectionBoundaryRole::Focus, record.focus),
-                (SelectionBoundaryRole::ComposedStart, record.composed_start),
-                (SelectionBoundaryRole::ComposedEnd, record.composed_end),
             ] {
-                if !include_composed
-                    && matches!(
-                        role,
-                        SelectionBoundaryRole::ComposedStart | SelectionBoundaryRole::ComposedEnd
-                    )
-                {
-                    continue;
-                }
                 let Some(point) = point else { continue };
                 let side = if start.is_some_and(|start| same_boundary_position(dom, point, start)) {
                     RangeBoundarySide::Start
                 } else if end.is_some_and(|end| same_boundary_position(dom, point, end)) {
                     RangeBoundarySide::End
                 } else {
-                    // Focus and cross-tree selections may retain separate
-                    // composed boundaries. Do not overwrite their projection.
                     continue;
                 };
                 links.push(SelectionRangeBoundaryLink {
@@ -159,22 +191,108 @@ impl SelectionRecordRegistry {
 
     pub(super) fn sync_linked_range_boundaries(
         &mut self,
-        dom: &DomHost,
         ranges: &RangeRecordRegistry,
         links: Vec<SelectionRangeBoundaryLink>,
     ) {
         for link in links {
             if let Some(point) = ranges.boundary_point(link.range, link.side)
                 && let Some(record) = self.records.get_mut(&link.selection)
+                && let Some(slot) = record.range_boundary_slot_mut(link.role)
             {
-                *record.boundary_slot_mut(link.role) = Some(point);
+                *slot = Some(point);
             }
         }
+    }
+
+    pub(super) fn update_composed_for_character_data_edit(
+        &mut self,
+        dom: &DomHost,
+        target: DomHandle,
+        edit_offset: u32,
+        removed_count: u32,
+        inserted_count: u32,
+    ) {
         for record in self.records.values_mut() {
+            for point in [&mut record.composed_start, &mut record.composed_end]
+                .into_iter()
+                .flatten()
+            {
+                if point.container == target {
+                    point.update_text_boundary(dom, |boundary| {
+                        boundary.update_for_character_data_edit(
+                            dom,
+                            target,
+                            edit_offset,
+                            removed_count,
+                            inserted_count,
+                        );
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn update_composed_for_text_split(
+        &mut self,
+        dom: &DomHost,
+        original: DomHandle,
+        new_text: DomHandle,
+        offset: u32,
+    ) {
+        for record in self.records.values_mut() {
+            for point in [&mut record.composed_start, &mut record.composed_end]
+                .into_iter()
+                .flatten()
+            {
+                if point.container == original {
+                    point.update_text_boundary(dom, |boundary| {
+                        boundary.update_for_text_split(dom, original, new_text, offset);
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn update_for_child_removal(
+        &mut self,
+        dom: &DomHost,
+        parent: DomHandle,
+        removed_child: DomHandle,
+        index: u32,
+        previous_sibling: Option<DomHandle>,
+    ) {
+        let removed_offset = previous_sibling
+            .and_then(|previous| dom.child_index(parent, previous))
+            .and_then(|previous_index| u32::try_from(previous_index + 1).ok())
+            .unwrap_or(index);
+        for record in self.records.values_mut() {
+            // Preserve the editing-host caret projection when its host is
+            // removed across a shadow boundary. Ordinary observable endpoints
+            // have already followed their associated live Range.
             if let (Some(anchor), Some(focus)) = (record.anchor, record.focus)
                 && same_boundary_position(dom, anchor, focus)
+                && shadow_including_descendant_or_self(dom, anchor.container(), removed_child)
+                && contenteditable_editing_host_in_dom(dom.dom(), anchor.container())
+                    == Some(anchor.container())
+                && let Some(point) = RangeBoundaryPoint::new(dom, parent, removed_offset)
             {
-                record.direction = SelectionDirection::None;
+                record.anchor = Some(point);
+                record.focus = Some(point);
+            }
+            // All document selections share this native registry, including
+            // child realms mutated through a borrowed parent-realm method.
+            for point in [&mut record.composed_start, &mut record.composed_end]
+                .into_iter()
+                .flatten()
+            {
+                if shadow_including_descendant_or_self(dom, point.container, removed_child) {
+                    *point = SelectionBoundarySnapshot {
+                        container: parent,
+                        offset: removed_offset,
+                    };
+                } else if point.container == parent && point.offset > index {
+                    point.offset -= 1;
+                }
             }
         }
     }
@@ -255,11 +373,12 @@ impl SelectionRecordRegistry {
             return false;
         };
         let Some(composed_start) =
-            RangeBoundaryPoint::new(dom_host, composed_start.0, composed_start.1)
+            SelectionBoundarySnapshot::new(dom_host, composed_start.0, composed_start.1)
         else {
             return false;
         };
-        let Some(composed_end) = RangeBoundaryPoint::new(dom_host, composed_end.0, composed_end.1)
+        let Some(composed_end) =
+            SelectionBoundarySnapshot::new(dom_host, composed_end.0, composed_end.1)
         else {
             return false;
         };
@@ -283,9 +402,16 @@ impl SelectionRecordRegistry {
     }
 
     fn direction(&self, handle: SelectionRecordHandle) -> Option<&'static str> {
-        self.records
-            .get(&handle)
-            .map(|record| record.direction.as_str())
+        let record = self.records.get(&handle)?;
+        // getRangeAt() and the observable endpoints can be collapsed while a
+        // composed selection still spans shadow trees. Its direction belongs
+        // to the composed selection, independently of that DOM projection.
+        if let (Some(start), Some(end)) = (record.composed_start, record.composed_end)
+            && start == end
+        {
+            return Some("none");
+        }
+        Some(record.direction.as_str())
     }
 
     fn boundary(
@@ -294,26 +420,17 @@ impl SelectionRecordRegistry {
         handle: SelectionRecordHandle,
         role: SelectionBoundaryRole,
     ) -> Option<SelectionBoundarySnapshot> {
-        let boundary = self.records.get_mut(&handle)?.boundary_mut(role)?;
+        let record = self.records.get_mut(&handle)?;
+        match role {
+            SelectionBoundaryRole::ComposedStart => return record.composed_start,
+            SelectionBoundaryRole::ComposedEnd => return record.composed_end,
+            _ => {}
+        }
+        let boundary = record.range_boundary_slot_mut(role)?.as_mut()?;
         Some(SelectionBoundarySnapshot {
             container: boundary.container(),
             offset: boundary.offset(dom_host)?,
         })
-    }
-
-    fn set_boundary(
-        &mut self,
-        dom_host: &crate::dom::native::DomHost,
-        handle: SelectionRecordHandle,
-        role: SelectionBoundaryRole,
-        container: DomHandle,
-        offset: u32,
-    ) -> bool {
-        let Some(point) = RangeBoundaryPoint::new(dom_host, container, offset) else {
-            return false;
-        };
-        *self.record_mut(handle).boundary_slot_mut(role) = Some(point);
-        true
     }
 
     fn is_collapsed(
@@ -331,28 +448,16 @@ impl SelectionRecordRegistry {
             && anchor.offset(dom_host).unwrap_or(0) == focus.offset(dom_host).unwrap_or(0)
     }
 
-    fn document_snapshot(
-        &self,
-        dom_host: &crate::dom::native::DomHost,
-        document: DomHandle,
-    ) -> Option<DocumentSelectionSnapshot> {
+    fn document_snapshot(&self, document: DomHandle) -> Option<DocumentSelectionSnapshot> {
         let record = self
             .records
             .iter()
             .filter(|(_, record)| record.owner_document == Some(document) && record.has_range())
             .min_by_key(|(handle, _)| handle.raw())
             .map(|(_, record)| record)?;
-        let mut start = record.composed_start?;
-        let mut end = record.composed_end?;
         Some(DocumentSelectionSnapshot {
-            start: SelectionBoundarySnapshot {
-                container: start.container(),
-                offset: start.offset(dom_host)?,
-            },
-            end: SelectionBoundarySnapshot {
-                container: end.container(),
-                offset: end.offset(dom_host)?,
-            },
+            start: record.composed_start?,
+            end: record.composed_end?,
         })
     }
 
@@ -388,19 +493,14 @@ impl SelectionRecord {
             && self.composed_end.is_some()
     }
 
-    fn boundary_mut(&mut self, role: SelectionBoundaryRole) -> Option<&mut RangeBoundaryPoint> {
-        self.boundary_slot_mut(role).as_mut()
-    }
-
-    fn boundary_slot_mut(
+    fn range_boundary_slot_mut(
         &mut self,
         role: SelectionBoundaryRole,
-    ) -> &mut Option<RangeBoundaryPoint> {
+    ) -> Option<&mut Option<RangeBoundaryPoint>> {
         match role {
-            SelectionBoundaryRole::Anchor => &mut self.anchor,
-            SelectionBoundaryRole::Focus => &mut self.focus,
-            SelectionBoundaryRole::ComposedStart => &mut self.composed_start,
-            SelectionBoundaryRole::ComposedEnd => &mut self.composed_end,
+            SelectionBoundaryRole::Anchor => Some(&mut self.anchor),
+            SelectionBoundaryRole::Focus => Some(&mut self.focus),
+            SelectionBoundaryRole::ComposedStart | SelectionBoundaryRole::ComposedEnd => None,
         }
     }
 }
@@ -492,19 +592,6 @@ impl JsContextHost {
             .boundary(dom_host, handle, role)
     }
 
-    pub(crate) fn set_selection_record_boundary(
-        &mut self,
-        handle: SelectionRecordHandle,
-        role: SelectionBoundaryRole,
-        container: DomHandle,
-        offset: u32,
-    ) -> bool {
-        let runtime = self.runtime;
-        let dom_host = unsafe { &*runtime }.dom_host();
-        self.selection_record_registry
-            .set_boundary(dom_host, handle, role, container, offset)
-    }
-
     pub(crate) fn selection_record_is_collapsed(&mut self, handle: SelectionRecordHandle) -> bool {
         let runtime = self.runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
@@ -516,7 +603,6 @@ impl JsContextHost {
         &self,
         document: DomHandle,
     ) -> Option<DocumentSelectionSnapshot> {
-        self.selection_record_registry
-            .document_snapshot(self.dom_host(), document)
+        self.selection_record_registry.document_snapshot(document)
     }
 }

@@ -1,4 +1,3 @@
-use super::selection::selection_update_composed_boundaries_for_child_removal;
 use super::*;
 use crate::document_runtime::DomHandle;
 
@@ -97,15 +96,6 @@ pub(super) fn update_live_ranges_for_child_removal(
 ) {
     unsafe { &mut *host_ptr }.update_live_range_records_for_child_removal(
         scope,
-        parent,
-        removed_child,
-        index,
-        previous_sibling,
-    );
-    selection_update_composed_boundaries_for_child_removal(
-        scope,
-        host_ptr,
-        _dom_host,
         parent,
         removed_child,
         index,
