@@ -229,18 +229,6 @@ pub(in crate::native_bridge) fn fieldset_disabled_setter_function<'s>(
         "disabled",
         args.get(0).boolean_value(scope),
     );
-    let runtime = unsafe { &*runtime_ptr };
-    if runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.has_attribute("disabled"))
-        && runtime
-            .active_element_handle()
-            .is_some_and(|active| node_contains(runtime, handle, active))
-    {
-        update_focus(scope, runtime_ptr, None);
-    }
     rv.set_undefined();
 }
 
@@ -623,8 +611,6 @@ pub(in crate::native_bridge) fn output_default_value_setter_function<'s>(
     }
     rv.set_undefined();
 }
-
-use super::owner::node_contains;
 
 fn legend_fieldset_ancestor(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = runtime.dom_host().parent_node(handle);

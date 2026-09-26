@@ -109,21 +109,6 @@ pub(crate) fn form_control_is_effectively_disabled(
                 || dom.disabled_fieldset_ancestor(handle).is_some()))
 }
 
-pub(super) fn node_contains(
-    runtime: &PageScriptHost,
-    ancestor: DomHandle,
-    node: DomHandle,
-) -> bool {
-    let mut current = Some(node);
-    while let Some(handle) = current {
-        if handle == ancestor {
-            return true;
-        }
-        current = runtime.dom_host().parent_node(handle);
-    }
-    false
-}
-
 pub(in crate::native_bridge) fn form_associated_form_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

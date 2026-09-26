@@ -22,6 +22,10 @@ use crate::document_runtime::{DomHandle, EventTargetHandle};
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererDomFocusOutcome;
 use crate::util::{node_wrapper_from_handle, v8_string, v8str};
+use crate::v8_execution_watchdog::{
+    SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
+    V8ExecutionWatchdogOutcome,
+};
 
 mod navigation;
 
@@ -554,46 +558,35 @@ fn flat_tree_contains(runtime: &PageScriptHost, ancestor: DomHandle, node: DomHa
     false
 }
 
-fn blur_if_focused_chain_is_display_none_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(runtime_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(active) = runtime.active_element_handle() else {
-        return;
-    };
-    if focused_chain_requires_async_blur(runtime, active) {
-        update_focus(scope, runtime_ptr, None);
-    }
-}
-
-pub(crate) fn schedule_focus_blur_if_needed(
+pub(crate) fn apply_document_focus_fixup(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
-    active: DomHandle,
-) {
+    document: DomHandle,
+) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    if !focused_chain_requires_async_blur(runtime, active) {
-        return;
-    }
-    if let Some(callback) = v8::Function::new(scope, blur_if_focused_chain_is_display_none_callback)
+    let Some(active) = runtime.active_element_handle() else {
+        return false;
+    };
+    if runtime.dom_host().owner_document_handle(active) != Some(document)
+        || is_focusable(runtime, active)
     {
-        let global = scope.get_current_context().global(scope);
-        let Some(set_timeout) = global
-            .get(scope, v8str(scope, "setTimeout").into())
-            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        else {
-            crate::util::enqueue_host_microtask(scope, callback);
-            return;
-        };
-        let delay = v8::Integer::new(scope, 0);
-        let args = [callback.into(), delay.into()];
-        let _ = set_timeout.call(scope, global.into(), &args);
+        return false;
     }
+    // The ordinary focus transition owns events, text-control change commits,
+    // viewport fallback, and retention of the sequential navigation origin.
+    // This runs outside an author animation callback or timer. Its change/blur
+    // handlers and cleanup microtasks still need their own execution budget.
+    let watchdog = V8ExecutionWatchdog::arm(
+        V8ExecutionWatchdogKind::FocusFixup,
+        scope.thread_safe_handle(),
+        SCRIPT_TURN_WATCHDOG_TIMEOUT,
+    );
+    update_focus(scope, runtime_ptr, None);
+    crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
+    if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {
+        tracing::warn!("focus fixup exceeded its execution deadline");
+    }
+    true
 }
 
 fn wrap_handle_value<'s>(
@@ -901,7 +894,7 @@ fn update_focus_from_previous_with_previous_focus_within(
         if unsafe { &*runtime_ptr }.active_element_handle() != Some(next_handle) {
             return;
         }
-        schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
+        unsafe { &mut *runtime_ptr }.queue_focused_document_fixup(scope);
     }
     if let Some((_, next_window)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
