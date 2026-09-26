@@ -432,6 +432,15 @@ fn child_document_close_callback<'s>(
             rv.set_undefined();
             return;
         }
+        // Only script-created streams accept EOF from document.close().
+        if !host
+            .frame_owner_store
+            .current_child_document_owner(handle)
+            .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner))
+        {
+            rv.set_undefined();
+            return;
+        }
         let script_context = match unsafe { &mut *host_ptr }
             .ensure_prebootstrapped_child_default_context(scope, handle)
         {
