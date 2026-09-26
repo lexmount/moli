@@ -1164,6 +1164,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ResizeObserver,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ResizeObserverEntry::DESCRIPTOR,
+        kind: ConstructorKind::ResizeObserverEntry,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ResizeObserverSize::DESCRIPTOR,
+        kind: ConstructorKind::ResizeObserverSize,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PerformanceObserver::DESCRIPTOR,
         kind: ConstructorKind::PerformanceObserver,
     },
