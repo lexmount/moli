@@ -1,22 +1,28 @@
 use super::super::range::{native_range_boundary_handles, new_range_for_document};
-use super::{selection_range, selection_store_with_composed_boundaries};
+use super::editing_caret::initial_editing_caret;
+use super::{
+    selection_composed_end_node, selection_composed_start_node, selection_direction,
+    selection_range, selection_store_with_composed_boundaries,
+};
 use crate::context_bootstrap::selection_value_for_window;
 use crate::document_runtime::DomHandle;
 use crate::dom::forms::InputType;
-use crate::native_bridge::element::queue_text_control_selection_change_event;
-use crate::native_bridge::{JsContextHost, OwnerDispatchScope};
+use crate::native_bridge::element::{
+    contenteditable_editing_host, queue_text_control_selection_change_event,
+};
+use crate::native_bridge::{JsContextHost, OwnerDispatchScope, callback_value_dom_handle};
+use crate::page_task_queue::RendererPageUserInteractionEventKind;
 
-/// Project a text field's internal selection into its Document before focus
-/// listeners run. Picker controls have separate focus behavior and are not
-/// text fields, even when their values contain text.
-pub(crate) fn focus_text_control_selection(
+/// Update the focused area's selection in its owner realm before focus events.
+pub(crate) fn focus_element_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    control: DomHandle,
+    target: DomHandle,
 ) -> Option<()> {
     let runtime = unsafe { &mut *runtime_ptr };
-    let element = runtime.dom_host().node(control)?.as_element()?;
-    if !(element.is_html_textarea()
+    let element = runtime.dom_host().node(target)?.as_element()?;
+    // Picker controls have a separate focus behavior from text fields.
+    let text_field = element.is_html_textarea()
         || (element.is_html_input()
             && matches!(
                 element.input_type(),
@@ -27,12 +33,12 @@ pub(crate) fn focus_text_control_selection(
                     | InputType::Email
                     | InputType::Password
                     | InputType::Number
-            )))
-    {
+            ));
+    if !text_field && contenteditable_editing_host(runtime, target) != Some(target) {
         return None;
     }
-    let document = runtime.dom_host().owner_document_handle(control)?;
-    let dispatch_scope = runtime.owner_dispatch_scope_for_node(control)?;
+    let document = runtime.dom_host().owner_document_handle(target)?;
+    let dispatch_scope = runtime.owner_dispatch_scope_for_node(target)?;
     match dispatch_scope {
         OwnerDispatchScope::Child(child) => {
             runtime
@@ -50,7 +56,11 @@ pub(crate) fn focus_text_control_selection(
     let (_, context) = runtime.window_execution_context(scope, owner, dispatch_scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let previous = dispatch_scope.enter(scope);
-    let result = focus_text_control_selection_in_context(scope, runtime_ptr, document, control);
+    let result = if text_field {
+        focus_text_control_selection_in_context(scope, runtime_ptr, document, target)
+    } else {
+        focus_editing_host_selection_in_context(scope, runtime_ptr, document, target)
+    };
     dispatch_scope.restore(scope, previous);
     result
 }
@@ -68,14 +78,7 @@ fn focus_text_control_selection_in_context(
     // getRangeAt() exposes the position before the control (or its outermost
     // shadow host). getComposedRanges() instead encloses the internal editor's
     // host, with author shadow roots rescoping through the existing API.
-    let (mut container, mut offset) = (parent, index);
-    let mut root = dom.root_node_handle(container)?;
-    while dom.is_shadow_root(root) {
-        let host = dom.shadow_root_host(root)?;
-        container = dom.parent_node(host)?;
-        offset = u32::try_from(dom.child_index(container, host)?).ok()?;
-        root = dom.root_node_handle(container)?;
-    }
+    let (container, offset) = project_caret_out_of_shadow_trees(runtime, parent, index)?;
 
     let window = scope.get_current_context().global(scope);
     let selection = selection_value_for_window(scope, window)?;
@@ -122,6 +125,78 @@ fn focus_text_control_selection_in_context(
     );
     queue_text_control_selection_change_event(scope, runtime_ptr, control);
     Some(())
+}
+
+fn focus_editing_host_selection_in_context(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: DomHandle,
+    editing_host: DomHandle,
+) -> Option<()> {
+    let window = scope.get_current_context().global(scope);
+    let selection = selection_value_for_window(scope, window)?;
+    let anchor = if selection_direction(scope, selection).as_deref() == Some("backward") {
+        selection_composed_end_node(scope, selection)
+    } else {
+        selection_composed_start_node(scope, selection)
+    }
+    .and_then(|anchor| callback_value_dom_handle(scope, anchor.into()));
+    let runtime = unsafe { &*runtime_ptr };
+    if runtime.document_selected_text_control(document).is_none()
+        && anchor.is_some_and(|anchor| {
+            contenteditable_editing_host(runtime, anchor) == Some(editing_host)
+        })
+    {
+        // A selection anchored in this editor survives refocusing, including
+        // backward selections and selections extending outside the editor.
+        return Some(());
+    }
+    let (container, offset) = initial_editing_caret(runtime, editing_host)?;
+    let (container, offset) = project_caret_out_of_shadow_trees(runtime, container, offset)?;
+    let document_object = wrap_node(scope, runtime_ptr, document)?;
+    let host_object = wrap_node(scope, runtime_ptr, editing_host)?;
+    let container = wrap_node(scope, runtime_ptr, container)?;
+    let range = new_range_for_document(scope, document_object)?;
+    selection_store_with_composed_boundaries(
+        scope,
+        selection,
+        range,
+        container,
+        offset,
+        container,
+        offset,
+        "none",
+        container,
+        offset,
+        container,
+        offset,
+        host_object,
+        0,
+        host_object,
+        0,
+    );
+    let _ = unsafe { &mut *runtime_ptr }.queue_user_interaction_event_task(
+        scope,
+        RendererPageUserInteractionEventKind::DocumentSelectionChange,
+        document,
+    );
+    Some(())
+}
+
+fn project_caret_out_of_shadow_trees(
+    runtime: &JsContextHost,
+    mut container: DomHandle,
+    mut offset: u32,
+) -> Option<(DomHandle, u32)> {
+    let dom = runtime.dom_host();
+    let mut root = dom.root_node_handle(container)?;
+    while dom.is_shadow_root(root) {
+        let host = dom.shadow_root_host(root)?;
+        container = dom.parent_node(host)?;
+        offset = u32::try_from(dom.child_index(container, host)?).ok()?;
+        root = dom.root_node_handle(container)?;
+    }
+    Some((container, offset))
 }
 
 fn wrap_node<'s>(
