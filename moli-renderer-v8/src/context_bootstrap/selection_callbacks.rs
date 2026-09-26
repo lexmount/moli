@@ -1,7 +1,6 @@
 use super::range::{
-    RangeBoundarySide, child_index, current_document_object, new_range_for_document,
-    range_boundary_container_object, range_boundary_offset, range_is_collapsed, range_node_length,
-    range_validate_boundary_point,
+    RangeBoundarySide, child_index, new_range_for_document, range_boundary_container_object,
+    range_boundary_offset, range_is_collapsed, range_node_length, range_validate_boundary_point,
 };
 use super::range_algorithms::range_delete_contents;
 use super::selection::{
@@ -10,7 +9,8 @@ use super::selection::{
     selection_composed_start_node, selection_composed_start_offset, selection_direction,
     selection_dispatch_change, selection_focus_node, selection_focus_offset, selection_has_range,
     selection_is_collapsed_internal, selection_owner_document, selection_range,
-    selection_set_collapsed, selection_store, selection_store_with_composed_boundaries,
+    selection_range_belongs_to_document, selection_set_collapsed, selection_spans_dom_roots,
+    selection_store, selection_store_with_composed_boundaries,
 };
 use super::selection_modify::selection_modify_target;
 use super::*;
