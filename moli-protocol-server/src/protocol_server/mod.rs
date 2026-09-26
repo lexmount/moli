@@ -136,6 +136,19 @@ impl ProtocolServer {
     }
 
     pub async fn serve(&self) -> Result<()> {
+        self.serve_with_shutdown(std::future::pending::<()>()).await
+    }
+
+    /// Serves until either a browser-level `Browser.close` or `shutdown`
+    /// completes, then drains all owners, flushes persisted storage, and
+    /// returns.
+    ///
+    /// `shutdown` lets the caller drive a graceful process termination (for
+    /// example from SIGTERM) through the same drain-and-flush path.
+    pub async fn serve_with_shutdown<F>(&self, shutdown: F) -> Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
         let listener = TcpListener::bind(self.config.bind_target())
             .await
             .with_context(|| {
@@ -164,9 +177,35 @@ impl ProtocolServer {
         let listener = listener.tap_io(|tcp_stream| {
             tcp_options::configure_accepted_protocol_stream(tcp_stream);
         });
+<<<<<<< Updated upstream
         let result = axum::serve(listener, app).await;
+=======
+        let graceful_shutdown = async move {
+            tokio::select! {
+                () = shutdown_coordinator.wait() => {
+                    info!("protocol server shutting down after browser-level Browser.close");
+                }
+                () = shutdown => {
+                    info!("protocol server shutting down after external shutdown request");
+                }
+            }
+        };
+        let result = axum::serve(listener, app)
+            .with_graceful_shutdown(graceful_shutdown)
+            .await;
+>>>>>>> Stashed changes
         cdp_owner_registry.shutdown().await;
+        flush_storage_partition(&self.storage_partition).await;
         result.context("protocol server failed")
+    }
+}
+
+async fn flush_storage_partition(storage_partition: &Arc<StoragePartitionState>) {
+    let storage_partition = storage_partition.clone();
+    match tokio::task::spawn_blocking(move || storage_partition.flush()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(?error, "failed to flush storage partition on shutdown"),
+        Err(error) => tracing::warn!(?error, "storage partition flush task failed"),
     }
 }
 
@@ -854,6 +893,9 @@ enum SharedCookieProfileBacking {
 
 #[derive(Debug, Clone, Default)]
 struct CookieProfileCommit {
+    // Only the legacy in-memory backing reconciles against a baseline now that
+    // storage-partition-backed profiles share the canonical cookie store.
+    #[cfg_attr(not(test), allow(dead_code))]
     initial_cookies: Vec<StoredCookie>,
     final_cookies: Option<Vec<StoredCookie>>,
 }
@@ -937,7 +979,12 @@ impl SharedCookieProfile {
                 Ok(())
             }
             SharedCookieProfileBacking::StoragePartition(storage_partition) => {
-                storage_partition.commit_cookie_delta(&commit.initial_cookies, commit.final_cookies)
+                // The protocol connection shares the partition's canonical
+                // cookie store, so every mutation is already live. Re-applying
+                // a possibly-stale snapshot here would clobber concurrent
+                // writers; persisting the current store is all that is needed.
+                let _ = commit;
+                storage_partition.flush()
             }
         }
     }

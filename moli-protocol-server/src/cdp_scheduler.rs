@@ -37,6 +37,7 @@ const PAGE_SCREENCAST_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 mod actor;
 mod adapter_scheduler;
 mod command_dispatch;
+mod cookie_persistence;
 mod frontend_control;
 mod protocol_residence;
 mod runtime_command_barrier;
@@ -47,6 +48,7 @@ pub(crate) use adapter_scheduler::{
     ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
 };
 pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
+pub(crate) use cookie_persistence::CookiePersistence;
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{
     ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
@@ -117,6 +119,7 @@ pub(crate) struct CdpScheduler {
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
     page_screencast_interval_ms: u32,
+    cookie_persistence: Option<CookiePersistence>,
 }
 
 #[derive(Clone, Copy)]
@@ -708,6 +711,31 @@ impl CdpScheduler {
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
             page_screencast_interval_ms,
+            cookie_persistence: None,
+        }
+    }
+
+    pub(crate) fn set_cookie_persistence(&mut self, cookie_persistence: CookiePersistence) {
+        self.cookie_persistence = Some(cookie_persistence);
+    }
+
+    /// Persists the shared cookie store after a command completes.
+    ///
+    /// Cookie-mutating CDP methods and page-JavaScript execution can both write
+    /// cookies (`document.cookie`); the latter cannot be detected from the
+    /// method name, so it always flushes. The shared store keeps this cheap:
+    /// only the profile file write is performed.
+    pub(crate) fn persist_cookies_after_command(
+        &self,
+        method: Option<&str>,
+        executes_page_javascript: bool,
+    ) {
+        let mutates = method.is_some_and(CookiePersistence::method_mutates_cookies);
+        if !mutates && !executes_page_javascript {
+            return;
+        }
+        if let Some(cookie_persistence) = self.cookie_persistence.as_ref() {
+            cookie_persistence.flush_async();
         }
     }
 

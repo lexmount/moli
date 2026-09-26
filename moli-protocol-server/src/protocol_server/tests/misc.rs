@@ -163,18 +163,16 @@ fn shared_cookie_profile_merge_and_save_writes_cache_file() -> anyhow::Result<()
 }
 
 #[test]
-fn shared_cookie_profile_partition_backing_uses_storage_partition() -> anyhow::Result<()> {
-    let profile = TempDir::new("shared-cookie-profile-partition");
-    let paths = BrowserProfilePaths::new(&profile.path);
-    let partition = Arc::new(StoragePartitionState::open(Some(&profile.path))?);
-    partition.import_cookies(vec![stored_cookie("sid", "old")])?;
+fn shared_cookie_profile_partition_backing_flushes_storage_partition() -> anyhow::Result<()> {
+    let profile_dir = TempDir::new("shared-cookie-profile-partition");
+    let paths = BrowserProfilePaths::new(&profile_dir.path);
+    let partition = Arc::new(StoragePartitionState::open(Some(&profile_dir.path))?);
     let profile = SharedCookieProfile::from_storage_partition(partition.clone());
 
-    let initial_cookies = profile.snapshot();
-    profile.commit_and_save(CookieProfileCommit::new(
-        initial_cookies,
-        vec![stored_cookie("sid", "new")],
-    ))?;
+    // The connection shares the partition's canonical cookie store, so a
+    // mutation is already live. Committing only needs to persist it.
+    partition.import_cookies(vec![stored_cookie("sid", "new")])?;
+    profile.commit_and_save(CookieProfileCommit::new(Vec::new(), Vec::new()))?;
 
     let partition_cookies = partition.cookies()?;
     assert_eq!(partition_cookies.len(), 1);

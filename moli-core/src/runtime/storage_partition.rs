@@ -51,6 +51,7 @@ pub struct StoragePartitionState {
 
 #[derive(Clone)]
 pub struct StoragePartitionSharedStorageHandles {
+    cookie_store: SharedBrowserCookieStore,
     web_storage_store: SharedWebStorageStore,
     indexed_db_manager: SharedIndexedDbManager,
     storage_bucket_store: SharedStorageBucketStore,
@@ -58,6 +59,14 @@ pub struct StoragePartitionSharedStorageHandles {
 }
 
 impl StoragePartitionSharedStorageHandles {
+    /// The partition's canonical cookie store.
+    ///
+    /// Protocol connections must share this handle rather than maintain a
+    /// private copy so writes are visible to the persistence layer.
+    pub fn cookie_store(&self) -> SharedBrowserCookieStore {
+        self.cookie_store.clone()
+    }
+
     pub fn web_storage_store(&self) -> SharedWebStorageStore {
         self.web_storage_store.clone()
     }
@@ -255,6 +264,7 @@ impl StoragePartitionState {
 
     pub fn shared_storage_handles(&self) -> StoragePartitionSharedStorageHandles {
         StoragePartitionSharedStorageHandles {
+            cookie_store: self.cookie_store.clone(),
             web_storage_store: self.web_storage_store.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),
             storage_bucket_store: self.storage_bucket_store.clone(),
