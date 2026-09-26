@@ -385,7 +385,8 @@ enum QueuedMutationRecordKind {
 struct IntersectionObserverState {
     observer: v8::Global<v8::Object>,
     callback: callback::ObserverCallback,
-    // Preserve observation order; duplicate observe() leaves the position unchanged.
+    // ObservationTargets is an ordered list; repeated observe() is a no-op,
+    // and unobserve()/observe() moves only that target to the end.
     observed_targets: IndexSet<NativeNodeId>,
     queued_entries: Vec<QueuedIntersectionEntry>,
     last_reported_entries: HashMap<NativeNodeId, LastReportedIntersection>,
@@ -792,39 +793,41 @@ impl ObserverStore {
         deliveries
     }
 
-    fn collect_intersection_deliveries<'s>(
+    fn intersection_notification_observers(
+        &self,
+        owner: crate::native_bridge::WindowExecutionContextOwner,
+    ) -> Vec<u32> {
+        let mut ids: Vec<_> = self
+            .intersection_observers
+            .iter()
+            .filter_map(|(id, state)| {
+                state
+                    .callback
+                    .observer_identity()
+                    .is_some_and(|identity| identity.owner() == owner)
+                    .then_some(*id)
+            })
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn take_intersection_delivery<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
-        owner: crate::native_bridge::WindowExecutionContextOwner,
-    ) -> Vec<IntersectionObserverDelivery<'s>> {
-        let mut deliveries = Vec::new();
-        let mut states: Vec<_> = self.intersection_observers.iter_mut().collect();
-        states.sort_unstable_by_key(|(id, _)| **id);
-        for (_, state) in states {
-            if state
-                .callback
-                .observer_identity()
-                .is_none_or(|identity| identity.owner() != owner)
-            {
-                continue;
-            }
-            if state.queued_entries.is_empty() {
-                continue;
-            }
-            let entries = mem::take(&mut state.queued_entries);
-            let Some(callback) = state.callback.prepare(scope, host_ptr) else {
-                continue;
-            };
-            let observer = v8::Local::new(scope, &state.observer);
-            deliveries.push(IntersectionObserverDelivery {
-                observer,
-                callback,
-                entries,
-                options: state.options.clone(),
-            });
+        id: u32,
+    ) -> Option<IntersectionObserverDelivery<'s>> {
+        let state = self.intersection_observers.get_mut(&id)?;
+        if state.queued_entries.is_empty() {
+            return None;
         }
-        deliveries
+        Some(IntersectionObserverDelivery {
+            observer: v8::Local::new(scope, &state.observer),
+            callback: state.callback.prepare(scope, host_ptr)?,
+            entries: mem::take(&mut state.queued_entries),
+            options: state.options.clone(),
+        })
     }
 
     fn retire_execution_context_owner(
@@ -893,44 +896,26 @@ fn invoke_mutation_deliveries<'s>(
     }
 }
 
-fn invoke_intersection_deliveries<'s>(
+fn invoke_intersection_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    target: crate::native_bridge::WindowDocumentTaskTarget,
-    deliveries: Vec<IntersectionObserverDelivery<'s>>,
+    delivery: IntersectionObserverDelivery<'s>,
 ) {
-    for delivery in deliveries {
-        if scope.is_execution_terminating()
-            || !(unsafe { &*host_ptr }).window_document_owner_is_current_for_dispatch_scope(
-                target.owner(),
-                target.dispatch_scope(),
-            )
-        {
-            break;
-        }
-        if !delivery.callback.is_current(scope) {
-            continue;
-        }
-        let callback_context = delivery.callback.relevant_context(scope);
-        // Web IDL argument conversion uses the callback's relevant Realm,
-        // which can differ from the observer's creation Realm. Enter it before
-        // projecting native targets and binding the entry/rect/array wrappers.
-        let entries = {
-            let scope = &mut v8::ContextScope::new(scope, callback_context);
-            build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries)
-        };
-        let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
-        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
-        delivery.callback.invoke_and_report(
-            scope,
-            "intersectionobserver",
-            "IntersectionObserver callback",
-            observer_value,
-            &[entries.into(), observer_value],
-        );
-        drop(execution_scope);
-        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
-    }
+    if !delivery.callback.is_current(scope) { return; }
+    let callback_context = delivery.callback.relevant_context(scope);
+    // Web IDL entry conversion belongs to the callback's relevant Realm.
+    let entries = {
+        let scope = &mut v8::ContextScope::new(scope, callback_context);
+        build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries)
+    };
+    let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
+    let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+    delivery.callback.invoke_and_report(
+        scope, "intersectionobserver", "IntersectionObserver callback", observer_value,
+        &[entries.into(), observer_value],
+    );
+    drop(execution_scope);
+    crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
 }
 
 impl MutationObserverState {
