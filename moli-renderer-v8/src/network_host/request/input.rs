@@ -29,7 +29,7 @@ pub(super) fn request_method_allows_body(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD")
 }
 
-pub(super) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
+pub(crate) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
     if mode == "no-cors" {
         HeadersGuard::RequestNoCors
     } else {

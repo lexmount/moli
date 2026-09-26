@@ -15173,6 +15173,7 @@ mod child_dynamic_inline_scripts;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
+mod fetch_request_guard;
 mod headers_list;
 mod http_fixture;
 mod import_meta;
