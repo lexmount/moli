@@ -2365,7 +2365,6 @@ css/css-sizing/aspect-ratio/percentage-resolution-003.html
 css/css-sizing/aspect-ratio/percentage-resolution-004.html
 css/css-sizing/aspect-ratio/percentage-resolution-005.html
 css/css-sizing/aspect-ratio/quirks-mode-002.html
-css/css-sizing/aspect-ratio/quirks-mode-003.html
 css/css-sizing/aspect-ratio/replaced-element-001.html
 css/css-sizing/aspect-ratio/replaced-element-002.html
 css/css-sizing/aspect-ratio/replaced-element-004.html
@@ -2815,6 +2814,7 @@ css/cssom-view/HTMLImageElement-x-and-y-ignore-transforms.html
 css/cssom-view/Screen-pixelDepth-Screen-colorDepth001.html
 css/cssom-view/client-props-inline-list-item.html
 css/cssom-view/client-props-root-display-none-crash.html
+css/cssom-view/client-props-root.html
 css/cssom-view/client-props-zoom.html
 css/cssom-view/cssom-getBoundingClientRect-001.html
 css/cssom-view/cssom-getBoundingClientRect-002.html
@@ -3074,6 +3074,7 @@ css/mediaqueries/scripting.html
 css/mediaqueries/update-media-feature.html
 css/selectors/attribute-selectors/attribute-case/cssom.html
 css/selectors/attribute-selectors/attribute-case/semantics.html
+css/selectors/attribute-selectors/attribute-case/syntax.html
 css/selectors/attribute-selectors/style-attribute-selector.html
 css/selectors/backdrop-input-crash.html
 css/selectors/child-indexed-pseudo-class.html
@@ -3544,6 +3545,7 @@ dom/nodes/Element-insertAdjacentElement.html
 dom/nodes/Element-insertAdjacentText.html
 dom/nodes/Element-lastElementChild.html
 dom/nodes/Element-matches-namespaced-elements.html
+dom/nodes/Element-matches.html
 dom/nodes/Element-nextElementSibling.html
 dom/nodes/Element-previousElementSibling.html
 dom/nodes/Element-remove.html
@@ -3553,6 +3555,7 @@ dom/nodes/Element-setAttribute-crbug-1138487.html
 dom/nodes/Element-setAttribute.html
 dom/nodes/Element-siblingElement-null.html
 dom/nodes/Element-tagName.html
+dom/nodes/Element-webkitMatchesSelector.html
 dom/nodes/MutationObserver-attributes.html
 dom/nodes/MutationObserver-callback-arguments.html
 dom/nodes/MutationObserver-characterData.html
@@ -3604,6 +3607,7 @@ dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html
 dom/nodes/ParentNode-append.html
 dom/nodes/ParentNode-children.html
 dom/nodes/ParentNode-prepend.html
+dom/nodes/ParentNode-querySelector-All.html
 dom/nodes/ParentNode-querySelector-case-insensitive.html
 dom/nodes/ParentNode-querySelector-scope.html
 dom/nodes/ParentNode-querySelectorAll-removed-elements.html
@@ -3699,6 +3703,7 @@ dom/nodes/rootNode.html
 dom/nodes/svg-template-querySelector.html
 dom/ranges/Range-adopt-test.html
 dom/ranges/Range-attributes.html
+dom/ranges/Range-cloneContents.html
 dom/ranges/Range-cloneRange.html
 dom/ranges/Range-collapse.html
 dom/ranges/Range-commonAncestorContainer-2.html
@@ -3711,6 +3716,7 @@ dom/ranges/Range-constructor.html
 dom/ranges/Range-deleteContents.html
 dom/ranges/Range-detach.html
 dom/ranges/Range-extractContents-dynamic-end.html
+dom/ranges/Range-extractContents.html
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=closed
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=open
 dom/ranges/Range-intersectsNode-2.html
@@ -5579,6 +5585,7 @@ html/editing/editing-0/spelling-and-grammar-checking/spellcheck-enumerated-ascii
 html/editing/editing-0/spelling-and-grammar-checking/user-interaction-editing-spellcheck.html
 html/editing/editing-0/writing-suggestions/writingsuggestions.html
 html/editing/the-hidden-attribute/hidden-idl.html
+html/editing/the-hidden-attribute/hidden-ua-stylesheet.html
 html/editing/the-hidden-attribute/hidden-until-found-idl.html
 html/embedded-content/the-img-element/attr-img-fetchpriority.html
 html/infrastructure/common-dom-interfaces/collections/domstringlist.html
@@ -5681,6 +5688,7 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6158,7 +6166,6 @@ html/semantics/interactive-elements/the-details-element/name-attribute.html
 html/semantics/interactive-elements/the-details-element/nested-details-crash.html
 html/semantics/interactive-elements/the-details-element/nested-top-layer-elements-in-details-crash.html
 html/semantics/interactive-elements/the-details-element/toggleEvent.html
-html/semantics/interactive-elements/the-dialog-element/abspos-dialog-layout.html
 html/semantics/interactive-elements/the-dialog-element/default-color.html
 html/semantics/interactive-elements/the-dialog-element/dialog-active-document.html
 html/semantics/interactive-elements/the-dialog-element/dialog-audio-video-crash.html
@@ -6921,7 +6928,6 @@ html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-03.ht
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-encoding.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-CEReactions.html
@@ -7535,12 +7541,20 @@ preload/modulepreload-text.html
 preload/preconnect-onerror-event.html
 preload/preconnect.html
 preload/reflected-as-value.html
+preload/supported-as-values.html?as=audio&expected=0
 preload/supported-as-values.html?as=fetch&expected=1
 preload/supported-as-values.html?as=font&expected=1
+preload/supported-as-values.html?as=garbagefoobar&expected=0
+preload/supported-as-values.html?as=iframe&expected=0
 preload/supported-as-values.html?as=image&expected=1
+preload/supported-as-values.html?as=json&expected=0
+preload/supported-as-values.html?as=object&expected=0
 preload/supported-as-values.html?as=script&expected=1
 preload/supported-as-values.html?as=style&expected=1
 preload/supported-as-values.html?as=track&expected=1
+preload/supported-as-values.html?as=video&expected=0
+preload/supported-as-values.html?as=worklet&expected=0
+print/crashtests/reload-crash.html
 proximity/ProximitySensor_insecure_context.html
 quirks/blocks-ignore-line-height.html
 quirks/body-fill-html-quirk-intrinsic-crash.html
@@ -7560,6 +7574,7 @@ quirks/unitless-length/quirks.html
 referrer-policy/generic/subresource-test/attr-referrer-invalid-value.html
 requestidlecallback/basic.html
 requestidlecallback/callback-exception.html
+requestidlecallback/callback-idle-periods.html
 requestidlecallback/callback-iframe-different-origin.html
 requestidlecallback/callback-iframe.html
 requestidlecallback/callback-invoked.html
@@ -7595,7 +7610,6 @@ resource-timing/initiator-type/frameset.html
 resource-timing/initiator-type/iframe.html
 resource-timing/initiator-type/img-srcset.html
 resource-timing/initiator-type/img.html
-resource-timing/initiator-type/script.html
 resource-timing/internal-resources-not-counted.html
 resource-timing/link-sequence-of-events.html
 resource-timing/queue-entry-regardless-buffer-size.html
@@ -7662,6 +7676,7 @@ selection/crashtests/selection-setBaseAndExtent-from-label-to-end-of-audio-and-h
 selection/crashtests/selection-setBaseAndExtent-video-in-shadow-and-another-shadowroot.html
 selection/crashtests/table.html
 selection/deleteFromDocument-HTMLDetails.html
+selection/deleteFromDocument.html
 selection/extend-00.html
 selection/extend-20.html
 selection/extend-40.html
@@ -7806,7 +7821,6 @@ shadow-dom/declarative/declarative-shadow-dom-slot-assignment-serialization.html
 shadow-dom/declarative/declarative-shadow-dom-slot-assignment.html
 shadow-dom/declarative/declarative-with-disabled-shadow.html
 shadow-dom/declarative/gethtml-ordering.html
-shadow-dom/declarative/gethtml.html
 shadow-dom/declarative/innerhtml-before-closing-tag.html
 shadow-dom/declarative/innerhtml-on-ordinary-template.html
 shadow-dom/declarative/move-template-before-closing-tag.html

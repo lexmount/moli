@@ -1986,6 +1986,7 @@ css/css-sizing/aspect-ratio/intrinsic-size-010.html
 css/css-sizing/aspect-ratio/intrinsic-size-014.html
 css/css-sizing/aspect-ratio/intrinsic-size-015.html
 css/css-sizing/aspect-ratio/quirks-mode-001.html
+css/css-sizing/aspect-ratio/quirks-mode-003.html
 css/css-sizing/aspect-ratio/replaced-element-005.html
 css/css-sizing/aspect-ratio/replaced-element-006.html
 css/css-sizing/aspect-ratio/replaced-element-018.html
@@ -2628,7 +2629,6 @@ css/cssom-view/MediaQueryList-extends-EventTarget.html
 css/cssom-view/MediaQueryListEvent.html
 css/cssom-view/checkVisibility.html
 css/cssom-view/client-props-input.html
-css/cssom-view/client-props-root.html
 css/cssom-view/cssom-getBoundingClientRect-003.html
 css/cssom-view/cssom-getBoundingClientRect-vertical-rl.html
 css/cssom-view/cssom-getBoxQuads-001.html
@@ -2784,7 +2784,6 @@ css/mediaqueries/media-query-matches-in-iframe.html
 css/mediaqueries/overflow-media-features.html
 css/mediaqueries/relative-units-005.html
 css/mediaqueries/test_media_queries.html
-css/selectors/attribute-selectors/attribute-case/syntax.html
 css/selectors/focus-display-none-001.html
 css/selectors/focus-visible-017-2.html
 css/selectors/focus-visible-017.html
@@ -2865,9 +2864,6 @@ dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
 dom/lists/DOMTokenList-coverage-for-attributes.html
-dom/nodes/Element-matches.html
-dom/nodes/Element-webkitMatchesSelector.html
-dom/nodes/ParentNode-querySelector-All.html
 dom/nodes/ParentNode-querySelector-escapes.html
 dom/nodes/getElementsByClassName-14.htm
 dom/nodes/moveBefore/child-style-preserve.html
@@ -2877,8 +2873,6 @@ dom/nodes/moveBefore/moveBefore-size-query.html
 dom/nodes/moveBefore/preserve-render-blocking-script.html
 dom/nodes/moveBefore/preserve-render-blocking-style.html
 dom/observable/tentative/idlharness.html
-dom/ranges/Range-cloneContents.html
-dom/ranges/Range-extractContents.html
 dom/ranges/tentative/OpaqueRange-auto-disconnect.html
 dom/ranges/tentative/OpaqueRange-basic.html
 dom/ranges/tentative/OpaqueRange-disconnect.html
@@ -3306,7 +3300,6 @@ html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
 html/editing/the-hidden-attribute/beforematch-infinite-loop.html
-html/editing/the-hidden-attribute/hidden-ua-stylesheet.html
 html/infrastructure/safe-passing-of-structured-data/shared-array-buffers/window-serviceworker-failure.https.html
 html/infrastructure/safe-passing-of-structured-data/transfer-audiodata.html
 html/infrastructure/safe-passing-of-structured-data/transfer-mediasourcehandle.html
@@ -3414,6 +3407,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
@@ -3466,6 +3460,7 @@ html/semantics/forms/the-select-element/show-picker-cross-origin-iframe.html
 html/semantics/forms/the-textarea-element/textarea-placeholder-lineheight.html
 html/semantics/forms/the-textarea-element/wrap-enumerated-ascii-case-insensitive.html
 html/semantics/interactive-elements/the-details-element/auto-expand-details-element-fragment.html
+html/semantics/interactive-elements/the-dialog-element/abspos-dialog-layout.html
 html/semantics/interactive-elements/the-dialog-element/centering.html
 html/semantics/interactive-elements/the-dialog-element/child-sequential-focus.html
 html/semantics/interactive-elements/the-dialog-element/dialog-autofocus-just-once.html
@@ -3507,6 +3502,7 @@ html/semantics/scripting-1/the-script-element/css-module/content-type-checking.h
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3602,6 +3598,7 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
@@ -3745,13 +3742,6 @@ pointerevents/pointerevent_on_event_handlers.html
 pointerevents/pointerevent_root_hit_test.html
 pointerevents/pointerevent_touch-action-verification.html
 preload/modulepreload-sri.html
-preload/supported-as-values.html?as=audio&expected=0
-preload/supported-as-values.html?as=garbagefoobar&expected=0
-preload/supported-as-values.html?as=iframe&expected=0
-preload/supported-as-values.html?as=json&expected=0
-preload/supported-as-values.html?as=object&expected=0
-preload/supported-as-values.html?as=video&expected=0
-preload/supported-as-values.html?as=worklet&expected=0
 quirks/line-height-calculation.html
 quirks/percentage-height-calculation.html
 quirks/table-cell-nowrap-minimum-width-calculation.html
@@ -3759,7 +3749,6 @@ quirks/table-cell-width-calculation-applies-to.html
 quirks/unitless-length/excluded-properties-001.html
 referrer-policy/generic/inheritance/popup-inheritance-form-submission.html
 reporting/crashReport-test.html
-requestidlecallback/callback-idle-periods.html
 requestidlecallback/deadline-max-rAF-dynamic.html
 requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
@@ -3768,6 +3757,7 @@ resource-timing/iframe-sequence-of-events.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
+resource-timing/initiator-type/script.html
 resource-timing/initiator-type/style.html
 resource-timing/initiator-type/svg.html
 resource-timing/initiator-type/workers.html
@@ -3812,7 +3802,6 @@ scroll-to-text-fragment/same-document-tests.html
 secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 selection/addRange.htm
-selection/deleteFromDocument.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
 selection/toString-ff-bug-001.html
 selection/toString-user-select-none.html
@@ -3854,7 +3843,6 @@ service-workers/service-worker/local-url-inherit-controller.https.html
 service-workers/service-worker/multipart-image.https.html
 service-workers/service-worker/navigate-window.https.html
 service-workers/service-worker/navigation-preload/get-state.https.html
-service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/nested-blob-url-workers.https.html
 service-workers/service-worker/next-hop-protocol.https.html
@@ -3889,7 +3877,6 @@ service-workers/service-worker/update-result.https.html
 service-workers/service-worker/waiting.https.html
 service-workers/service-worker/websocket.https.html
 service-workers/service-worker/windowclient-ancestorOrigins.sub.https.html
-service-workers/service-worker/windowclient-navigate.https.html
 service-workers/service-worker/worker-interception.https.html
 service-workers/service-worker/xhr-response-url.https.html
 service-workers/service-worker/xsl-base-url.https.html

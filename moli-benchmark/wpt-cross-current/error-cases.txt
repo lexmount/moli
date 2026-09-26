@@ -9,4 +9,4 @@ infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
 navigation-api/navigate-event/navigate-form-onformdata-navigate-crash.html
 navigation-api/navigate-event/signal-abort-replaceState-crash.html
-print/crashtests/reload-crash.html
+shadow-dom/declarative/gethtml.html
