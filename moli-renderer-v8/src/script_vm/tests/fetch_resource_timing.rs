@@ -99,9 +99,16 @@ async fn handle_timing_request(
         body.clear();
     }
     let mut headers = format!(
-        "HTTP/1.1 {status} Fixture\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
+        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
         body.len()
     );
+    if url.path() == "/mime" {
+        for (_, value) in url.query_pairs().filter(|(name, _)| name == "value") {
+            headers.push_str(&format!("Content-Type: {value}\r\n"));
+        }
+    } else {
+        headers.push_str(&format!("Content-Type: {mime}\r\n"));
+    }
     if redirect {
         headers.push_str(&format!("Location: {}\r\n", get("to")));
     }
@@ -133,6 +140,23 @@ async fn handle_timing_request(
 
 #[tokio::test(flavor = "current_thread")]
 async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/fetch-resource-timing.js"),
+        36,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn resource_timing_minimizes_response_content_type() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/resource-timing-content-type.js"),
+        44,
+    )
+    .await;
+}
+
+async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
     let first = timing_server().await;
     let second = timing_server().await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
@@ -143,7 +167,6 @@ async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
         serde_json::to_string(&[&first.origin, &second.origin]).unwrap(),
     ))
     .unwrap();
-    let fixture = include_str!("../../../tests/fixtures/fetch-resource-timing.js");
     page.eval(&format!(
         "({}).then(value => __fetchTimingResult = value, error => __fetchTimingResult = String(error));",
         fixture.trim().trim_end_matches(';'),
@@ -159,6 +182,6 @@ async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
     let result = page.eval("__fetchTimingResult").unwrap();
     let result: serde_json::Value = serde_json::from_str(&result)
         .unwrap_or_else(|error| panic!("fetch timing probe returned {result:?}: {error}"));
-    assert_eq!(result["total"], 36);
+    assert_eq!(result["total"], expected_total);
     assert_eq!(result["failures"], serde_json::json!([]));
 }

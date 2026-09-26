@@ -682,7 +682,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
 
     assert_eq!(
         result,
-        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"identity":true,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
+        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"text/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"identity":true,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
     );
 }
 
