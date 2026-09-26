@@ -201,16 +201,25 @@ pub(in crate::context_bootstrap) fn selection_is_collapsed_internal<'s>(
         .unwrap_or(true)
 }
 
-pub(in crate::context_bootstrap) fn selection_spans_dom_roots<'s>(
+pub(in crate::context_bootstrap) fn selection_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
-) -> bool {
+) -> &'static str {
     selection_record_handle(scope, selection)
         .and_then(|handle| {
             context_host_ptr_from_global_bridge(scope)
-                .map(|host_ptr| unsafe { &*host_ptr }.selection_record_spans_dom_roots(handle))
+                .map(|host_ptr| unsafe { &mut *host_ptr }.selection_record_type(handle))
         })
-        .unwrap_or(false)
+        .unwrap_or("None")
+}
+
+pub(in crate::context_bootstrap) fn selection_text_control_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    selection: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let handle = selection_record_handle(scope, selection)?;
+    let host = context_host_ptr_from_global_bridge(scope)?;
+    unsafe { &*host }.selection_record_text_control_text(handle)
 }
 
 pub(in crate::context_bootstrap) fn selection_store<'s>(

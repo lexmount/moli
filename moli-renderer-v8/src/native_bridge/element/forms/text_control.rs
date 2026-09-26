@@ -9,7 +9,7 @@ pub(crate) use events::{
     queue_text_control_selection_change_event,
 };
 pub(crate) use selection::{
-    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html, restore_focused_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal,
 };
