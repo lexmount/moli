@@ -1146,10 +1146,6 @@ fn performance_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if performance_slot_number(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if let Some(subobject) = super::lazy_subobjects::PerformanceSubobject::from_slot(slot) {
         match super::lazy_subobjects::ensure_performance_subobject(scope, args.this(), subobject) {
             Ok(value) => rv.set(value),

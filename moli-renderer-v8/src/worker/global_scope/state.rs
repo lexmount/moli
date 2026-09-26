@@ -8,6 +8,7 @@ pub(crate) struct WorkerGlobalState {
     /// Weak handles and native cleanups owned by this worker isolate. Worker
     /// teardown clears this registry before `OwnedIsolate` is destroyed.
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
+    pub(crate) resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry,
     /// Channel to send messages back to the parent.
     pub(in crate::worker) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     /// Internal wake channel used by worker-owned async runtime surfaces.
