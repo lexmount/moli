@@ -1,5 +1,61 @@
 use super::*;
 
+#[test]
+fn observer_element_arguments_use_native_interface_identity() {
+    let mut vm = new_parsed_test_vm(
+        "https://observer-element-arguments.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/observer-element-arguments.js"
+        ))
+        .unwrap();
+    assert_eq!(result, r#"{"total":204,"failures":[]}"#);
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let global = scope.get_current_context().global(scope);
+        let key = v8::String::new(scope, "__observerNativeElement").unwrap();
+        let value = global.get(scope, key.into()).unwrap();
+        assert!(
+            value.is_proxy(),
+            "fixture must cover a registered native Proxy"
+        );
+        let object = v8::Local::<v8::Object>::try_from(value).unwrap();
+        assert!(crate::web_api_interfaces::Element::is_instance(
+            scope, object
+        ));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rendering_observers_track_detached_native_targets_through_adoption() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://observer-detached-targets.test/");
+    let count: usize = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/observer-detached-targets.js"
+        ))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(count, 3);
+    for index in 0..count {
+        let name = vm
+            .eval(&format!("__observerDetached.start({index})"))
+            .unwrap();
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .unwrap();
+        assert_eq!(
+            vm.eval("__observerDetached.result").unwrap(),
+            vm.eval("__observerDetached.expected").unwrap(),
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn intersection_observer_queues_preserve_target_order_and_reentrant_operations() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
