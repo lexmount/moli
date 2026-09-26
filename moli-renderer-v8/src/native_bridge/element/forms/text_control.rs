@@ -16,7 +16,7 @@ pub(crate) use selection::{
     text_control_set_selection_range_with_direction_internal,
 };
 pub(crate) use selection::{
-    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html, restore_focused_text_control_selection,
 };
 pub(in crate::native_bridge) use selection::{
     text_control_select_callback, text_control_selection_direction_getter_function,

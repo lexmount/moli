@@ -177,8 +177,10 @@ impl DocumentRuntime {
             );
         }
         self.assert_active_parser_document_incarnation();
+        let changed_text_controls =
+            unsafe { &mut *host_ptr }.reconcile_text_control_selection_dom_mutations(&effects);
         self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
-        let result = {
+        let mut result = {
             let dom_host = self.dom_host.borrow_mut();
             apply_runtime_mutation_effects_to_dom_host(
                 &mut self.mutations,
@@ -192,6 +194,7 @@ impl DocumentRuntime {
                 mutation_options,
             )
         };
+        result.changed_text_controls = changed_text_controls;
         let changed = finish_runtime_mutation_effects(self, scope, host_ptr, result);
         if !changed {
             return;
@@ -358,8 +361,10 @@ impl DocumentRuntime {
         let effects = self.parser_remove_child_effects_in_structural_scope(parent, child);
         self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &effects);
         self.assert_active_parser_document_incarnation();
+        let changed_text_controls =
+            unsafe { &mut *host_ptr }.reconcile_text_control_selection_dom_mutations(&effects);
         self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
-        let result = {
+        let mut result = {
             let dom_host = self.dom_host.borrow_mut();
             apply_runtime_mutation_effects_to_dom_host(
                 &mut self.mutations,
@@ -373,6 +378,7 @@ impl DocumentRuntime {
                 mutation_options,
             )
         };
+        result.changed_text_controls = changed_text_controls;
         let changed = finish_runtime_mutation_effects(self, scope, host_ptr, result);
         if changed {
             self.dispatch_tree_removal_side_effects_after_change(

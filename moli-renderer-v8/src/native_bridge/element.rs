@@ -331,7 +331,7 @@ pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
-    contenteditable_editing_host, focus_element,
+    contenteditable_editing_host, focus_element, focus_text_control_preserving_selection,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
@@ -451,7 +451,7 @@ pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, text_control_value,
+    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_value,
 };
 pub(crate) use forms::{form_control_is_effectively_disabled, input_files_for_object};
 pub(in crate::native_bridge) use forms::{
