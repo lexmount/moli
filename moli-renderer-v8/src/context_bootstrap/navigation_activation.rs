@@ -213,6 +213,10 @@ pub(super) fn install_navigation_transition<'s>(
     to: Option<v8::Local<'s, v8::Object>>,
     navigation_type: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+    // Joint traversals can install another Window's transition from the
+    // initiating realm. The transition and both promises belong to Navigation.
+    let context = navigation.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let resolver = v8::PromiseResolver::new(scope)?;
     let finished = resolver.get_promise(scope);
     suppress_unhandled_rejection(scope, finished);
@@ -432,4 +436,52 @@ pub(super) fn set_navigation_current_entry(
         NAVIGATION_CURRENT_ENTRY_SLOT,
         entry.into(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_transition_and_promises_use_navigation_creation_realm() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let first = v8::Context::new(scope, Default::default());
+        let second = v8::Context::new(scope, Default::default());
+        for (owner, caller) in [(first, second), (second, first)] {
+            let (navigation, from) = {
+                let scope = &mut v8::ContextScope::new(scope, owner);
+                (v8::Object::new(scope), v8::Object::new(scope))
+            };
+            let scope = &mut v8::ContextScope::new(scope, caller);
+            let resolver = install_navigation_transition(scope, navigation, from, None, "traverse")
+                .expect("transition should be installed");
+            assert_eq!(scope.get_current_context(), caller);
+            let transition = navigation_transition_object(scope, navigation).unwrap();
+            assert_eq!(transition.get_creation_context(scope), Some(owner));
+            for name in ["committed", "finished"] {
+                let value = transition.get(scope, v8str(scope, name).into()).unwrap();
+                let promise = v8::Local::<v8::Promise>::try_from(value).unwrap();
+                assert_eq!(promise.get_creation_context(scope), Some(owner), "{name}");
+                if name == "finished" {
+                    assert_eq!(promise, resolver.get_promise(scope));
+                }
+            }
+            assert!(
+                transition
+                    .get(scope, v8str(scope, "from").into())
+                    .unwrap()
+                    .strict_equals(from.into())
+            );
+            resolve_navigation_transition_committed(scope, navigation, from.into());
+            let committed = transition
+                .get(scope, v8str(scope, "committed").into())
+                .unwrap();
+            let committed = v8::Local::<v8::Promise>::try_from(committed).unwrap();
+            assert_eq!(committed.state(), v8::PromiseState::Fulfilled);
+            assert!(committed.result(scope).strict_equals(from.into()));
+        }
+    }
 }
