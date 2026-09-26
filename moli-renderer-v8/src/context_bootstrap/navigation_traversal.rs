@@ -504,6 +504,22 @@ fn history_traverse<'s>(
         queue_browser_owned_top_level_history_traversal(scope, history, delta);
         return;
     };
+    let source_owner = runtime_window_owner(scope, history);
+    if let Some(source_handle) =
+        super::navigation_window::child_browsing_context_handle_for_runtime_owner(
+            scope,
+            source_owner,
+        )
+        && plan.targets.iter().any(|target| {
+            super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
+                scope,
+                source_handle,
+                target.owner,
+            )
+        })
+    {
+        return;
+    }
     super::navigation_traversal_coordinator::queue_plan(scope, plan);
 }
 

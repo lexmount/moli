@@ -643,6 +643,14 @@ fn sandbox_blocks_ancestor_or_top_location_navigation<'s>(
     else {
         return false;
     };
+    sandbox_blocks_ancestor_or_top_navigation_from_source(scope, source_handle, owner)
+}
+
+pub(super) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source_handle: crate::document_runtime::DomHandle,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
     let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner)
         .or_else(|| context_host_ptr_from_global_bridge(scope))
     else {
