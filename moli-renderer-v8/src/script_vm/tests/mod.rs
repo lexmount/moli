@@ -2425,6 +2425,7 @@ mod observer_callbacks;
 
 mod svg_text_position_native_receivers;
 
+mod observer_documents;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
 mod offline_audio_float;
