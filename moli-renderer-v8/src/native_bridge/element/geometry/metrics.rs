@@ -256,14 +256,11 @@ fn node_box_metric_from_object<'s>(
     metric: &str,
 ) -> Result<i32, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let runtime = unsafe { &*runtime_ptr };
-        let metrics = read_element_metrics(runtime, handle)?;
+        let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
         return Ok(metrics
             .as_ref()
             .map(|metrics| layout_box_metric(metrics, metric))
-            .unwrap_or_else(|| {
-                unpublished_document_client_metric(runtime, handle, metric).unwrap_or(0)
-            }));
+            .unwrap_or(0));
     }
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
@@ -281,44 +278,6 @@ fn node_box_metric_from_object<'s>(
     } else {
         Ok(value)
     }
-}
-
-fn unpublished_document_client_metric(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    metric: &str,
-) -> Option<i32> {
-    if !matches!(metric, "clientWidth" | "clientHeight")
-        || !runtime.layout_policy().uses_real_layout()
-        || !runtime.dom_host().is_connected(handle)
-    {
-        return None;
-    }
-    let document = runtime.layout_document_for_source(handle)?;
-    if runtime
-        .dom_host()
-        .dom()
-        .document_element_handle_for_document(document)
-        != Some(handle)
-        || (document != runtime.document_handle()
-            && runtime
-                .child_browsing_context_host_for_document_handle(document)
-                .is_none())
-        || runtime
-            .with_latest_layout_tree_for_document(document, |_| ())
-            .is_some()
-    {
-        return None;
-    }
-    // Before the first visual publication, use the configured viewport as the
-    // document's client size. Content bounds and element boxes still need a
-    // snapshot; a published zero-sized box must not acquire this fallback.
-    let viewport = runtime.layout_viewport_for_document(document);
-    Some(rounded_layout_value(if metric == "clientWidth" {
-        viewport.css_width as f32
-    } else {
-        viewport.css_height as f32
-    }))
 }
 
 fn layout_box_metric(metrics: &moli_layout::LayoutElementMetrics<DomHandle>, metric: &str) -> i32 {

@@ -1383,7 +1383,7 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
 }
 
 #[test]
-fn document_client_size_defaults_to_viewport_without_publishing_layout() {
+fn document_client_size_requires_published_layout() {
     let mut vm = new_parsed_test_vm(
         "https://document-client-viewport.test/",
         "<!doctype html><style>html,body{margin:0}main{width:80px;height:900px}</style><main></main>",
@@ -1403,10 +1403,7 @@ fn document_client_size_defaults_to_viewport_without_publishing_layout() {
             ..Default::default()
         }))
         .unwrap();
-        assert_eq!(
-            vm.eval(query).unwrap(),
-            format!("[{width},{height},0,0,0,0,0]")
-        );
+        assert_eq!(vm.eval(query).unwrap(), "[0,0,0,0,0,0,0]");
         assert_eq!(vm.layout_pass_observability_for_test().1, initial_passes);
     }
 

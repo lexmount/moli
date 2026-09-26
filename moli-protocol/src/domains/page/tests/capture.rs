@@ -378,6 +378,26 @@ async fn capture_screenshot_rejects_invalid_quality_and_clip() {
             json!({"clip": {"x": 0, "y": 0, "width": 0, "height": 1, "scale": 1}}),
             "Page.captureScreenshot clip must have a finite origin and positive finite width, height, and scale.",
         ),
+        (
+            20,
+            json!({"clip": {"x": 1, "y": 0, "width": 0, "height": 0, "scale": 1}}),
+            "Page.captureScreenshot clip must have a finite origin and positive finite width, height, and scale.",
+        ),
+        (
+            21,
+            json!({"clip": {"x": 0, "y": 0, "width": -1, "height": -1, "scale": 1}}),
+            "Page.captureScreenshot clip must have a finite origin and positive finite width, height, and scale.",
+        ),
+        (
+            22,
+            json!({"clip": {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 0}}),
+            "Page.captureScreenshot clip must have a finite origin and positive finite width, height, and scale.",
+        ),
+        (
+            23,
+            json!({"clip": {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 1}}),
+            "Page.captureScreenshot clip must have a finite origin and positive finite width, height, and scale.",
+        ),
     ] {
         ctx.process_async(json!({
             "id": id,
@@ -1111,6 +1131,105 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
     assert_eq!(live["result"]["visualViewport"]["pageY"], 100.0);
     assert_eq!(live["result"]["visualViewport"]["scale"], 2.0);
     assert_eq!(live["result"]["contentSize"]["height"], 900.0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn full_page_clip_from_layout_metrics_preserves_geometry_until_capture() {
+    for (dpr, scale, beyond, width, height) in [
+        (1.0, 1.0, false, 320, 240),
+        (2.0, 1.0, false, 640, 480),
+        (2.0, 0.5, true, 320, 240),
+    ] {
+        let mut ctx = TestContext::new();
+        let session = "SID-COLD-FULL-SCREENSHOT";
+        install_active_screenshot_page(
+            &mut ctx,
+            "BID-COLD-FULL-SCREENSHOT",
+            "TID-COLD-FULL-SCREENSHOT",
+            session,
+            &screenshot_data_url("<!doctype html><style>html,body{margin:0}main{width:80px;height:900px;background:rgb(20,30,40)}</style><main></main>"),
+        ).await;
+        set_screenshot_viewport(&mut ctx, session, 320, 240, dpr, 120).await;
+
+        let geometry = json!({
+            "id":121,"method":"Runtime.evaluate","sessionId":session,
+            "params":{
+                "expression":"[document.documentElement.clientWidth,document.documentElement.clientHeight,document.querySelector('main').getBoundingClientRect().width]",
+                "returnByValue":true
+            }
+        });
+        ctx.process_async(geometry.clone()).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
+            json!([0, 0, 0])
+        );
+
+        // Empty clips are invalid both before and after layout publication.
+        let empty_capture = json!({
+            "id":122,"method":"Page.captureScreenshot","sessionId":session,
+            "params":{"format":"png","captureBeyondViewport":beyond,
+                "clip":{"x":0,"y":0,"width":0,"height":0,"scale":scale}}
+        });
+        ctx.process_async(empty_capture.clone()).await;
+        let cold_error = take_response_by_id(&mut ctx, 122);
+        assert_eq!(cold_error["error"]["code"], -32602, "{cold_error}");
+
+        ctx.process_async(json!({
+            "id":123,"method":"Page.getLayoutMetrics","sessionId":session
+        }))
+        .await;
+        let unpublished = take_response_by_id(&mut ctx, 123);
+        let mut clip = unpublished["result"]["cssContentSize"].clone();
+        assert_eq!(clip, json!({"x":0,"y":0,"width":320.0,"height":240.0}));
+        clip["scale"] = json!(scale);
+
+        // The page-size fallback and rejected capture must leave DOM geometry
+        // unpublished. The caller supplies a positive clip to the screenshot.
+        ctx.process_async(geometry.clone()).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
+            json!([0, 0, 0])
+        );
+        ctx.process_async(json!({
+            "id":122,"method":"Page.captureScreenshot","sessionId":session,
+            "params":{"format":"png","captureBeyondViewport":beyond,"clip":clip}
+        }))
+        .await;
+        let png = screenshot_bytes(&take_response_by_id(&mut ctx, 122));
+        assert_png_dimensions(&png, width, height);
+        assert_eq!(decode_png_pixel(&png, 10, 10), [20, 30, 40, 255]);
+
+        ctx.process_async(geometry).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 121)["result"]["result"]["value"][2],
+            80
+        );
+        ctx.process_async(json!({
+            "id":123,"method":"Page.getLayoutMetrics","sessionId":session
+        }))
+        .await;
+        let published = take_response_by_id(&mut ctx, 123);
+        assert_eq!(published["result"]["contentSize"]["height"], 900.0);
+
+        ctx.process_async(empty_capture).await;
+        let rejected = take_response_by_id(&mut ctx, 122);
+        assert_eq!(rejected["error"], cold_error["error"]);
+
+        let mut full_clip = published["result"]["cssContentSize"].clone();
+        full_clip["scale"] = json!(scale);
+        ctx.process_async(json!({
+            "id":124,"method":"Page.captureScreenshot","sessionId":session,
+            "params":{"captureBeyondViewport":true,"clip":full_clip}
+        }))
+        .await;
+        let full = screenshot_bytes(&take_response_by_id(&mut ctx, 124));
+        let full_height = (900.0 * dpr * scale) as u32;
+        assert_png_dimensions(&full, width, full_height);
+        assert_eq!(
+            decode_png_pixel(&full, 10, full_height - 10),
+            [20, 30, 40, 255]
+        );
+    }
 }
 
 /// cdp.page: getLayoutMetrics – falls back to viewport metrics without a live page

@@ -67,14 +67,7 @@ async fn render_full_page_screenshot_extends_beyond_viewport() -> Result<()> {
     )
     .await?;
 
-    let viewport = render_page_output_async(
-        &mut page,
-        &FetchCommandConfig {
-            dump_mode: Some(DumpFormat::Screenshot),
-            ..FetchCommandConfig::default()
-        },
-    )
-    .await?;
+    // Full-document output must work before any other capture publishes layout.
     let full_page = render_page_output_async(
         &mut page,
         &FetchCommandConfig {
@@ -83,9 +76,18 @@ async fn render_full_page_screenshot_extends_beyond_viewport() -> Result<()> {
         },
     )
     .await?;
+    let viewport = render_page_output_async(
+        &mut page,
+        &FetchCommandConfig {
+            dump_mode: Some(DumpFormat::Screenshot),
+            ..FetchCommandConfig::default()
+        },
+    )
+    .await?;
 
     let viewport_dimensions = png_dimensions(&viewport);
     let full_page_dimensions = png_dimensions(&full_page);
+    assert_eq!(full_page_dimensions.1, 1300);
     assert_eq!(full_page_dimensions.0, viewport_dimensions.0);
     assert!(full_page_dimensions.1 > viewport_dimensions.1);
 

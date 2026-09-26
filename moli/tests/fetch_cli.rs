@@ -1099,8 +1099,10 @@ fn cli_fetch_implicit_html_dump_is_quiet_by_default() -> Result<()> {
 }
 
 #[test]
-fn cli_dump_full_screenshot_writes_png_bytes() -> Result<()> {
-    let output = run_fetch_cli_with_dump_and_args("about:blank", "screenshot_full", &["--layout"])?;
+fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<()> {
+    let html = "<!doctype html><style>html,body{margin:0}main{height:1600px;background:blue}</style><main></main>";
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+    let output = run_fetch_cli_with_dump_and_args(&url, "screenshot_full", &["--layout"])?;
     assert!(
         output.status.success(),
         "moli fetch failed: stdout_bytes={}\nstderr={}",
@@ -1109,6 +1111,11 @@ fn cli_dump_full_screenshot_writes_png_bytes() -> Result<()> {
     );
     assert!(output.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(output.stdout.ends_with(b"IEND\xaeB`\x82"));
+    assert_eq!(
+        u32::from_be_bytes(output.stdout[20..24].try_into().unwrap()),
+        1600,
+        "full screenshot must include content below the default viewport"
+    );
     Ok(())
 }
 
