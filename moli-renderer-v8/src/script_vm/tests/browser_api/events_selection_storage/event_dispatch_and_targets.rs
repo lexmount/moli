@@ -1759,3 +1759,15 @@ fn selection_range_membership_uses_native_document_relationships() {
         ""
     );
 }
+
+#[test]
+fn selection_shadow_direction_and_composed_boundaries_follow_native_mutations() {
+    let mut vm = new_storage_test_vm("https://selection-shadow-state.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../../tests/fixtures/selection-shadow-state.js"
+        ))
+        .expect("shadow selections should retain their composed state"),
+        ""
+    );
+}
