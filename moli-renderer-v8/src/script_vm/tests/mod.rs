@@ -2429,6 +2429,7 @@ mod observer_documents;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
 mod offline_audio_float;
+mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
 mod post_parse;
