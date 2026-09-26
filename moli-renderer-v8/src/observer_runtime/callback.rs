@@ -411,6 +411,13 @@ pub(crate) struct PreparedObserverCallback {
 }
 
 impl PreparedObserverCallback {
+    pub(crate) fn relevant_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        self.callback.relevant_context(scope)
+    }
+
     pub(crate) fn is_current(&self, host: &JsContextHost) -> bool {
         self.observer_identity
             .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))

@@ -92,7 +92,7 @@ pub(crate) fn broadcast_document_resize_observers(
             else {
                 continue;
             };
-            let Some(context) = observer.get_creation_context(scope) else {
+            let Some(context) = callback.relevant_context(scope) else {
                 continue;
             };
             let scope = &mut v8::ContextScope::new(scope, context);
@@ -105,12 +105,7 @@ pub(crate) fn broadcast_document_resize_observers(
                         .map_or(target_depth, |current| current.min(target_depth)),
                 );
                 set_resize_observer_last_reported_size(scope, sample.record, sample.observed_size);
-                entries.push(
-                    sample
-                        .entry
-                        .bind(scope)
-                        .expect("ResizeObserverEntry declaration should bind"),
-                );
+                entries.push(sample.entry.into_object(scope));
             }
             let pending = v8::Array::new(scope, 0);
             set_resize_observer_pending_targets(scope, observer, pending);

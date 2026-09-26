@@ -1885,7 +1885,7 @@ fn geometry_rect_objects_and_lists_expose_their_webidl_shapes() {
     typeof rangeRect.toJSON,
     rangeRects instanceof DOMRectList,
     rangeRects[0] instanceof DOMRect,
-    contentRect instanceof DOMRect,
+    Object.getPrototypeOf(contentRect) === DOMRectReadOnly.prototype,
     typeof contentRect.toJSON,
     Object.hasOwn(DOMRectReadOnly.prototype, 'toJSON'),
     Object.hasOwn(DOMRect.prototype, 'toJSON')

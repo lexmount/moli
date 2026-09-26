@@ -15999,6 +15999,7 @@ mod post_parse;
 mod queue_microtask;
 mod rendering_observers;
 mod rendering_update;
+mod resize_observer_entries;
 mod retained_child_window;
 mod script_terminal_completion;
 mod streams;

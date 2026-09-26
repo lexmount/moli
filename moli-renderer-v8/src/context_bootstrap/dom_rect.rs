@@ -289,7 +289,7 @@ pub(crate) fn build_dom_rect_object<'s>(
         .expect("DOMRect declaration should bind")
 }
 
-fn build_dom_rect_readonly_object<'s>(
+pub(super) fn build_dom_rect_readonly_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
     y: f64,

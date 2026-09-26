@@ -152,6 +152,11 @@ pub(super) fn install_observer_template_bindings<'s>(
             let proto = template.prototype_template(scope);
             ResizeObserverTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
+        "ResizeObserverEntry" | "ResizeObserverSize" => {
+            super::resize_observer_runtime::install_resize_observer_entry_template_bindings(
+                scope, template, spec_name,
+            );
+        }
         "PerformanceObserver" => {
             let proto = template.prototype_template(scope);
             PerformanceObserverTemplateMethodsDeclaration::initialize_prototype_template(
