@@ -1333,6 +1333,8 @@ window.addEventListener('load', () => {
 
 #[tokio::test]
 async fn websocket_cdp_defer_wait_runs_ready_tasks_while_next_defer_source_is_pending() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -1354,13 +1356,22 @@ addEventListener('DOMContentLoaded', () => {
         )
     }
 
-    async fn delayed_defer_script() -> impl IntoResponse {
-        sleep(Duration::from_millis(120)).await;
-        (
-            [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
-            "mainDeferWaitTaskOrder.push(`second:${document.readyState}`);",
-        )
-    }
+    let completed_tasks = Arc::new(AtomicU8::new(0));
+    let release_defer = Arc::new(tokio::sync::Notify::new());
+    let task_ready_route = |mask| {
+        let completed_tasks = Arc::clone(&completed_tasks);
+        let release_defer = Arc::clone(&release_defer);
+        get(move || {
+            let completed_tasks = Arc::clone(&completed_tasks);
+            let release_defer = Arc::clone(&release_defer);
+            async move {
+                if completed_tasks.fetch_or(mask, Ordering::SeqCst) | mask == 3 {
+                    release_defer.notify_one();
+                }
+                axum::http::StatusCode::NO_CONTENT
+            }
+        })
+    };
 
     let fixture_app = Router::new()
         .route("/", get(page))
@@ -1370,15 +1381,35 @@ addEventListener('DOMContentLoaded', () => {
                 (
                     [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
                     r#"mainDeferWaitTaskOrder.push(`first:${document.readyState}`);
-setTimeout(() => mainDeferWaitTaskOrder.push(`timer:${document.readyState}`), 0);
+const recordReadyTask = name => {
+  mainDeferWaitTaskOrder.push(`${name}:${document.readyState}`);
+  fetch(`/${name}-ready`);
+};
+setTimeout(() => recordReadyTask('timer'), 0);
 addEventListener('message', () => {
-  mainDeferWaitTaskOrder.push(`message:${document.readyState}`);
+  recordReadyTask('message');
 }, { once: true });
 postMessage('between-defer-scripts', '*');"#,
                 )
             }),
         )
-        .route("/defer.js", get(delayed_defer_script));
+        .route("/timer-ready", task_ready_route(1))
+        .route("/message-ready", task_ready_route(2))
+        .route(
+            "/defer.js",
+            get(move || {
+                let release_defer = Arc::clone(&release_defer);
+                async move {
+                    // Both callbacks must run while this source is pending.
+                    // A fixed delay could expire before the first script runs.
+                    release_defer.notified().await;
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                        "mainDeferWaitTaskOrder.push(`second:${document.readyState}`);",
+                    )
+                }
+            }),
+        );
     let (fixture_addr, fixture_server) =
         spawn_dedicated_fixture_server(fixture_app, "defer-event-loop-order");
 
