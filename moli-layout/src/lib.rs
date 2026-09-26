@@ -61,7 +61,7 @@ pub use layout_tree::{
     LayoutFragmentKind, LayoutHit, LayoutIntersectionClip, LayoutIntersectionGeometry,
     LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
+    LayoutQueryBatch, LayoutRect, LayoutResizeObserverBox, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
     LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
     LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
     LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,

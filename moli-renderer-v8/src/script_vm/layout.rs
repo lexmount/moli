@@ -337,6 +337,43 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
+        let document = self._context_host.borrow().document_handle();
+        self.with_fresh_document_layout_pass_in_environment(
+            document,
+            request,
+            publication,
+            environment_override,
+            consume,
+        )
+    }
+
+    pub(super) fn with_fresh_document_layout_pass<T>(
+        &mut self,
+        document: DomHandle,
+        request: moli_layout::LayoutPassRequest,
+        consume: impl FnOnce(
+            &mut moli_layout::LayoutPassResult<DomHandle>,
+        ) -> Result<T, moli_layout::LayoutError>,
+    ) -> Result<Option<T>, moli_layout::LayoutError> {
+        self.with_fresh_document_layout_pass_in_environment(
+            document,
+            request,
+            LayoutPublicationRequest::Screen,
+            None,
+            consume,
+        )
+    }
+
+    fn with_fresh_document_layout_pass_in_environment<T>(
+        &mut self,
+        document: DomHandle,
+        request: moli_layout::LayoutPassRequest,
+        publication: LayoutPublicationRequest,
+        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+        consume: impl FnOnce(
+            &mut moli_layout::LayoutPassResult<DomHandle>,
+        ) -> Result<T, moli_layout::LayoutError>,
+    ) -> Result<Option<T>, moli_layout::LayoutError> {
         if environment_override.is_some() && publication != LayoutPublicationRequest::Transient {
             return Err(moli_layout::LayoutError::source_contract(
                 "capture environment",
@@ -347,9 +384,9 @@ impl ScriptVm {
         // Layout consumes registered data and performs no font loading work.
         let paused = self.is_debugger_paused();
         let discovers_css_images = request.requests_paint() && !paused;
-        let (document, publishes_layout, result) = {
+        let rendering_update = request.reason == moli_layout::LayoutFlushReason::RenderingUpdate;
+        let (publishes_layout, result) = {
             let context_host = self._context_host.borrow();
-            let document = context_host.document_handle();
             let publication =
                 context_host.prepare_layout_publication(document, request.viewport, publication)?;
             let publishes_layout = publication.publishes_screen();
@@ -382,7 +419,7 @@ impl ScriptVm {
                     context_host.finish_layout_publication(publication, pass, feedback)?;
                     Ok(Some((value, css_images)))
                 });
-            (document, publishes_layout, result)
+            (publishes_layout, result)
         };
         let (result, css_images) = match result {
             Ok(Some((value, css_images))) => (Ok(Some(value)), css_images),
@@ -398,7 +435,13 @@ impl ScriptVm {
         if publishes_layout
             && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
-                crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+                if !rendering_update {
+                    crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+                    crate::observer_runtime::queue_resize_observer_rendering_updates(
+                        scope,
+                        runtime_ptr,
+                    );
+                }
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,

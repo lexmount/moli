@@ -9,21 +9,18 @@
     const observer = new IntersectionObserver((entries) => {
       const entry = entries[0];
       capture.push(`${entry.isIntersecting}:${entry.intersectionRatio}`);
+      if (capture.length === 1) {
+        target.remove();
+      } else if (capture.length === 2) {
+        document.body.appendChild(target);
+      } else {
+        window.intersectionThresholdCapture = capture.join("|");
+        window.intersectionThresholdCount = capture.length;
+        observer.disconnect();
+      }
     }, { threshold: [0, 1] });
 
     observer.observe(target);
-
-    setTimeout(() => {
-      target.remove();
-      setTimeout(() => {
-        document.body.appendChild(target);
-        setTimeout(() => {
-          window.intersectionThresholdCapture = capture.join("|");
-          window.intersectionThresholdCount = capture.length;
-          observer.disconnect();
-        }, 0);
-      }, 0);
-    }, 0);
 
     const burstRoot = document.createElement("div");
     burstRoot.setAttribute("style", "width: 100px; height: 100px; overflow: hidden");
@@ -32,23 +29,28 @@
     burstRoot.appendChild(burstTarget);
     document.body.appendChild(burstRoot);
 
-    const burstObserver = new IntersectionObserver(() => {}, {
+    let burstCallbacks = 0;
+    const burstObserver = new IntersectionObserver(() => {
+      burstCallbacks++;
+      if (burstCallbacks !== 1) return;
+      // Removing and reinserting within one callback does not create an
+      // intermediate intersection observation before the next rendering update.
+      burstTarget.remove();
+      burstRoot.appendChild(burstTarget);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const burstRecords = burstObserver.takeRecords();
+        window.intersectionThresholdBurstCount = burstRecords.length;
+        window.intersectionThresholdBurstCapture = Array.from(burstRecords)
+          .map(entry => `${entry.isIntersecting}:${entry.intersectionRatio > 0}`)
+          .join("|");
+        window.intersectionThresholdBurstCallbackCount = burstCallbacks;
+        burstObserver.disconnect();
+      }));
+    }, {
       root: burstRoot,
       threshold: [0.5],
     });
     burstObserver.observe(burstTarget);
-
-    setTimeout(() => {
-      burstTarget.remove();
-      burstRoot.appendChild(burstTarget);
-
-      const burstRecords = burstObserver.takeRecords();
-      window.intersectionThresholdBurstCount = burstRecords.length;
-      window.intersectionThresholdBurstCapture = Array.from(burstRecords)
-        .map(entry => `${entry.isIntersecting}:${entry.intersectionRatio > 0}`)
-        .join("|");
-      burstObserver.disconnect();
-    }, 0);
   </script>
 </body>
 </html>

@@ -36,6 +36,10 @@ impl ObserverCallback {
         host.current_window_document_task_target_for_dispatch_scope(observer.dispatch_scope())
     }
 
+    pub(super) fn observer_identity(&self) -> Option<WindowExecutionContextIdentity> {
+        self.observer_identity
+    }
+
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         host: &PageScriptHost,

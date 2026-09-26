@@ -568,7 +568,7 @@ fn realtime_io_claimed_notification_cannot_consume_replacement_document_work() {
 }
 
 #[test]
-fn legacy_io_modes_keep_microtask_delivery_and_create_no_frame_or_io_tasks() {
+fn legacy_io_modes_notify_after_the_rendering_update_without_realtime_frames() {
     run_page_vm_large_stack_async_test("legacy-io-isolation", || async move {
         for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
             let loader =
@@ -586,6 +586,41 @@ fn legacy_io_modes_keep_microtask_delivery_and_create_no_frame_or_io_tasks() {
             "#,
                 )
                 .unwrap();
+            assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "0");
+            finish_initial_document_reveals_for_rendering_test(&mut page, &loader)
+                .await
+                .unwrap();
+            let deadline = page
+                .vm()
+                .next_timeout_deadline()
+                .expect("observer render wake");
+            tokio::time::sleep_until(deadline.into()).await;
+            assert!(
+                page.run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                page.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                    &loader,
+                )
+                .await
+                .unwrap()
+            );
+            assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "0");
+            let delivery = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .expect("observer delivery on the non-realtime rendering source");
+            assert_eq!(
+                delivery.rendering_update_owner_and_kind().unwrap().1,
+                RendererPageRenderingUpdateTaskKind::IntersectionObserverDelivery
+            );
+            page.run_claimed_selected_page_task_for_test(delivery, &loader)
+                .await
+                .unwrap();
             assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "1");
             assert!(
                 page.claim_exact_selected_page_task_for_test(
@@ -597,7 +632,9 @@ fn legacy_io_modes_keep_microtask_delivery_and_create_no_frame_or_io_tasks() {
                 page.next_rendering_opportunity_deadline_for_test()
                     .is_none()
             );
-            assert_eq!(page.vm().layout_pass_observability_for_test().1, 0);
+            if policy == LayoutPolicy::Mock {
+                assert_eq!(page.vm().layout_pass_observability_for_test().1, 0);
+            }
         }
     });
 }

@@ -97,13 +97,30 @@ pub(super) struct CompletedIntersectionCheckBatch {
     geometry_cache: RootlessIntersectionGeometryCache,
 }
 
+pub(super) enum IntersectionSampling<'a> {
+    Document(crate::native_bridge::WindowExecutionContextOwner),
+    Realtime(RealtimeIntersectionSampling<'a>),
+}
+
 impl ObserverStore {
     pub(super) fn take_intersection_check_batch(
         &mut self,
-        realtime: Option<RealtimeIntersectionSampling<'_>>,
+        source: IntersectionSampling<'_>,
     ) -> Option<IntersectionCheckBatch> {
+        let (owner, realtime) = match source {
+            IntersectionSampling::Document(owner) => (Some(owner), None),
+            IntersectionSampling::Realtime(sample) => (None, Some(sample)),
+        };
         let mut observers = Vec::with_capacity(self.intersection_observers.len());
         for (&observer_id, state) in &mut self.intersection_observers {
+            if owner.is_some_and(|owner| {
+                state
+                    .callback
+                    .observer_identity()
+                    .is_none_or(|identity| identity.owner() != owner)
+            }) {
+                continue;
+            }
             if realtime
                 .is_some_and(|sample| sample.observer_ids.binary_search(&observer_id).is_err())
             {
@@ -219,6 +236,7 @@ pub(super) fn compute_intersection_check_batch(
             by_document.entry(document).or_default().push(index);
         }
     }
+    let realtime = runtime.layout_policy().is_realtime();
     for (document, indices) in by_document {
         let queries = indices
             .iter()
@@ -231,7 +249,7 @@ pub(super) fn compute_intersection_check_batch(
             })
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
-        let answers: Vec<_> = if runtime.layout_policy().is_realtime() {
+        let answers: Vec<_> = if realtime {
             match crate::native_bridge::element::observable_geometry_batch(
                 runtime, document, &queries,
             ) {

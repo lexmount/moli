@@ -1,11 +1,15 @@
 mod realtime;
 use super::*;
+mod delivery;
 use crate::common_runtime::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence, CommonRuntimeState,
 };
 use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
+pub(crate) use delivery::{
+    broadcast_document_resize_observers, report_document_resize_observer_loop_error,
+};
 use entry::ResizeObserverEntryData;
 pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi::resize_observer_entry as entry;
@@ -53,8 +57,8 @@ struct ResizeObserverObjectDeclaration<'s> {
     targets: (),
     #[webapi(slot = RESIZE_OBSERVER_PENDING_TARGETS_SLOT, init = "array")]
     pending_targets: (),
-    #[webapi(slot = RESIZE_OBSERVER_SCHEDULED_SLOT, init = false)]
-    scheduled: (),
+    #[webapi(slot = RESIZE_OBSERVER_DELIVERY_ACTIVE_SLOT)]
+    delivery_active: bool,
 }
 
 #[derive(WebApiObject)]
@@ -129,6 +133,7 @@ pub(super) fn resize_observer_constructor_callback<'s>(
         callback,
         relevant_global,
         incumbent_global,
+        false,
     )
     .initialize(scope, args.this())
     .expect("ResizeObserver declaration should initialize object");
@@ -163,32 +168,35 @@ pub(super) fn resize_observer_observe_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let record = if let Some(existing_index) =
-        observed_record_index(scope, targets, parsed.target.into())
+    if let Some(index) = observed_record_index(scope, targets, parsed.target.into())
+        && let Some(value) = targets.get_index(scope, index)
+        && let Ok(record) = v8::Local::<v8::Object>::try_from(value)
+        && observed_record_box(scope, record) == Some(parsed.options.observed_box)
     {
-        let record = targets
-            .get_index(scope, existing_index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-        if let Some(record) = record {
-            set_observed_record_box(scope, record, parsed.options.observed_box);
-            record
-        } else {
-            let record = build_observed_record(scope, parsed.target, parsed.options.observed_box);
-            let _ = targets.set_index(scope, existing_index, record.into());
-            record
-        }
-    } else {
-        let record = build_observed_record(scope, parsed.target, parsed.options.observed_box);
-        let _ = targets.set_index(scope, targets.length(), record.into());
-        record
-    };
-    if let Some(pending_targets) = resize_observer_pending_targets(scope, args.this())
-        && observed_record_index(scope, pending_targets, parsed.target.into()).is_none()
-    {
-        let _ = pending_targets.set_index(scope, pending_targets.length(), record.into());
+        rv.set_undefined();
+        return;
     }
-    push_object_to_global_registry(scope, RESIZE_OBSERVER_REGISTRY_SLOT, args.this());
-    queue_resize_observer_delivery(scope, args.this());
+    // Changing the observed box removes and appends the observation. This is
+    // also the order of entries delivered to the callback.
+    let targets = without_observed_target(scope, targets, parsed.target.into());
+    let record = build_observed_record(scope, parsed.target, parsed.options.observed_box);
+    let _ = targets.set_index(scope, targets.length(), record.into());
+    set_resize_observer_targets(scope, args.this(), targets);
+    if let Some(pending_targets) = resize_observer_pending_targets(scope, args.this()) {
+        let pending_targets = without_observed_target(scope, pending_targets, parsed.target.into());
+        let _ = pending_targets.set_index(scope, pending_targets.length(), record.into());
+        set_resize_observer_pending_targets(scope, args.this(), pending_targets);
+    }
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(id) = resize_observer_callback_id(scope, args.this())
+    {
+        crate::observer_runtime::activate_resize_observer_callback(
+            scope,
+            host_ptr,
+            id,
+            args.this(),
+        );
+    }
     rv.set_undefined();
 }
 
@@ -243,6 +251,13 @@ pub(super) fn resize_observer_disconnect_callback<'s>(
     set_resize_observer_targets(scope, args.this(), targets);
     let pending_targets = v8::Array::new(scope, 0);
     set_resize_observer_pending_targets(scope, args.this(), pending_targets);
+    let active = v8::Boolean::new(scope, false);
+    set_private_value(
+        scope,
+        args.this(),
+        RESIZE_OBSERVER_DELIVERY_ACTIVE_SLOT,
+        active.into(),
+    );
     remove_resize_observer_from_registry(scope, args.this());
     rv.set_undefined();
 }
@@ -275,67 +290,6 @@ pub(super) fn resize_observer_take_records_callback<'s>(
     rv.set(entries.into());
 }
 
-fn resize_observer_flush_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(observer) = pop_first_object_from_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT)
-    else {
-        return;
-    };
-    set_resize_observer_scheduled(scope, observer, false);
-    let Some(pending_targets) = resize_observer_pending_targets(scope, observer) else {
-        return;
-    };
-    if pending_targets.length() == 0 {
-        return;
-    }
-    let Some(callback_residence) = resize_observer_callback_residence(scope, observer) else {
-        return;
-    };
-    let Some(common) = CommonRuntimeState::from_scope(scope) else {
-        return;
-    };
-    let Some(callback) = common.callbacks.prepare(
-        scope,
-        observer,
-        CallbackRegistrationKind::ResizeObserver,
-        callback_residence,
-    ) else {
-        let pending_targets = v8::Array::new(scope, 0);
-        set_resize_observer_pending_targets(scope, observer, pending_targets);
-        return;
-    };
-    let callback_context = callback.relevant_context(scope);
-    let result = {
-        let scope = &mut v8::ContextScope::new(scope, callback_context);
-        build_resize_observer_entries(scope, pending_targets)
-    };
-    let entries = match result {
-        Ok(entries) => entries,
-        Err(error) => {
-            let pending_targets = v8::Array::new(scope, 0);
-            set_resize_observer_pending_targets(scope, observer, pending_targets);
-            throw_resize_observer_layout_error(scope, error);
-            return;
-        }
-    };
-    let pending_targets = v8::Array::new(scope, 0);
-    set_resize_observer_pending_targets(scope, observer, pending_targets);
-    if entries.length() == 0 {
-        return;
-    }
-    let observer_value: v8::Local<'_, v8::Value> = observer.into();
-    callback.invoke_and_report(
-        scope,
-        "resizeobserver",
-        "ResizeObserver callback",
-        observer_value,
-        &[entries.into(), observer_value],
-    );
-}
-
 fn is_resize_observer_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -348,11 +302,19 @@ fn is_resize_observer_target<'s>(
     .is_some()
 }
 
+struct SampledResizeObservation<'s> {
+    record: v8::Local<'s, v8::Object>,
+    handle: Option<crate::document_runtime::DomHandle>,
+    observed_size: (f64, f64),
+    entry: ResizeObserverEntryData<'s>,
+}
+
 /// One active sample, before it has been reported. Keeping native entry data
 /// here lets a frame gather observations without creating JS entries or
 /// advancing lastReportedSizes for observations that it cannot broadcast yet.
 struct ResizeObservationMeasurement<'s> {
     record: Option<v8::Local<'s, v8::Object>>,
+    handle: Option<crate::document_runtime::DomHandle>,
     observed_size: (f64, f64),
     entry: ResizeObserverEntryData<'s>,
 }
@@ -375,6 +337,24 @@ fn build_resize_observer_entries<'s>(
         entries.push(measurement.into_reported_entry(scope));
     })?;
     Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
+}
+
+fn sample_resize_observations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observed_records: v8::Local<'s, v8::Array>,
+) -> Result<Vec<SampledResizeObservation<'s>>, moli_layout::LayoutError> {
+    let mut samples = Vec::new();
+    for_each_resize_observation(scope, observed_records, false, |_, measurement| {
+        if let Some(record) = measurement.record {
+            samples.push(SampledResizeObservation {
+                record,
+                handle: measurement.handle,
+                observed_size: measurement.observed_size,
+                entry: measurement.entry,
+            });
+        }
+    })?;
+    Ok(samples)
 }
 
 /// Samples the published geometry and compares it with reported sizes, without
@@ -516,6 +496,7 @@ fn for_each_resize_observation<'s, 'i>(
             scope,
             ResizeObservationMeasurement {
                 record: entry.record,
+                handle: entry.handle,
                 observed_size,
                 entry: ResizeObserverEntryData {
                     target: entry.target,
@@ -561,17 +542,6 @@ fn build_observed_record<'s>(
         .expect("ResizeObserver options");
     reset_resize_observer_last_reported_size(scope, record);
     record
-}
-
-fn set_observed_record_box<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    record: v8::Local<'s, v8::Object>,
-    observed_box: ResizeObserverBoxOptions,
-) {
-    ResizeObserverOptions { observed_box }
-        .initialize_snapshot(scope, record)
-        .expect("ResizeObserver options");
-    reset_resize_observer_last_reported_size(scope, record);
 }
 
 fn observed_record_box<'s>(
@@ -751,71 +721,16 @@ fn resize_observer_callback_residence<'s>(
     ))
 }
 
-fn resize_observer_scheduled<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    observer: v8::Local<'s, v8::Object>,
-) -> bool {
-    resize_observer_slot_value(scope, observer, RESIZE_OBSERVER_SCHEDULED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
-fn set_resize_observer_scheduled(
-    scope: &mut v8::PinScope<'_, '_>,
-    observer: v8::Local<'_, v8::Object>,
-    scheduled: bool,
-) {
-    let value = v8::Boolean::new(scope, scheduled);
-    set_resize_observer_slot_value(
-        scope,
-        observer,
-        RESIZE_OBSERVER_SCHEDULED_SLOT,
-        value.into(),
-    );
-}
-
-fn queue_resize_observer_delivery<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    observer: v8::Local<'s, v8::Object>,
-) {
-    if realtime::is_enabled(scope) {
-        return;
-    }
-    if resize_observer_scheduled(scope, observer) {
-        return;
-    }
-    let Some(callback_id) = resize_observer_callback_id(scope, observer) else {
-        return;
-    };
-    let Some(common) = CommonRuntimeState::from_scope(scope) else {
-        return;
-    };
-    if !common.callbacks.is_current(
-        scope,
-        callback_id,
-        observer,
-        CallbackRegistrationKind::ResizeObserver,
-    ) {
-        let pending_targets = v8::Array::new(scope, 0);
-        set_resize_observer_pending_targets(scope, observer, pending_targets);
-        return;
-    }
-    set_resize_observer_scheduled(scope, observer, true);
-    push_object_to_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT, observer);
-    schedule_scope_callback(scope, resize_observer_flush_callback, None);
-}
-
 pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
     if realtime::is_enabled(scope) {
         // The source commit requested native RO work before observer effects.
         return;
     }
-    let Some(registry) = global_queue_array(scope, RESIZE_OBSERVER_REGISTRY_SLOT) else {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let observers = (0..registry.length())
-        .filter_map(|index| registry.get_index(scope, index))
-        .filter_map(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .collect::<Vec<_>>();
+    let observers =
+        crate::observer_runtime::active_resize_observer_callbacks(scope, host_ptr, None);
     for observer in observers {
         let Some(targets) = resize_observer_targets(scope, observer) else {
             continue;
@@ -837,8 +752,8 @@ pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
             }
         }
         set_resize_observer_pending_targets(scope, observer, pending);
-        queue_resize_observer_delivery(scope, observer);
     }
+    crate::observer_runtime::queue_resize_observer_rendering_updates(scope, host_ptr);
 }
 
 fn remove_resize_observer_from_registry<'s>(
@@ -848,21 +763,11 @@ fn remove_resize_observer_from_registry<'s>(
     if realtime::deactivate_if_realtime(scope, observer) {
         return;
     }
-    let Some(registry) = global_queue_array(scope, RESIZE_OBSERVER_REGISTRY_SLOT) else {
-        return;
-    };
-    let next = v8::Array::new(scope, 0);
-    for index in 0..registry.length() {
-        let Some(candidate) = registry.get_index(scope, index) else {
-            continue;
-        };
-        if candidate.strict_equals(observer.into()) {
-            continue;
-        }
-        let _ = next.set_index(scope, next.length(), candidate);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(id) = resize_observer_callback_id(scope, observer)
+    {
+        crate::observer_runtime::deactivate_resize_observer_callback(host_ptr, id);
     }
-    let global = scope.get_current_context().global(scope);
-    set_private_value(scope, global, RESIZE_OBSERVER_REGISTRY_SLOT, next.into());
 }
 
 fn resize_observer_slot_value<'s>(
@@ -880,4 +785,20 @@ fn set_resize_observer_slot_value(
     value: v8::Local<'_, v8::Value>,
 ) {
     set_private_value(scope, observer, slot, value);
+}
+
+fn without_observed_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    records: v8::Local<'s, v8::Array>,
+    target: v8::Local<'s, v8::Value>,
+) -> v8::Local<'s, v8::Array> {
+    let next = v8::Array::new(scope, 0);
+    for index in 0..records.length() {
+        if let Some(record) = records.get_index(scope, index)
+            && !observed_record_matches_target(scope, record, target)
+        {
+            let _ = next.set_index(scope, next.length(), record);
+        }
+    }
+    next
 }

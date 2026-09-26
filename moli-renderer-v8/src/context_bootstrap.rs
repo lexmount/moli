@@ -165,11 +165,12 @@ pub(crate) use range_algorithms::{
 mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
-pub(crate) use resize_observer_runtime::queue_resize_observer_checks;
 #[cfg(test)]
 pub(crate) use resize_observer_runtime::resize_observer_measurements_for_test;
 pub(crate) use resize_observer_runtime::{
-    broadcast_realtime_resize_observer, gather_realtime_resize_observers,
+    broadcast_document_resize_observers, broadcast_realtime_resize_observer,
+    gather_realtime_resize_observers, queue_resize_observer_checks,
+    report_document_resize_observer_loop_error,
 };
 mod runtime_state;
 mod selection;

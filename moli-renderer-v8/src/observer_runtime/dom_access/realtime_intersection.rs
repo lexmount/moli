@@ -1,6 +1,6 @@
 use super::*;
 use crate::native_bridge::WindowDocumentTaskTarget;
-use intersection::RealtimeIntersectionSampling;
+use intersection::{IntersectionSampling, RealtimeIntersectionSampling};
 use std::time::Instant;
 
 /// Sample once at the end of rendering. Notification ownership follows the
@@ -29,7 +29,9 @@ pub(crate) fn sample_realtime_intersections(
         now,
         sample_all,
     };
-    if let Some(batch) = access.store(|store| store.take_intersection_check_batch(Some(sample))) {
+    if let Some(batch) = access
+        .store(|store| store.take_intersection_check_batch(IntersectionSampling::Realtime(sample)))
+    {
         let completed = access.read(|host| {
             intersection::compute_intersection_check_batch(host, host.dom_host(), batch)
         })?;
@@ -114,6 +116,6 @@ pub(crate) fn deliver_realtime_intersection_observer(
     let Some(delivery) = delivery else {
         return false;
     };
-    invoke_intersection_deliveries(scope, host_ptr, vec![delivery]);
+    invoke_intersection_deliveries(scope, host_ptr, target, vec![delivery]);
     true
 }
