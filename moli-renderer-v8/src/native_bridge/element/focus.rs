@@ -1,3 +1,4 @@
+use super::global_attributes::parse_tab_index_attribute;
 use crate::dom::native::Node;
 
 use super::super::{
@@ -952,7 +953,7 @@ fn style_integer_property(
 
 fn slot_focus_scope_tab_index(runtime: &JsContextHost, handle: DomHandle) -> Option<i32> {
     let value = element_attribute(runtime, handle, "tabindex")
-        .and_then(|value| parse_sequential_tab_index(&value))
+        .and_then(|value| parse_tab_index_attribute(&value))
         .unwrap_or(0);
     (value >= 0).then_some(value)
 }
@@ -980,7 +981,7 @@ fn sequential_tab_index_without_scroll_descendant_check(
     handle: DomHandle,
 ) -> Option<i32> {
     let value = element_attribute(runtime, handle, "tabindex")
-        .and_then(|value| parse_sequential_tab_index(&value))
+        .and_then(|value| parse_tab_index_attribute(&value))
         .unwrap_or_else(|| default_sequential_tab_index(runtime, handle));
     (value >= 0).then_some(value)
 }
@@ -1031,7 +1032,7 @@ fn is_interactive_sequential_focusable_descendant(
         "a" | "button" | "input" | "select" | "textarea"
     );
     let has_non_negative_tab_index = element_attribute(runtime, handle, "tabindex")
-        .and_then(|value| parse_sequential_tab_index(&value))
+        .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value >= 0);
     (is_interactive_element || has_non_negative_tab_index)
         && sequential_tab_index_without_scroll_descendant_check(runtime, handle).is_some()
@@ -1039,7 +1040,7 @@ fn is_interactive_sequential_focusable_descendant(
 
 fn explicit_negative_tab_index(runtime: &JsContextHost, handle: DomHandle) -> bool {
     element_attribute(runtime, handle, "tabindex")
-        .and_then(|value| parse_sequential_tab_index(&value))
+        .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value < 0)
 }
 
@@ -1055,28 +1056,6 @@ fn default_sequential_tab_index(runtime: &JsContextHost, handle: DomHandle) -> i
         _ if element_is_scrollable(runtime, handle) => 0,
         _ => -1,
     }
-}
-
-fn parse_sequential_tab_index(value: &str) -> Option<i32> {
-    let value = value.trim_start();
-    let mut chars = value.chars();
-    let (sign, rest) = match chars.next() {
-        Some('+') => (1_i64, chars.as_str()),
-        Some('-') => (-1_i64, chars.as_str()),
-        Some(_) => (1_i64, value),
-        None => return None,
-    };
-    let digits = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    digits
-        .parse::<i64>()
-        .ok()
-        .and_then(|value| i32::try_from(sign * value).ok())
 }
 
 fn negative_shadow_scope_tab_target(

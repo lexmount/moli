@@ -2531,7 +2531,7 @@ pub(in crate::native_bridge) fn node_tab_index_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn parse_tab_index_attribute(value: &str) -> Option<i32> {
+pub(super) fn parse_tab_index_attribute(value: &str) -> Option<i32> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let mut chars = value.chars();
     let (sign, rest) = match chars.next() {
@@ -2558,6 +2558,10 @@ mod tests {
     #[test]
     fn parses_tab_index_attribute_like_html_signed_integer() {
         assert_eq!(parse_tab_index_attribute(""), None);
+        assert_eq!(parse_tab_index_attribute("invalid"), None);
+        assert_eq!(parse_tab_index_attribute("\u{b}0"), None);
+        assert_eq!(parse_tab_index_attribute("\u{a0}0"), None);
+        assert_eq!(parse_tab_index_attribute(" \t\n\r\u{c}+0tail"), Some(0));
         assert_eq!(parse_tab_index_attribute(" 5abc"), Some(5));
         assert_eq!(parse_tab_index_attribute("+5"), Some(5));
         assert_eq!(parse_tab_index_attribute("-5"), Some(-5));
