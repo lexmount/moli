@@ -107,6 +107,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     DomPoint,
     DomMatrix,
     ResizeObserver,
+    ResizeObserverEntry,
+    ResizeObserverSize,
     PerformanceObserver,
     PerformanceObserverEntryList,
     PerformanceEntry,

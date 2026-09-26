@@ -6511,7 +6511,12 @@ yield; // Publish this scene before reading its geometry.
     first.borderBoxSize[0].blockSize,
     second.devicePixelContentBoxSize[0].inlineSize,
     second.devicePixelContentBoxSize[0].blockSize,
-    Object.keys(first.contentBoxSize[0]).join(',')
+    Object.keys(first.contentBoxSize[0]).length,
+    Object.keys(ResizeObserverSize.prototype).join(','),
+    first instanceof ResizeObserverEntry,
+    first.contentBoxSize[0] instanceof ResizeObserverSize,
+    ['contentBoxSize', 'borderBoxSize', 'devicePixelContentBoxSize']
+      .every(name => Object.isFrozen(first[name]))
   ].join('|');
 })()
 "#,
@@ -6520,7 +6525,7 @@ yield; // Publish this scene before reading its geometry.
 
     assert_eq!(
         result,
-        "true|true|true|true|1|41|23|41|23|41|23|inlineSize,blockSize"
+        "true|true|true|true|1|41|23|41|23|41|23|0|inlineSize,blockSize|true|true|true"
     );
 }
 
