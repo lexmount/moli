@@ -177,6 +177,7 @@ impl ElementRareData {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
+        input_multiple: bool,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -189,6 +190,7 @@ impl ElementRareData {
                 namespace,
                 local_name,
                 input_type,
+                input_multiple,
                 attribute_name,
                 attribute_value,
             );
@@ -208,6 +210,7 @@ impl ElementRareData {
             namespace,
             local_name,
             input_type,
+            input_multiple,
             attribute_name,
             attribute_value,
         );

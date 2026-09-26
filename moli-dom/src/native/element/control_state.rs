@@ -1,5 +1,7 @@
 use super::Attribute;
-use crate::forms::{input_type_has_value_sanitization, sanitize_input_value_for_type};
+use crate::forms::{
+    input_type_has_value_sanitization, sanitize_input_value_for_type_with_multiple,
+};
 use crate::native::NativeNodeId;
 use indexmap::IndexSet;
 use moli_html_input_type::InputType;
@@ -246,9 +248,10 @@ impl ElementControlState {
 
         if local_name == "input" {
             let input_type = InputType::from_attribute_value(attribute("type"));
-            state.input_value = Some(sanitize_input_value_for_type(
+            state.input_value = Some(sanitize_input_value_for_type_with_multiple(
                 input_type,
                 attribute("value").unwrap_or_default(),
+                attribute("multiple").is_some(),
             ));
             state.checked = Some(attribute("checked").is_some());
             state.selection_start = Some(0);
@@ -874,6 +877,7 @@ impl ElementControlState {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
+        input_multiple: bool,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -886,17 +890,31 @@ impl ElementControlState {
         match (local_name, attribute_name) {
             ("input", "value") => {
                 if !self.input_value_dirty {
-                    self.input_value = Some(sanitize_input_value_for_type(
+                    self.input_value = Some(sanitize_input_value_for_type_with_multiple(
                         input_type,
                         attribute_value.unwrap_or_default(),
+                        input_multiple,
                     ));
                 }
             }
             ("input", "type") => {
-                if input_type_has_value_sanitization(input_type) {
+                if input_type_has_value_sanitization(input_type) || input_type == InputType::Email {
                     let current = self.input_value.as_deref().unwrap_or_default();
-                    self.input_value = Some(sanitize_input_value_for_type(input_type, current));
+                    self.input_value = Some(sanitize_input_value_for_type_with_multiple(
+                        input_type,
+                        current,
+                        input_multiple,
+                    ));
                 }
+            }
+            ("input", "multiple") if input_type == InputType::Email => {
+                let current = self.input_value.as_deref().unwrap_or_default();
+                self.input_value = Some(sanitize_input_value_for_type_with_multiple(
+                    input_type,
+                    current,
+                    input_multiple,
+                ));
+                self.input_bad_input = false;
             }
             ("input", "checked") => {
                 if !self.checked_dirty {
