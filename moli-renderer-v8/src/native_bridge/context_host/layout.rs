@@ -206,6 +206,37 @@ impl JsContextHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
+    /// Lazily publishes the first screen layout for this main Document.
+    ///
+    /// Every consumer shares the same recursive tree. Missing nodes or newly
+    /// navigated frames in an existing tree must not refresh the whole page.
+    pub(crate) fn ensure_initial_layout(&self) -> Result<(), LayoutError> {
+        if !self.layout_policy.uses_real_layout() {
+            return Ok(());
+        }
+        if self.layout_pass_active.get() {
+            return Err(LayoutError::ReentrantLayoutPass);
+        }
+        let document = self.document_handle();
+        if self
+            .document_layout_state
+            .borrow()
+            .latest_layout(document)
+            .is_some()
+        {
+            return Ok(());
+        }
+        let request = LayoutPassRequest::new(
+            self.layout_viewport_for_document(document),
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        );
+        let pass = self
+            .build_layout_pass_for_document(document, request)?
+            .ok_or(LayoutError::NoLayoutRoot)?;
+        self.publish_layout_pass_for_document(document, pass);
+        Ok(())
+    }
+
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,

@@ -87,8 +87,8 @@ pub(crate) fn observable_scrollbar_hit_test(
     })
 }
 
-/// Coordinate input must not create or refresh geometry, including embedded
-/// frame geometry. Live DOM checks only reject sources that no longer exist.
+/// Coordinate input initializes a cold page once, then consumes the same
+/// published tree, including embedded frames, until an explicit refresh.
 pub(crate) fn input_surface_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
@@ -103,6 +103,7 @@ pub(crate) fn input_surface_hit_test(
                 control: None,
             });
     }
+    runtime.ensure_initial_layout()?;
     runtime
         .with_latest_layout_tree_for_document(document, |tree| {
             input_surface_hit_test_in_tree(

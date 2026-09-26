@@ -35,6 +35,7 @@ impl ScriptVm {
             if !host.layout_policy().uses_real_layout() {
                 return Ok(ClickTarget::DomActivation);
             }
+            host.ensure_initial_layout().map_err(layout_error)?;
             let document = host
                 .layout_document_for_source(handle)
                 .ok_or(ClickError::StaleNode)?;

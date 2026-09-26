@@ -40,6 +40,16 @@ pub(crate) fn observable_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+    runtime.ensure_initial_layout()?;
+    published_geometry_batch(runtime, document, batch)
+}
+
+/// Style and observer sampling never initializes layout as a side effect.
+pub(crate) fn published_geometry_batch(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    batch: &LayoutQueryBatch<DomHandle>,
+) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
         runtime.answer_layout_for_document(document, batch)
     } else {
@@ -200,9 +210,23 @@ pub(crate) fn observable_used_grid_tracks(
     runtime: &JsContextHost,
     source: DomHandle,
 ) -> Result<Option<LayoutResolvedGridTracks>, LayoutError> {
-    match query_source(runtime, source, LayoutQuery::UsedGridTracks { source })? {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = match published_geometry_batch(
+        runtime,
+        document,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedGridTracks { source }]),
+    ) {
+        Ok(answers) => answers,
+        Err(LayoutError::NoLayoutSnapshot) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
-        None => Ok(None),
         _ => Err(provider_contract_error("used Grid tracks")),
     }
 }

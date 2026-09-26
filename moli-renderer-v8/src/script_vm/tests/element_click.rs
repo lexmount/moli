@@ -2,28 +2,20 @@ use super::*;
 use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
 
 #[test]
-fn native_element_click_requires_explicit_layout_without_building_it() {
+fn native_element_click_initializes_layout_once() {
     let mut vm = new_parsed_test_vm(
         "https://click-native-geometry.test/",
         "<!doctype html><button id=target style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>",
     );
     let target = vm.document_runtime.get_element_by_id("target").unwrap();
     let before = vm.layout_pass_observability_for_test().1;
-    let error = vm.prepare_element_click(target).unwrap_err();
-    let crate::runtime::RendererElementClickError::LayoutUnavailable(message) = error else {
-        panic!("expected missing-layout guidance, got {error:?}");
-    };
-    for command in ["Page.captureScreenshot", "Page.startScreencast"] {
-        assert!(message.contains(command), "{message}");
+    for _ in 0..2 {
+        assert!(matches!(
+            vm.prepare_element_click(target).unwrap(),
+            RendererElementClickTarget::Pointer(_)
+        ));
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     }
-    assert!(!message.contains("Page.printToPDF"), "{message}");
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    publish_layout_for_test(&mut vm);
-    assert!(matches!(
-        vm.prepare_element_click(target).unwrap(),
-        RendererElementClickTarget::Pointer(_)
-    ));
-    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]

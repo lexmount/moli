@@ -549,11 +549,6 @@ async fn print_to_pdf_returns_base64_pdf_without_publishing_interactive_geometry
         "sessionId": "SID-PDF-BASE64",
         "params": {"expression": "document.querySelector('main').getBoundingClientRect().width"}
     });
-    ctx.process_async(query.clone()).await;
-    assert_eq!(
-        take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
-        0
-    );
     ctx.process_async(json!({
         "id": 1112,
         "method": "Page.printToPDF",
@@ -563,31 +558,39 @@ async fn print_to_pdf_returns_base64_pdf_without_publishing_interactive_geometry
     let pdf = screenshot_bytes(&take_response_by_id(&mut ctx, 1112));
     assert!(pdf.starts_with(b"%PDF-1.7"));
     assert!(pdf.ends_with(b"%%EOF\n"));
+    // Printing a cold page must not publish its print-media geometry.
+    ctx.process_async(json!({
+        "id":1113,"method":"Runtime.evaluate","sessionId":"SID-PDF-BASE64",
+        "params":{"expression":"document.querySelector('main').style.width='60px'"}
+    }))
+    .await;
+    take_response_by_id(&mut ctx, 1113);
     ctx.process_async(query.clone()).await;
     assert_eq!(
         take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
-        0
+        60
     );
+
+    // Printing a warm page must also leave its previous screen geometry alone.
     ctx.process_async(json!({
-        "id":1113,"method":"Page.getLayoutMetrics","sessionId":"SID-PDF-BASE64"
+        "id":1113,"method":"Runtime.evaluate","sessionId":"SID-PDF-BASE64",
+        "params":{"expression":"document.querySelector('main').style.width='100px'"}
     }))
     .await;
-    assert!(take_response_by_id(&mut ctx, 1113)["result"]["visualViewport"].is_object());
-    ctx.process_async(json!({
-        "id":1113,"method":"Input.dispatchMouseEvent","sessionId":"SID-PDF-BASE64",
-        "params":{"type":"mousePressed","x":20,"y":20,"button":"left"}
-    }))
-    .await;
-    let response = take_response_by_id(&mut ctx, 1113);
-    assert_eq!(response["error"]["code"], -32000, "{response}");
-    let message = response["error"]["message"].as_str().unwrap();
-    assert!(message.contains("Page.captureScreenshot"), "{response}");
-    assert!(!message.contains("Page.printToPDF"), "{response}");
+    take_response_by_id(&mut ctx, 1113);
+    ctx.process_async(json!({"id":1112,"method":"Page.printToPDF","sessionId":"SID-PDF-BASE64"}))
+        .await;
+    assert!(screenshot_bytes(&take_response_by_id(&mut ctx, 1112)).starts_with(b"%PDF-1.7"));
+    ctx.process_async(query.clone()).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
+        60
+    );
     ctx.capture_fixture_layout(Some("SID-PDF-BASE64")).await;
     ctx.process_async(query).await;
     assert_eq!(
         take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
-        40
+        100
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -1088,7 +1091,7 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
     ctx.process_async(geometry.clone()).await;
     assert_eq!(
         take_response_by_id(&mut ctx, 122)["result"]["result"]["value"],
-        0
+        80
     );
 
     // Playwright gets these metrics before issuing its first capture request.
@@ -1134,11 +1137,11 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn full_page_clip_from_layout_metrics_preserves_geometry_until_capture() {
+async fn full_page_clip_from_dom_initialized_layout_preserves_capture_semantics() {
     for (dpr, scale, beyond, width, height) in [
-        (1.0, 1.0, false, 320, 240),
-        (2.0, 1.0, false, 640, 480),
-        (2.0, 0.5, true, 320, 240),
+        (1.0, 1.0, false, 320, 900),
+        (2.0, 1.0, false, 640, 1800),
+        (2.0, 0.5, true, 320, 900),
     ] {
         let mut ctx = TestContext::new();
         let session = "SID-COLD-FULL-SCREENSHOT";
@@ -1161,7 +1164,7 @@ async fn full_page_clip_from_layout_metrics_preserves_geometry_until_capture() {
         ctx.process_async(geometry.clone()).await;
         assert_eq!(
             take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
-            json!([0, 0, 0])
+            json!([305, 240, 80])
         );
 
         // Empty clips are invalid both before and after layout publication.
@@ -1180,15 +1183,15 @@ async fn full_page_clip_from_layout_metrics_preserves_geometry_until_capture() {
         .await;
         let unpublished = take_response_by_id(&mut ctx, 123);
         let mut clip = unpublished["result"]["cssContentSize"].clone();
-        assert_eq!(clip, json!({"x":0,"y":0,"width":320.0,"height":240.0}));
+        assert_eq!(clip, json!({"x":0,"y":0,"width":320.0,"height":900.0}));
         clip["scale"] = json!(scale);
 
-        // The page-size fallback and rejected capture must leave DOM geometry
-        // unpublished. The caller supplies a positive clip to the screenshot.
+        // Rejected clips leave the already published geometry unchanged.
+        // The caller supplies the actual content extent to the screenshot.
         ctx.process_async(geometry.clone()).await;
         assert_eq!(
             take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
-            json!([0, 0, 0])
+            json!([305, 240, 80])
         );
         ctx.process_async(json!({
             "id":122,"method":"Page.captureScreenshot","sessionId":session,

@@ -30,80 +30,38 @@ async def run_playwright_compat_group(state: SmokeState) -> None:
 
 
 async def _verify_playwright_first_screenshot(state: SmokeState) -> None:
-    # Each case starts on a new page. A raw CDP capture here would hide a broken
-    # getLayoutMetrics preflight in Playwright's own screenshot implementation.
+    # Start each mode on a new page, without geometry probes or raw captures
+    # that could initialize layout before Playwright's own screenshot preflight.
     for name, options, size in [
         ("viewport", {}, (320, 240)),
         ("clip", {"clip": {"x": 10, "y": 15, "width": 60, "height": 50}}, (60, 50)),
+        ("full-page", {"full_page": True}, (320, 900)),
+        ("full-page-clip", {"full_page": True, "clip": {"x": 10, "y": 15, "width": 60, "height": 50}}, (60, 50)),
     ]:
         page = await state.context.new_page()
         try:
             await page.set_viewport_size({"width": 320, "height": 240})
+            # Match Playwright's Chromium --hide-scrollbars launch default.
             await page.goto(
-                "data:text/html,<!doctype html><body style='margin:0'>"
+                "data:text/html,<!doctype html><style>html{scrollbar-width:none}</style>"
+                "<body style='margin:0'>"
                 "<div style='width:80px;height:900px;background:rgb(20,30,40)'></div>",
                 wait_until="load",
                 timeout=10_000,
             )
-            assert_equal(
-                await page.evaluate("""() => [
-                    document.documentElement.clientWidth,
-                    document.documentElement.clientHeight,
-                    document.querySelector('div').getBoundingClientRect().width
-                ]"""),
-                [0, 0, 0],
-                f"unpublished geometry before first Playwright {name} screenshot",
-            )
-            if name == "viewport":
-                # Playwright derives fullPage clips from DOM dimensions, which
-                # are zero before publication. CDP must reject that empty clip.
-                try:
-                    await page.screenshot(full_page=True, timeout=10_000)
-                except Exception as error:
-                    if "positive finite width, height, and scale" not in str(error):
-                        raise SmokeError(f"unexpected cold full-page error: {error}") from error
-                else:
-                    raise SmokeError("cold Playwright full-page screenshot should reject its empty clip")
-                assert_equal(
-                    await page.evaluate("""() => [
-                        document.documentElement.clientWidth,
-                        document.documentElement.clientHeight,
-                        document.querySelector('div').getBoundingClientRect().width
-                    ]"""),
-                    [0, 0, 0],
-                    "rejected full-page screenshot must not publish layout",
-                )
             image = decode_png(await page.screenshot(timeout=10_000, **options))
             assert_equal((image.width, image.height), size, f"first Playwright {name} screenshot size")
             assert_equal(image.pixel(5, 5), (20, 30, 40, 255), f"first Playwright {name} screenshot pixel")
-            if name == "viewport":
-                # A successful viewport capture publishes the DOM dimensions
-                # used by subsequent Playwright full-page requests.
-                full_image = decode_png(await page.screenshot(full_page=True, timeout=10_000))
-                assert_equal(full_image.height, 900, "published Playwright full-page screenshot height")
-                assert_equal(
-                    full_image.pixel(5, 880),
-                    (20, 30, 40, 255),
-                    "published Playwright full-page bottom pixel",
-                )
-                # Playwright clips against DOM dimensions before sending CDP.
-                # A full-page clip therefore needs a previously published frame.
-                clipped = decode_png(await page.screenshot(
-                    full_page=True,
-                    clip={"x": 10, "y": 15, "width": 60, "height": 50},
-                    timeout=10_000,
-                ))
-                assert_equal((clipped.width, clipped.height), (60, 50), "published full-page clip size")
-                assert_equal(clipped.pixel(5, 5), (20, 30, 40, 255), "published full-page clip pixel")
+            if name == "full-page":
+                assert_equal(image.pixel(5, 880), (20, 30, 40, 255), "cold full-page bottom pixel")
+            full_image = decode_png(await page.screenshot(full_page=True, timeout=10_000))
+            assert_equal(full_image.height, 900, "subsequent full-page screenshot height")
+            assert_equal(full_image.pixel(5, 880), (20, 30, 40, 255), "subsequent full-page bottom pixel")
         finally:
             await page.close()
     state.record(
         "playwright_first_screenshot_without_published_layout",
-        {
-            "modes": ["viewport", "clip"],
-            "rejected_unpublished_modes": ["full-page"],
-            "published_modes": ["full-page", "full-page-clip"],
-        },
+        {"modes": ["viewport", "clip", "full-page", "full-page-clip"]},
     )
 
 

@@ -33,8 +33,8 @@ pub(crate) use mock::{
 pub(crate) use provider::{
     observable_bounding_client_rects, observable_caret_position, observable_event_offset,
     observable_geometry_batch, observable_hit_test_all, observable_sources_with_fragments,
-    observable_used_grid_tracks, read_bounding_client_rect, read_client_rects,
-    read_element_metrics,
+    observable_used_grid_tracks, published_geometry_batch, read_bounding_client_rect,
+    read_client_rects, read_element_metrics,
 };
 pub(in crate::native_bridge) use rects::{
     node_get_bounding_client_rect_callback, node_get_client_rects_callback,

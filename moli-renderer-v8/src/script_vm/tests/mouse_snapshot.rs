@@ -17,7 +17,7 @@ fn mouse(
 }
 
 #[test]
-fn mouse_input_rejects_missing_snapshot_without_layout_or_input_state_changes() {
+fn mouse_input_initializes_layout_once_and_shares_it_with_geometry() {
     let mut vm = new_parsed_test_vm(
         "https://mouse-snapshot.test/",
         "<!doctype html><button id=target style='position:absolute;left:20px;top:20px;width:100px;height:100px'>go</button>",
@@ -25,47 +25,35 @@ fn mouse_input_rejects_missing_snapshot_without_layout_or_input_state_changes() 
     vm.eval("window.events=[];for(const type of ['mousemove','mousedown','mouseup','click','wheel'])document.addEventListener(type,e=>events.push(type))").unwrap();
     let before = vm.layout_pass_observability_for_test().1;
     for event in ["mousemove", "mousedown", "mouseup", "wheel"] {
-        let error = mouse(&mut vm, event).unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<moli_layout::LayoutError>(),
-            Some(&moli_layout::LayoutError::NoLayoutSnapshot)
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, before);
-        assert_eq!(vm.pressed_mouse_buttons, 0);
-        assert!(vm.pending_mouse_press.is_none());
+        mouse(&mut vm, event).unwrap();
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     }
-    assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
+    assert_eq!(vm.pressed_mouse_buttons, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"["mousemove","mousedown","mouseup","click","wheel"]"#
+    );
     assert_eq!(
         vm.eval("String(target.getBoundingClientRect().width)")
             .unwrap(),
-        "0"
+        "100"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    refresh_layout_for_test(&mut vm);
-    let prepared = vm.layout_pass_observability_for_test().1;
-    // A rejected down must not leave a press that a subsequent up can activate.
-    mouse(&mut vm, "mouseup").unwrap();
-    assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), r#"["mouseup"]"#);
-    assert_eq!(vm.layout_pass_observability_for_test().1, prepared);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]
-fn mouse_input_rejects_a_snapshot_from_a_replaced_document() {
+fn mouse_input_initializes_a_replaced_document_without_reusing_old_geometry() {
     let mut vm = new_parsed_test_vm(
         "https://mouse-snapshot.test/",
         "<!doctype html><button>old</button>",
     );
     refresh_layout_for_test(&mut vm);
-    vm.eval("document.open();document.write('<button>new</button>');document.close()")
+    vm.eval("document.open();document.write('<button id=new style=\"position:absolute;left:20px;top:20px;width:100px;height:100px\">new</button>');document.close();document.onmousedown=e=>window.hit=e.target.id")
         .unwrap();
     let before = vm.layout_pass_observability_for_test().1;
-    let error = mouse(&mut vm, "mousedown").unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<moli_layout::LayoutError>(),
-        Some(&moli_layout::LayoutError::NoLayoutSnapshot)
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    assert_eq!(vm.pressed_mouse_buttons, 0);
+    mouse(&mut vm, "mousedown").unwrap();
+    assert_eq!(vm.eval("window.hit").unwrap(), "new");
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]

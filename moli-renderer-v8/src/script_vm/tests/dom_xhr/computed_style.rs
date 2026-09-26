@@ -5436,9 +5436,7 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let updates = vm.retained_style_system_update_count_for_document_for_test(inner_document);
     let stylist = vm.retained_stylist_identity_for_document_for_test(inner_document);
 
-    let after = vm
-        .eval(
-            r#"
+    let query = r#"
 (() => {
   const {
     outerFrame,
@@ -5464,10 +5462,20 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     fresh.height
   ].join('|');
 })()
-"#,
-        )
-        .expect("nested held styles should observe recursive iframe resize");
-    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
+"#;
+    let after = vm
+        .eval(query)
+        .expect("warm queries retain the published frame viewports");
+    assert_eq!(after, "200|160|100|80|10px|8px|4px|10px|8px");
+    assert_eq!(
+        vm.retained_style_system_update_count_for_document_for_test(inner_document),
+        updates
+    );
+    publish_layout_for_test(&mut vm);
+    let refreshed = vm
+        .eval(query)
+        .expect("explicit refresh updates recursive frame viewports");
+    assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
         updates + 1,

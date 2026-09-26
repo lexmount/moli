@@ -726,25 +726,12 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
     )
     .expect("iframe input snapshot fixture should initialize");
 
-    assert_eq!(
-        vm.eval("document.body.offsetWidth > 0")
-            .expect("parent geometry should evaluate"),
-        "false"
-    );
     let passes_before = vm.layout_pass_observability_for_test().1;
-    let error = vm
-        .dispatch_mouse_event_at_point(140.0, 130.0, "mousedown", 0, Some(1), 0.0, 0.0)
-        .expect_err("input cannot build the missing iframe projection");
-    assert_eq!(
-        error.downcast_ref::<moli_layout::LayoutError>(),
-        Some(&moli_layout::LayoutError::NoLayoutSnapshot)
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
-    assert_eq!(vm.pressed_mouse_buttons, 0);
-    assert!(vm.pending_mouse_press.is_none());
-    publish_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("cold input should publish the parent and iframe together");
     let prepared = vm.layout_pass_observability_for_test().1;
     assert_eq!(prepared, passes_before + 1);
+    assert_eq!(vm.eval("document.body.offsetWidth > 0").unwrap(), "true");
     for _ in 0..3 {
         vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
             .expect("child hover should consume the published composite snapshot");
@@ -1383,7 +1370,42 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
 }
 
 #[test]
-fn document_client_size_requires_published_layout() {
+fn cold_geometry_entries_share_one_layout_and_do_not_rebuild_for_missing_boxes() {
+    for query in [
+        "target.clientWidth",
+        "target.getBoundingClientRect().width",
+        "target.getClientRects()[0].width",
+        "range.getBoundingClientRect().width",
+        "document.elementFromPoint(30, 30) === target ? 100 : -1",
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://initial-geometry.test/",
+            "<!doctype html><div id=target style='position:absolute;left:20px;top:20px;width:100px;height:80px'></div><div id=hidden style='display:none'></div>",
+        );
+        vm.eval("globalThis.range=document.createRange();range.selectNode(target)")
+            .unwrap();
+        let before = vm.layout_pass_observability_for_test().1;
+        assert_eq!(vm.eval(query).unwrap(), "100", "{query}");
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+        vm.eval("target.style.width='200px';const added=document.createElement('div');added.id='added';added.style.width='50px';document.body.appendChild(added)").unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([target.clientWidth,hidden.clientWidth,added.clientWidth])")
+                .unwrap(),
+            "[100,0,0]"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+        publish_layout_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify([target.clientWidth,hidden.clientWidth,added.clientWidth])")
+                .unwrap(),
+            "[200,0,50]"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
+    }
+}
+
+#[test]
+fn document_client_size_initializes_layout_once_and_reuses_it_until_capture() {
     let mut vm = new_parsed_test_vm(
         "https://document-client-viewport.test/",
         "<!doctype html><style>html,body{margin:0}main{width:80px;height:900px}</style><main></main>",
@@ -1395,20 +1417,18 @@ fn document_client_size_requires_published_layout() {
         document.body.clientWidth, document.querySelector('main').clientHeight,
         document.querySelector('main').getBoundingClientRect().width
     ])"#;
-    for (width, height, dpr) in [(320, 240, 1.0), (480, 360, 2.0)] {
-        vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
-            inner_width: width,
-            inner_height: height,
-            device_pixel_ratio: dpr,
-            ..Default::default()
-        }))
-        .unwrap();
-        assert_eq!(vm.eval(query).unwrap(), "[0,0,0,0,0,0,0]");
-        assert_eq!(vm.layout_pass_observability_for_test().1, initial_passes);
-    }
-
-    publish_layout_for_test(&mut vm);
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 480,
+        inner_height: 360,
+        device_pixel_ratio: 2.0,
+        ..Default::default()
+    }))
+    .unwrap();
     let published = vm.eval(query).unwrap();
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        initial_passes + 1
+    );
     let published_metrics: serde_json::Value = serde_json::from_str(&published).unwrap();
     assert_eq!(published_metrics[0], 465); // The viewport now has a scrollbar.
     assert_eq!(published_metrics[1], 360);

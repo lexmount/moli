@@ -249,21 +249,21 @@ Covered well:
   asynchronous request cancellation, and suppression of asynchronous events and
   timers while a synchronous request owns the main thread.
 - The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). Its Moli-only TreeScope fixture also captures 104 open/closed Shadow Roots, nested roots, and 24 roots in an iframe twice, requiring stable pixels and completion within the protocol timeout. The group covers Moli's generation-gated 1 FPS JPEG screencast as well: initial-frame delivery, clean-state frame suppression without ACK backpressure, 400x300 scaling, metadata/session routing, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the TreeScope, fixed-1-FPS, and default-Mock branches are Moli-only.
-- The default `playwright-compat` group takes viewport and clipped
-  screenshots through `page.screenshot()` on fresh pages, without a raw CDP capture first.
-  This covers Playwright's `Page.getLayoutMetrics` preflight before layout has
-  been published. DPR/resize and concurrent-page screenshot cases likewise use
-  Playwright directly, so a fixture cannot hide a broken first screenshot.
-  In Moli, before the first layout publication, DOM dimensions remain zero,
-  while `Page.getLayoutMetrics.cssContentSize` falls back to the configured
-  viewport. Clients can use those page metrics to submit a positive screenshot
-  clip. Empty clips are rejected regardless of layout publication state.
-  Playwright computes its own full-page clip from DOM dimensions, so a cold
-  `fullPage: true` request fails. The smoke test checks that rejection leaves
-  geometry unpublished, then verifies viewport output and subsequent full-page
-  and full-page clip output on a tall page. CLI `moli fetch --layout --dump
-  screenshot_full` directly requests full-document output and works on the
-  first capture without a DOM-size preflight.
+- The default `playwright-compat` group takes viewport, clipped, full-page,
+  and full-page clipped screenshots through `page.screenshot()` on fresh pages,
+  without a geometry probe or raw CDP capture first. DOM geometry reads initialize
+  Moli's first layout on demand; subsequent reads consume that published layout
+  until a screenshot or new screencast frame refreshes it. The tall-page fixture
+  checks the first full-page image's height and bottom pixels, then repeats the
+  full-page capture. It sets `scrollbar-width: none` explicitly to match
+  Playwright's Chromium `--hide-scrollbars` launch default. With visible native
+  scrollbars, both Chromium and Moli produce a 305px-wide full-page capture for
+  this narrow-content, 320px-viewport fixture. Empty clips remain invalid
+  regardless of layout state.
+  CLI `moli fetch --layout --dump screenshot_full` directly requests full-document
+  output and works on the first capture without a DOM-size preflight.
+  The four first-capture modes were checked with the same test against
+  `/usr/bin/chromium` 145.0.7632.116 on 2026-09-27 (one run per mode).
 - The default raw `action-window` group holds Moli's on-demand input policy at
   the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
   wheel commands remain delayed until one fixed one-second deadline, preserve

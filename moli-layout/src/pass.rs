@@ -186,7 +186,7 @@ where
     build_layout_pass_with_embedded_frames(source, styles, services, request, &mut NoEmbeddedFrames)
 }
 
-/// Builds one complete layout result and resolves embedded frame pixels after
+/// Builds one complete layout result and resolves embedded frame geometry after
 /// the parent numeric layout has established their exact content viewports.
 ///
 /// This is a one-shot composition seam, not a per-Document cache. Child trees
@@ -230,41 +230,40 @@ where
     let numeric_layout_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
-    if request.requests_paint() {
-        for index in 0..world.boxes.len() {
-            let layout_box = &world.boxes[index];
-            if !layout_box.element_semantics().is_some_and(|semantics| {
-                semantics.replaced == Some(crate::LayoutReplacedKind::Frame)
-            }) {
-                continue;
-            }
-            let Some(source) = layout_box.source() else {
-                continue;
-            };
-            let layout = layout_box.final_layout();
-            let width = (layout.size.width
-                - layout.border.left
-                - layout.border.right
-                - layout.padding.left
-                - layout.padding.right)
-                .max(0.0);
-            let height = (layout.size.height
-                - layout.border.top
-                - layout.border.bottom
-                - layout.padding.top
-                - layout.padding.bottom)
-                .max(0.0);
-            if width <= 0.0 || height <= 0.0 {
-                continue;
-            }
-            let viewport = LayoutViewport::new(
-                css_viewport_dimension(width),
-                css_viewport_dimension(height),
-                request.viewport.device_pixel_ratio,
-            );
-            if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-                embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
-            }
+    for index in 0..world.boxes.len() {
+        let layout_box = &world.boxes[index];
+        if !layout_box
+            .element_semantics()
+            .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Frame))
+        {
+            continue;
+        }
+        let Some(source) = layout_box.source() else {
+            continue;
+        };
+        let layout = layout_box.final_layout();
+        let width = (layout.size.width
+            - layout.border.left
+            - layout.border.right
+            - layout.padding.left
+            - layout.padding.right)
+            .max(0.0);
+        let height = (layout.size.height
+            - layout.border.top
+            - layout.border.bottom
+            - layout.padding.top
+            - layout.padding.bottom)
+            .max(0.0);
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        let viewport = LayoutViewport::new(
+            css_viewport_dimension(width),
+            css_viewport_dimension(height),
+            request.viewport.device_pixel_ratio,
+        );
+        if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
+            embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
         }
     }
     let embedded_frame_elapsed = phase_started.elapsed();

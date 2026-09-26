@@ -2825,7 +2825,12 @@ fn document_point_queries_retain_published_geometry_after_viewport_resize() {
             completed_passes,
             "changing the viewport alone must not trigger layout"
         );
-        assert_eq!(vm.eval(query).unwrap(), published);
+        if completed_passes == before {
+            assert_eq!(vm.eval(query).unwrap(), expected);
+            completed_passes += 1;
+        } else {
+            assert_eq!(vm.eval(query).unwrap(), published);
+        }
         assert_eq!(vm.layout_pass_observability_for_test().1, completed_passes);
         if completed_passes < before + expected_passes {
             vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(width, 200, 1.0))
@@ -2895,13 +2900,17 @@ fn geometry_queries_retain_published_screen_and_resolution_environment() {
                 passes,
                 "an environment update alone must not trigger layout"
             );
+            if passes == before {
+                published_width = expected_width.to_string();
+            }
             assert_eq!(
                 vm.eval("String(target.getBoundingClientRect().width)")
                     .unwrap(),
                 published_width
             );
-            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
-            if passes < before + expected_passes {
+            let after_read = passes + u64::from(passes == before);
+            assert_eq!(vm.layout_pass_observability_for_test().1, after_read);
+            if after_read < before + expected_passes {
                 vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(
                     800, 600, dpr as f32,
                 ))
@@ -2979,13 +2988,17 @@ fn geometry_queries_retain_published_media_environment() {
             let passes = vm.layout_pass_observability_for_test().1;
             vm.set_emulated_media(environment);
             assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            if passes == before {
+                published_width = expected_width.to_string();
+            }
             assert_eq!(
                 vm.eval("String(target.getBoundingClientRect().width)")
                     .unwrap(),
                 published_width
             );
-            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
-            if passes < before + expected_passes {
+            let after_read = passes + u64::from(passes == before);
+            assert_eq!(vm.layout_pass_observability_for_test().1, after_read);
+            if after_read < before + expected_passes {
                 vm.screenshot_layout_snapshot(moli_layout::LayoutViewport::new(800, 600, 1.0))
                     .unwrap()
                     .unwrap();

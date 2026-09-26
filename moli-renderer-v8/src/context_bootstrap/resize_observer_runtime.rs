@@ -438,7 +438,7 @@ fn build_resize_observer_entries<'s>(
                 .copied()
                 .map(|source| moli_layout::LayoutQuery::ElementMetrics { source }),
         );
-        let answers = match crate::native_bridge::element::observable_geometry_batch(
+        let answers = match crate::native_bridge::element::published_geometry_batch(
             runtime,
             document,
             &moli_layout::LayoutQueryBatch::new(queries),

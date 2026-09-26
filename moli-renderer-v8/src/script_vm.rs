@@ -4523,6 +4523,7 @@ impl ScriptVm {
         {
             let host = self._context_host.borrow();
             if host.layout_policy().uses_real_layout() {
+                host.ensure_initial_layout()?;
                 let document = host
                     .layout_document_for_source(handle)
                     .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
