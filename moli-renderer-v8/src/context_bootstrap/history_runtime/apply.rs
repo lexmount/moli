@@ -55,10 +55,14 @@ pub(in crate::context_bootstrap) fn prepare_local_history_entry_commit<'s>(
         let record = record.borrow();
         (record.url.clone(), record.history_state.clone())
     };
-    let state = snapshot
-        .as_ref()
-        .and_then(|state| crate::structured_clone::deserialize_history_state(scope, state))
-        .unwrap_or_else(|| v8::null(scope).into());
+    let context = history.get_creation_context(scope)?;
+    let state = {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        snapshot
+            .as_ref()
+            .and_then(|state| crate::structured_clone::deserialize_history_state(scope, state))
+            .unwrap_or_else(|| v8::null(scope).into())
+    };
     let entry = super::native::entry_wrapper(scope, owner, record.clone());
     let location = window_location_for_holder(scope, owner)?;
     let parsed_url = url::Url::parse(&url).ok()?;

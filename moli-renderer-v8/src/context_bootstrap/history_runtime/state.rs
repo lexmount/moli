@@ -197,7 +197,11 @@ pub(in crate::context_bootstrap) fn cache_current_history_state<'s>(
         return;
     };
     let revision = record.borrow().revision();
-    if history.get_creation_context(scope) == Some(scope.get_current_context()) {
+    let history_context = history.get_creation_context(scope);
+    let state_context = v8::Local::<v8::Object>::try_from(state)
+        .ok()
+        .map_or(history_context, |state| state.get_creation_context(scope));
+    if state_context == history_context {
         cache_history_state(scope, history, revision, state);
     }
 }
