@@ -139,8 +139,13 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        metrics: moli_layout::LayoutPassMetrics,
     ) {
-        self.latest_layout.publish(document, tree);
+        self.latest_layout.publish(document, tree, metrics);
+    }
+
+    pub(super) fn latest_layout_pass_metrics(&self) -> Option<moli_layout::LayoutPassMetrics> {
+        self.latest_layout.pass_metrics()
     }
 
     pub(super) fn clear_latest_layout(&mut self) {

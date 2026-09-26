@@ -16,7 +16,8 @@ pub(crate) use dom_access::{
     deliver_document_intersections, document_has_rendering_observers, flush_slotchange_microtask,
     prepare_callback, queue_intersection_checks, queue_mutation_records,
     queue_resize_observer_rendering_updates, queue_style_rendering_update, register_callback,
-    retire_context_token, retire_execution_context_owner, update_document_intersections,
+    rendering_observer_documents, retire_context_token, retire_execution_context_owner,
+    update_document_intersections,
 };
 
 use crate::web_api_interfaces;

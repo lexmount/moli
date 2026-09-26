@@ -2252,6 +2252,7 @@ mod navigation_timing_inheritance;
 mod no_cors_header_fill;
 mod observable;
 mod observer_callbacks;
+mod observer_documents;
 mod observer_receivers;
 mod popup_root_window;
 mod post_parse;
