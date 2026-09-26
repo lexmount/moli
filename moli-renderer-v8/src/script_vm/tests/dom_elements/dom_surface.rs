@@ -8535,6 +8535,30 @@ fn html_link_as_reflects_attribute() {
 }
 
 #[test]
+fn html_link_as_does_not_trim_enumerated_keywords() {
+    let mut vm = new_storage_test_vm("https://link-as.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+              for (const doc of [document, document.implementation.createHTMLDocument('')]) {
+                const link = doc.createElement('link');
+                for (const value of [' fetch', 'fetch ', '\tscript\n', '\u00a0style', 'image\u00a0']) {
+                  link.as = value;
+                  if (link.as !== '' || link.getAttribute('as') !== value)
+                    throw new Error('invalid enumerated keyword: ' + JSON.stringify(value));
+                }
+                link.as = 'sCrIpT';
+                if (link.as !== 'script' || link.getAttribute('as') !== 'sCrIpT')
+                  throw new Error('ASCII case folding must preserve the content attribute');
+              }
+              return 'pass';
+            })()"#,
+        )
+        .expect("link as keyword reflection should evaluate");
+    assert_eq!(result, "pass");
+}
+
+#[test]
 fn html_link_integrity_reflects_attribute_on_live_and_detached_documents() {
     let mut vm = new_storage_test_vm("https://link-integrity.test/");
 

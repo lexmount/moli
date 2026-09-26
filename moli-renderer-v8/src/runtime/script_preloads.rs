@@ -1431,7 +1431,7 @@ impl HtmlPreloadScannerSink {
         let is_style_preload = link_rel_includes_token(&rel, "preload")
             && html_attr_value(&tag.attrs, "as")
                 .as_deref()
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("style"));
+                .is_some_and(|value| value.eq_ignore_ascii_case("style"));
         if !is_stylesheet && !is_style_preload {
             return;
         }

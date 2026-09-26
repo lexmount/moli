@@ -3027,6 +3027,9 @@ document.body.setAttribute('data-error-state', [
                       fetchpriority="high">
                 <link rel="preload" as="STYLE" href="/preload.css">
                 <link rel="preload" as="script" href="/not-style.css">
+                <link rel="preload" as=" style " href="/padded.css">
+                <link rel="preload" as="&#9;style&#10;" href="/ascii-space.css">
+                <link rel="preload" as="&#160;style" href="/unicode-space.css">
                 <link rel="stylesheet" disabled href="/disabled.css">
                 <link rel="stylesheet" type="text/plain" href="/wrong-type.css">
                 <link rel="stylesheet" href="data:text/css,body{}">

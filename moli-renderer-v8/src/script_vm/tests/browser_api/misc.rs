@@ -13679,6 +13679,7 @@ async fn navigator_service_worker_intercepts_preload_link_destinations() {
         "/app/worker.js",
         "text/javascript; charset=utf-8",
         r#"
+        const requests = [];
         self.addEventListener("install", event => {
           event.waitUntil(Promise.resolve());
         });
@@ -13687,6 +13688,11 @@ async fn navigator_service_worker_intercepts_preload_link_destinations() {
         });
         self.addEventListener("fetch", event => {
           const path = new URL(event.request.url).pathname;
+          if (path.endsWith("/preload-requests")) {
+            event.respondWith(new Response(requests.sort().join("|")));
+            return;
+          }
+          requests.push(path.split("/").pop() + ":" + event.request.destination);
           const expected = path.endsWith("/style.css") ? "style" :
             path.endsWith("/font.woff2") ? "font" :
             path.endsWith("/image.png") ? "image" :
@@ -13753,15 +13759,17 @@ async fn navigator_service_worker_intercepts_preload_link_destinations() {
                   };
                   parent.appendChild(link);
                 });
+                // These must produce neither a fetch event nor a terminal link event.
+                preload("audio", "clip.ogg");
+                preload("video", "clip.mp4");
                 await Promise.all([
                   preload("style", "style.css"),
                   preload("font", "font.woff2"),
-                  preload("image", "image.png"),
-                  preload("audio", "clip.ogg"),
-                  preload("video", "clip.mp4")
+                  preload("image", "image.png")
                 ]);
+                const requests = await (await fetch("preload-requests")).text();
                 globalThis.__serviceWorkerPreloadDestinationProbe =
-                  seen.sort().join("|");
+                  seen.sort().join("|") + ";" + requests;
               })().catch((error) => {
                 globalThis.__serviceWorkerPreloadDestinationProbe =
                   "error:" + String(error && error.message);
@@ -13776,7 +13784,7 @@ async fn navigator_service_worker_intercepts_preload_link_destinations() {
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerPreloadDestinationProbe)",
-        "audio:load|font:load|image:load|style:load|video:load",
+        "font:load|image:load|style:load;font.woff2:font|image.png:image|style.css:style",
     )
     .await;
 

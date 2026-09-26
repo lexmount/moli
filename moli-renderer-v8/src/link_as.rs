@@ -28,6 +28,15 @@ pub(crate) enum LinkAsDestination {
 }
 
 impl LinkAsDestination {
+    pub(crate) fn is_preload_destination(self) -> bool {
+        // HTML's preload destinations are a subset of the enumerated `as`
+        // keywords. Missing and unknown values have no preload default.
+        matches!(
+            self,
+            Self::Fetch | Self::Font | Self::Image | Self::Script | Self::Style | Self::Track
+        )
+    }
+
     pub(crate) fn reflected_value(self) -> &'static str {
         match self {
             Self::None => "",
@@ -60,7 +69,7 @@ impl LinkAsDestination {
 }
 
 pub(crate) fn link_as_destination(value: Option<&str>) -> LinkAsDestination {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(value) = value else {
         return LinkAsDestination::None;
     };
     match value.to_ascii_lowercase().as_str() {

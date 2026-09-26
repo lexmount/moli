@@ -730,6 +730,22 @@ impl DocumentRuntime {
             self.invalidate_stylesheet_owner_operations(handle);
             return result;
         }
+        if self
+            .dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| {
+                element.is_html_element("link") && !link_rel_starts_resource_load(element)
+            })
+        {
+            self.settle_connected_style_load_admission(
+                host_ptr,
+                event_admission,
+                "link no longer has a supported resource destination",
+            );
+            self.invalidate_stylesheet_owner_operations(handle);
+            return result;
+        }
         if let Some(admission) = event_admission {
             let expects_modulepreload_identity =
                 self.connected_owner_uses_non_blocking_modulepreload_identity(handle);
@@ -1853,18 +1869,23 @@ fn connected_style_owner_kind(
         return None;
     }
     match (element.attribute("rel"), element.attribute("href")) {
-        (Some(rel), Some(href))
-            if !href.trim().is_empty()
-                && (link_rel_includes_token(rel, "stylesheet")
-                    || link_rel_includes_token(rel, "preload")
-                    || link_rel_includes_token(rel, "modulepreload")
-                    || link_rel_includes_token(rel, "prefetch")
-                    || link_rel_includes_token(rel, "compression-dictionary")) =>
+        (Some(_), Some(href))
+            if !href.trim().is_empty() && link_rel_starts_resource_load(element) =>
         {
             Some(ConnectedStyleOwnerKind::Link)
         }
         _ => None,
     }
+}
+
+fn link_rel_starts_resource_load(element: &crate::dom::native::Element) -> bool {
+    let rel = element.attribute("rel").unwrap_or_default();
+    link_rel_includes_token(rel, "stylesheet")
+        || link_rel_includes_token(rel, "modulepreload")
+        || link_rel_includes_token(rel, "prefetch")
+        || link_rel_includes_token(rel, "compression-dictionary")
+        || (link_rel_includes_token(rel, "preload")
+            && link_as_destination(element.attribute("as")).is_preload_destination())
 }
 
 fn preload_like_link_resource_type(
@@ -3430,6 +3451,56 @@ mod tests {
                 .has_pending_operation()
         );
         Ok(())
+    }
+
+    #[test]
+    fn preload_destinations_are_checked_before_load_event_admission() {
+        let parser = HtmlParser::SCRIPTING_ENABLED;
+        let document = parser.parse(
+            Url::parse("https://example.test/page").unwrap(),
+            concat!(
+                "<!doctype html><html><head>",
+                "<link rel=preload href='/missing.js'>",
+                "<link rel=preload as='' href='/empty.js'>",
+                "<link rel=preload as=garbage href='/unknown.js'>",
+                "<link rel=preload as=video href='/video'>",
+                "<link rel=preload as=worker href='/worker.js'>",
+                "<link rel=preload as=' style ' href='/padded.css'>",
+                "</head><body></body></html>"
+            )
+            .to_owned(),
+        );
+        let link = first_link_handle(&document);
+        let mut runtime = DocumentRuntime::new(&document);
+        assert!(runtime.prepare_initial_connected_style_loads().is_empty());
+        assert!(!runtime.has_pending_style_loads());
+        assert!(runtime.pop_ready_connected_style_load().is_none());
+
+        assert!(runtime.dom_host_mut().set_attribute(link, "as", "FETCH"));
+        let prepared = runtime.prepare_connected_style_loads(link, false);
+        assert_eq!(
+            prepared.len(),
+            1,
+            "a rejected link can become a valid preload"
+        );
+        assert_eq!(prepared[0].owner(), link);
+    }
+
+    #[test]
+    fn preload_destination_is_rechecked_after_owner_admission() {
+        let parser = HtmlParser::SCRIPTING_ENABLED;
+        let document = parser.parse(
+            Url::parse("https://example.test/page").unwrap(),
+            "<!doctype html><link rel=preload as=fetch href='data:text/plain,preload'>".to_owned(),
+        );
+        let link = first_link_handle(&document);
+        let mut runtime = DocumentRuntime::new(&document);
+        runtime.queue_initial_connected_style_loads();
+        assert!(runtime.has_pending_style_loads());
+        assert!(runtime.dom_host_mut().set_attribute(link, "as", "video"));
+        runtime.prime_pending_connected_style_loads();
+        assert!(!runtime.has_pending_style_loads());
+        assert!(runtime.pop_ready_connected_style_load().is_none());
     }
 
     #[test]

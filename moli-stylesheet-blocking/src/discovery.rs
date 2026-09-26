@@ -368,7 +368,7 @@ pub fn stylesheet_preload_link_request(
         || !element
             .as_attr
             .as_deref()
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("style"))
+            .is_some_and(|value| value.eq_ignore_ascii_case("style"))
     {
         return None;
     }
@@ -467,9 +467,7 @@ pub fn connected_preload_like_link_url(
 
 pub fn preload_like_link_loads_stylesheet(rel: &str, as_attr: Option<&str>, href: &str) -> bool {
     if link_rel_includes_token(rel, "preload") {
-        return as_attr
-            .map(str::trim)
-            .is_some_and(|value| value.eq_ignore_ascii_case("style"));
+        return as_attr.is_some_and(|value| value.eq_ignore_ascii_case("style"));
     }
     if !link_rel_includes_token(rel, "modulepreload") {
         return false;

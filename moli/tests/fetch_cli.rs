@@ -392,13 +392,32 @@ const OPTIONAL_RESOURCE_PATHS: [&str; 5] = [
     "/optional-track.vtt",
     "/optional-video.mp4",
 ];
-const OPTIONAL_RESOURCE_FLAG_CASES: [(&str, Option<&str>); 6] = [
-    ("--image", Some("/optional-image.png")),
-    ("--font", Some("/optional-font.woff2")),
-    ("--audio", Some("/optional-audio.mp3")),
-    ("--video", Some("/optional-video.mp4")),
-    ("--media", None),
-    ("--text-track", Some("/optional-track.vtt")),
+const OPTIONAL_PRELOAD_RESOURCE_PATHS: [&str; 3] = [
+    "/optional-font.woff2",
+    "/optional-image.png",
+    "/optional-track.vtt",
+];
+// Resource flags permit element requests, but cannot enable unsupported `as`
+// destinations on a preload link.
+const OPTIONAL_RESOURCE_FLAG_CASES: [(&str, Option<&str>, Option<&str>); 6] = [
+    (
+        "--image",
+        Some("/optional-image.png"),
+        Some("/optional-image.png"),
+    ),
+    (
+        "--font",
+        Some("/optional-font.woff2"),
+        Some("/optional-font.woff2"),
+    ),
+    ("--audio", None, Some("/optional-audio.mp3")),
+    ("--video", None, Some("/optional-video.mp4")),
+    ("--media", None, None),
+    (
+        "--text-track",
+        Some("/optional-track.vtt"),
+        Some("/optional-track.vtt"),
+    ),
 ];
 const TRACK_TERMINAL_WAIT_SCRIPT: &str = "document.getElementById('track').readyState === 2";
 
@@ -906,8 +925,11 @@ fn fetch_cli_individual_flags_send_only_matching_real_preload_and_element_reques
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
 
-    for page_path in ["/preloads.html", "/elements.html"] {
-        for (flag, expected_path) in OPTIONAL_RESOURCE_FLAG_CASES {
+    for (flag, preload_path, element_path) in OPTIONAL_RESOURCE_FLAG_CASES {
+        for (page_path, expected_path) in [
+            ("/preloads.html", preload_path),
+            ("/elements.html", element_path),
+        ] {
             let expected = expected_path.map_or_else(Vec::new, |path| vec![path]);
             assert_optional_resource_request_case(
                 &server,
@@ -927,25 +949,29 @@ fn fetch_cli_individual_flags_send_only_matching_real_preload_and_element_reques
 fn fetch_cli_representative_flag_subsets_send_exact_real_request_unions() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
-    let cases: [(&str, &[&str], &[&str]); 4] = [
+    let cases: [(&str, &[&str], &[&str], &[&str]); 4] = [
         (
             "image+font",
             &["--image", "--font"],
+            &["/optional-image.png", "/optional-font.woff2"],
             &["/optional-image.png", "/optional-font.woff2"],
         ),
         (
             "audio+video",
             &["--audio", "--video"],
+            &[],
             &["/optional-audio.mp3", "/optional-video.mp4"],
         ),
         (
             "font+media+track",
             &["--font", "--media", "--text-track"],
             &["/optional-font.woff2", "/optional-track.vtt"],
+            &["/optional-font.woff2", "/optional-track.vtt"],
         ),
         (
             "image+audio+video+track",
             &["--image", "--audio", "--video", "--text-track"],
+            &["/optional-image.png", "/optional-track.vtt"],
             &[
                 "/optional-image.png",
                 "/optional-audio.mp3",
@@ -955,8 +981,11 @@ fn fetch_cli_representative_flag_subsets_send_exact_real_request_unions() -> Res
         ),
     ];
 
-    for page_path in ["/preloads.html", "/elements.html"] {
-        for (name, flags, expected_paths) in cases {
+    for (name, flags, preload_paths, element_paths) in cases {
+        for (page_path, expected_paths) in [
+            ("/preloads.html", preload_paths),
+            ("/elements.html", element_paths),
+        ] {
             assert_optional_resource_request_case(
                 &server,
                 page_path,
@@ -976,12 +1005,15 @@ fn fetch_cli_all_resource_flag_enables_real_preload_and_element_resource_paths()
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
 
-    for page_path in ["/preloads.html", "/elements.html"] {
+    for (page_path, expected_paths) in [
+        ("/preloads.html", OPTIONAL_PRELOAD_RESOURCE_PATHS.as_slice()),
+        ("/elements.html", OPTIONAL_RESOURCE_PATHS.as_slice()),
+    ] {
         assert_optional_resource_request_case(
             &server,
             page_path,
             &["--resource"],
-            &OPTIONAL_RESOURCE_PATHS,
+            expected_paths,
             &format!("all-resource {page_path}"),
         )?;
     }
