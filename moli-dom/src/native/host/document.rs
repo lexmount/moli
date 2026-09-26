@@ -511,6 +511,27 @@ impl DomHost {
             .is_some_and(|node| node.flags().connected())
     }
 
+    pub fn is_connected_to_document(&self, handle: DomHandle) -> bool {
+        let Some(mut root) = self.root_node_handle(handle) else {
+            return false;
+        };
+        loop {
+            if self.node(root).is_some_and(Node::is_document) {
+                return true;
+            }
+            if !self.is_shadow_root(root) {
+                return false;
+            }
+            let Some(host) = self.shadow_root_host(root) else {
+                return false;
+            };
+            let Some(outer_root) = self.root_node_handle(host) else {
+                return false;
+            };
+            root = outer_root;
+        }
+    }
+
     pub fn active_element_handle(&self) -> Option<DomHandle> {
         self.active_element.get().filter(|handle| {
             self.node(*handle)
