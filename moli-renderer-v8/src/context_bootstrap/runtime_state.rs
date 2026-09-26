@@ -12,7 +12,6 @@ use super::{
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
-    range_surface::reset_range_runtime_state,
     trusted_types::install_trusted_types_runtime_state,
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
@@ -1956,7 +1955,6 @@ pub(crate) fn finish_context_bootstrap(
     install_window_global_accessors(scope, global);
 
     native_bridge::install_detached_bridge_methods(scope);
-    reset_range_runtime_state(scope);
     initialize_file_api_runtime_queues(scope, global)?;
     super::exposed_interfaces::capture_eager_intrinsic_interfaces(
         scope,

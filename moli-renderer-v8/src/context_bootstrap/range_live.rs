@@ -2,13 +2,6 @@ use super::selection::selection_update_composed_boundaries_for_child_removal;
 use super::*;
 use crate::document_runtime::DomHandle;
 
-pub(super) fn clear_live_range_registry(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    unsafe { &mut *host_ptr }.clear_live_range_registry();
-}
-
 fn range_container_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,

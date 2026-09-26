@@ -2651,6 +2651,18 @@ fn pointer_event_sequences_preserve_identity_and_secure_context_exposure() {
 }
 
 #[test]
+fn live_ranges_survive_initialization_of_child_and_sibling_realms() {
+    let mut vm = new_storage_test_vm("https://range-realm-lifetime.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/range-realm-lifetime.js"
+        ))
+        .expect("new realms must preserve live ranges in existing documents"),
+        ""
+    );
+}
+
+#[test]
 fn character_data_setters_apply_replace_all_live_range_offsets() {
     let mut vm = new_storage_test_vm("https://character-data-range.test/");
 

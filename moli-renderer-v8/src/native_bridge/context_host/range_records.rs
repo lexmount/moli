@@ -70,6 +70,8 @@ pub(super) struct RangeRecord {
     end: RangeBoundaryPoint,
 }
 
+// Shared by all realms in this JsContextHost. Creating another Window must not
+// invalidate existing wrappers; their weak finalizers retire individual records.
 pub(super) struct RangeRecordRegistry {
     lifetime_token: u64,
     active_live_records: HashSet<RangeRecordId>,
@@ -91,15 +93,6 @@ impl RangeRecordRegistry {
             by_boundary_container: HashMap::new(),
             by_boundary_child_before: HashMap::new(),
         }
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.drain_finalized_live_records();
-        self.active_live_records.clear();
-        self.live_record_wrappers.clear();
-        self.records.clear();
-        self.by_boundary_container.clear();
-        self.by_boundary_child_before.clear();
     }
 
     pub(super) fn active_is_empty(&mut self) -> bool {

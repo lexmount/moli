@@ -14,7 +14,6 @@ use super::range_algorithms::{
     range_geometry_client_rects, range_geometry_dom_rect, range_insert_node_at_boundary,
     range_intersects_node_native, range_string_contents, range_surround_contents, root_handle,
 };
-use super::range_live::clear_live_range_registry;
 use super::*;
 
 mod accessors;
@@ -26,7 +25,7 @@ mod geometry;
 mod install;
 mod template;
 
-pub(super) use install::{install_range_template_bindings, reset_range_runtime_state};
+pub(super) use install::install_range_template_bindings;
 pub(super) use template::{
     build_abstract_range_template, build_range_constructor_template,
     build_static_range_constructor_template,

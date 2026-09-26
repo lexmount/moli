@@ -15,7 +15,6 @@ use super::content::{
     range_surround_contents_callback, range_to_string_callback,
 };
 use super::geometry::{range_get_bounding_client_rect_callback, range_get_client_rects_callback};
-use super::*;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -124,10 +123,6 @@ struct AbstractRangePrototypeDeclaration {
         enumerable
     )]
     common_ancestor_container: (),
-}
-
-pub(in crate::context_bootstrap) fn reset_range_runtime_state(scope: &mut v8::PinScope<'_, '_>) {
-    clear_live_range_registry(scope);
 }
 
 pub(in crate::context_bootstrap) fn install_range_template_bindings<'s>(

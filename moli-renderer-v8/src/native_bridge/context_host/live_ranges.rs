@@ -1,10 +1,6 @@
 use super::*;
 
 impl JsContextHost {
-    pub(crate) fn clear_live_range_registry(&mut self) {
-        self.range_record_registry.clear();
-    }
-
     pub(crate) fn live_ranges_is_empty(&mut self) -> bool {
         self.range_record_registry.active_is_empty()
     }
