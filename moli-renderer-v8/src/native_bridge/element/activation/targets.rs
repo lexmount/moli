@@ -509,11 +509,16 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     if let Some(target_name) = target_name
         && special_target.is_none()
     {
-        return navigate_named_iframe_target(
+        let source_document = unsafe { &*runtime_ptr }
+            .dom_host()
+            .node(source_handle)
+            .and_then(|node| node.owner_document());
+        return navigate_named_iframe_target_from_document(
             scope,
             runtime_ptr,
             target_name,
             resolved_url,
+            source_document,
             source_element,
         ) || navigate_hyperlink_popup_target(
             scope,

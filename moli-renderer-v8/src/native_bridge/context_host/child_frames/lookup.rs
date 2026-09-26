@@ -257,6 +257,17 @@ impl JsContextHost {
         key: &str,
         document: DomHandle,
     ) -> Option<DomHandle> {
+        // Navigable lookup searches the current navigable's inclusive subtree.
+        // A same-named descendant must not shadow the source frame itself.
+        if !key.is_empty()
+            && let Some(handle) = self.child_browsing_context_host_for_document_handle(document)
+            && self
+                .child_browsing_contexts
+                .get(&handle)
+                .is_some_and(|entry| entry.matches_browsing_context_name(key))
+        {
+            return Some(handle);
+        }
         self.sync_child_browsing_context_subtree(scope, document);
         self.child_browsing_context_handle_by_name_in_document_order_from_document(key, document)
     }
