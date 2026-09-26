@@ -74,7 +74,9 @@ fn visible_navigation_entries<'s>(
     let same_origin = |entry: &HistoryEntryRef| {
         let current = current_entry.borrow();
         let candidate = entry.borrow();
-        current.document == candidate.document || (current.document_origin != "null" && current.document_origin == candidate.document_origin)
+        current.document == candidate.document
+            || (current.document_origin != "null"
+                && current.document_origin == candidate.document_origin)
     };
     let mut start = current_index;
     while start > 0 {

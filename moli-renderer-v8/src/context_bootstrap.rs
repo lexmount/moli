@@ -125,11 +125,11 @@ pub(crate) use navigation_window::{
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
+mod session_history_traversal;
 mod shared_event_targets;
 #[cfg(test)]
 pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
 mod world_wrappers;
-mod session_history_traversal;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
