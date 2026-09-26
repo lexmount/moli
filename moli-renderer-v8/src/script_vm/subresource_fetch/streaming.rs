@@ -722,6 +722,9 @@ impl ScriptVm {
             );
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         };
+        if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
+            fetch.resource_timing().response_started();
+        }
         let trace_fields = async_subresource_trace_fields_for_pending_with_body(
             "streaming_started",
             started.internal_id,
@@ -854,10 +857,12 @@ impl ScriptVm {
                     .record_subresource_network(network_record);
                 match &pending.continuation {
                     PendingSubresourceContinuation::Fetch(fetch) => {
+                        if !started.head.preload_state.is_consumed() {
                         crate::context_bootstrap::record_resource_performance_entry(
                             scope,
                             fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url)),
                         );
+                        }
                         let resolver = fetch
                             .resolver()
                             .expect("detached keepalive stream is handled before V8 entry");
@@ -1834,6 +1839,13 @@ impl ScriptVm {
                                     &response_body,
                                 )
                         {
+                            if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                                && !streaming.head.preload_state.is_consumed()
+                            {
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope, fetch.resource_timing().failed(&streaming.pending.info.url),
+                                );
+                            }
                             let mut record = crate::types::SubresourceNetworkRecord::failure(
                                 streaming.pending.info.frame_id.clone(),
                                 streaming.pending.info.document_url.clone(),
@@ -2075,7 +2087,9 @@ impl ScriptVm {
                         }
                     }
                     Err(error_text) => {
-                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                            && !streaming.head.preload_state.is_consumed()
+                        {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 fetch.resource_timing().failed(fetch.initial_request_url(&streaming.pending.info.url)),

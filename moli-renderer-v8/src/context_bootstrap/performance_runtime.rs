@@ -169,6 +169,9 @@ pub(crate) struct ResourcePerformanceEntry {
     initiator_type: String,
     initiator_url: String,
     start_unix_millis: Option<f64>,
+    end_unix_millis: Option<f64>,
+    response_start_unix_millis: Option<f64>,
+    next_hop_protocol: String,
     transfer_size: f64,
     encoded_body_size: f64,
     decoded_body_size: f64,
@@ -276,6 +279,9 @@ impl ResourcePerformanceEntry {
             initiator_type: initiator_type.to_owned(),
             initiator_url: String::new(),
             start_unix_millis,
+            end_unix_millis: None,
+            response_start_unix_millis: None,
+            next_hop_protocol: String::new(),
             transfer_size,
             encoded_body_size: body_size,
             decoded_body_size: body_size,
@@ -344,6 +350,9 @@ impl ResourcePerformanceEntry {
             initiator_type: initiator_type.to_owned(),
             initiator_url: String::new(),
             start_unix_millis,
+            end_unix_millis: None,
+            response_start_unix_millis: None,
+            next_hop_protocol: String::new(),
             transfer_size: 0.0,
             encoded_body_size: 0.0,
             decoded_body_size: 0.0,
@@ -389,15 +398,24 @@ fn append_resource_performance_entry<'s>(
     performance: v8::Local<'s, v8::Object>,
     entry: ResourcePerformanceEntry,
 ) {
-    let start_time = entry.start_unix_millis.unwrap_or_else(unix_epoch_millis)
-        - performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let time_origin =
+        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let start_time = entry.start_unix_millis.unwrap_or_else(unix_epoch_millis) - time_origin;
+    let start_time = if entry.end_unix_millis.is_some() {
+        moli_time::coarsened_dom_time_millis(start_time.max(0.0))
+    } else {
+        start_time
+    };
+    let end_time = entry
+        .end_unix_millis
+        .map(|end| moli_time::coarsened_dom_time_millis(end - time_origin).max(start_time));
     let resource = entries::create_performance_entry(
         scope,
         performance,
         "resource",
         entry.name.into(),
         start_time,
-        0.0,
+        end_time.map_or(0.0, |end| (end - start_time).max(0.0)),
         None,
     );
     initialize_resource_timing_slots(
@@ -418,6 +436,38 @@ fn append_resource_performance_entry<'s>(
             PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
             value.into(),
         );
+    }
+    if let Some(end_time) = end_time {
+        set_performance_entry_slot_number(
+            scope,
+            resource,
+            PERFORMANCE_RESOURCE_FETCH_START_SLOT,
+            start_time,
+        );
+        set_performance_entry_slot_number(
+            scope,
+            resource,
+            PERFORMANCE_RESOURCE_RESPONSE_END_SLOT,
+            end_time,
+        );
+        if let Some(response_start) = entry.response_start_unix_millis {
+            let response_start = moli_time::coarsened_dom_time_millis(response_start - time_origin)
+                .clamp(start_time, end_time);
+            set_performance_entry_slot_number(
+                scope,
+                resource,
+                PERFORMANCE_RESOURCE_RESPONSE_START_SLOT,
+                response_start,
+            );
+        }
+        if let Some(protocol) = v8_string(scope, &entry.next_hop_protocol) {
+            set_private_value(
+                scope,
+                resource,
+                PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT,
+                protocol.into(),
+            );
+        }
     }
     push_performance_entry(scope, performance, resource);
 }
