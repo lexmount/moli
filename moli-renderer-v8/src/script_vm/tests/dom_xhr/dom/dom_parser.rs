@@ -315,3 +315,45 @@ yield; // Publish this scene before reading its geometry.
         "INPUT|<input><span>some text</span>|<input type=\"text\" id=\"inputid\"><div id=\"divid\">new text</div>|inputId|0|1|Som|NotSupportedError:9"
     );
 }
+
+#[test]
+fn child_document_factories_allocate_results_in_document_realm() {
+    let mut vm = new_storage_test_vm("https://child-document-factory-realm.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const doc = child.document;
+  const ChildObject = child.Object;
+  child.Object = Object;
+  const range = doc.createRange();
+  const values = {
+    attribute: doc.createAttribute('data-value'),
+    namespacedAttribute: doc.createAttributeNS(null, 'data-value'),
+    event: doc.createEvent('Event'),
+    range,
+    borrowedRange: Document.prototype.createRange.call(doc),
+    borrowedEvent: Document.prototype.createEvent.call(doc, 'Event'),
+    borrowedAttribute: Document.prototype.createAttribute.call(doc, 'data-borrowed'),
+    clonedRange: range.cloneRange(),
+    nodeIterator: doc.createNodeIterator(doc),
+    treeWalker: doc.createTreeWalker(doc),
+    borrowedNamespacedAttribute: Document.prototype.createAttributeNS.call(doc, null, 'data-ns'),
+    borrowedNodeIterator: Document.prototype.createNodeIterator.call(doc, doc),
+    borrowedTreeWalker: Document.prototype.createTreeWalker.call(doc, doc),
+  };
+  return Object.entries(values)
+    .filter(([, value]) => !(value instanceof ChildObject) || value instanceof Object)
+    .map(([name]) => name)
+    .join(',');
+})()
+"#,
+        )
+        .expect("child document factory realm probe should evaluate");
+
+    assert_eq!(result, "");
+}
