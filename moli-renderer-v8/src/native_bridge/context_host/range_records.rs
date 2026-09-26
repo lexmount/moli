@@ -289,7 +289,7 @@ impl RangeRecordRegistry {
             .map(|record| record.boundary(side).container())
     }
 
-    fn boundary_point(
+    pub(super) fn boundary_point(
         &self,
         handle: RangeRecordHandle,
         side: RangeBoundarySide,
@@ -753,6 +753,14 @@ impl JsContextHost {
         let ids = self
             .range_record_registry
             .live_record_ids_for_boundary_container(scope, target);
+        if ids.is_empty() {
+            return;
+        }
+        let selection_links = self.selection_record_registry.linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            true,
+        );
         self.range_record_registry.update_for_character_data_edit(
             dom_host,
             &ids,
@@ -760,6 +768,11 @@ impl JsContextHost {
             edit_offset,
             removed_count,
             inserted_count,
+        );
+        self.selection_record_registry.sync_linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            selection_links,
         );
     }
 
@@ -776,6 +789,16 @@ impl JsContextHost {
         let ids = self
             .range_record_registry
             .live_record_ids_for_child_removal(scope, dom_host, removed_child);
+        if ids.is_empty() {
+            return;
+        }
+        // Composed removal boundaries have their own shadow-including
+        // rescoping step. Synchronize only the observable endpoints here.
+        let selection_links = self.selection_record_registry.linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            false,
+        );
         self.range_record_registry.update_for_child_removal(
             dom_host,
             &ids,
@@ -783,6 +806,11 @@ impl JsContextHost {
             removed_child,
             index,
             previous_sibling,
+        );
+        self.selection_record_registry.sync_linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            selection_links,
         );
     }
 
@@ -798,8 +826,21 @@ impl JsContextHost {
         let ids = self
             .range_record_registry
             .live_record_ids_for_text_split(scope, dom_host, original);
+        if ids.is_empty() {
+            return;
+        }
+        let selection_links = self.selection_record_registry.linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            true,
+        );
         self.range_record_registry
             .update_for_text_split(dom_host, &ids, original, new_text, offset);
+        self.selection_record_registry.sync_linked_range_boundaries(
+            dom_host,
+            &self.range_record_registry,
+            selection_links,
+        );
     }
 
     pub(crate) fn range_record_is_collapsed(&mut self, handle: RangeRecordHandle) -> Option<bool> {

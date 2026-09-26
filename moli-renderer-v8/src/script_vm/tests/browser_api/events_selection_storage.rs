@@ -6,6 +6,18 @@ use tokio::{
 };
 
 #[test]
+fn selection_endpoints_follow_associated_live_range_mutations() {
+    let mut vm = new_storage_test_vm("https://selection-live-mutations.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/selection-live-range-mutations.js"
+        ))
+        .expect("Selection endpoints should follow their live Range"),
+        ""
+    );
+}
+
+#[test]
 fn selection_range_membership_uses_native_document_relationships() {
     let mut vm = new_storage_test_vm("https://selection-native-membership.test/");
     assert_eq!(
