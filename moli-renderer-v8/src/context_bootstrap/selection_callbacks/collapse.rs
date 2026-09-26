@@ -38,25 +38,18 @@ fn nodes_share_dom_tree_root<'s>(
     a: v8::Local<'s, v8::Object>,
     b: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let a_root = selection_dom_tree_root(scope, a);
-    let b_root = selection_dom_tree_root(scope, b);
-    a_root.strict_equals(b_root.into())
-}
-
-fn selection_dom_tree_root<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    let mut current = node;
-    loop {
-        if let Some(parent) = object_property_as_object(scope, current, "parentNode")
-            && !parent.strict_equals(current.into())
-        {
-            current = parent;
-            continue;
-        }
-        return current;
-    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let Some(a) = callback_value_dom_handle(scope, a.into()) else {
+        return false;
+    };
+    let Some(b) = callback_value_dom_handle(scope, b.into()) else {
+        return false;
+    };
+    let dom = unsafe { &*host_ptr }.dom_host();
+    dom.root_node_handle(a)
+        .is_some_and(|root| dom.root_node_handle(b) == Some(root))
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -339,7 +332,14 @@ pub(in crate::context_bootstrap) fn selection_extend_callback<'s>(
         return;
     }
 
-    let anchor_offset = selection_anchor_offset(scope, args.this());
+    // An ordinary Range cannot span distinct DOM roots. Extending into a
+    // different shadow tree replaces it with a caret at the new focus.
+    let (anchor_node, anchor_offset) =
+        if nodes_share_dom_tree_root(scope, anchor_node, parsed.focus_node) {
+            (anchor_node, selection_anchor_offset(scope, args.this()))
+        } else {
+            (parsed.focus_node, parsed.focus_offset)
+        };
     let direction = match boundary_order(
         scope,
         anchor_node,
@@ -519,6 +519,11 @@ pub(in crate::context_bootstrap) fn selection_set_base_and_extent_callback<'s>(
             Some(std::cmp::Ordering::Greater) => (parsed.anchor_node, parsed.anchor_offset),
             _ => (parsed.focus_node, parsed.focus_offset),
         };
+        let direction = match composed_order {
+            Some(std::cmp::Ordering::Less) => "forward",
+            Some(std::cmp::Ordering::Greater) => "backward",
+            _ => "none",
+        };
         selection_store_with_composed_boundaries(
             scope,
             args.this(),
@@ -527,7 +532,7 @@ pub(in crate::context_bootstrap) fn selection_set_base_and_extent_callback<'s>(
             collapsed_offset,
             collapsed_node,
             collapsed_offset,
-            "none",
+            direction,
             collapsed_node,
             collapsed_offset,
             collapsed_node,

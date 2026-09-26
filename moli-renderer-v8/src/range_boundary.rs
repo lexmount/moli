@@ -78,6 +78,57 @@ impl RangeBoundaryPoint {
         self.child_before_boundary
     }
 
+    pub(crate) fn update_for_character_data_edit(
+        &mut self,
+        dom_host: &DomHost,
+        target: DomHandle,
+        edit_offset: u32,
+        removed_count: u32,
+        inserted_count: u32,
+    ) {
+        if self.container != target {
+            return;
+        }
+        let Some(current) = self.offset(dom_host) else {
+            return;
+        };
+        let next = if current <= edit_offset {
+            current
+        } else if current <= edit_offset.saturating_add(removed_count) {
+            edit_offset
+        } else {
+            current
+                .saturating_sub(removed_count)
+                .saturating_add(inserted_count)
+        };
+        if let Some(point) = Self::new(dom_host, target, next) {
+            *self = point;
+        }
+    }
+
+    pub(crate) fn update_for_text_split(
+        &mut self,
+        dom_host: &DomHost,
+        original: DomHandle,
+        new_text: DomHandle,
+        offset: u32,
+    ) {
+        if self.container == original {
+            if let Some(current) = self.offset(dom_host)
+                && current > offset
+                && let Some(point) = Self::new(dom_host, new_text, current - offset)
+            {
+                *self = point;
+            }
+        } else if self.child_before_boundary == Some(original)
+            && dom_host.parent_node(original) == Some(self.container)
+        {
+            // A parent boundary immediately after the original text must stay
+            // after both halves. Later siblings already track their own index.
+            self.set_child_before_boundary(dom_host, Some(new_text));
+        }
+    }
+
     pub(crate) fn set_child_before_boundary(
         &mut self,
         dom_host: &DomHost,
