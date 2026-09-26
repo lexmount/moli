@@ -1058,7 +1058,7 @@ fn screenshot_data_url(html: &str) -> String {
     )
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
+async fn get_layout_metrics_initializes_layout_and_reuses_content_until_capture() {
     let mut ctx = TestContext::new();
     let session = "SID-COLD-METRICS";
     install_active_screenshot_page(
@@ -1081,7 +1081,7 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
     assert_eq!(result["visualViewport"]["scale"], 1.0);
     assert_eq!(
         result["cssContentSize"],
-        json!({"x":0,"y":0,"width":320.0,"height":240.0})
+        json!({"x":0,"y":0,"width":320.0,"height":900.0})
     );
 
     let geometry = json!({
@@ -1094,7 +1094,7 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
         80
     );
 
-    // Playwright gets these metrics before issuing its first capture request.
+    // A viewport capture still uses the caller's explicit clip.
     ctx.process_async(json!({
         "id":123,"method":"Page.captureScreenshot","sessionId":session,
         "params":{"format":"png","clip":{
@@ -1134,6 +1134,13 @@ async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
     assert_eq!(live["result"]["visualViewport"]["pageY"], 100.0);
     assert_eq!(live["result"]["visualViewport"]["scale"], 2.0);
     assert_eq!(live["result"]["contentSize"]["height"], 900.0);
+    assert_eq!(live["result"]["contentSize"]["width"], 320.0);
+    ctx.capture_fixture_layout(Some(session)).await;
+    ctx.process_async(json!({"id":128,"method":"Page.getLayoutMetrics","sessionId":session}))
+        .await;
+    let refreshed = take_response_by_id(&mut ctx, 128);
+    assert_eq!(refreshed["result"]["cssContentSize"]["height"], 1600.0);
+    assert_eq!(refreshed["result"]["cssContentSize"]["width"], 400.0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1161,11 +1168,6 @@ async fn full_page_clip_from_dom_initialized_layout_preserves_capture_semantics(
                 "returnByValue":true
             }
         });
-        ctx.process_async(geometry.clone()).await;
-        assert_eq!(
-            take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
-            json!([305, 240, 80])
-        );
 
         // Empty clips are invalid both before and after layout publication.
         let empty_capture = json!({
@@ -1177,12 +1179,18 @@ async fn full_page_clip_from_dom_initialized_layout_preserves_capture_semantics(
         let cold_error = take_response_by_id(&mut ctx, 122);
         assert_eq!(cold_error["error"]["code"], -32602, "{cold_error}");
 
+        ctx.process_async(geometry.clone()).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 121)["result"]["result"]["value"],
+            json!([305, 240, 80])
+        );
+
         ctx.process_async(json!({
             "id":123,"method":"Page.getLayoutMetrics","sessionId":session
         }))
         .await;
-        let unpublished = take_response_by_id(&mut ctx, 123);
-        let mut clip = unpublished["result"]["cssContentSize"].clone();
+        let initial = take_response_by_id(&mut ctx, 123);
+        let mut clip = initial["result"]["cssContentSize"].clone();
         assert_eq!(clip, json!({"x":0,"y":0,"width":320.0,"height":900.0}));
         clip["scale"] = json!(scale);
 
@@ -1235,13 +1243,22 @@ async fn full_page_clip_from_dom_initialized_layout_preserves_capture_semantics(
     }
 }
 
-/// cdp.page: getLayoutMetrics – falls back to viewport metrics without a live page
+/// cdp.page: getLayoutMetrics – initializes an actual blank document
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics() {
     let mut ctx = TestContext::new();
-    load_bc_with_target(&mut ctx, "BID-9", "FID-000000000X", "about:blank");
-    ctx.process_async(json!({"id": 12, "method": "Page.getLayoutMetrics"}))
-        .await;
+    install_active_screenshot_page(
+        &mut ctx,
+        "BID-9",
+        "FID-000000000X",
+        "SID-BLANK-METRICS",
+        "about:blank",
+    )
+    .await;
+    ctx.process_async(
+        json!({"id": 12, "method": "Page.getLayoutMetrics", "sessionId": "SID-BLANK-METRICS"}),
+    )
+    .await;
     let msg = ctx.take_one();
     let r = &msg["result"];
     assert_eq!(r["layoutViewport"]["clientWidth"], 1920);
@@ -1250,7 +1267,7 @@ async fn get_layout_metrics() {
     assert_eq!(r["contentSize"]["height"], 1080.0);
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn get_layout_metrics_uses_viewport_fallback_without_live_page() {
+async fn get_layout_metrics_without_live_page_does_not_fabricate_content_size() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
@@ -1283,23 +1300,8 @@ async fn get_layout_metrics_uses_viewport_fallback_without_live_page() {
     }))
     .await;
     let metrics = take_response_by_id(&mut ctx, 122);
-    let result = &metrics["result"];
-    assert_eq!(result["layoutViewport"]["clientWidth"], json!(800));
-    assert_eq!(result["layoutViewport"]["clientHeight"], json!(600));
-    assert_eq!(result["visualViewport"]["scale"], json!(1.0));
-    assert_eq!(
-        result["contentSize"],
-        json!({ "x": 0, "y": 0, "width": 800.0, "height": 600.0 }),
-        "without a live renderer page, content size should use the owner viewport"
-    );
-    assert_eq!(
-        result["cssContentSize"]["width"],
-        result["contentSize"]["width"]
-    );
-    assert_eq!(
-        result["cssContentSize"]["height"],
-        result["contentSize"]["height"]
-    );
+    assert_eq!(metrics["error"]["code"], -32000, "{metrics}");
+    assert_eq!(metrics["error"]["message"], "NoDocumentLoaded");
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
@@ -1325,8 +1327,6 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         .runtime_slot
         .replace_loaded_page(Some(page));
 
-    ctx.capture_fixture_layout(Some("SID-PENDING-LAYOUT-METRICS"))
-        .await;
     ctx.process_async(json!({
         "id": 125,
         "method": "Page.getLayoutMetrics",
@@ -1381,7 +1381,6 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
     .await;
     ctx.expect_result(121, json!({}), Some("SID-background"));
 
-    ctx.capture_fixture_layout(Some("SID-background")).await;
     ctx.process_async(json!({
         "id": 123,
         "method": "Page.getLayoutMetrics",
@@ -1435,7 +1434,6 @@ async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
     .await;
     ctx.expect_result(121, json!({}), Some("SID-inactive"));
 
-    ctx.capture_fixture_layout(Some("SID-inactive")).await;
     ctx.process_async(json!({
         "id": 124,
         "method": "Page.getLayoutMetrics",

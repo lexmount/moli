@@ -2764,14 +2764,14 @@ impl ScriptVm {
         self.start_stylesheet_subresource_fetches(bound);
     }
 
-    /// Viewport and scroll state are live browser state, including before the
-    /// first capture. Only the content extent comes from published layout;
-    /// without a snapshot it falls back to the viewport, without running layout.
+    /// Initializes the first layout on demand, then keeps its content extent
+    /// until an explicit refresh. Viewport and scroll remain live browser state.
     pub(crate) fn document_metrics_for_current_document(
         &self,
-    ) -> moli_layout::LayoutDocumentMetrics {
+    ) -> Result<moli_layout::LayoutDocumentMetrics, moli_layout::LayoutError> {
         let host = self._context_host.borrow();
         let document = host.document_handle();
+        let metrics = crate::native_bridge::element::observable_document_metrics(&host, document)?;
         let viewport = host.layout_viewport_for_document(document);
         let viewport_scroll = host
             .dom_host()
@@ -2786,16 +2786,11 @@ impl ScriptVm {
                 )
             })
             .unwrap_or(moli_layout::LayoutPoint::ZERO);
-        let content_size = host
-            .with_latest_layout_tree_for_document(document, |tree| tree.content_size)
-            .unwrap_or_else(|| {
-                moli_layout::LayoutSize::new(viewport.css_width as f32, viewport.css_height as f32)
-            });
-        moli_layout::LayoutDocumentMetrics {
+        Ok(moli_layout::LayoutDocumentMetrics {
             viewport,
             viewport_scroll,
-            content_size,
-        }
+            content_size: metrics.content_size,
+        })
     }
 
     pub(crate) fn observable_geometry_batch_for_document(

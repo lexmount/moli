@@ -4371,8 +4371,9 @@ async fn devtools_command_executes_context_viewport_override() {
         DevToolsCommandResult::Empty
     );
 
+    let owner = CommandOwnerScope::capture(&conn, None);
     let metrics = conn
-        .target_session_owner_emulated_device_metrics(None)
+        .target_session_owner_emulated_device_metrics_for_owner(&owner)
         .expect("active target should hold emulated device metrics");
     assert_eq!(metrics.width, 800);
     assert_eq!(metrics.height, 600);
@@ -7214,7 +7215,8 @@ fn command_dispatch_completes_additional_page_sync_commands_without_legacy_fallb
     let messages = complete_messages(step);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["id"], json!(412));
-    assert!(messages[0]["result"]["layoutViewport"].is_object());
+    assert_eq!(messages[0]["error"]["code"], -32000);
+    assert_eq!(messages[0]["error"]["message"], "NoDocumentLoaded");
 
     let print_raw = serde_json::to_string(&json!({
         "id": 413,

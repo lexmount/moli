@@ -854,7 +854,7 @@ impl PageVm {
                 Ok(RendererPageReply::OptionalString(Some(self.serialize_html())))
             }
             RendererPageCommand::LayoutMetrics => {
-                Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()))
+                Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()?))
             }
             RendererPageCommand::PublishLayout => {
                 self.vm_mut().publish_layout()?;

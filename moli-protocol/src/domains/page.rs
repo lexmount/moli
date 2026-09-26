@@ -41,7 +41,7 @@ use crate::conn::{
     CommandOwnerScope, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
     PageScreencastConfig, PageScreencastFormat,
 };
-use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
+use crate::conn::{CdpConnection, Cmd};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
 use crate::domains::actions::PageAction;
 use crate::domains::activity::{
@@ -5890,32 +5890,6 @@ struct PageSetDownloadBehaviorParams {
     download_path: Option<String>,
 }
 
-fn current_viewport_surface(
-    conn: &CdpConnection,
-    session_id: Option<&str>,
-) -> EmulatedViewportSurface {
-    (conn
-        .target_session_owner_emulated_device_metrics(session_id)
-        .as_ref())
-    .map_or_else(
-        EmulatedViewportSurface::default,
-        crate::conn::EmulatedDeviceMetrics::viewport_surface,
-    )
-}
-
-fn current_viewport_surface_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-) -> EmulatedViewportSurface {
-    (conn
-        .target_session_owner_emulated_device_metrics_for_owner(owner)
-        .as_ref())
-    .map_or_else(
-        EmulatedViewportSurface::default,
-        crate::conn::EmulatedDeviceMetrics::viewport_surface,
-    )
-}
-
 async fn execute_devtools_get_layout_metrics_command(
     conn: &mut CdpConnection,
     command: DevToolsGetLayoutMetricsCommand,
@@ -5929,14 +5903,12 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
-    let fallback =
-        layout_metrics_result_from_surface(current_viewport_surface_for_owner(conn, owner));
     let Some(page) = conn
         .runtime_session_owner_slot_mut_for_owner(owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
-        return Ok(fallback);
+        return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
     };
     let pending = page.start_layout_metrics().map_err(|error| {
         devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
@@ -5956,20 +5928,6 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
         .map_err(|error| {
             devtools_layout_metrics_error(format!("Failed to finish layout metrics: {error}"))
         })
-}
-
-fn layout_metrics_result_from_surface(
-    surface: EmulatedViewportSurface,
-) -> DevToolsLayoutMetricsResult {
-    DevToolsLayoutMetricsResult {
-        layout_viewport_width: surface.inner_width,
-        layout_viewport_height: surface.inner_height,
-        page_x: 0.0,
-        page_y: 0.0,
-        content_width: f64::from(surface.inner_width),
-        content_height: f64::from(surface.inner_height),
-        device_pixel_ratio: surface.device_pixel_ratio,
-    }
 }
 
 fn layout_metrics_result_from_renderer(
@@ -7165,8 +7123,8 @@ mod protocol_neutral_tests {
         let mut out = Vec::new();
         plan.emit_into(&mut out, cmd.id, cmd.session_id);
         assert_eq!(out[0]["id"], json!(123));
-        assert!(out[0]["result"]["layoutViewport"]["clientWidth"].is_u64());
-        assert!(out[0]["result"]["visualViewport"]["clientHeight"].is_u64());
+        assert_eq!(out[0]["error"]["code"], -32000);
+        assert_eq!(out[0]["error"]["message"], "NoDocumentLoaded");
     }
 
     #[test]
@@ -7538,16 +7496,14 @@ fn start_devtools_get_layout_metrics_command(
     command: crate::devtools_runtime::DevToolsGetLayoutMetricsCommand,
 ) -> PageCommandTaskStep {
     let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let fallback =
-        layout_metrics_result_from_surface(current_viewport_surface(conn, command_session_id));
     let owner_scope = CommandOwnerScope::capture(conn, command_session_id);
     let Some(page) = conn
         .runtime_session_owner_slot_mut(command_session_id)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-            DevToolsCommandResult::LayoutMetrics(fallback),
+        return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+            devtools_layout_metrics_error("NoDocumentLoaded"),
         ));
     };
     match page.start_layout_metrics() {

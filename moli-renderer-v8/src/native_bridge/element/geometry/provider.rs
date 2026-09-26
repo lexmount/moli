@@ -62,6 +62,21 @@ pub(crate) fn published_geometry_batch(
     }
 }
 
+pub(crate) fn observable_document_metrics(
+    runtime: &JsContextHost,
+    document: DomHandle,
+) -> Result<LayoutDocumentMetrics, LayoutError> {
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentMetrics]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::DocumentMetrics(metrics)) => Ok(metrics),
+        _ => Err(provider_contract_error("document metrics")),
+    }
+}
+
 pub(crate) fn read_client_rects(
     runtime: &JsContextHost,
     source: DomHandle,

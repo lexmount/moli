@@ -2641,6 +2641,9 @@ async fn device_metrics_override_updates_layout_metrics() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.install_navigation_fixture_for_session_owner("about:blank", None)
+        .await;
+    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 12,

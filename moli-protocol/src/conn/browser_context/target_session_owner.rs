@@ -2289,14 +2289,6 @@ impl CdpConnection {
             .frame_tree_loader_id()
     }
 
-    pub(crate) fn target_session_owner_emulated_device_metrics(
-        &self,
-        session_id: Option<&str>,
-    ) -> Option<crate::conn::EmulatedDeviceMetrics> {
-        self.target_session_owner_ref(session_id)?
-            .emulated_device_metrics()
-    }
-
     pub(crate) fn target_session_owner_emulated_device_metrics_for_owner(
         &self,
         owner: &CommandOwnerScope,
