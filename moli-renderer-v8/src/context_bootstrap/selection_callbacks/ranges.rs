@@ -107,32 +107,22 @@ fn range_belongs_to_current_document<'s>(
     else {
         return true;
     };
-    let start_root = selection_tree_root(scope, start_node);
-    let end_root = selection_tree_root(scope, end_node);
-    let document_value: v8::Local<'s, v8::Value> = document.into();
-    start_root.strict_equals(end_root.into()) && start_root.strict_equals(document_value)
-}
-
-fn selection_tree_root<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    let mut current = node;
-    loop {
-        if let Some(parent) = object_property_as_object(scope, current, "parentNode")
-            && !parent.strict_equals(current.into())
-        {
-            current = parent;
-            continue;
-        }
-        if object_number_property(scope, current, "nodeType").unwrap_or(0.0) as u32 == 11
-            && let Some(host) = object_property_as_object(scope, current, "host")
-        {
-            current = host;
-            continue;
-        }
-        return current;
-    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let Some(document) = callback_value_dom_handle(scope, document.into()) else {
+        return false;
+    };
+    // Connectivity and ownership are native relationships. Author properties
+    // named parentNode, nodeType or host must not change Selection membership
+    // (or run script while checking an associated Range).
+    let dom = unsafe { &*host_ptr }.dom_host();
+    [start_node, end_node].into_iter().all(|node| {
+        callback_value_dom_handle(scope, node.into()).is_some_and(|handle| {
+            dom.is_connected_to_document(handle)
+                && (handle == document || dom.owner_document_handle(handle) == Some(document))
+        })
+    })
 }
 
 pub(in crate::context_bootstrap) fn selection_get_range_at_callback<'s>(
