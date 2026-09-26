@@ -1804,3 +1804,15 @@ fn selection_shadow_direction_and_composed_boundaries_follow_native_mutations() 
         ""
     );
 }
+
+#[test]
+fn text_control_selection_setters_restore_the_focused_document_selection() {
+    let mut vm = new_storage_test_vm("https://text-control-selection-restoration.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../../tests/fixtures/text-control-selection-restoration.js"
+        ))
+        .expect("text control selection updates should restore only their focused document"),
+        ""
+    );
+}
