@@ -49,23 +49,25 @@ pub(crate) fn contenteditable_editing_host(
 ) -> Option<DomHandle> {
     let dom = runtime.dom_host().dom();
     let mut current = Some(handle);
+    let mut editing_host = None;
     while let Some(candidate) = current {
         if let Some(element) = dom.node(candidate).and_then(Node::as_element)
+            && element.namespace() == document::XHTML_NS
             && let Some(value) = element.attribute("contenteditable")
         {
             match contenteditable_state_from_attr(value) {
-                Some(true) => return Some(candidate),
-                Some(false) => return None,
+                Some(true) => editing_host = Some(candidate),
+                Some(false) => break,
                 None => {}
             }
         }
         current = dom.parent_node(candidate);
     }
-    None
+    editing_host
 }
 
 fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
-    let normalized = value.trim().to_ascii_lowercase();
+    let normalized = value.to_ascii_lowercase();
     if normalized.is_empty() || normalized == "true" || normalized == "plaintext-only" {
         Some(true)
     } else if normalized == "false" {
@@ -899,7 +901,7 @@ fn update_focus_from_previous_with_previous_focus_within(
     }
     runtime.note_focus_style_activity(None, next);
     if let Some(handle) = next {
-        let _ = crate::context_bootstrap::focus_text_control_selection(scope, runtime_ptr, handle);
+        let _ = crate::context_bootstrap::focus_element_selection(scope, runtime_ptr, handle);
         let runtime = unsafe { &mut *runtime_ptr };
         if is_text_control(runtime, handle) {
             runtime.note_text_control_selection(handle);

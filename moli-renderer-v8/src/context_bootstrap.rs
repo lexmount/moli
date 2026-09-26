@@ -192,7 +192,7 @@ pub(crate) use navigation_traversal_execution::{
 };
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;
-pub(crate) use selection::focus_text_control_selection;
+pub(crate) use selection::focus_element_selection;
 pub(crate) use selection_surface::{
     selection_text_for_clipboard, selection_value_for_window,
     sync_selection_owner_document_for_window,
