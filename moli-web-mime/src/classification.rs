@@ -143,6 +143,26 @@ pub fn is_font_mime_essence(input: &str) -> bool {
         )
 }
 
+/// MIME types consumed by Moli's SFNT, WOFF and WOFF2 font pipeline.
+/// This includes collections and legacy aliases, but not EOT or arbitrary
+/// font/* subtypes merely because they are font MIME types.
+pub fn is_supported_font_mime_essence(input: &str) -> bool {
+    matches!(
+        input,
+        "font/ttf"
+            | "font/otf"
+            | "font/sfnt"
+            | "font/collection"
+            | "font/woff"
+            | "font/woff2"
+            | "application/font-ttf"
+            | "application/font-otf"
+            | "application/font-sfnt"
+            | "application/font-woff"
+            | "application/vnd.ms-opentype"
+    )
+}
+
 pub fn is_form_urlencoded_mime(input: &str) -> bool {
     mime_essence(input).is_some_and(|mime| mime == "application/x-www-form-urlencoded")
 }
