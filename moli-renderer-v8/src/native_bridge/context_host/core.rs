@@ -212,6 +212,7 @@ impl JsContextHost {
             output_journal: None,
             page_context_resources_closed: false,
             page_default_context: None,
+            top_level_window_name: crate::RendererTopLevelWindowName::default(),
             v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry::default(),
             bridge: NativeDomBridge::new(bindings),
             dom_agent_state: crate::runtime::RendererDomAgentState::new(
@@ -476,6 +477,18 @@ impl JsContextHost {
         };
         host.sync_owner_style_sheet_texts_for_document_tree_scopes(host.document_handle());
         host
+    }
+
+    pub(crate) fn top_level_window_name(&self) -> String {
+        self.top_level_window_name.get()
+    }
+
+    pub(crate) fn top_level_window_name_state(&self) -> crate::RendererTopLevelWindowName {
+        self.top_level_window_name.clone()
+    }
+
+    pub(crate) fn set_top_level_window_name(&self, value: String) {
+        self.top_level_window_name.set(value);
     }
 
     pub(crate) fn set_root_document_lifecycle(

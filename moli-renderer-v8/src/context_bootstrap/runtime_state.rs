@@ -881,6 +881,14 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if child_context_handle_from_owner(scope, receiver).is_none()
+        && receiver.strict_equals(scope.get_current_context().global(scope).into())
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(value) = v8_string(scope, &unsafe { &*host_ptr }.top_level_window_name())
+    {
+        rv.set(value.into());
+        return;
+    }
     let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
@@ -901,6 +909,10 @@ fn window_name_runtime_setter<'s>(
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
         unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+    } else if receiver.strict_equals(scope.get_current_context().global(scope).into())
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        unsafe { &*host_ptr }.set_top_level_window_name(next.clone());
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
 }

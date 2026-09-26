@@ -1,6 +1,33 @@
 use std::{fmt, sync::Arc};
 
 use crate::{SharedWebStorageStore, new_shared_web_storage_store};
+use parking_lot::Mutex;
+
+/// State owned by one top-level browsing context and shared by each Document
+/// committed into it.
+#[derive(Clone, Default)]
+pub struct RendererTopLevelWindowName {
+    value: Arc<Mutex<String>>,
+}
+
+impl RendererTopLevelWindowName {
+    pub(crate) fn get(&self) -> String {
+        self.value.lock().clone()
+    }
+
+    pub(crate) fn set(&self, value: String) {
+        *self.value.lock() = value;
+    }
+}
+
+impl fmt::Debug for RendererTopLevelWindowName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RendererTopLevelWindowName")
+            .field("strong_count", &Arc::strong_count(&self.value))
+            .finish_non_exhaustive()
+    }
+}
 
 /// Web Storage state installed into one renderer page environment.
 ///
@@ -12,6 +39,7 @@ use crate::{SharedWebStorageStore, new_shared_web_storage_store};
 pub struct RendererWebStorageHandles {
     local_storage: SharedWebStorageStore,
     session_storage: SharedWebStorageStore,
+    top_level_window_name: RendererTopLevelWindowName,
 }
 
 impl RendererWebStorageHandles {
@@ -22,7 +50,13 @@ impl RendererWebStorageHandles {
         Self {
             local_storage,
             session_storage,
+            top_level_window_name: RendererTopLevelWindowName::default(),
         }
+    }
+
+    pub fn with_top_level_window_name(mut self, value: RendererTopLevelWindowName) -> Self {
+        self.top_level_window_name = value;
+        self
     }
 
     pub fn ephemeral() -> Self {
@@ -38,6 +72,10 @@ impl RendererWebStorageHandles {
 
     pub fn session_storage(&self) -> SharedWebStorageStore {
         self.session_storage.clone()
+    }
+
+    pub(crate) fn top_level_window_name(&self) -> RendererTopLevelWindowName {
+        self.top_level_window_name.clone()
     }
 
     pub fn shares_local_storage_with(&self, other: &Self) -> bool {

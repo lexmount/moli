@@ -4830,6 +4830,7 @@ impl ScriptVm {
             host.web_storage_store(),
             host.session_storage_store(),
         )
+        .with_top_level_window_name(host.top_level_window_name_state())
     }
 
     pub(super) fn set_wpt_extensions_enabled(&mut self, enabled: bool) -> Result<()> {
