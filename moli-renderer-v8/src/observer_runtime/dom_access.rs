@@ -11,12 +11,68 @@ use super::{
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
     build_mutation_records_array,
     callback::ObserverCallback,
-    intersection::{self, IntersectionCheckBatch},
+    intersection,
     invoke_intersection_deliveries, invoke_mutation_deliveries, node_is_intersection_root,
     node_is_intersection_target,
     schedule::{self, ObserverTask},
     target_is_intersection_observable,
 };
+
+pub(crate) fn activate_resize_observer_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    id: crate::common_runtime::CallbackRegistrationId,
+    observer: v8::Local<'s, v8::Object>,
+) {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let common = access.read(|host| std::rc::Rc::clone(&host.common));
+    if let Some(identity) =
+        common.callbacks.activate_resize_observer(scope, id, observer)
+    {
+        access.mutate(|host| host.queue_document_observer_update(scope, identity.dispatch_scope()));
+    }
+}
+
+pub(crate) fn deactivate_resize_observer_callback(
+    host_ptr: *mut JsContextHost,
+    id: crate::common_runtime::CallbackRegistrationId,
+) {
+    let common = ObserverHostAccess::new(host_ptr).read(|host| std::rc::Rc::clone(&host.common));
+    common.callbacks.deactivate_resize_observer(id);
+}
+
+pub(crate) fn active_resize_observer_callbacks<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    owner: Option<WindowExecutionContextOwner>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let common = access.read(|host| std::rc::Rc::clone(&host.common));
+    common.callbacks.active_resize_observers(scope, owner)
+}
+
+pub(crate) fn queue_resize_observer_rendering_updates(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+) {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let common = access.read(|host| std::rc::Rc::clone(&host.common));
+    let identities = common.callbacks.resize_observer_identities();
+    for identity in identities {
+        access.mutate(|host| host.queue_document_observer_update(scope, identity.dispatch_scope()));
+    }
+}
+
+/// CSSOM and adopted-sheet edits bypass DOM MutationRecords but invalidate
+/// observer geometry and can make the focused element unavailable.
+pub(crate) fn queue_style_rendering_update(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+) {
+    queue_resize_observer_rendering_updates(scope, host_ptr);
+    queue_intersection_checks(scope, host_ptr);
+    ObserverHostAccess::new(host_ptr).mutate(|host| host.queue_focused_document_fixup(scope));
+}
 
 pub(crate) struct ObserverStoreAccessToken {
     _private: (),
@@ -144,11 +200,8 @@ pub(crate) fn queue_mutation_records(
     }
     match intersection {
         IntersectionMutationPlan::None => {}
-        IntersectionMutationPlan::CheckNow => {
-            queue_intersection_checks_with_dom(&mut access, scope, dom_host)
-        }
         IntersectionMutationPlan::ScheduleCheck => {
-            request_task_with_access(&mut access, scope, ObserverTask::IntersectionCheck)
+            queue_intersection_checks(scope, host_ptr);
         }
     }
     crate::context_bootstrap::queue_resize_observer_checks(scope);
@@ -293,7 +346,7 @@ pub(super) fn observe_intersection_target(
         access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
     });
     if should_check {
-        request_task_with_access(&mut access, scope, ObserverTask::IntersectionCheck);
+        queue_intersection_checks(scope, host_ptr);
     }
     true
 }
@@ -341,61 +394,85 @@ pub(crate) fn queue_intersection_checks(
     host_ptr: *mut JsContextHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
-    let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
-        return;
-    };
-    let Ok(completed) = access.read(|runtime| {
-        intersection::compute_intersection_check_batch(runtime, runtime.dom_host(), batch)
-    }) else {
-        return;
-    };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
-    if queued_any {
-        request_task_with_access(&mut access, scope, ObserverTask::IntersectionDelivery);
-    }
-}
-
-fn queue_intersection_checks_with_dom(
-    access: &mut ObserverHostAccess,
-    scope: &mut v8::PinScope<'_, '_>,
-    dom_host: &DomHost,
-) {
-    let Some(batch): Option<IntersectionCheckBatch> =
-        access.store(ObserverStore::take_intersection_check_batch)
-    else {
-        return;
-    };
-    let Ok(completed) = access
-        .read(|runtime| intersection::compute_intersection_check_batch(runtime, dom_host, batch))
-    else {
-        return;
-    };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
-    if queued_any {
-        request_task_with_access(access, scope, ObserverTask::IntersectionDelivery);
-    }
-}
-
-pub(super) fn flush_intersection_checks(
-    scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
-) {
-    let mut access = ObserverHostAccess::new(host_ptr);
-    access.store(|store| store.begin_task(ObserverTask::IntersectionCheck));
-    queue_intersection_checks(scope, host_ptr);
-}
-
-pub(super) fn flush_intersection_observers(
-    scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
-) {
-    let deliveries = ObserverHostAccess::new(host_ptr).store(|store| {
-        store.begin_task(ObserverTask::IntersectionDelivery);
-        store.collect_intersection_deliveries(scope, host_ptr)
+    let identities = access.store(|store| {
+        let mut identities = Vec::new();
+        for state in store.intersection_observers.values() {
+            if !state.observed_targets.is_empty()
+                && let Some(identity) = state.callback.observer_identity()
+                && !identities.contains(&identity)
+            {
+                identities.push(identity);
+            }
+        }
+        identities
     });
+    for identity in identities {
+        if access.read(|host| host.window_execution_context_identity_is_current(identity)) {
+            access.mutate(|host| {
+                host.queue_document_observer_update(scope, identity.dispatch_scope())
+            });
+        }
+    }
+}
 
-    // Blink likewise removes observers from its controller pending set before
-    // invoking `IntersectionObserver::Deliver`, so reentrant observe/disconnect
-    // updates fresh owner state instead of aliasing the delivery traversal.
-    invoke_intersection_deliveries(scope, host_ptr, deliveries);
+pub(crate) fn document_has_rendering_observers(
+    host: &mut JsContextHost,
+    owner: WindowExecutionContextOwner,
+) -> bool {
+    let common = std::rc::Rc::clone(&host.common);
+    let store = host.observers_mut(&OBSERVER_STORE_ACCESS);
+    let has_intersection = store.intersection_observers.values().any(|state| {
+        !state.observed_targets.is_empty()
+            && state
+                .callback
+                .observer_identity()
+                .is_some_and(|identity| identity.owner() == owner)
+    });
+    has_intersection
+        || common.callbacks
+            .resize_observer_identities()
+            .iter()
+            .any(|identity| identity.owner() == owner)
+}
+
+/// Sample intersections after the ResizeObserver loop and focus fixup. Delivery
+/// receives its own exact-Document task, so callback cleanup cannot run it in
+/// the middle of another rendering phase.
+pub(crate) fn update_document_intersections(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    target: crate::native_bridge::WindowDocumentTaskTarget,
+    owner: WindowExecutionContextOwner,
+) -> Result<(), moli_layout::LayoutError> {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    if !access.read(|host| {
+        host.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        )
+    }) {
+        return Ok(());
+    }
+    let Some(batch) = access.store(|store| store.take_intersection_check_batch(owner)) else {
+        return Ok(());
+    };
+    let completed = access.read(|host| {
+        intersection::compute_intersection_check_batch(host, host.dom_host(), batch)
+    })?;
+    if access.store(|store| store.apply_intersection_check_batch(completed)) {
+        access.mutate(|host| host.queue_document_intersection_delivery(target, owner));
+    }
+    let _ = scope;
+    Ok(())
+}
+
+pub(crate) fn deliver_document_intersections(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    owner: WindowExecutionContextOwner,
+    target: crate::native_bridge::WindowDocumentTaskTarget,
+) {
+    let deliveries = ObserverHostAccess::new(host_ptr)
+        .store(|store| store.collect_intersection_deliveries(scope, host_ptr, owner));
+    invoke_intersection_deliveries(scope, host_ptr, target, deliveries);
 }

@@ -270,8 +270,8 @@ fn mutation_observer_observe_accepts_registered_native_proxy_targets_and_receive
     })()"#).unwrap(), "true");
 }
 
-fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
-    let mut vm = new_storage_test_vm(url);
+async fn observer_callback_test_vm(url: &str) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let mut vm = new_storage_page_task_executor_test_vm(url);
     vm.eval(
         r#"
 (() => {
@@ -286,13 +286,16 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 "#,
     )
     .expect("observer callback child-realm setup should evaluate");
-    materialize_single_child_default_realm_for_test(&mut vm, "observer callback child-realm setup");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("materialize observer callback child realm");
     vm
 }
 
-#[test]
-fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-method-realms.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
+    let mut vm = observer_callback_test_vm("https://performance-borrowed-method-realms.test/").await;
     let source = format!(
         "({})(window, __observerCallbackFrame.contentWindow).then(result => globalThis.__borrowedTimeline = result, error => globalThis.__borrowedTimeline = {{ error: String(error) }});",
         include_str!("performance_timeline_borrowed_methods.js"),
@@ -305,9 +308,9 @@ fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
     );
 }
 
-#[test]
-fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-buffered-observe.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
+    let mut vm = observer_callback_test_vm("https://performance-borrowed-buffered-observe.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -333,9 +336,9 @@ fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
     );
 }
 
-#[test]
-fn borrowed_performance_delivery_survives_retirement_of_the_method_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-method-realm-retirement.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn borrowed_performance_delivery_survives_retirement_of_the_method_realm() {
+    let mut vm = observer_callback_test_vm("https://performance-method-realm-retirement.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -386,9 +389,9 @@ new PerformanceObserver(list => {
     assert_eq!(common.finalizer_count(), 0);
 }
 
-#[test]
-fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-observer-global-isolation.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback_realm() {
+    let mut vm = observer_callback_test_vm("https://performance-observer-global-isolation.test/").await;
     vm.eval(
         r#"
 (() => {
@@ -417,9 +420,9 @@ fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback
     );
 }
 
-#[test]
-fn document_preinsert_validation_precedes_mutation_and_adoption() {
-    let mut vm = observer_callback_test_vm("https://document-preinsert.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn document_preinsert_validation_precedes_mutation_and_adoption() {
+    let mut vm = observer_callback_test_vm("https://document-preinsert.test/").await;
     assert_eq!(
         vm.eval(include_str!("document_preinsert_validation.js"))
             .expect("Document pre-insert validation should precede mutation and adoption"),
@@ -427,9 +430,9 @@ fn document_preinsert_validation_precedes_mutation_and_adoption() {
     );
 }
 
-#[test]
-fn windowless_fragment_insertions_preserve_native_mutation_records() {
-    let mut vm = observer_callback_test_vm("https://windowless-fragments.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn windowless_fragment_insertions_preserve_native_mutation_records() {
+    let mut vm = observer_callback_test_vm("https://windowless-fragments.test/").await;
     assert_eq!(
         vm.eval(include_str!("windowless_fragment_mutations.js"))
             .expect("fragment insertion should preserve native mutation records"),
@@ -437,9 +440,10 @@ fn windowless_fragment_insertions_preserve_native_mutation_records() {
     );
 }
 
-#[test]
-fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
+    let mut vm =
+        observer_callback_test_vm("https://observer-callback-function-semantics.test/").await;
 
     let queued = vm
         .eval(
@@ -507,6 +511,10 @@ fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_sema
         .expect("observer callback-function semantics should queue");
     assert_eq!(queued, "queued");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval(
             r#"
@@ -531,7 +539,7 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
     ] {
-        let mut vm = observer_callback_test_vm("https://intersection-entry-realm.test/");
+        let mut vm = observer_callback_test_vm("https://intersection-entry-realm.test/").await;
         vm.set_layout_policy(policy);
         vm.eval(
             r#"
@@ -583,6 +591,8 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         "#,
         )
         .unwrap();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        vm.advance_timers_until_deadline_for_test(&loader).await.expect("deliver Document intersection task");
         assert_eq!(
             vm.eval("JSON.stringify(rows)").unwrap(),
             r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2}]"#,
@@ -605,7 +615,7 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
     ] {
-        let mut vm = new_storage_test_vm("https://intersection-isolated-world.test/");
+        let mut vm = new_storage_page_task_executor_test_vm("https://intersection-isolated-world.test/");
         vm.set_layout_policy(policy);
         vm.eval(
             r#"
@@ -641,6 +651,8 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
         "#,
         )
         .unwrap();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        vm.advance_timers_until_deadline_for_test(&loader).await.expect("deliver Document intersection task");
         assert_eq!(
             vm.eval_in_isolated_context(isolated, "JSON.stringify(rows)")
                 .unwrap(),
@@ -655,9 +667,9 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
     }
 }
 
-#[test]
-fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
+    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/").await;
 
     vm.eval(
         r#"
@@ -702,6 +714,10 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     )
     .expect("observer exception projection should queue");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval(
             "JSON.stringify(globalThis.__observerCallbackErrors.sort((a, b) => a.message.localeCompare(b.message)))",
@@ -713,9 +729,9 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     );
 }
 
-#[test]
-fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-retirement.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
+    let mut vm = observer_callback_test_vm("https://observer-callback-retirement.test/").await;
 
     let queued = vm
         .eval(
@@ -785,6 +801,10 @@ fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
         .expect("observer retirement should queue");
     assert_eq!(queued, "true");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval("JSON.stringify(globalThis.__retiredObserverCallbacks)")
         .expect("retired observer callbacks should remain suppressed");
@@ -807,6 +827,10 @@ fn js_owned_observer_callback_cycles_remain_v8_collectable() {
   for (let index = 0; index < 128; index++) {
     let resizeObserver;
     resizeObserver = new ResizeObserver(() => resizeObserver.disconnect());
+    const target = document.createElement('div');
+    resizeObserver.observe(target);
+    if (index % 2) resizeObserver.unobserve(target);
+    else resizeObserver.disconnect();
 
     let performanceObserver;
     performanceObserver = new PerformanceObserver(
@@ -878,7 +902,7 @@ fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mutation_record_node_lists_are_native_readonly_snapshots() {
-    let mut vm = observer_callback_test_vm("https://mutation-record-node-lists.test/");
+    let mut vm = observer_callback_test_vm("https://mutation-record-node-lists.test/").await;
     vm.eval(include_str!("mutation_record_node_lists.js"))
         .expect("MutationRecord NodeList fixture should evaluate");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

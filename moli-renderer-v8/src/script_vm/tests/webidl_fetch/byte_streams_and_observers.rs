@@ -1670,36 +1670,7 @@ yield; // Publish this scene before reading its geometry.
     );
 }
 
-#[test]
-fn resize_observer_callback_runs_after_microtask_checkpoint() {
-    let mut vm = new_storage_test_vm("https://resize-observer-delivery.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  const html = document.documentElement || document.appendChild(document.createElement('html'));
-  const body = document.body || html.appendChild(document.createElement('body'));
-  globalThis.__resizeObserverLog = [];
-  const target = document.createElement('div');
-  target.style.cssText = 'width: 10px; height: 20px';
-  body.appendChild(target);
-  const observer = new ResizeObserver((entries, instance) => {
-    globalThis.__resizeObserverLog.push(`${entries.length}:${instance === observer}:${entries[0].target === target}`);
-  });
-  observer.observe(target);
-  return 'scheduled';
-})()
-"#,
-        )
-        .expect("ResizeObserver delivery setup should evaluate");
-
-    assert_eq!(result, "scheduled");
-    let delivered = vm
-        .eval("globalThis.__resizeObserverLog.join('|')")
-        .expect("ResizeObserver delivery log should evaluate");
-    assert_eq!(delivered, "1:true:true");
-}
 
 #[test]
 fn resize_observer_declared_slots_ignore_prototype_spoofing() {
@@ -2234,4 +2205,44 @@ fn intersection_observer_margins_follow_css_token_syntax() {
         )
         .expect("IntersectionObserver margins should use CSS token syntax");
     assert_eq!(result, "ok");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn resize_observer_callback_runs_during_rendering_after_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://resize-observer-delivery.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  globalThis.__resizeObserverLog = [];
+  const target = document.createElement('div');
+  target.style.cssText = 'width: 10px; height: 20px';
+  body.appendChild(target);
+  const observer = new ResizeObserver((entries, instance) => {
+    globalThis.__resizeObserverLog.push(`${entries.length}:${instance === observer}:${entries[0].target === target}`);
+  });
+  observer.observe(target);
+  return 'scheduled';
+})()
+"#,
+        )
+        .expect("ResizeObserver delivery setup should evaluate");
+
+    assert_eq!(result, "scheduled");
+    assert_eq!(
+        vm.eval("__resizeObserverLog.length").unwrap(),
+        "0",
+        "a microtask checkpoint must not deliver resize observations"
+    );
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("rendering update");
+    let delivered = vm
+        .eval("globalThis.__resizeObserverLog.join('|')")
+        .expect("ResizeObserver delivery log should evaluate");
+    assert_eq!(delivered, "1:true:true");
 }
