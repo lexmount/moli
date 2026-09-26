@@ -696,6 +696,8 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
         ConstructorKind::PerformanceEntry
+        | ConstructorKind::ResizeObserverEntry
+        | ConstructorKind::ResizeObserverSize
         | ConstructorKind::PerformanceNavigationTiming
         | ConstructorKind::PerformanceMeasure
         | ConstructorKind::PerformanceResourceTiming

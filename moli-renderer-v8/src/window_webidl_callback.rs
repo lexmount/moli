@@ -180,6 +180,16 @@ pub(crate) enum PreparedWindowWebIdlCallbackFunctionOutcome<R, E> {
 }
 
 impl PreparedWindowWebIdlCallbackFunction {
+    pub(crate) fn relevant_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        match self {
+            Self::Live { callback, .. } => Some(callback.relevant_context(scope)),
+            Self::Retired => None,
+        }
+    }
+
     pub(crate) const fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         match self {
             Self::Live {
