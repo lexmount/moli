@@ -2013,6 +2013,21 @@ fn node_is_intersection_target(dom_host: &DomHost, node: NativeNodeId) -> bool {
     dom_host.node(node).is_some_and(|node| node.is_element())
 }
 
+fn intersection_has_rendering_document(
+    runtime: &JsContextHost,
+    target: NativeNodeId,
+    options: &IntersectionObserverOptions,
+) -> bool {
+    // An explicit root belongs to its own Document even when the target is
+    // windowless or in another Document. For implicit roots, keep the target's
+    // browsing context semantics (IntersectionObserver issue #456).
+    runtime
+        .dom_host()
+        .owner_document_handle(options.root.unwrap_or(target))
+        .and_then(|document| runtime.window_endpoint_for_document(document))
+        .is_some()
+}
+
 fn target_is_intersection_observable(
     dom_host: &DomHost,
     target: NativeNodeId,
