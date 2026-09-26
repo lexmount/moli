@@ -1,5 +1,6 @@
 mod input_type;
 mod numeric;
+mod option;
 mod text;
 mod validity;
 
@@ -26,6 +27,10 @@ pub use numeric::{
     meter_element_values, number_aligns_to_step, number_step_mismatch,
     parse_html_floating_point_prefix, parse_input_numeric_value, progress_element_values,
     step_input_value,
+};
+pub use option::{
+    OptionDisabledAncestorStep, OptionNearestSelectStep, OptionNearestSelectTraversal,
+    option_disabled_ancestor_step,
 };
 pub use text::{
     normalize_custom_validation_message, normalize_form_submission_newlines,
