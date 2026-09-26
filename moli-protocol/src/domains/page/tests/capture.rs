@@ -548,26 +548,21 @@ async fn print_to_pdf_returns_base64_pdf_without_publishing_interactive_geometry
         take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
         0
     );
-    for (method, params) in [
-        ("Page.getLayoutMetrics", json!({})),
-        (
-            "Input.dispatchMouseEvent",
-            json!({"type":"mousePressed","x":20,"y":20,"button":"left"}),
-        ),
-    ] {
-        ctx.process_async(json!({
-            "id": 1113,
-            "method": method,
-            "sessionId": "SID-PDF-BASE64",
-            "params": params
-        }))
-        .await;
-        let response = take_response_by_id(&mut ctx, 1113);
-        assert_eq!(response["error"]["code"], -32000, "{response}");
-        let message = response["error"]["message"].as_str().unwrap();
-        assert!(message.contains("Page.captureScreenshot"), "{response}");
-        assert!(!message.contains("Page.printToPDF"), "{response}");
-    }
+    ctx.process_async(json!({
+        "id":1113,"method":"Page.getLayoutMetrics","sessionId":"SID-PDF-BASE64"
+    }))
+    .await;
+    assert!(take_response_by_id(&mut ctx, 1113)["result"]["visualViewport"].is_object());
+    ctx.process_async(json!({
+        "id":1113,"method":"Input.dispatchMouseEvent","sessionId":"SID-PDF-BASE64",
+        "params":{"type":"mousePressed","x":20,"y":20,"button":"left"}
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 1113);
+    assert_eq!(response["error"]["code"], -32000, "{response}");
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(message.contains("Page.captureScreenshot"), "{response}");
+    assert!(!message.contains("Page.printToPDF"), "{response}");
     ctx.capture_fixture_layout(Some("SID-PDF-BASE64")).await;
     ctx.process_async(query).await;
     assert_eq!(
@@ -1039,6 +1034,85 @@ fn screenshot_data_url(html: &str) -> String {
         percent_encoding::percent_encode(html.as_bytes(), percent_encoding::NON_ALPHANUMERIC)
     )
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn get_layout_metrics_before_first_screenshot_does_not_publish_layout() {
+    let mut ctx = TestContext::new();
+    let session = "SID-COLD-METRICS";
+    install_active_screenshot_page(
+        &mut ctx,
+        "BID-COLD-METRICS",
+        "TID-COLD-METRICS",
+        session,
+        &screenshot_data_url("<!doctype html><style>html,body{margin:0}main{width:80px;height:900px;background:rgb(20,30,40)}</style><main></main>"),
+    ).await;
+    set_screenshot_viewport(&mut ctx, session, 320, 240, 1.0, 120).await;
+
+    ctx.process_async(json!({"id":121,"method":"Page.getLayoutMetrics","sessionId":session}))
+        .await;
+    let response = take_response_by_id(&mut ctx, 121);
+    let result = &response["result"];
+    assert_eq!(result["layoutViewport"]["clientWidth"], 320, "{response}");
+    assert_eq!(result["layoutViewport"]["clientHeight"], 240);
+    assert_eq!(result["visualViewport"]["pageX"], 0.0);
+    assert_eq!(result["visualViewport"]["pageY"], 0.0);
+    assert_eq!(result["visualViewport"]["scale"], 1.0);
+    assert_eq!(
+        result["cssContentSize"],
+        json!({"x":0,"y":0,"width":320.0,"height":240.0})
+    );
+
+    let geometry = json!({
+        "id":122,"method":"Runtime.evaluate","sessionId":session,
+        "params":{"expression":"document.querySelector('main').getBoundingClientRect().width"}
+    });
+    ctx.process_async(geometry.clone()).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 122)["result"]["result"]["value"],
+        0
+    );
+
+    // Playwright gets these metrics before issuing its first capture request.
+    ctx.process_async(json!({
+        "id":123,"method":"Page.captureScreenshot","sessionId":session,
+        "params":{"format":"png","clip":{
+            "x":result["visualViewport"]["pageX"],
+            "y":result["visualViewport"]["pageY"],
+            "width":320,"height":240,"scale":result["visualViewport"]["scale"]
+        }}
+    }))
+    .await;
+    let png = screenshot_bytes(&take_response_by_id(&mut ctx, 123));
+    assert_png_dimensions(&png, 320, 240);
+    assert_eq!(decode_png_pixel(&png, 20, 20), [20, 30, 40, 255]);
+    ctx.process_async(geometry).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 122)["result"]["result"]["value"],
+        80
+    );
+
+    ctx.process_async(json!({"id":124,"method":"Page.getLayoutMetrics","sessionId":session}))
+        .await;
+    let published = take_response_by_id(&mut ctx, 124);
+    assert_eq!(published["result"]["contentSize"]["height"], 900.0);
+
+    // The viewport and scroll offset stay live even when the content extent
+    // still belongs to an older published frame.
+    ctx.process_async(json!({
+        "id":125,"method":"Runtime.evaluate","sessionId":session,
+        "params":{"expression":"window.scrollTo(0,100);document.querySelector('main').style.height='1600px'"}
+    })).await;
+    take_response_by_id(&mut ctx, 125);
+    set_screenshot_viewport(&mut ctx, session, 400, 300, 2.0, 126).await;
+    ctx.process_async(json!({"id":127,"method":"Page.getLayoutMetrics","sessionId":session}))
+        .await;
+    let live = take_response_by_id(&mut ctx, 127);
+    assert_eq!(live["result"]["layoutViewport"]["clientWidth"], 400);
+    assert_eq!(live["result"]["layoutViewport"]["clientHeight"], 300);
+    assert_eq!(live["result"]["visualViewport"]["pageY"], 100.0);
+    assert_eq!(live["result"]["visualViewport"]["scale"], 2.0);
+    assert_eq!(live["result"]["contentSize"]["height"], 900.0);
+}
+
 /// cdp.page: getLayoutMetrics – falls back to viewport metrics without a live page
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics() {

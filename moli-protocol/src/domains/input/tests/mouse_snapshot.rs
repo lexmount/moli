@@ -37,26 +37,24 @@ async fn cdp_geometry_and_mouse_require_explicit_layout_publication() {
     );
 
     let object_id = resolve_selector_object_id(&mut ctx, "#target", 710).await;
-    for (method, params) in [
-        ("DOM.getBoxModel", json!({"objectId": object_id})),
-        ("Page.getLayoutMetrics", json!({})),
+    ctx.process_async(json!({"id":719,"method":"Page.getLayoutMetrics"}))
+        .await;
+    assert!(ctx.take_response_by_id(719)["result"]["visualViewport"].is_object());
+    ctx.process_async(json!({"id":720,"method":"DOM.getBoxModel","params":{"objectId":object_id}}))
+        .await;
+    let cold = ctx.take_response_by_id(720);
+    assert_eq!(cold["error"]["code"], -32000, "{cold}");
+    let message = cold["error"]["message"]
+        .as_str()
+        .expect("missing-layout error");
+    for command in [
+        "Page.captureScreenshot",
+        "Page.startScreencast",
+        "wait for a frame",
     ] {
-        ctx.process_async(json!({"id":720,"method":method,"params":params}))
-            .await;
-        let cold = ctx.take_response_by_id(720);
-        assert_eq!(cold["error"]["code"], -32000, "{cold}");
-        let message = cold["error"]["message"]
-            .as_str()
-            .expect("missing-layout error");
-        for command in [
-            "Page.captureScreenshot",
-            "Page.startScreencast",
-            "wait for a frame",
-        ] {
-            assert!(message.contains(command), "{cold}");
-        }
-        assert!(!message.contains("Page.printToPDF"), "{cold}");
+        assert!(message.contains(command), "{cold}");
     }
+    assert!(!message.contains("Page.printToPDF"), "{cold}");
     ctx.process_async(json!({"id":719,"method":"Page.captureScreenshot"}))
         .await;
     assert!(ctx.take_response_by_id(719)["result"]["data"].is_string());

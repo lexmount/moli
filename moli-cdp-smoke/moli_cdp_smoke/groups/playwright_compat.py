@@ -6,9 +6,11 @@ from typing import Any, Callable, Awaitable
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..pdf_document import assert_pdf_envelope
+from ..png_image import decode_png
 
 
 async def run_playwright_compat_group(state: SmokeState) -> None:
+    await _verify_playwright_first_screenshot(state)
     await _verify_playwright_context_route_metadata_sample(state)
     await _verify_playwright_page_route_precedence_sample(state)
     await _verify_playwright_context_route_fallback_sample(state)
@@ -25,6 +27,30 @@ async def run_playwright_compat_group(state: SmokeState) -> None:
     await _verify_playwright_main_frame_cdp_session_sample(state)
     await _verify_playwright_cdp_session_detach_sample(state)
     await _verify_playwright_browser_cdp_session_sample(state)
+
+
+async def _verify_playwright_first_screenshot(state: SmokeState) -> None:
+    # Each case starts on a new page. A raw CDP capture here would hide a broken
+    # getLayoutMetrics preflight in Playwright's own screenshot implementation.
+    for name, options, size in [
+        ("viewport", {}, (320, 240)),
+        ("clip", {"clip": {"x": 10, "y": 15, "width": 60, "height": 50}}, (60, 50)),
+    ]:
+        page = await state.context.new_page()
+        try:
+            await page.set_viewport_size({"width": 320, "height": 240})
+            await page.goto(
+                "data:text/html,<!doctype html><body style='margin:0'>"
+                "<div style='width:80px;height:900px;background:rgb(20,30,40)'></div>",
+                wait_until="load",
+                timeout=10_000,
+            )
+            image = decode_png(await page.screenshot(timeout=10_000, **options))
+            assert_equal((image.width, image.height), size, f"first Playwright {name} screenshot size")
+            assert_equal(image.pixel(5, 5), (20, 30, 40, 255), f"first Playwright {name} screenshot pixel")
+        finally:
+            await page.close()
+    state.record("playwright_first_screenshot_without_published_layout", {"modes": ["viewport", "clip"]})
 
 
 async def _with_fresh_page(state: SmokeState, body: Callable[[Any, Any], Awaitable[None]]) -> None:

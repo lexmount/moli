@@ -308,7 +308,7 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "playwright-compat",
-        "Playwright upstream derived route and CDPSession compatibility samples.",
+        "Playwright first screenshots without layout prewarming, routes, and CDPSession compatibility samples.",
         "page",
         run_playwright_compat_group,
     ),

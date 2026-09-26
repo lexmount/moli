@@ -5,7 +5,11 @@ from typing import Any
 
 
 async def capture_layout(page: Any) -> bytes:
-    """Publish fixture layout with CDP, without Playwright's geometry preflight."""
+    """Publish fixture layout for geometry and input assertions.
+
+    Screenshot tests must call page.screenshot() directly on a fresh page;
+    prewarming here would bypass Playwright's getLayoutMetrics preflight.
+    """
     client = await page.context.new_cdp_session(page)
     try:
         result = await client.send("Page.captureScreenshot", {"format": "png"})

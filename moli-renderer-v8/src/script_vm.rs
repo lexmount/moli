@@ -2764,12 +2764,38 @@ impl ScriptVm {
         self.start_stylesheet_subresource_fetches(bound);
     }
 
-    pub(crate) fn observable_geometry_batch_for_current_document(
-        &mut self,
-        batch: &moli_layout::LayoutQueryBatch<DomHandle>,
-    ) -> Result<moli_layout::LayoutAnswers<DomHandle>, moli_layout::LayoutError> {
-        let document = self._context_host.borrow().document_handle();
-        self.observable_geometry_batch_for_document(document, batch)
+    /// Viewport and scroll state are live browser state, including before the
+    /// first capture. Only the content extent comes from published layout;
+    /// without a snapshot it falls back to the viewport, without running layout.
+    pub(crate) fn document_metrics_for_current_document(
+        &self,
+    ) -> moli_layout::LayoutDocumentMetrics {
+        let host = self._context_host.borrow();
+        let document = host.document_handle();
+        let viewport = host.layout_viewport_for_document(document);
+        let viewport_scroll = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+            .and_then(|root| host.dom_host().node(root))
+            .and_then(|node| node.as_element())
+            .map(|element| {
+                moli_layout::LayoutPoint::new(
+                    element.scroll_left() as f32,
+                    element.scroll_top() as f32,
+                )
+            })
+            .unwrap_or(moli_layout::LayoutPoint::ZERO);
+        let content_size = host
+            .with_latest_layout_tree_for_document(document, |tree| tree.content_size)
+            .unwrap_or_else(|| {
+                moli_layout::LayoutSize::new(viewport.css_width as f32, viewport.css_height as f32)
+            });
+        moli_layout::LayoutDocumentMetrics {
+            viewport,
+            viewport_scroll,
+            content_size,
+        }
     }
 
     pub(crate) fn observable_geometry_batch_for_document(
