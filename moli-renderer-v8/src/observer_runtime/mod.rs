@@ -33,6 +33,7 @@ use crate::dom::native::{
     DomHost, DomMutationEffects, DomMutationRecord, DomMutationRecordKind, NativeNodeId,
 };
 use crate::webidl;
+use indexmap::IndexSet;
 use moli_css_parse::{normalize_root_margin, root_margin_components};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -355,7 +356,9 @@ enum QueuedMutationRecordKind {
 struct IntersectionObserverState {
     observer: v8::Global<v8::Object>,
     callback: callback::ObserverCallback,
-    observed_targets: HashSet<NativeNodeId>,
+    // ObservationTargets is an ordered list; repeated observe() is a no-op,
+    // and unobserve()/observe() moves only that target to the end.
+    observed_targets: IndexSet<NativeNodeId>,
     queued_entries: Vec<QueuedIntersectionEntry>,
     last_reported_entries: HashMap<NativeNodeId, LastReportedIntersection>,
     options: IntersectionObserverOptions,
@@ -618,7 +621,7 @@ impl ObserverStore {
             IntersectionObserverState {
                 observer: v8::Global::new(scope, observer),
                 callback,
-                observed_targets: HashSet::new(),
+                observed_targets: IndexSet::new(),
                 queued_entries: Vec::new(),
                 last_reported_entries: HashMap::new(),
                 options,
@@ -658,7 +661,7 @@ impl ObserverStore {
         let Some(state) = self.intersection_observers.get_mut(&id) else {
             return;
         };
-        state.observed_targets.remove(&target);
+        state.observed_targets.shift_remove(&target);
         state
             .queued_entries
             .retain(|queued| queued.target != target);
@@ -733,35 +736,40 @@ impl ObserverStore {
         deliveries
     }
 
-    fn collect_intersection_deliveries<'s>(
+    fn intersection_notification_observers(
+        &self,
+        owner: crate::native_bridge::WindowExecutionContextOwner,
+    ) -> Vec<u32> {
+        let mut ids: Vec<_> = self
+            .intersection_observers
+            .iter()
+            .filter_map(|(id, state)| {
+                state
+                    .callback
+                    .observer_identity()
+                    .is_some_and(|identity| identity.owner() == owner)
+                    .then_some(*id)
+            })
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn take_intersection_delivery<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        owner: crate::native_bridge::WindowExecutionContextOwner,
-    ) -> Vec<IntersectionObserverDelivery<'s>> {
-        let mut deliveries = Vec::new();
-        let mut states: Vec<_> = self.intersection_observers.iter_mut().collect();
-        states.sort_unstable_by_key(|(id, _)| **id);
-        for (_, state) in states {
-            if state
-                .callback
-                .observer_identity()
-                .is_none_or(|identity| identity.owner() != owner)
-            {
-                continue;
-            }
-            if state.queued_entries.is_empty() {
-                continue;
-            }
-            let entries = mem::take(&mut state.queued_entries);
-            let observer = v8::Local::new(scope, &state.observer);
-            deliveries.push(IntersectionObserverDelivery {
-                observer,
-                callback: state.callback.prepare(scope),
-                entries,
-                options: state.options.clone(),
-            });
+        id: u32,
+    ) -> Option<IntersectionObserverDelivery<'s>> {
+        let state = self.intersection_observers.get_mut(&id)?;
+        if state.queued_entries.is_empty() {
+            return None;
         }
-        deliveries
+        Some(IntersectionObserverDelivery {
+            observer: v8::Local::new(scope, &state.observer),
+            callback: state.callback.prepare(scope),
+            entries: mem::take(&mut state.queued_entries),
+            options: state.options.clone(),
+        })
     }
 
     fn retire_execution_context_owner(
@@ -845,50 +853,39 @@ fn invoke_mutation_deliveries<'s>(
     }
 }
 
-fn invoke_intersection_deliveries<'s>(
+fn invoke_intersection_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    target: crate::native_bridge::WindowDocumentTaskTarget,
-    deliveries: Vec<IntersectionObserverDelivery<'s>>,
+    delivery: IntersectionObserverDelivery<'s>,
 ) {
-    for delivery in deliveries {
-        if scope.is_execution_terminating()
-            || !(unsafe { &*host_ptr }).window_document_owner_is_current_for_dispatch_scope(
-                target.owner(),
-                target.dispatch_scope(),
-            )
-        {
-            break;
-        }
-        if !delivery.callback.is_current(unsafe { &*host_ptr }) {
-            continue;
-        }
-        let entries =
-            build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries);
-        let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
-        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
-        let outcome = delivery.callback.invoke(
+    if !delivery.callback.is_current(unsafe { &*host_ptr }) {
+        return;
+    }
+    let entries =
+        build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries);
+    let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
+    let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+    let outcome = delivery.callback.invoke(
+        scope,
+        host_ptr,
+        "IntersectionObserver callback",
+        observer_value,
+        &[entries.into(), observer_value],
+    );
+    if !scope.is_execution_terminating()
+        && let WindowWebIdlCallbackFunctionOutcome::Threw(report) = outcome
+    {
+        report_event_callback_exception(
             scope,
             host_ptr,
-            "IntersectionObserver callback",
-            observer_value,
-            &[entries.into(), observer_value],
+            "intersectionobserver",
+            delivery.callback.relevant_identity(),
+            None,
+            &report,
         );
-        if !scope.is_execution_terminating()
-            && let WindowWebIdlCallbackFunctionOutcome::Threw(report) = outcome
-        {
-            report_event_callback_exception(
-                scope,
-                host_ptr,
-                "intersectionobserver",
-                delivery.callback.relevant_identity(),
-                None,
-                &report,
-            );
-        }
-        drop(execution_scope);
-        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
+    drop(execution_scope);
+    crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
 }
 
 impl MutationObserverState {
