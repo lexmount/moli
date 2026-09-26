@@ -18,7 +18,10 @@ async fn gated_page() -> (SameDocumentPage, Arc<ResponseGate>) {
         "/popup-response.html",
         axum::routing::get(move |uri: axum::http::Uri| {
             let gate = observed.clone();
-            async move {
+            // stop() can close the HTTP connection and cancel its handler.
+            // Keep the simulated late response alive until the test releases
+            // the gate, even when that response can no longer be delivered.
+            let response_task = tokio::spawn(async move {
                 use axum::response::IntoResponse;
                 let visit = gate.requests.fetch_add(1, Ordering::SeqCst) + 1;
                 let query = uri.query().unwrap_or("");
@@ -49,6 +52,11 @@ async fn gated_page() -> (SameDocumentPage, Arc<ResponseGate>) {
                     );
                 }
                 response
+            });
+            async move {
+                response_task
+                    .await
+                    .expect("gated popup response task should complete")
             }
         }),
     );
