@@ -313,6 +313,7 @@ const LIGHTWEIGHT_STYLE_PROPERTIES: &[&str] = &[
     "container-name",
     "container-type",
     "content",
+    "content-visibility",
     "cursor",
     "direction",
     "display",
