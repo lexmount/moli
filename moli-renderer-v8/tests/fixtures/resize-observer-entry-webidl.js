@@ -3,6 +3,8 @@
   const entryAttributes = ['target', 'contentRect', 'contentBoxSize', 'borderBoxSize', 'devicePixelContentBoxSize'];
   const boxAttributes = entryAttributes.slice(2);
   const sizeAttributes = ['inlineSize', 'blockSize'];
+  const afterRendering = () => new Promise(resolve =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const withFrame = async run => {
     const frame = document.body.appendChild(document.createElement('iframe'));
     try { await run(frame.contentWindow); }
@@ -116,6 +118,9 @@
                 if (written) Reflect.set(rect, key, original);
                 assert(!written && rect[key] === original, `${key} is readonly`);
               }
+              const copy = structuredClone(rect);
+              assert(copy instanceof DOMRectReadOnly && copy !== rect, 'readonly geometry retains its clone codec');
+              assert(copy.width === rect.width && copy.height === rect.height, 'cloned geometry');
             });
             for (const attribute of boxAttributes) check(`${attribute} is a stable FrozenArray of native sizes`, () => {
               const array = entry[attribute], first = array[0];
@@ -182,25 +187,18 @@
     async run(check) {
       const target = document.body.appendChild(document.createElement('div'));
       target.style.cssText = 'width:31px;height:17px';
-      let deliver;
-      const observer = new ResizeObserver(entries => deliver(entries[0]));
-      const sample = async () => {
-        // The native fixture publishes layout explicitly; browser runs can
-        // use the next rendering opportunity.
-        await (__resizeEntryChecks.publishLayout?.() ?? new Promise(requestAnimationFrame));
-        return new Promise(resolve => {
-          deliver = resolve;
-          observer.observe(target);
-        });
-      };
+      const deliveries = [];
+      const observer = new ResizeObserver(entries => deliveries.push(entries[0]));
       try {
-        const first = await sample();
+        observer.observe(target);
+        await afterRendering();
+        const first = deliveries[0];
         assert(first, 'initial notification');
-        observer.unobserve(target);
         target.style.width = '47px';
-        const second = await sample();
+        await afterRendering();
+        const second = deliveries[deliveries.length - 1];
         check('old dimensions and object identities survive the resize', () => {
-          assert(first !== second, 'a new observation creates a fresh snapshot');
+          assert(deliveries.length === 2 && first !== second, 'one new snapshot per changed size');
           assert(first.contentRect.width === 31 && first.contentBoxSize[0].inlineSize === 31, 'old dimensions');
           assert(second.contentRect.width === 47 && second.contentBoxSize[0].inlineSize === 47, 'new dimensions');
           for (const attribute of ['contentRect', ...boxAttributes]) assert(first[attribute] !== second[attribute], 'fresh nested snapshot');

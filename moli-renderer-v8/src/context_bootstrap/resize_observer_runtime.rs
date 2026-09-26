@@ -7,11 +7,11 @@ use crate::common_runtime::{
 use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
-use entry::ResizeObserverEntryData;
-pub(super) use entry::install_resize_observer_entry_template_bindings;
 pub(crate) use delivery::{
     broadcast_document_resize_observers, report_document_resize_observer_loop_error,
 };
+use entry::ResizeObserverEntryData;
+pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi_declare::WebApiObject;
 use webidl::WebIdlDictionarySerialize;
 
@@ -434,9 +434,6 @@ fn sample_resize_observations<'s>(
             (content_width * device_scale).round(),
             (content_height * device_scale).round(),
         );
-        let content_box_size = content_size;
-        let border_box_size = border_size;
-        let device_pixel_content_box_size = device_size;
         let observed_size = match entry
             .record
             .and_then(|record| observed_record_box(scope, record))
@@ -451,9 +448,9 @@ fn sample_resize_observations<'s>(
         let declaration = ResizeObserverEntryData {
             target: entry.target,
             content_rect: rect,
-            content_box_size,
-            border_box_size,
-            device_pixel_content_box_size,
+            content_box_size: content_size,
+            border_box_size: border_size,
+            device_pixel_content_box_size: device_size,
         };
         entries.push(SampledResizeObservation {
             record,
