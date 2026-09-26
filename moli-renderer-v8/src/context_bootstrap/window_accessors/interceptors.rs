@@ -82,7 +82,7 @@ pub(in crate::context_bootstrap) fn window_indexed_property_enumerator<'s>(
         if let Some(document) = host.child_browsing_context_document_handle(parent) {
             host.sync_child_browsing_context_subtree(scope, document);
         }
-        host.child_browsing_context_child_frame_handles(parent)
+        host.window_child_browsing_context_handles(Some(parent))
             .len()
     } else {
         host.sync_child_browsing_context_subtree(scope, host.document_handle());

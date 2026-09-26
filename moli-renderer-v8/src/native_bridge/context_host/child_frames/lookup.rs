@@ -14,8 +14,27 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_browsing_context_count(&self) -> usize {
-        self.top_level_child_browsing_context_handles_in_frame_tree_order()
-            .len()
+        self.window_child_browsing_context_handles(None).len()
+    }
+
+    pub(crate) fn window_child_browsing_context_handles(
+        &self,
+        parent: Option<DomHandle>,
+    ) -> Vec<DomHandle> {
+        let handles = match parent {
+            Some(parent) => self.child_browsing_context_child_frame_handles(parent),
+            None => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
+        };
+        // Shadow frames remain in the browsing-context tree, but do not appear
+        // in their containing Window's indexed properties.
+        handles
+            .into_iter()
+            .filter(|handle| {
+                self.dom_host()
+                    .node(*handle)
+                    .is_some_and(|node| node.flags().in_document_tree())
+            })
+            .collect()
     }
 
     pub(crate) fn child_browsing_context_handles_in_document_order(&self) -> Vec<DomHandle> {
@@ -123,7 +142,7 @@ impl JsContextHost {
         if self.child_browsing_contexts.is_empty() {
             return None;
         }
-        self.top_level_child_browsing_context_handles_in_frame_tree_order()
+        self.window_child_browsing_context_handles(None)
             .into_iter()
             .nth(index)
     }
@@ -133,7 +152,7 @@ impl JsContextHost {
         parent: DomHandle,
         index: usize,
     ) -> Option<DomHandle> {
-        self.child_browsing_context_child_frame_handles(parent)
+        self.window_child_browsing_context_handles(Some(parent))
             .into_iter()
             .nth(index)
     }

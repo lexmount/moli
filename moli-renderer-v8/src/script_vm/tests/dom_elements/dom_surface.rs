@@ -9383,7 +9383,7 @@ document.getElementById('frame').srcdoc =
 }
 
 #[test]
-fn iframe_in_shadow_tree_is_not_a_named_window_property() {
+fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
 
     let result = vm
@@ -9399,6 +9399,10 @@ const lightFrame = document.createElement('iframe');
 lightFrame.name = 'lightTarget';
 (document.body || document.documentElement || document).appendChild(lightFrame);
 [
+  window.length,
+  window.frames.length,
+  window[0] === lightFrame.contentWindow,
+  window[1] === undefined,
   'shadowTarget' in window,
   window.shadowTarget === undefined,
   shadowFrame.contentWindow !== null,
@@ -9409,8 +9413,45 @@ lightFrame.name = 'lightTarget';
         )
         .expect("shadow iframe named property probe should evaluate");
 
-    assert_eq!(result, "false|true|true|true|true");
+    assert_eq!(result, "1|1|true|true|false|true|true|true|true");
 }
+#[test]
+fn nested_window_indexes_exclude_shadow_tree_iframes() {
+    let mut vm = new_parsed_test_vm(
+        "https://nested-shadow-frame-index.test/",
+        "<!doctype html><html><body><iframe id='outer'></iframe></body></html>",
+    );
+    let result = vm
+        .eval(
+            r#"
+      (() => {
+        const outer = document.getElementById('outer');
+        const child = outer.contentWindow;
+        const doc = outer.contentDocument;
+        const host = doc.body.appendChild(doc.createElement('div'));
+        const shadowFrame = doc.createElement('iframe');
+        shadowFrame.name = 'shadowTarget';
+        host.attachShadow({mode: 'open'}).appendChild(shadowFrame);
+        const lightFrame = doc.createElement('iframe');
+        lightFrame.name = 'lightTarget';
+        doc.body.appendChild(lightFrame);
+        return [
+          child.length,
+          child.frames.length,
+          child[0] === lightFrame.contentWindow,
+          child[1] === undefined,
+          Object.getOwnPropertyNames(child).filter(key => /^\d+$/.test(key)).join(','),
+          shadowFrame.contentWindow !== null,
+          !('shadowTarget' in child),
+          child.lightTarget === lightFrame.contentWindow
+        ].join('|');
+      })()
+    "#,
+        )
+        .expect("nested Window indexes should evaluate");
+    assert_eq!(result, "1|1|true|true|0|true|true|true");
+}
+
 #[test]
 fn child_webassembly_native_values_use_public_intrinsic_prototypes() {
     let mut vm = new_storage_test_vm("https://child-wasm-intrinsics.test/");
