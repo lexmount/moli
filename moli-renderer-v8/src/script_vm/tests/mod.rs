@@ -15233,3 +15233,5 @@ mod window_execution_context;
 mod string_timers;
 
 mod history_replace_forward;
+
+mod navigation_timing_inheritance;

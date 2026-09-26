@@ -461,24 +461,6 @@ fn performance_navigation_legacy_type(navigation_type: &str) -> f64 {
     }
 }
 
-const NAV_INITIATOR_TYPE_SLOT: &str = "__moliPerformanceNavigationTimingInitiatorType";
-const NAV_NEXT_HOP_PROTOCOL_SLOT: &str = "__moliPerformanceNavigationTimingNextHopProtocol";
-const NAV_WORKER_START_SLOT: &str = "__moliPerformanceNavigationTimingWorkerStart";
-const NAV_REDIRECT_START_SLOT: &str = "__moliPerformanceNavigationTimingRedirectStart";
-const NAV_REDIRECT_END_SLOT: &str = "__moliPerformanceNavigationTimingRedirectEnd";
-const NAV_FETCH_START_SLOT: &str = "__moliPerformanceNavigationTimingFetchStart";
-const NAV_DOMAIN_LOOKUP_START_SLOT: &str = "__moliPerformanceNavigationTimingDomainLookupStart";
-const NAV_DOMAIN_LOOKUP_END_SLOT: &str = "__moliPerformanceNavigationTimingDomainLookupEnd";
-const NAV_CONNECT_START_SLOT: &str = "__moliPerformanceNavigationTimingConnectStart";
-const NAV_CONNECT_END_SLOT: &str = "__moliPerformanceNavigationTimingConnectEnd";
-const NAV_SECURE_CONNECTION_START_SLOT: &str =
-    "__moliPerformanceNavigationTimingSecureConnectionStart";
-const NAV_REQUEST_START_SLOT: &str = "__moliPerformanceNavigationTimingRequestStart";
-const NAV_RESPONSE_START_SLOT: &str = "__moliPerformanceNavigationTimingResponseStart";
-const NAV_RESPONSE_END_SLOT: &str = "__moliPerformanceNavigationTimingResponseEnd";
-const NAV_TRANSFER_SIZE_SLOT: &str = "__moliPerformanceNavigationTimingTransferSize";
-const NAV_ENCODED_BODY_SIZE_SLOT: &str = "__moliPerformanceNavigationTimingEncodedBodySize";
-const NAV_DECODED_BODY_SIZE_SLOT: &str = "__moliPerformanceNavigationTimingDecodedBodySize";
 const NAV_UNLOAD_EVENT_START_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventStart";
 const NAV_UNLOAD_EVENT_END_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventEnd";
 const NAV_DOM_INTERACTIVE_SLOT: &str = "__moliPerformanceNavigationTimingDomInteractive";
@@ -493,23 +475,6 @@ const NAV_TYPE_SLOT: &str = "__moliPerformanceNavigationTimingType";
 const NAV_REDIRECT_COUNT_SLOT: &str = "__moliPerformanceNavigationTimingRedirectCount";
 
 const PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
-    NAV_INITIATOR_TYPE_SLOT,
-    NAV_NEXT_HOP_PROTOCOL_SLOT,
-    NAV_WORKER_START_SLOT,
-    NAV_REDIRECT_START_SLOT,
-    NAV_REDIRECT_END_SLOT,
-    NAV_FETCH_START_SLOT,
-    NAV_DOMAIN_LOOKUP_START_SLOT,
-    NAV_DOMAIN_LOOKUP_END_SLOT,
-    NAV_CONNECT_START_SLOT,
-    NAV_CONNECT_END_SLOT,
-    NAV_SECURE_CONNECTION_START_SLOT,
-    NAV_REQUEST_START_SLOT,
-    NAV_RESPONSE_START_SLOT,
-    NAV_RESPONSE_END_SLOT,
-    NAV_TRANSFER_SIZE_SLOT,
-    NAV_ENCODED_BODY_SIZE_SLOT,
-    NAV_DECODED_BODY_SIZE_SLOT,
     NAV_UNLOAD_EVENT_START_SLOT,
     NAV_UNLOAD_EVENT_END_SLOT,
     NAV_DOM_INTERACTIVE_SLOT,
@@ -525,40 +490,6 @@ const PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::PerformanceNavigationTiming)]
 struct PerformanceNavigationTimingSlotDeclaration {
-    #[webapi(slot = NAV_INITIATOR_TYPE_SLOT, constructor_default = "navigation")]
-    initiator_type: &'static str,
-    #[webapi(slot = NAV_NEXT_HOP_PROTOCOL_SLOT, constructor_default = "")]
-    next_hop_protocol: &'static str,
-    #[webapi(slot = NAV_WORKER_START_SLOT, constructor_default)]
-    worker_start: f64,
-    #[webapi(slot = NAV_REDIRECT_START_SLOT, constructor_default)]
-    redirect_start: f64,
-    #[webapi(slot = NAV_REDIRECT_END_SLOT, constructor_default)]
-    redirect_end: f64,
-    #[webapi(slot = NAV_FETCH_START_SLOT, constructor_default)]
-    fetch_start: f64,
-    #[webapi(slot = NAV_DOMAIN_LOOKUP_START_SLOT, constructor_default)]
-    domain_lookup_start: f64,
-    #[webapi(slot = NAV_DOMAIN_LOOKUP_END_SLOT, constructor_default)]
-    domain_lookup_end: f64,
-    #[webapi(slot = NAV_CONNECT_START_SLOT, constructor_default)]
-    connect_start: f64,
-    #[webapi(slot = NAV_CONNECT_END_SLOT, constructor_default)]
-    connect_end: f64,
-    #[webapi(slot = NAV_SECURE_CONNECTION_START_SLOT, constructor_default)]
-    secure_connection_start: f64,
-    #[webapi(slot = NAV_REQUEST_START_SLOT, constructor_default)]
-    request_start: f64,
-    #[webapi(slot = NAV_RESPONSE_START_SLOT, constructor_default)]
-    response_start: f64,
-    #[webapi(slot = NAV_RESPONSE_END_SLOT, constructor_default)]
-    response_end: f64,
-    #[webapi(slot = NAV_TRANSFER_SIZE_SLOT, constructor_default)]
-    transfer_size: f64,
-    #[webapi(slot = NAV_ENCODED_BODY_SIZE_SLOT, constructor_default)]
-    encoded_body_size: f64,
-    #[webapi(slot = NAV_DECODED_BODY_SIZE_SLOT, constructor_default)]
-    decoded_body_size: f64,
     #[webapi(slot = NAV_UNLOAD_EVENT_START_SLOT, constructor_default)]
     unload_event_start: f64,
     #[webapi(slot = NAV_UNLOAD_EVENT_END_SLOT, constructor_default)]
@@ -579,175 +510,73 @@ struct PerformanceNavigationTimingSlotDeclaration {
     navigation_type: &'static str,
     #[webapi(slot = NAV_REDIRECT_COUNT_SLOT, constructor_default)]
     redirect_count: f64,
-    #[webapi(method, name = "toJSON", length = 0, callback = performance_navigation_timing_to_json_callback)]
-    to_json: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable)]
+#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable, receiver)]
 struct PerformanceNavigationTimingPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 0)
     )]
-    initiator_type: (),
+    unload_event_start: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 1)
     )]
-    next_hop_protocol: (),
+    unload_event_end: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 2)
     )]
-    worker_start: (),
+    dom_interactive: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 3)
     )]
-    redirect_start: (),
+    dom_content_loaded_event_start: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 4)
     )]
-    redirect_end: (),
+    dom_content_loaded_event_end: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 5)
     )]
-    fetch_start: (),
+    dom_complete: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 6)
     )]
-    domain_lookup_start: (),
+    load_event_start: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 7)
     )]
-    domain_lookup_end: (),
+    load_event_end: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 8)
     )]
-    connect_start: (),
+    r#type: (),
     #[webapi(
         accessor_property,
         getter = performance_navigation_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 9)
     )]
-    connect_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 10)
-    )]
-    secure_connection_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 11)
-    )]
-    request_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 12)
-    )]
-    response_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 13)
-    )]
-    response_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 14)
-    )]
-    transfer_size: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 15)
-    )]
-    encoded_body_size: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 16)
-    )]
-    decoded_body_size: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 17)
-    )]
-    unload_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 18)
-    )]
-    unload_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 19)
-    )]
-    dom_interactive: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 20)
-    )]
-    dom_content_loaded_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 21)
-    )]
-    dom_content_loaded_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 22)
-    )]
-    dom_complete: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 23)
-    )]
-    load_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 24)
-    )]
-    load_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 25)
-    )]
-    r#type: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 26)
-    )]
     redirect_count: (),
+    #[webapi(method, name = "toJSON", length = 0, callback = performance_navigation_timing_to_json_callback)]
+    to_json: (),
 }
 
 fn performance_navigation_entry_name<'s>(
@@ -776,6 +605,17 @@ fn create_navigation_performance_entry<'s>(
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
     let entry = create_performance_entry(scope, "navigation", name, 0.0, 0.0, None);
+    super::entries::initialize_resource_timing_slots(
+        scope,
+        entry,
+        "navigation",
+        0.0,
+        0.0,
+        0.0,
+        "non-blocking",
+        0.0,
+        "",
+    );
     PerformanceNavigationTimingSlotDeclaration::new(performance_navigation_timing_type(
         navigation_type,
     ))
@@ -1612,43 +1452,31 @@ fn performance_navigation_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let output = object_json_snapshot(
-        scope,
-        args.this(),
-        &[
-            "name",
-            "entryType",
-            "startTime",
-            "duration",
-            "initiatorType",
-            "nextHopProtocol",
-            "workerStart",
-            "redirectStart",
-            "redirectEnd",
-            "fetchStart",
-            "domainLookupStart",
-            "domainLookupEnd",
-            "connectStart",
-            "connectEnd",
-            "secureConnectionStart",
-            "requestStart",
-            "responseStart",
-            "responseEnd",
-            "transferSize",
-            "encodedBodySize",
-            "decodedBodySize",
-            "unloadEventStart",
-            "unloadEventEnd",
-            "domInteractive",
-            "domContentLoadedEventStart",
-            "domContentLoadedEventEnd",
-            "domComplete",
-            "loadEventStart",
-            "loadEventEnd",
-            "type",
-            "redirectCount",
-        ],
-    );
+    let Some(output) = super::entries::resource_timing_json_snapshot(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    // Inherited and navigation-only attributes are serialized from the same
+    // native slots used by their getters, without consulting author properties.
+    for (name, slot) in [
+        "unloadEventStart",
+        "unloadEventEnd",
+        "domInteractive",
+        "domContentLoadedEventStart",
+        "domContentLoadedEventEnd",
+        "domComplete",
+        "loadEventStart",
+        "loadEventEnd",
+        "type",
+        "redirectCount",
+    ]
+    .iter()
+    .zip(PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS)
+    {
+        let value = get_private_value(scope, args.this(), slot)
+            .expect("native PerformanceNavigationTiming should retain its attributes");
+        let _ = output.create_data_property(scope, v8str(scope, name).into(), value);
+    }
     rv.set(output.into());
 }
 
