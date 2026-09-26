@@ -15,8 +15,8 @@ use super::navigation_traversal_execution::{
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active, window_history_for_holder, window_navigation_for_holder,
-    window_task_target_for_runtime_owner,
+    navigation_document_is_active, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::history_traversal::{
@@ -318,6 +318,7 @@ fn settle_aborted_admission<'s>(
     admission: &PendingHistoryTraversalAdmission,
     error: Option<v8::Local<'s, v8::Value>>,
 ) {
+    let canceled = error.is_none();
     let error = error.unwrap_or_else(|| {
         navigation_dom_exception(scope, "History traversal was canceled", "AbortError")
     });
@@ -329,8 +330,18 @@ fn settle_aborted_admission<'s>(
         }
         if let Some(navigation) = &participant.navigation {
             let navigation = v8::Local::new(scope, navigation);
+            let filename = if canceled {
+                let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+                window_location_for_holder(scope, owner)
+                    .and_then(|location| {
+                        super::location_runtime::location_href_slot(scope, location)
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             super::navigation_lifecycle::finish_navigation_error_events(
-                scope, navigation, error, "",
+                scope, navigation, error, &filename,
             );
         }
     }
