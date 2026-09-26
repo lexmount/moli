@@ -8,16 +8,28 @@ use url::Url;
 /// be active when the body finishes. This must not retain any V8 objects.
 #[derive(Clone)]
 pub(crate) struct FetchResourceTiming {
+    started: std::time::Instant,
     start_unix_millis: f64,
+    response_start_unix_millis: std::cell::Cell<Option<f64>>,
     initiator_url: String,
 }
 
 impl FetchResourceTiming {
     pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>, origin: &WebOrigin) -> Self {
         Self {
+            started: std::time::Instant::now(),
             start_unix_millis: crate::context_bootstrap::unix_epoch_millis(),
+            response_start_unix_millis: std::cell::Cell::new(None),
             initiator_url: crate::resource_initiator::current_url(scope, origin),
         }
+    }
+
+    fn now(&self) -> f64 {
+        self.start_unix_millis + self.started.elapsed().as_secs_f64() * 1000.0
+    }
+
+    pub(crate) fn response_started(&self) {
+        self.response_start_unix_millis.set(Some(self.now()));
     }
 
     pub(crate) fn completed(
@@ -50,6 +62,14 @@ impl FetchResourceTiming {
             // to this global, even when respondWith forwards a fetched body.
             entry.transfer_size = 0.0;
         }
+        entry.end_unix_millis = Some(self.now());
+        if metadata.timing_allow_passed {
+            entry.response_start_unix_millis = self.response_start_unix_millis.get();
+            entry.next_hop_protocol = head
+                .negotiated_http_version
+                .map(|version| version.protocol_name().to_owned())
+                .unwrap_or_default();
+        }
         if !metadata.timing_allow_passed {
             entry.transfer_size = 0.0;
             entry.encoded_body_size = 0.0;
@@ -59,11 +79,13 @@ impl FetchResourceTiming {
     }
 
     pub(crate) fn failed(&self, url: &Url) -> ResourcePerformanceEntry {
-        ResourcePerformanceEntry::from_network_failure(
+        let mut entry = ResourcePerformanceEntry::from_network_failure(
             url.as_str(),
             "fetch",
             Some(self.start_unix_millis),
-        )
+        );
+        entry.end_unix_millis = Some(self.now());
+        entry
     }
 }
 
@@ -75,6 +97,8 @@ mod tests {
     #[test]
     fn completed_uses_the_response_snapshot_and_keeps_delivery_separate() {
         let timing = FetchResourceTiming {
+            started: std::time::Instant::now(),
+            response_start_unix_millis: std::cell::Cell::new(None),
             start_unix_millis: 42.0,
             initiator_url: "https://page.test/script.js".to_owned(),
         };
@@ -93,6 +117,7 @@ mod tests {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         };
         let delivered = AsyncSubresourceFetchResponseFilter::service_worker(Default::default());

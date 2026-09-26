@@ -1965,20 +1965,23 @@ impl PageScriptHost {
     pub(crate) fn cancel_streaming_subresource_body_source(
         &mut self,
         body_source_id: NetworkBodySourceId,
-    ) -> bool {
-        let Some(internal_id) =
+    ) -> Option<(
+        v8::Global<v8::Context>,
+        crate::context_bootstrap::ResourcePerformanceEntry,
+    )> {
+        let internal_id =
             self.streaming_subresource_fetches
                 .iter()
                 .find_map(|(internal_id, state)| {
                     (state.body_source_id == body_source_id).then_some(*internal_id)
-                })
-        else {
-            return false;
-        };
+                })?;
         let streaming = self
             .streaming_subresource_fetches
             .remove(&internal_id)
             .expect("streaming subresource id was selected from the same map");
+        let timing = (!streaming.head.preload_state.is_consumed())
+            .then(|| cancelled_fetch_resource_timing(&streaming.pending))
+            .flatten();
         streaming.pending.load.cancel();
         self.browser_context_runtime
             .abort_service_worker_fetch(internal_id);
@@ -1989,7 +1992,7 @@ impl PageScriptHost {
         self.record_pending_subresource_continue_event(
             PendingSubresourceContinueEvent::Completed { internal_id },
         );
-        true
+        timing
     }
 
     fn record_streaming_subresource_fetch_failure(
@@ -2887,7 +2890,9 @@ impl PageScriptHost {
         }
 
         if let Some(streaming) = self.streaming_subresource_fetches.remove(&internal_id) {
-            let timing = cancelled_fetch_resource_timing(&streaming.pending);
+            let timing = (!streaming.head.preload_state.is_consumed())
+                .then(|| cancelled_fetch_resource_timing(&streaming.pending))
+                .flatten();
             streaming.pending.load.cancel();
             self.browser_context_runtime
                 .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
@@ -2912,7 +2917,9 @@ impl PageScriptHost {
 
         if let Some(auth) = self.pending_subresource_auths.remove(&internal_id) {
             let pending = auth.pending;
-            let timing = cancelled_fetch_resource_timing(&pending);
+            let timing = (!auth.response.preload_state.is_consumed())
+                .then(|| cancelled_fetch_resource_timing(&pending))
+                .flatten();
             pending.load.cancel();
             self.browser_context_runtime
                 .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
@@ -2925,7 +2932,9 @@ impl PageScriptHost {
 
         if let Some(response) = self.pending_subresource_responses.remove(&internal_id) {
             let pending = response.pending;
-            let timing = cancelled_fetch_resource_timing(&pending);
+            let timing = (!response.response.preload_state.is_consumed())
+                .then(|| cancelled_fetch_resource_timing(&pending))
+                .flatten();
             pending.load.cancel();
             self.browser_context_runtime
                 .abort_service_worker_fetch_with_reason(internal_id, reason_payload);

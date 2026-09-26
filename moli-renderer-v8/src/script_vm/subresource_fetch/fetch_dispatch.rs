@@ -1006,10 +1006,12 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            if !consumed_preload {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url)),
                             );
+                            }
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");

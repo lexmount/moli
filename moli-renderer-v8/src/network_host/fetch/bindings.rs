@@ -50,6 +50,8 @@ fn window_fetch_abort_signal_callback<'s>(
         .unwrap_or_else(|| abort_error_value(scope));
     let reason_payload = structured_serialize_fetch_abort_reason(scope, reason);
     let timing = host.abort_fetch_promise(scope, internal_id, reason, reason_payload);
+    // The signal can belong to another realm. Report in the fetch's client
+    // realm, after releasing the mutable request-host borrow.
     if let Some((context, entry)) = timing {
         let context = v8::Local::new(scope, &context);
         let scope = &mut v8::ContextScope::new(scope, context);
