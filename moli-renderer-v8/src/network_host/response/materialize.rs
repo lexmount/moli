@@ -6,10 +6,21 @@ use super::super::fetch_surface::{
 use super::*;
 use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
-use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
 use moli_url::WebOrigin;
 use moli_webapi_declare::WebApiObject;
+
+#[derive(Clone, Copy)]
+pub(crate) struct FetchResponseRequest<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) mode: RequestMode,
+}
+
+impl FetchResponseRequest<'_> {
+    fn has_null_body(self, status: u16) -> bool {
+        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+    }
+}
 
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
@@ -175,7 +186,7 @@ fn filtered_response_status_text(
 pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     response: Response,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
@@ -183,7 +194,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     build_fetch_response_object_from_body_source_for_request_mode(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body,
     )
@@ -192,7 +203,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
 ) -> v8::Local<'s, v8::Object> {
@@ -200,7 +211,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     build_fetch_response_object_from_body_source_for_request_mode_with_filter(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body,
         None,
@@ -210,7 +221,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -218,9 +229,11 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request_mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
     } else {
         set_filtered_response_internal_body_from_response_body(scope, obj, body);
@@ -232,14 +245,16 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
 pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
-    let filter = response_filter(&request_origin, &head, request_mode);
+    let filter = response_filter(&request_origin, &head, request.mode);
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         Some(network_body_stream_from_subresource_body(scope, obj, body))
     } else {
         set_filtered_response_internal_body_from_subresource_body(scope, obj, body);
@@ -251,7 +266,7 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
@@ -259,7 +274,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     build_fetch_response_object_from_stream_for_request_mode_with_filter(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body_source_id,
         None,
@@ -269,7 +284,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -278,7 +293,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filt
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body_source_id,
         None,
@@ -289,14 +304,14 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filt
 pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         request_url,
-        request_mode,
+        request,
         head,
         body_source_id,
         Some(request_url.as_str()),
@@ -307,7 +322,7 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
 fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
@@ -316,7 +331,7 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request_mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
@@ -327,6 +342,12 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
         filter,
         filtered_surface_url,
     );
+    if request.has_null_body(head.status) {
+        // Fetch nulls the internal body, including for filtered responses. Do
+        // not register a body source: subsequent transport chunks and terminal
+        // events then have no stream to enqueue into or retain bytes for.
+        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
+    }
     if !filtered_response_exposes_body(filter) {
         set_filtered_response_internal_body_from_pending_stream(scope, obj, body_source_id);
         return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
@@ -526,6 +547,9 @@ pub(crate) fn materialize_response_object<'s>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(stream) = body_stream_object(scope, response) {
+        crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream);
+    }
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     Ok(head.with_body(body))
 }
@@ -545,14 +569,14 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
+    if body_is_used(scope, response) {
+        return Err(format!(
+            "{context} rejected a Response whose body is already used."
+        ));
+    }
     if response_body_locked(scope, response) {
         return Err(format!(
             "{context} rejected a Response whose body is locked."
-        ));
-    }
-    if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
-        return Err(format!(
-            "{context} rejected a Response whose body is already used."
         ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)
@@ -725,19 +749,6 @@ fn response_body_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(body) = response_slot_value(scope, response, RESPONSE_BODY_SLOT) else {
-        return false;
-    };
-    if body.is_null_or_undefined() {
-        return false;
-    }
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
-        return false;
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return false;
-    }
-    stream
-        .get(scope, crate::util::v8str(scope, "locked").into())
-        .is_some_and(move |value| value.boolean_value(scope))
+    body_stream_object(scope, response)
+        .is_some_and(|stream| crate::context_bootstrap::readable_stream_locked(scope, stream))
 }

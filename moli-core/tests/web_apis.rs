@@ -6345,3 +6345,6 @@ async fn window_host_globals_expose_aliases_performance_and_visual_viewport() ->
     server.shutdown().await;
     Ok(())
 }
+
+#[path = "web_apis/body_state.rs"]
+mod body_state;

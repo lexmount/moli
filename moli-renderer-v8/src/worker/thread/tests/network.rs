@@ -5109,7 +5109,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
         .expect("worker fetch manual-redirect server should finish");
     assert_eq!(
         post,
-        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlMatchesRequest":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneUrlMatchesRequest":true,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlMatchesRequest":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneUrlMatchesRequest":true,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
@@ -5189,7 +5189,7 @@ async fn worker_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
     assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
     assert_eq!(
         post,
-        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 

@@ -420,17 +420,18 @@ pub use self::storage_buckets::{
     storage_bucket_indexed_db_storage_key,
 };
 pub(crate) use self::stream_adapter::{
-    cancel_readable_stream, close_stream, enqueue_byte_chunk, error_stream,
-    readable_stream_disturbed, readable_stream_has_pipe_owner, require_internal_stream_value,
+    begin_readable_stream_body_consumption, cancel_readable_stream, close_stream,
+    enqueue_byte_chunk, error_stream, readable_stream_disturbed, readable_stream_has_pipe_owner,
+    readable_stream_locked, require_internal_stream_value,
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-    build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-    build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
-    initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
-    new_readable_stream_from_array_buffer, new_readable_stream_from_source,
-    prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer,
+    body_stream_reader_operations, build_readable_stream_clone_shell,
+    build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+    initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
+    initialize_writable_stream_clone_shell, new_readable_stream_from_array_buffer,
+    new_readable_stream_from_source, prepare_readable_stream_transfer,
+    prepare_transform_stream_transfer, prepare_writable_stream_transfer,
 };
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
