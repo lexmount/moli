@@ -42,6 +42,9 @@ pub struct LayoutDocumentMetrics {
 /// second time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutElementMetrics<N> {
+    /// None for non-replaced inline boxes. These report zero ResizeObserver
+    /// sizes even when CSSOM offset geometry includes their line fragments.
+    pub resize_observer_box: Option<LayoutResizeObserverBox>,
     pub offset_parent: Option<N>,
     pub offset_position: LayoutPoint,
     /// Border-box origin in viewport CSS pixels after layout placement and
@@ -63,6 +66,19 @@ pub struct LayoutElementMetrics<N> {
     pub clips_overflow: bool,
     pub visible: bool,
     pub pointer_events: bool,
+}
+
+/// ResizeObserver's box interpretation sampled from the same immutable
+/// geometry as ordinary CSSOM metrics, without consulting live style.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutResizeObserverBox {
+    /// Physical content dimensions, positioned at the used left/top padding.
+    pub content_rect: super::model::LayoutRect,
+    pub border_size: LayoutSize,
+    pub horizontal: bool,
+    /// CSS zoom is excluded from CSS-pixel box sizes, but participates in
+    /// device-pixel observations alongside the viewport's device pixel ratio.
+    pub effective_zoom: f32,
 }
 
 /// One scroll container on a target's layout ancestor chain.

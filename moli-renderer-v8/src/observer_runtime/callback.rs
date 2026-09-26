@@ -30,6 +30,10 @@ pub(super) struct ObserverCallback {
 }
 
 impl ObserverCallback {
+    pub(super) fn observer_identity(&self) -> Option<WindowExecutionContextIdentity> {
+        self.observer_identity
+    }
+
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         host: &JsContextHost,
@@ -95,10 +99,11 @@ pub(super) struct ObserverCallbackBinding {
     observer_identity: Option<WindowExecutionContextIdentity>,
     callback_identity: Option<WindowExecutionContextIdentity>,
     // PerformanceObserver's registered-observer set keeps an actively
-    // observing wrapper alive. ResizeObserver does not use this root. Exact
+    // observing wrapper alive. Exact
     // Realm retirement or disconnect removes it before the V8 cycle can be
     // collected.
     active_performance_observer: Option<Rc<v8::Global<v8::Object>>>,
+    active_resize_observer: Option<Rc<v8::Global<v8::Object>>>,
 }
 
 impl ObserverCallbackBinding {
@@ -118,6 +123,7 @@ impl ObserverCallbackBinding {
             observer_identity,
             callback_identity,
             active_performance_observer: None,
+            active_resize_observer: None,
         }
     }
 
@@ -157,14 +163,95 @@ struct ObserverCallbackRegistryState {
 ///
 /// The `Rc<RefCell<_>>` is deliberate: a V8 weak finalizer must be able to
 /// release the small identity binding after the observer becomes unreachable,
-/// without retaining a raw `JsContextHost` pointer. The registry never roots
-/// the callback or observer, so callback↔observer cycles remain V8-collectable.
+/// without retaining a raw `JsContextHost` pointer. Only active observations
+/// root their wrapper; disconnect or exact Realm retirement releases that
+/// root, so unregistered callback↔observer cycles remain V8-collectable.
 #[derive(Clone, Default)]
 pub(super) struct ObserverCallbackRegistry {
     state: Rc<RefCell<ObserverCallbackRegistryState>>,
 }
 
 impl ObserverCallbackRegistry {
+    pub(super) fn activate_resize_observer<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host: &JsContextHost,
+        id: ObserverCallbackId,
+        observer: v8::Local<'s, v8::Object>,
+    ) -> Option<WindowExecutionContextIdentity> {
+        // A finalizer can reenter the registry during V8 allocation.
+        let observer = Rc::new(v8::Global::new(scope, observer));
+        let mut state = self.state.borrow_mut();
+        let binding = state.bindings.get_mut(&id)?;
+        if !binding.is_current(host) {
+            return None;
+        }
+        binding.active_resize_observer = Some(observer);
+        binding.observer_identity
+    }
+
+    pub(super) fn deactivate_resize_observer(&self, id: ObserverCallbackId) {
+        let observer = self
+            .state
+            .borrow_mut()
+            .bindings
+            .get_mut(&id)
+            .and_then(|binding| binding.active_resize_observer.take());
+        drop(observer);
+    }
+
+    pub(super) fn active_resize_observers<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host: &JsContextHost,
+        owner: Option<WindowExecutionContextOwner>,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let mut observers: Vec<_> = self
+            .state
+            .borrow()
+            .bindings
+            .iter()
+            .filter(|(_, binding)| {
+                binding.is_current(host)
+                    && owner.is_none_or(|owner| {
+                        binding
+                            .observer_identity
+                            .is_some_and(|identity| identity.owner() == owner)
+                    })
+            })
+            .filter_map(|(id, binding)| {
+                binding
+                    .active_resize_observer
+                    .as_ref()
+                    .map(|observer| (id.as_u32(), Rc::clone(observer)))
+            })
+            .collect();
+        // The Document's observer list uses constructor order, including after
+        // disconnect/reobserve. Hash-map or observe-call order is observable.
+        observers.sort_unstable_by_key(|(id, _)| *id);
+        observers
+            .iter()
+            .map(|(_, observer)| v8::Local::new(scope, observer.as_ref()))
+            .collect()
+    }
+
+    pub(super) fn resize_observer_identities(
+        &self,
+        host: &JsContextHost,
+    ) -> Vec<WindowExecutionContextIdentity> {
+        let mut identities = Vec::new();
+        for binding in self.state.borrow().bindings.values() {
+            if binding.active_resize_observer.is_some()
+                && binding.is_current(host)
+                && let Some(identity) = binding.observer_identity
+                && !identities.contains(&identity)
+            {
+                identities.push(identity);
+            }
+        }
+        identities
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.state.borrow().bindings.len()
