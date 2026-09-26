@@ -8,9 +8,7 @@ use crate::runtime::{
 };
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
-use moli_page_types::{
-    NavigationHistoryEntrySeed, NavigationHistoryMutation,
-};
+use moli_page_types::{NavigationHistoryEntrySeed, NavigationHistoryMutation};
 use url::Url;
 
 pub(crate) struct PendingReservedServiceWorkerClient {

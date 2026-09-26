@@ -58,7 +58,9 @@ pub(crate) fn begin_dispatch_with_original_target<'s>(
         .unwrap_or(target);
     let original_target = backing
         .get_creation_context(scope)
-        .map(|context| super::shared_event_targets::target_in_realm(scope, original_target, context))
+        .map(|context| {
+            super::shared_event_targets::target_in_realm(scope, original_target, context)
+        })
         .unwrap_or(original_target);
     // HTML's legacy target override changes Event.target, not the dispatch
     // path or the Window whose listeners are invoked.

@@ -35,7 +35,8 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event_with_re
         event_type == "error",
     );
     events::mark_event_trusted(scope, event);
-    extras(scope, event);
+    let backing = events::event_backing(scope, event);
+    extras(scope, backing);
     dispatch_idb_event_object_with_result(scope, target, event)
 }
 

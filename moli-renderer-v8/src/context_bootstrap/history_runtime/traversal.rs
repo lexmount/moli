@@ -2,7 +2,7 @@ use super::super::navigation_activation::{
     install_navigation_transition, precommit_transition_resolver_from_event,
     resolve_navigation_transition_committed,
 };
-use super::super::navigation_entry::{history_entries};
+use super::super::navigation_entry::history_entries;
 use super::super::navigation_events::{
     NavigationDispatchOutcome, dispatch_navigation_success,
     run_navigation_precommit_deferred_handlers,
