@@ -49,6 +49,11 @@ impl JsContextHost {
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
+            for document in self.live_lightweight_popup_documents() {
+                if let Some(cache) = self.lightweight_popup_layout_cache(document) {
+                    cache.borrow_mut().clear();
+                }
+            }
         }
         self.layout_policy = policy;
     }
@@ -151,13 +156,27 @@ impl JsContextHost {
         if frames.is_empty() {
             return;
         }
+        let documents = frames
+            .iter()
+            .filter_map(|frame| {
+                let document = self.dom_host().owner_document_handle(*frame)?;
+                self.top_level_document_for_document(document)
+            })
+            .collect::<std::collections::HashSet<_>>();
         let changed = {
             let mut state = self.document_layout_state.borrow_mut();
             let changed =
                 state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
-            state.clear_latest_layout();
+            if documents.contains(&self.document_handle()) {
+                state.clear_latest_layout();
+            }
             changed
         };
+        for document in documents {
+            if let Some(cache) = self.lightweight_popup_layout_cache(document) {
+                cache.borrow_mut().clear();
+            }
+        }
         if changed {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
@@ -276,6 +295,7 @@ impl JsContextHost {
             state.retain_live_embedded_document_services(|candidate| {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
+                    || self.lightweight_popup_document_is_open(candidate)
             });
             state.with_services_for_document(
                 document,
@@ -368,7 +388,11 @@ impl JsContextHost {
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.publish_latest_layout(document, tree);
+            if let Some(cache) = self.lightweight_popup_layout_cache(document) {
+                cache.borrow_mut().publish(document, tree, metrics);
+            } else {
+                state.publish_latest_layout(document, tree, metrics);
+            }
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
@@ -412,8 +436,7 @@ impl JsContextHost {
     ) -> Result<T, LayoutError> {
         let value = self
             .with_latest_layout_tree_for_document(document, |tree| {
-                self.last_layout_pass_metrics
-                    .get()
+                self.latest_layout_pass_metrics_for_document(document)
                     .map(|metrics| inspect(tree, metrics))
             })
             .flatten();
@@ -428,8 +451,8 @@ impl JsContextHost {
         }
     }
 
-    /// Inspects the member tree for one exact Document in the single latest
-    /// recursively frozen snapshot.
+    /// Inspects the member tree for one exact Document in its top-level
+    /// Document's latest recursively frozen snapshot.
     ///
     /// The callback cannot retain the tree or force a refresh. Consumers
     /// such as lazy-image admission may combine this sampled geometry with
@@ -445,12 +468,37 @@ impl JsContextHost {
             .dom()
             .document_element_handle_for_document(document)
             .unwrap_or(document);
+        if let Some(top) = self.top_level_document_for_document(document)
+            && let Some(cache) = self.lightweight_popup_layout_cache(top)
+        {
+            let cache = cache.borrow();
+            return cache
+                .get(document)
+                .or_else(|| cache.get_for_root(root))
+                .filter(|tree| tree.source_root() == root)
+                .map(inspect);
+        }
         let state = self.document_layout_state.borrow();
         state
             .latest_layout(document)
             .or_else(|| state.latest_layout_for_root(root))
             .filter(|tree| tree.source_root() == root)
             .map(inspect)
+    }
+
+    fn latest_layout_pass_metrics_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Option<moli_layout::LayoutPassMetrics> {
+        if let Some(top) = self.top_level_document_for_document(document)
+            && let Some(cache) = self.lightweight_popup_layout_cache(top)
+        {
+            cache.borrow().pass_metrics()
+        } else {
+            self.document_layout_state
+                .borrow()
+                .latest_layout_pass_metrics()
+        }
     }
 
     fn answer_layout_query(

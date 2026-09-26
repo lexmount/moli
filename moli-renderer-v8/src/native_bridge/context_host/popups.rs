@@ -459,6 +459,9 @@ pub(super) struct LightweightPopupDocumentState {
 
 struct LightweightPopupDocumentRecord {
     owner: LightweightPopupDocumentOwner,
+    // A popup is an independent top-level Document, not an embedded member of
+    // the opener's frozen tree. Replacement and close drop this exact snapshot.
+    layout: RefCell<super::layout_snapshot::LatestLayoutTreeCache>,
     local_window_id: LightweightPopupLocalWindowId,
     is_initial_empty_document: bool,
     // document.open() preserves whether navigation initialized Navigation entries.
@@ -1158,6 +1161,7 @@ impl JsContextHost {
                 lifecycle: LightweightPopupLifecycle::Open(Box::new(LightweightPopupOpenState {
                     document: LightweightPopupDocumentRecord {
                         owner: initial_document_owner,
+                        layout: RefCell::default(),
                         local_window_id: initial_local_window_id,
                         is_initial_empty_document: true,
                         has_committed_navigation: false,
@@ -2425,6 +2429,7 @@ impl JsContextHost {
                 &mut open.document,
                 LightweightPopupDocumentRecord {
                     owner: commit.owner,
+                    layout: RefCell::default(),
                     local_window_id: current_local_window_id,
                     is_initial_empty_document: false,
                     has_committed_navigation: true,
@@ -3293,6 +3298,21 @@ impl JsContextHost {
     pub(crate) fn lightweight_popup_document_handle(&self, popup_id: u64) -> Option<DomHandle> {
         self.lightweight_popup_document_record(popup_id)
             .and_then(|document| document.handle)
+    }
+
+    pub(super) fn lightweight_popup_layout_cache(
+        &self,
+        document: DomHandle,
+    ) -> Option<&RefCell<super::layout_snapshot::LatestLayoutTreeCache>> {
+        let popup_id = self.lightweight_popup_id_for_document_handle(document)?;
+        Some(&self.lightweight_popup_document_record(popup_id)?.layout)
+    }
+
+    pub(super) fn live_lightweight_popup_documents(&self) -> Vec<DomHandle> {
+        self.lightweight_popup_browsing_contexts
+            .keys()
+            .filter_map(|id| self.lightweight_popup_document_handle(*id))
+            .collect()
     }
 
     pub(crate) fn lightweight_popup_referrer_for_document_handle(

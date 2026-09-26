@@ -94,28 +94,43 @@ impl ScriptVm {
                     if scope.is_execution_terminating() {
                         return Ok(None);
                     }
-                    let host = unsafe { &mut *host_ptr };
-                    Ok(host
-                        .resolve_current_rendering_update_context(scope, target)
-                        .map(|(document, _)| {
-                            host.top_level_document_for_document(document)
-                                .unwrap_or(document)
-                        }))
+                    let document = {
+                        let host = unsafe { &mut *host_ptr };
+                        host.resolve_current_rendering_update_context(scope, target)
+                            .map(|(document, _)| {
+                                host.top_level_document_for_document(document)
+                                    .unwrap_or(document)
+                            })
+                    };
+                    let Some(document) = document else {
+                        return Ok(None);
+                    };
+                    let mut documents = crate::observer_runtime::rendering_observer_documents(
+                        scope,
+                        host_ptr,
+                        animation_owner,
+                    );
+                    documents.push(document);
+                    documents.sort_by_key(|document| document.index());
+                    documents.dedup();
+                    Ok(Some(documents))
                 })?;
-                let Some(document) = current else {
+                let Some(documents) = current else {
                     break;
                 };
-                let request = {
-                    let host = self._context_host.borrow();
-                    host.layout_policy().uses_real_layout().then(|| {
-                        moli_layout::LayoutPassRequest::new(
-                            host.layout_viewport_for_document(document),
-                            moli_layout::LayoutFlushReason::RenderingUpdate,
-                        )
-                    })
-                };
-                if let Some(request) = request {
-                    self.with_fresh_document_layout_pass(document, request, |_| Ok(()))?;
+                for document in documents {
+                    let request = {
+                        let host = self._context_host.borrow();
+                        host.layout_policy().uses_real_layout().then(|| {
+                            moli_layout::LayoutPassRequest::new(
+                                host.layout_viewport_for_document(document),
+                                moli_layout::LayoutFlushReason::RenderingUpdate,
+                            )
+                        })
+                    };
+                    if let Some(request) = request {
+                        self.with_fresh_document_layout_pass(document, request, |_| Ok(()))?;
+                    }
                 }
                 let broadcast = self.with_default_context_scope(|scope, host_ptr| {
                     Ok(

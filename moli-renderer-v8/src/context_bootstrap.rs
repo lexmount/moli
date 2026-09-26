@@ -122,7 +122,7 @@ mod range_surface;
 mod resize_observer_runtime;
 pub(crate) use resize_observer_runtime::{
     broadcast_document_resize_observers, queue_resize_observer_checks,
-    report_document_resize_observer_loop_error,
+    report_document_resize_observer_loop_error, resize_observer_observed_targets,
 };
 mod runtime_state;
 mod selection;

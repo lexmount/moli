@@ -11,6 +11,25 @@ pub(crate) use delivery::{
 };
 use moli_webapi_declare::WebApiObject;
 
+pub(crate) fn resize_observer_observed_targets<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> Vec<crate::document_runtime::DomHandle> {
+    let Some(records) = resize_observer_targets(scope, observer) else {
+        return Vec::new();
+    };
+    (0..records.length())
+        .filter_map(|index| {
+            let record = records.get_index(scope, index)?;
+            let target = observed_record_target(scope, record)?;
+            crate::native_bridge::branded_node_handle(
+                scope,
+                target,
+                web_api_interfaces::Element::DESCRIPTOR,
+            )
+        })
+        .collect()
+}
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ResizeObserver)]
 struct ResizeObserverObjectDeclaration<'s> {
