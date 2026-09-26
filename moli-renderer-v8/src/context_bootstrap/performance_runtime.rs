@@ -244,6 +244,43 @@ fn record_performance_load_event_for_window(
     record(scope);
 }
 
+fn resource_timing_content_type(headers: &[(String, Vec<u8>)]) -> String {
+    let Some(essence) = moli_web_mime::extract_response_mime_essence(headers) else {
+        return String::new();
+    };
+    // Fetch stores a minimized MIME type in response body info. Classify the
+    // extracted MIME record, not the first header or a sniffed body type.
+    // https://mimesniff.spec.whatwg.org/#minimize-a-supported-mime-type
+    if essence == "image/svg+xml" {
+        // SVG retains its own type instead of joining the generic XML group.
+        return essence;
+    }
+    if moli_web_mime::is_javascript_mime_essence(&essence) {
+        "text/javascript".to_owned()
+    } else if matches!(essence.as_str(), "application/json" | "text/json")
+        || essence.ends_with("+json")
+    {
+        "application/json".to_owned()
+    } else if matches!(essence.as_str(), "application/xml" | "text/xml")
+        || essence.ends_with("+xml")
+    {
+        "application/xml".to_owned()
+    } else if moli_web_mime::is_text_mime_essence(&essence)
+        || moli_image::supports_image_mime_essence(&essence)
+        || moli_web_mime::media_mime_support(&essence)
+            != moli_web_mime::MediaMimeSupport::Unsupported
+        || moli_web_mime::is_supported_font_mime_essence(&essence)
+        || essence == "application/wasm"
+    {
+        // Text documents, decodable images, media, fonts and WebAssembly use
+        // the same support decisions as their consuming APIs. An arbitrary
+        // image/*, audio/*, video/* or font/* prefix does not imply support.
+        essence
+    } else {
+        String::new()
+    }
+}
+
 pub(crate) struct ResourcePerformanceEntry {
     preload_state: moli_fetch::ResponsePreloadState,
     name: String,
@@ -363,9 +400,7 @@ impl ResourcePerformanceEntry {
             moli_fetch::ResponseCacheState::Local => 0.0,
             moli_fetch::ResponseCacheState::Validated => 300.0,
         };
-        let content_type = moli_web_mime::response_content_type(response_headers)
-            .and_then(|value| moli_web_mime::mime_essence(&value))
-            .unwrap_or_default();
+        let content_type = resource_timing_content_type(response_headers);
         Self {
             preload_state,
             name: name.into(),
@@ -567,6 +602,89 @@ pub(in crate::context_bootstrap) fn set_performance_slot_value<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_content_type_extracts_the_last_valid_mime_before_minimizing() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], ""),
+            (&["", "invalid", "*/*"], ""),
+            (
+                &["APPLICATION/X-JAVASCRIPT; charset=UTF-8"],
+                "text/javascript",
+            ),
+            (
+                &["text/plain", "application/problem+json"],
+                "application/json",
+            ),
+            (
+                &["application/rss+xml, image/svg+xml; charset=UTF-8"],
+                "image/svg+xml",
+            ),
+            (&["image/svg+xml", "text/xml"], "application/xml"),
+            (&["application/json", "*/*", "invalid"], "application/json"),
+            (&[r#"text/plain; x="a,application/json""#], "text/plain"),
+            (&[r#"text/plain; x="a"#, "application/json"], "text/plain"),
+            (&["application/json", "application/unknown"], ""),
+        ];
+        for &(values, expected) in cases {
+            let headers = values
+                .iter()
+                .map(|value| ("cOnTeNt-TyPe".to_owned(), value.as_bytes().to_vec()))
+                .collect::<Vec<_>>();
+            let entry = ResourcePerformanceEntry::from_response_parts(
+                "https://example.test/resource",
+                "fetch",
+                None,
+                200,
+                &headers,
+                68.0,
+                moli_fetch::ResponseCacheState::None,
+                Default::default(),
+            );
+            assert_eq!(entry.content_type, expected, "{values:?}");
+        }
+    }
+
+    #[test]
+    fn resource_content_type_retains_only_supported_essences() {
+        for essence in [
+            "text/html",
+            "text/plain",
+            "text/css",
+            "text/vtt",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "audio/mpeg",
+            "video/mp4",
+            "font/woff2",
+            "font/collection",
+            "application/font-woff",
+            "application/wasm",
+        ] {
+            let headers = vec![(
+                "Content-Type".to_owned(),
+                format!("{essence}; x=private").into_bytes(),
+            )];
+            assert_eq!(resource_timing_content_type(&headers), essence);
+        }
+        for essence in [
+            "image/jpe",
+            "image/unknown",
+            "application/png",
+            "audio/unknown",
+            "video/unknown",
+            "font/unknown",
+            "application/vnd.ms-fontobject",
+            "application/octet-stream",
+            "application/zip",
+            "application/pdf",
+        ] {
+            let headers = vec![("Content-Type".to_owned(), essence.as_bytes().to_vec())];
+            assert_eq!(resource_timing_content_type(&headers), "", "{essence}");
+        }
+    }
 
     #[test]
     fn failed_network_result_keeps_a_zero_sized_resource_timing_record() {
