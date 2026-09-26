@@ -24,7 +24,7 @@ pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_callback<
 ) {
     let entries = performance_entry_list_entries(scope, args.this())
         .unwrap_or_else(|| v8::Array::new(scope, 0));
-    rv.set(entries.into());
+    rv.set(filtered_entry_list_entries(scope, entries, None, None).into());
 }
 
 pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_by_type_callback<'s>(

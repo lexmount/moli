@@ -56,6 +56,9 @@
       window.performanceMeasureObservedCount = callbackEntries && callbackEntries.length;
       window.performanceMeasureObservedName =
         callbackEntries && callbackEntries[0] && callbackEntries[0].name;
+      window.performanceMeasureObservedChronological = callbackEntries &&
+        callbackEntries.every((entry, index) => index === 0 ||
+          callbackEntries[index - 1].startTime <= entry.startTime);
       window.performanceMeasureObservedType =
         callbackEntries && callbackEntries[0] && callbackEntries[0].entryType;
       window.performanceMeasureObservedByTypeCount =

@@ -49,7 +49,8 @@ use super::{
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
         get_private_object, get_private_value, global_constructor_prototype, serialize_v8_array,
-        serialize_v8_iter_array, throw_range_error, throw_type_error, v8_string, v8str,
+        serialize_v8_iter_array, set_private_value, throw_range_error, throw_type_error, v8_string,
+        v8str,
     },
     window_webidl_callback::WindowWebIdlCallbackFunctionOutcome,
 };
@@ -123,7 +124,7 @@ struct IntersectionObserverEntryDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable)]
+#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable, receiver)]
 struct IntersectionObserverPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     root: (),
@@ -479,7 +480,7 @@ impl ObserverStore {
                 queued_records: Vec::new(),
             },
         );
-        define_hidden_value(
+        set_private_value(
             scope,
             observer,
             MUTATION_OBSERVER_ID_SLOT,
@@ -628,7 +629,7 @@ impl ObserverStore {
                 options,
             },
         );
-        define_hidden_value(
+        set_private_value(
             scope,
             observer,
             INTERSECTION_OBSERVER_ID_SLOT,
@@ -1177,14 +1178,10 @@ pub(super) fn intersection_observer_constructor_callback<'s>(
             return;
         }
     };
-    dom_access::init_intersection_observer(
-        scope,
-        host_ptr,
-        args.this(),
-        parsed.callback,
-        options.clone(),
-    );
-    define_intersection_observer_slots(scope, host_ptr, args.this(), &options);
+    if define_intersection_observer_slots(scope, host_ptr, args.this(), &options).is_none() {
+        return;
+    }
+    dom_access::init_intersection_observer(scope, host_ptr, args.this(), parsed.callback, options);
     rv.set(args.this().into());
 }
 
@@ -1750,15 +1747,15 @@ fn define_intersection_observer_slots(
     host_ptr: *mut JsContextHost,
     observer: v8::Local<'_, v8::Object>,
     options: &IntersectionObserverOptions,
-) {
+) -> Option<()> {
     let root_value = options
         .root
         .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
-    define_hidden_value(scope, observer, INTERSECTION_OBSERVER_ROOT_SLOT, root_value);
+    set_private_value(scope, observer, INTERSECTION_OBSERVER_ROOT_SLOT, root_value);
     if let Some(root_margin) = v8_string(scope, &options.root_margin) {
-        define_hidden_value(
+        set_private_value(
             scope,
             observer,
             INTERSECTION_OBSERVER_ROOT_MARGIN_SLOT,
@@ -1766,33 +1763,36 @@ fn define_intersection_observer_slots(
         );
     }
     if let Some(scroll_margin) = v8_string(scope, &options.scroll_margin) {
-        define_hidden_value(
+        set_private_value(
             scope,
             observer,
             INTERSECTION_OBSERVER_SCROLL_MARGIN_SLOT,
             scroll_margin.into(),
         );
     }
-    let thresholds = crate::util::serialize_v8_array(scope, options.thresholds.as_slice())
-        .unwrap_or_else(|| v8::Array::new(scope, 0));
-    define_hidden_value(
+    let thresholds = crate::util::serialize_v8_array(scope, options.thresholds.as_slice())?;
+    if thresholds.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        return None;
+    }
+    set_private_value(
         scope,
         observer,
         INTERSECTION_OBSERVER_THRESHOLDS_SLOT,
         thresholds.into(),
     );
-    define_hidden_value(
+    set_private_value(
         scope,
         observer,
         INTERSECTION_OBSERVER_DELAY_SLOT,
         v8::Integer::new(scope, options.delay).into(),
     );
-    define_hidden_value(
+    set_private_value(
         scope,
         observer,
         INTERSECTION_OBSERVER_TRACK_VISIBILITY_SLOT,
         v8::Boolean::new(scope, options.track_visibility).into(),
     );
+    Some(())
 }
 
 #[derive(Clone, Copy, Default)]
@@ -2462,44 +2462,31 @@ fn mutation_observer_id_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<u32> {
-    hidden_numeric_id(scope, object, MUTATION_OBSERVER_ID_SLOT)
+    observer_id_from_private_slot(scope, object, MUTATION_OBSERVER_ID_SLOT)
 }
 
 fn intersection_observer_id_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<u32> {
-    hidden_numeric_id(scope, object, INTERSECTION_OBSERVER_ID_SLOT)
+    observer_id_from_private_slot(scope, object, INTERSECTION_OBSERVER_ID_SLOT)
 }
 
-fn hidden_numeric_id(
+fn observer_id_from_private_slot(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
     key: &str,
 ) -> Option<u32> {
-    let key = v8_string(scope, key)?;
-    object
-        .get(scope, key.into())
+    let object = v8::Local::new(scope, object);
+    get_private_value(scope, object, key)
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite() && *value >= 1.0)
         .map(|value| value as u32)
 }
 
-fn define_hidden_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(key) = v8_string(scope, key) else {
-        return;
-    };
-    let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
-}
-
-fn intersection_observer_attribute_getter_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+fn intersection_observer_attribute_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Some(name) = callback_data_item(
@@ -2524,9 +2511,7 @@ fn intersection_observer_attribute_getter_callback(
         }
     };
     rv.set(
-        args.this()
-            .get(scope, v8str(scope, slot).into())
-            .unwrap_or_else(|| v8::undefined(scope).into()),
+        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );
 }
 

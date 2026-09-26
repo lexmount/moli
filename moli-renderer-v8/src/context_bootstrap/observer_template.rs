@@ -16,7 +16,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MutationObserver, enumerable)]
+#[webapi(interface = web_api_interfaces::MutationObserver, enumerable, receiver)]
 struct MutationObserverTemplateMethodsDeclaration {
     #[webapi(method, length = 2, callback = observer_runtime::mutation_observer_observe_callback)]
     observe: (),
@@ -37,7 +37,7 @@ struct MutationObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable)]
+#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable, receiver)]
 struct IntersectionObserverTemplateMethodsDeclaration {
     #[webapi(
         method,
@@ -79,7 +79,7 @@ struct MediaQueryListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ResizeObserver, enumerable)]
+#[webapi(interface = web_api_interfaces::ResizeObserver, enumerable, receiver)]
 struct ResizeObserverTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = resize_observer_observe_callback)]
     observe: (),
@@ -95,9 +95,9 @@ struct ResizeObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceObserver, enumerable)]
+#[webapi(interface = web_api_interfaces::PerformanceObserver, enumerable, receiver)]
 struct PerformanceObserverTemplateMethodsDeclaration {
-    #[webapi(method, length = 1, callback = performance_observer_observe_callback)]
+    #[webapi(method, length = 0, callback = performance_observer_observe_callback)]
     observe: (),
 
     #[webapi(method, length = 0, callback = performance_observer_disconnect_callback)]
@@ -108,7 +108,7 @@ struct PerformanceObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable)]
+#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable, receiver)]
 struct PerformanceObserverEntryListTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_entry_list_get_entries_callback)]
     get_entries: (),
@@ -122,7 +122,7 @@ struct PerformanceObserverEntryListTemplateMethodsDeclaration {
 
     #[webapi(
         method,
-        length = 2,
+        length = 1,
         callback = performance_entry_list_get_entries_by_name_callback
     )]
     get_entries_by_name: (),

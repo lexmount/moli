@@ -9,9 +9,15 @@
 idl_test([`
 callback PerformanceObserverCallback = undefined (PerformanceObserverEntryList entries, PerformanceObserver observer);
 
+dictionary PerformanceObserverInit {
+  sequence<DOMString> entryTypes;
+  DOMString type;
+  boolean buffered;
+};
+
 interface PerformanceObserver {
   constructor(PerformanceObserverCallback callback);
-  undefined observe(object options);
+  undefined observe(optional PerformanceObserverInit options = {});
   undefined disconnect();
   sequence<PerformanceEntry> takeRecords();
 };

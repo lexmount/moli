@@ -1402,7 +1402,11 @@ async fn performance_measure_entries_are_observable_and_clearable() -> Result<()
     );
     assert_eq!(
         diagnostic_global(&page, "performanceMeasureObservedName"),
-        Some(&JsValueSnapshot::String("duration".to_owned()))
+        Some(&JsValueSnapshot::String("legacy-duration".to_owned()))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "performanceMeasureObservedChronological"),
+        Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
         diagnostic_global(&page, "performanceMeasureObservedType"),

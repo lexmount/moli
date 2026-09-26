@@ -6489,7 +6489,7 @@ fn performance_observer_declared_slots_ignore_prototype_spoofing() {
   PerformanceObserver.prototype.__moliPerformanceObserverScheduled = true;
 
   const fake = Object.create(PerformanceObserver.prototype);
-  const fakeRecords = PerformanceObserver.prototype.takeRecords.call(fake);
+  const fakeRecords = probe(() => PerformanceObserver.prototype.takeRecords.call(fake));
   const fakeObserve = probe(() => PerformanceObserver.prototype.observe.call(fake, {
     entryTypes: ['measure'],
   }));
@@ -6501,10 +6501,10 @@ fn performance_observer_declared_slots_ignore_prototype_spoofing() {
       observer.takeRecords().length
     ].join('|'),
     fake: [
-      fakeRecords.length,
-      fakeRecords[0],
+      fakeRecords,
       fakeObserve,
-      fake.takeRecords().length
+      probe(() => fake.takeRecords()),
+      probe(() => fake.disconnect())
     ].map(value => value === undefined ? 'undefined' : String(value)).join('|'),
     ownSlots
   });
@@ -6515,7 +6515,7 @@ fn performance_observer_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"real":"1|mark|declared-observer|0","fake":"0|undefined|undefined|0","ownSlots":[]}"#
+        r#"{"real":"1|mark|declared-observer|0","fake":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","ownSlots":[]}"#
     );
 }
 
@@ -7188,6 +7188,13 @@ fn resize_observer_declared_slots_ignore_prototype_spoofing() {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
   const stringify = value => value === undefined ? 'undefined' : String(value);
+  const probe = callback => {
+    try {
+      return stringify(callback());
+    } catch (error) {
+      return `throw:${error && error.name}`;
+    }
+  };
   const target = document.createElement('div');
   target.style.cssText = 'width: 10px; height: 20px';
   body.appendChild(target);
@@ -7204,9 +7211,9 @@ fn resize_observer_declared_slots_ignore_prototype_spoofing() {
   ResizeObserver.prototype.__moliResizeObserverScheduled = true;
 
   const fake = Object.create(ResizeObserver.prototype);
-  const fakeRecords = ResizeObserver.prototype.takeRecords.call(fake);
-  const fakeObserve = ResizeObserver.prototype.observe.call(fake, target);
-  const fakeAfterObserve = fake.takeRecords();
+  const fakeRecords = probe(() => ResizeObserver.prototype.takeRecords.call(fake));
+  const fakeObserve = probe(() => ResizeObserver.prototype.observe.call(fake, target));
+  const fakeAfterObserve = probe(() => fake.takeRecords());
   return JSON.stringify({
     real: [
       records.length,
@@ -7215,11 +7222,11 @@ fn resize_observer_declared_slots_ignore_prototype_spoofing() {
       observer.takeRecords().length
     ].join('|'),
     fake: [
-      fakeRecords.length,
-      fakeRecords[0],
+      fakeRecords,
       fakeObserve,
-      fakeAfterObserve.length,
-      fakeAfterObserve[0]
+      fakeAfterObserve,
+      probe(() => fake.unobserve(target)),
+      probe(() => fake.disconnect())
     ].map(stringify).join('|'),
     ownSlots
   });
@@ -7230,7 +7237,7 @@ fn resize_observer_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"real":"1|true|1|0","fake":"0|undefined|undefined|0|undefined","ownSlots":[]}"#
+        r#"{"real":"1|true|1|0","fake":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","ownSlots":[]}"#
     );
 }
 
