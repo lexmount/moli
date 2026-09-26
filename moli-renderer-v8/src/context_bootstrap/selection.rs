@@ -19,5 +19,5 @@ pub(super) use values::{
     selection_focus_offset, selection_has_range, selection_is_collapsed_internal,
     selection_owner_document, selection_range, selection_range_update_state,
     selection_set_collapsed, selection_store, selection_store_with_composed_boundaries,
-    selection_sync_associated_range, selection_update_composed_boundaries_for_child_removal,
+    selection_sync_associated_range,
 };
