@@ -12,8 +12,8 @@
 
     let seen = [];
     const observer = new IntersectionObserver((entries) => {
-      seen = seen.concat(entries.map((entry) => entry.target.id));
-      window.intersectionObserverRootScopedIds = seen.join(',');
+      seen = seen.concat(entries.map((entry) => `${entry.target.id}:${entry.isIntersecting}`));
+      window.intersectionObserverRootScopedEntries = seen.join(',');
       window.intersectionObserverRootScopedCount = seen.length;
       observer.disconnect();
     }, { root });
