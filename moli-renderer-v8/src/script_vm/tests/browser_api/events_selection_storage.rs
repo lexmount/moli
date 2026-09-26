@@ -6,6 +6,53 @@ use tokio::{
 };
 
 #[test]
+fn sequential_focus_navigation_retains_dom_positions_across_mutations() {
+    for preserve_selection in [false, true] {
+        // Navigation positions must be tracked even when the page has never
+        // created a Selection or Range. Use a fresh VM for each mode.
+        let mut vm = new_storage_test_vm("https://focus-navigation-starting-point.test/");
+        let count = vm
+            .eval(include_str!(
+                "../../../../tests/fixtures/focus-navigation-starting-point.js"
+            ))
+            .expect("set up focus navigation scenarios")
+            .parse::<usize>()
+            .unwrap();
+        for index in 0..count {
+            for reverse in [false, true] {
+                let scenario = vm
+                    .eval(&format!(
+                        "JSON.stringify(__focusNavigation.setup({index}, {reverse}, {preserve_selection}))"
+                    ))
+                    .expect("prepare a focus origin and mutate its tree");
+                vm.dispatch_key_event(
+                    "keydown",
+                    "Tab",
+                    "Tab",
+                    "",
+                    if reverse { 8 } else { 0 },
+                    false,
+                    false,
+                )
+                .expect("native Tab input should continue from the focus origin");
+                let result = vm
+                    .eval("JSON.stringify(__focusNavigation.snapshot())")
+                    .unwrap();
+                let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+                assert_eq!(
+                    result["actual"], result["expected"],
+                    "{scenario}, reverse={reverse}, preserve_selection={preserve_selection}"
+                );
+                assert_eq!(
+                    result["selectionPreserved"], true,
+                    "{scenario}, reverse={reverse}, preserve_selection={preserve_selection}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn document_selection_tracks_visible_text_controls_independently_of_cached_offsets() {
     let mut vm = new_storage_test_vm("https://text-control-visible-selection.test/");
     assert_eq!(

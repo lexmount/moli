@@ -43,13 +43,14 @@ impl DocumentRuntime {
         let focus_within_handles_before_remove = focus_reset_handle_before_remove
             .map(|active| self.focus_within_handles_for_active_element_before_tree_change(active))
             .unwrap_or_default();
-        let live_range_removal_index = if unsafe { &mut *host_ptr }.live_ranges_is_empty() {
-            None
-        } else {
-            self.dom_host
-                .child_index(parent, root)
-                .map(|index| index as u32)
-        };
+        let live_range_removal_index =
+            if !unsafe { &mut *host_ptr }.needs_live_tree_boundary_updates(std::iter::once(root)) {
+                None
+            } else {
+                self.dom_host
+                    .child_index(parent, root)
+                    .map(|index| index as u32)
+            };
         let live_range_previous_sibling = live_range_removal_index
             .and_then(|_| self.dom_host.node(root).and_then(Node::prev_sibling));
         let node_iterator_plan = if unsafe { &*host_ptr }.node_iterators_is_empty() {

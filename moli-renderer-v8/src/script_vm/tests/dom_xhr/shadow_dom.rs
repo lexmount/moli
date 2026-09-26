@@ -5851,6 +5851,14 @@ fn tab_key_skips_delegates_focus_host_but_uses_host_tabindex_scope() {
 
   const positive = setup(1);
   pressTab();
+  const positiveFromRetainedPosition = `${document.activeElement.id}:${innermostActive().id}`;
+  pressTab();
+  const positiveFollowingRetainedPosition = innermostActive().id;
+
+  // Replacing the focused tree preserves a DOM navigation position. Start
+  // explicitly before the positive scope to test its tabindex ordering too.
+  document.getElementById('before').focus();
+  pressTab(true);
   const positiveFirst = `${document.activeElement.id}:${innermostActive().id}`;
   pressTab();
   const positiveNext = innermostActive().id;
@@ -5864,6 +5872,8 @@ fn tab_key_skips_delegates_focus_host_but_uses_host_tabindex_scope() {
     zeroForward,
     zeroAfter,
     zeroBackward,
+    positiveFromRetainedPosition,
+    positiveFollowingRetainedPosition,
     positiveFirst,
     positiveNext,
     negativeSkip
@@ -5875,7 +5885,7 @@ fn tab_key_skips_delegates_focus_host_but_uses_host_tabindex_scope() {
 
     assert_eq!(
         result,
-        "host:inner|after|host:inner|host:inner|before|after"
+        "host:inner|after|host:inner|before:before|after|host:inner|before|after"
     );
 }
 #[test]

@@ -737,6 +737,11 @@ impl JsContextHost {
         index: u32,
         previous_sibling: Option<DomHandle>,
     ) {
+        self.update_sequential_focus_starting_points_for_child_removal(
+            parent,
+            removed_child,
+            previous_sibling,
+        );
         let runtime = self.runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         let ids = self
@@ -773,6 +778,7 @@ impl JsContextHost {
         new_text: DomHandle,
         offset: u32,
     ) {
+        self.update_sequential_focus_starting_points_for_text_split(original, new_text, offset);
         let runtime = self.runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.selection_record_registry
