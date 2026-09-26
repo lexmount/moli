@@ -1190,9 +1190,8 @@ fn precommit_commit_fulfilled_callback<'s>(
             Some("reload"),
         );
     }
-    let receiver = v8::undefined(scope).into();
     if let Some(resolve) = data.committed_resolve {
-        let _ = resolve.call(scope, receiver, &[resolved_value]);
+        settle_navigation_finished_resolved_immediately(scope, resolve, resolved_value);
     }
     resolve_navigation_transition_committed(scope, data.navigation);
     let outcome = NavigationDispatchOutcome {

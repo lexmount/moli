@@ -11,7 +11,7 @@ async fn assert_abort_signal_dependencies(scenario: &str, events: &[&str]) -> Re
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(10),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(

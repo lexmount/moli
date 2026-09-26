@@ -99,9 +99,9 @@ pub(crate) use navigation_window::{
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
+mod session_history_traversal;
 mod shared_event_targets;
 mod world_wrappers;
-mod session_history_traversal;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
@@ -157,7 +157,8 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    construct_original_event, construct_original_page_transition_event,
+    construct_original_event,
+    construct_original_page_transition_event,
     construct_original_storage_event_utf16,
 };
 pub(crate) use crypto::{

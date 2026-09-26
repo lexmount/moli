@@ -1042,6 +1042,12 @@ pub(in crate::context_bootstrap) fn run_navigate_event_precommit_handlers<'s>(
     }
     install_navigate_event_precommit_transition(scope, event);
     let controller = create_precommit_controller(scope, event);
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
+        controller.into(),
+    );
     let arguments = [controller.into()];
     run_navigation_handler_array(
         scope,
@@ -1117,16 +1123,9 @@ fn create_precommit_controller<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    let controller = PrecommitControllerDeclaration::new(event, true)
+    PrecommitControllerDeclaration::new(event, true)
         .bind(scope)
-        .expect("precommit controller declaration should bind");
-    set_private_value(
-        scope,
-        event,
-        NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
-        controller.into(),
-    );
-    controller
+        .expect("precommit controller declaration should bind")
 }
 
 fn precommit_controller_event<'s>(
@@ -1145,7 +1144,7 @@ fn precommit_controller_event<'s>(
     }
     let event = get_private_value(scope, controller, PRECOMMIT_CONTROLLER_EVENT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let owner_is_active = get_private_value(
+    let owner_is_active = crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,
@@ -1157,7 +1156,7 @@ fn precommit_controller_event<'s>(
     });
     if !owner_is_active
         || !navigate_event_target_is_connected(scope, event)
-        || object_bool_property(scope, event, "defaultPrevented").unwrap_or(false)
+        || crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented")
     {
         navigate_event_throw_invalid_state(scope);
         return None;
@@ -1239,7 +1238,7 @@ fn precommit_controller_redirect_callback<'s>(
         navigate_event_throw_invalid_state(scope);
         return;
     };
-    let Some(navigation) = get_private_value(
+    let Some(navigation) = crate::context_bootstrap::event_private_value(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,

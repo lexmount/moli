@@ -99,18 +99,26 @@ pub(super) fn apply_step(
                 .and_then(|entries| entries.get(target.target_index as usize).cloned())
             {
                 let key = entry.borrow().key.as_str().to_owned();
-                host.top_level_navigation_history().select_joint_traversal(key, step);
+                host.top_level_navigation_history()
+                    .select_joint_traversal(key, step);
             }
             host.record_pending_top_level_history_traversal(delta);
             return;
         }
     }
-    let targets = plan.targets.iter().map(|target| {
-        let entries = history_entries(scope, target.history)?;
-        let entry = entries.get(target.target_index as usize)?;
-        let key = entry.borrow().key.clone();
-        Some((session_history::binding(scope, host, target.owner).context, key))
-    }).collect::<Option<Vec<_>>>();
+    let targets = plan
+        .targets
+        .iter()
+        .map(|target| {
+            let entries = history_entries(scope, target.history)?;
+            let entry = entries.get(target.target_index as usize)?;
+            let key = entry.borrow().key.clone();
+            Some((
+                session_history::binding(scope, host, target.owner).context,
+                key,
+            ))
+        })
+        .collect::<Option<Vec<_>>>();
     let Some(targets) = targets else {
         if let Some(method) = method {
             reject_canceled_history_traversal_results(scope, &method.results);
@@ -135,15 +143,22 @@ pub(super) fn apply_step(
             let key = history_entries(scope, target.history)
                 .and_then(|entries| entries.get(target.target_index as usize).cloned())
                 .map(|entry| entry.borrow().key.as_str().to_owned());
-            let (info, results) = method.map_or_else(|| (None, Vec::new()), |method| (method.info, method.results));
-            apply_pending_cross_document_traversal(scope, host, PendingCrossDocumentTraversal {
-                target: exact,
-                target_index: target.target_index,
-                target_key: key,
-                seed,
-                info,
-                results,
-            })
+            let (info, results) = method.map_or_else(
+                || (None, Vec::new()),
+                |method| (method.info, method.results),
+            );
+            apply_pending_cross_document_traversal(
+                scope,
+                host,
+                PendingCrossDocumentTraversal {
+                    target: exact,
+                    target_index: target.target_index,
+                    target_key: key,
+                    seed,
+                    info,
+                    results,
+                },
+            )
         } else {
             false
         }

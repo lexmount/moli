@@ -109,8 +109,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/navigation_callbacks/navigation.rs",
-        // Three settlement calls now go through the existing shared helpers.
-        8,
+        // Fulfillment paths share the realm-aware lifecycle settlement helper.
+        7,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
