@@ -465,6 +465,68 @@ async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_r
 }
 
 #[tokio::test]
+async fn websocket_cdp_browser_close_exits_cleanly_releases_lock_and_persists_profile() {
+    let profile = TempDir::new("browser-close-profile");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
+    let page_url = format!("http://{fixture_addr}/page");
+
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to profiled cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
+    let write = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session_id,
+        6,
+        "localStorage.clear(); localStorage.setItem('persisted', 'yes'); 'ok'",
+    )
+    .await;
+    assert_eq!(write, "ok");
+
+    // Graceful whole-server shutdown must let `serve()` return, drop the
+    // profile guard, and exit the process normally (not via abort).
+    send_cdp_command_without_wait(&mut socket, 42, "Browser.close", None, json!({})).await;
+    timeout(Duration::from_secs(10), cdp_server)
+        .await
+        .expect("profiled server should exit after Browser.close")
+        .expect("profiled server task should return cleanly");
+    wait_for_profile_lock_release(&paths).await;
+
+    let persisted = std::fs::read_to_string(&paths.local_storage_path)
+        .expect("profiled localStorage json should be written before exit");
+    assert!(
+        persisted.contains("\"persisted\"") && persisted.contains("\"yes\""),
+        "profile file should contain localStorage checkpoint written before close: {persisted}"
+    );
+
+    // The same profile must reopen immediately after the graceful exit.
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("reconnect to profiled cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
+    let read = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session_id,
+        6,
+        "String(localStorage.getItem('persisted'))",
+    )
+    .await;
+    assert_eq!(read, "yes");
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(cdp_server).await;
+    wait_for_profile_lock_release(&paths).await;
+    fixture_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_indexeddb_profile_persists_across_server_restart() {
     let profile = TempDir::new("indexeddb-profile");
     let paths = BrowserProfilePaths::new(&profile.path);

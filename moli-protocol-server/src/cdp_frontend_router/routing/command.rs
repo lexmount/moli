@@ -78,6 +78,28 @@ impl CdpFrontendRoutingState {
         } else {
             Some(base_session_id)
         };
+        // A browser-level `Browser.close` is the client-controlled graceful
+        // whole-server shutdown path. Only the browser agent host owns that
+        // authority in Chromium: page/target sessions and child sessions have
+        // no Browser-domain handler and must not gain shutdown authority.
+        //
+        // The browser-base case is allowed to dispatch normally so the empty
+        // success response is produced; the actor requests shutdown only after
+        // that response has been enqueued (see `request_shutdown` callers), so
+        // the reply is always flushed ahead of the drain.
+        if method == "Browser.close"
+            && !self
+                .frontends
+                .is_browser_base_session(frontend_id, dispatch_session_id.as_deref())
+        {
+            return Some(immediate_error_response(
+                frontend_id,
+                Some(client_command_id),
+                client_session_id.as_deref(),
+                -32601,
+                "Method not found",
+            ));
+        }
         let target_session_reference = match self.resolve_target_session_reference(
             frontend_id,
             dispatch_session_id.as_deref(),

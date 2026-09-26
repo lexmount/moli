@@ -1,6 +1,7 @@
 use crate::{
     cdp_frontend_router::{CdpFrontendRouter, CdpPreparedFrontendCommand},
     cdp_scheduler::ProtocolOutputSequence,
+    protocol_server::cdp_shutdown::ShutdownCoordinator,
 };
 use moli_protocol::ParsedCdpCommand;
 
@@ -992,7 +993,7 @@ fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
 
 #[test]
 fn stalled_browser_writer_does_not_block_page_frontend_enqueue() {
-    let router = CdpFrontendRouter::new();
+    let router = CdpFrontendRouter::new(ShutdownCoordinator::new());
     let (root_sink, mut root_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
     let (page_sink, mut page_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
     router
@@ -1120,4 +1121,114 @@ fn orphaned_responses_and_unknown_session_events_do_not_fall_back_to_browser() {
             )
             .is_none()
     );
+}
+
+#[test]
+fn browser_base_session_close_dispatches_without_premature_shutdown() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
+        .expect("register browser frontend");
+
+    let command = expect_prepared_command(
+        routing.prepare_command(
+            5,
+            parsed_command(json!({ "id": 1, "method": "Browser.close" }).to_string()),
+        ),
+        "browser close",
+    );
+    // The command dispatches normally so the empty success response is produced
+    // and enqueued; the actor requests shutdown only after that flush.
+    assert_eq!(
+        serde_json::from_str::<Value>(command.json()).expect("close command JSON")["method"],
+        json!("Browser.close")
+    );
+    assert!(
+        !routing.shutdown_coordinator().is_requested(),
+        "the router must not request shutdown before the response is flushed"
+    );
+
+    routing.request_shutdown();
+    assert!(routing.shutdown_coordinator().is_requested());
+}
+
+#[test]
+fn browser_close_ignores_params_like_chromium() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
+        .expect("register browser frontend");
+
+    // Chromium's Browser.close takes no parameters and silently ignores any
+    // extra payload; the command must still dispatch rather than be rejected.
+    let prepared = routing.prepare_command(
+        5,
+        parsed_command(
+            json!({ "id": 1, "method": "Browser.close", "params": { "ignored": true } })
+                .to_string(),
+        ),
+    );
+    assert!(matches!(
+        prepared,
+        Some(CdpPreparedFrontendCommand::Command(_))
+    ));
+}
+
+#[test]
+fn repeated_browser_close_requests_are_idempotent() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
+        .expect("register browser frontend");
+
+    for _ in 0..3 {
+        routing.request_shutdown();
+    }
+    assert!(routing.shutdown_coordinator().is_requested());
+}
+
+#[test]
+fn target_frontend_close_does_not_request_server_shutdown() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_target_frontend(
+            10,
+            "TID-page".to_owned(),
+            "SID-page".to_owned(),
+            test_sink(),
+        )
+        .expect("register target frontend");
+
+    let prepared = routing.prepare_command(
+        10,
+        parsed_command(json!({ "id": 1, "method": "Browser.close" }).to_string()),
+    );
+    let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = prepared.unwrap() else {
+        panic!("page frontend Browser.close should be rejected before dispatch");
+    };
+    assert_eq!(message["error"]["code"], json!(-32601));
+    assert!(!routing.shutdown_coordinator().is_requested());
+}
+
+#[test]
+fn browser_child_session_close_does_not_request_server_shutdown() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
+        .expect("register browser frontend");
+    routing.register_child_session(5, Some("SID-browser"), "SID-child", Some("TID-child"));
+
+    // A page/target child session reached over the browser websocket has no
+    // Browser-domain handler in Chromium and must not gain shutdown authority.
+    let prepared = routing.prepare_command(
+        5,
+        parsed_command(
+            json!({ "id": 1, "method": "Browser.close", "sessionId": "SID-child" }).to_string(),
+        ),
+    );
+    let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = prepared.unwrap() else {
+        panic!("child-session Browser.close should be rejected before dispatch");
+    };
+    assert_eq!(message["error"]["code"], json!(-32601));
+    assert!(!routing.shutdown_coordinator().is_requested());
 }

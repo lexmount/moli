@@ -156,6 +156,7 @@ pub(crate) fn try_start_browser_command_dispatch(
         return BrowserCommandTaskStep::Complete(CommandOutputPlan::error(-32601, "UnknownMethod"));
     };
     match action {
+        BrowserAction::Close => BrowserCommandTaskStep::Complete(CommandOutputPlan::success()),
         BrowserAction::GetVersion => BrowserCommandTaskStep::Complete(get_version(conn)),
         BrowserAction::GetWindowForTarget => {
             BrowserCommandTaskStep::Complete(get_window_for_target(conn))

@@ -67,7 +67,10 @@ pub(super) async fn run_cdp_frontend_socket(
             let _ = writer_finished_rx.await;
         }
         CdpSocketExit::TransportClose => {
-            socket_sink.close();
+            // The owner/registry is tearing this frontend down (including the
+            // graceful `Browser.close` drain). Flush any already-enqueued
+            // output first so a terminal response is never dropped.
+            socket_sink.close_after_flush();
             let _ = writer_finished_rx.await;
         }
     }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::cdp_writer::CdpSocketSink;
+use crate::protocol_server::cdp_shutdown::ShutdownCoordinator;
 
 use self::{frontend_registry::FrontendRegistry, pending_commands::PendingCommandTable};
 
@@ -25,15 +26,23 @@ impl CdpRoutedFrontend {
     }
 }
 
-#[derive(Default)]
 pub(super) struct CdpFrontendRoutingState {
     // The downstream protocol connection is shared, so client command ids and
     // session ownership must never be used as global frontend identities.
     pending_commands: PendingCommandTable,
     frontends: FrontendRegistry,
+    shutdown_coordinator: ShutdownCoordinator,
 }
 
 impl CdpFrontendRoutingState {
+    pub(super) fn new(shutdown_coordinator: ShutdownCoordinator) -> Self {
+        Self {
+            pending_commands: PendingCommandTable::default(),
+            frontends: FrontendRegistry::default(),
+            shutdown_coordinator,
+        }
+    }
+
     pub(super) fn register_browser_frontend(
         &mut self,
         frontend_id: u64,
@@ -85,6 +94,24 @@ impl CdpFrontendRoutingState {
         self.frontends
             .frontend_sink(frontend_id)
             .map(|sink| CdpRoutedFrontend { frontend_id, sink })
+    }
+
+    #[cfg(test)]
+    pub(super) fn shutdown_coordinator(&self) -> &ShutdownCoordinator {
+        &self.shutdown_coordinator
+    }
+
+    /// Requests graceful server shutdown after a browser-level `Browser.close`
+    /// response has been enqueued. Idempotent.
+    pub(super) fn request_shutdown(&self) {
+        self.shutdown_coordinator.request();
+    }
+}
+
+#[cfg(test)]
+impl Default for CdpFrontendRoutingState {
+    fn default() -> Self {
+        Self::new(ShutdownCoordinator::new())
     }
 }
 

@@ -2873,3 +2873,90 @@ async fn websocket_cdp_owner_registry_shutdown_joins_shared_default_page_owner()
 
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_browser_close_responds_then_drains_and_closes_frontends() {
+    let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target_id).await;
+    assert_eq!(owner_registry.owner_count(), 1);
+
+    send_cdp_command_without_wait(&mut browser, 99, "Browser.close", None, json!({})).await;
+
+    // The empty success response must be observed on the wire before the
+    // websocket closes, so a caller can rely on the reply being flushed.
+    let mut saw_success = false;
+    let close_wait = async {
+        while let Some(message) = browser.next().await {
+            match message {
+                Ok(WsMessage::Text(text)) => {
+                    let message: serde_json::Value =
+                        serde_json::from_str(&text).expect("browser close message json");
+                    if message["id"] == json!(99) {
+                        assert_eq!(message["result"], json!({}));
+                        assert!(message.get("error").is_none());
+                        saw_success = true;
+                    }
+                }
+                Ok(WsMessage::Close(_)) | Err(_) => break,
+                Ok(_) => continue,
+            }
+        }
+    };
+    timeout(Duration::from_secs(5), close_wait)
+        .await
+        .expect("browser websocket should close after Browser.close");
+    assert!(saw_success, "Browser.close success must precede the close");
+
+    // `serve()` only returns after the owner registry has drained, so awaiting
+    // the server task also observes the completed graceful teardown.
+    timeout(Duration::from_secs(5), server)
+        .await
+        .expect("protocol server task should resolve after Browser.close")
+        .expect("protocol server should return cleanly after Browser.close");
+    assert_eq!(owner_registry.owner_count(), 0);
+
+    wait_for_websocket_close(&mut page, "Browser.close page").await;
+
+    // The listener is closed once `serve()` returns: new protocol connections
+    // must be refused rather than accepted.
+    assert!(
+        connect_async(format!("ws://{addr}/devtools/page/{target_id}"))
+            .await
+            .is_err(),
+        "protocol server must stop accepting connections after Browser.close"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_page_websocket_browser_close_is_rejected_without_shutdown() {
+    let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target_id).await;
+
+    let messages = send_cdp_command(&mut page, 7, "Browser.close", None, json!({})).await;
+    let response = response_by_id(&messages, 7);
+    assert_eq!(
+        response["error"]["code"],
+        json!(-32601),
+        "page-target Browser.close must be method-not-found: {response:?}"
+    );
+
+    // The server must stay up: the browser frontend is still usable and the
+    // owner registry was not drained.
+    let version = send_cdp_command(&mut browser, 2, "Browser.getVersion", None, json!({})).await;
+    assert!(response_by_id(&version, 2)["result"]["product"].is_string());
+    assert_eq!(owner_registry.owner_count(), 1);
+
+    let _ = page.close(None).await;
+    let _ = browser.close(None).await;
+    abort_test_cdp_server(server).await;
+}
