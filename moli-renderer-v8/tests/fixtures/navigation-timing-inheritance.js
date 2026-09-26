@@ -11,8 +11,8 @@
     'fetchStart', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart',
     'requestStart', 'responseStart', 'responseEnd', 'transferSize', 'encodedBodySize', 'decodedBodySize',
     'renderBlockingStatus', 'responseStatus'];
-  // contentType is covered by the Rust regression; the reference browser
-  // does not expose it yet.
+  // contentType and the new entry identity fields are covered by the Rust
+  // regression: the Chromium reference does not expose them yet.
   const navigationNames = ['unloadEventStart', 'unloadEventEnd', 'domInteractive', 'domContentLoadedEventStart',
     'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd', 'type', 'redirectCount'];
   const allNames = [...baseNames, ...resourceNames, ...navigationNames];
