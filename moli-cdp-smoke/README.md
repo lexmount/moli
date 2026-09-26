@@ -249,14 +249,15 @@ Covered well:
   asynchronous request cancellation, and suppression of asynchronous events and
   timers while a synchronous request owns the main thread.
 - The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). Its Moli-only TreeScope fixture also captures 104 open/closed Shadow Roots, nested roots, and 24 roots in an iframe twice, requiring stable pixels and completion within the protocol timeout. The group covers Moli's generation-gated 1 FPS JPEG screencast as well: initial-frame delivery, clean-state frame suppression without ACK backpressure, 400x300 scaling, metadata/session routing, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the TreeScope, fixed-1-FPS, and default-Mock branches are Moli-only.
-- The default `playwright-compat` group takes viewport and clipped screenshots
-  through `page.screenshot()` on fresh pages, without a raw CDP capture first.
+- The default `playwright-compat` group takes viewport, clipped, and full-page
+  screenshots through `page.screenshot()` on fresh pages, without a raw CDP capture first.
   This covers Playwright's `Page.getLayoutMetrics` preflight before layout has
   been published. DPR/resize and concurrent-page screenshot cases likewise use
   Playwright directly, so a fixture cannot hide a broken first screenshot.
-  A first `fullPage: true` screenshot still requires published DOM geometry:
-  Playwright reads the document's scroll/offset/client dimensions before its
-  metrics request, and those dimensions remain zero until layout is published.
+  In Moli, before the first layout publication, the document's client dimensions default
+  to the configured viewport, so a first `fullPage: true` capture covers one
+  viewport. The next full-page capture uses the published content dimensions;
+  the smoke test checks both captures on a page taller than the viewport.
 - The default raw `action-window` group holds Moli's on-demand input policy at
   the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
   wheel commands remain delayed until one fixed one-second deadline, preserve

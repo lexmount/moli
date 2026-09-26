@@ -35,6 +35,12 @@ async def _verify_playwright_first_screenshot(state: SmokeState) -> None:
     for name, options, size in [
         ("viewport", {}, (320, 240)),
         ("clip", {"clip": {"x": 10, "y": 15, "width": 60, "height": 50}}, (60, 50)),
+        ("full-page", {"full_page": True}, (320, 240)),
+        (
+            "full-page-clip",
+            {"full_page": True, "clip": {"x": 10, "y": 15, "width": 60, "height": 50}},
+            (60, 50),
+        ),
     ]:
         page = await state.context.new_page()
         try:
@@ -48,9 +54,22 @@ async def _verify_playwright_first_screenshot(state: SmokeState) -> None:
             image = decode_png(await page.screenshot(timeout=10_000, **options))
             assert_equal((image.width, image.height), size, f"first Playwright {name} screenshot size")
             assert_equal(image.pixel(5, 5), (20, 30, 40, 255), f"first Playwright {name} screenshot pixel")
+            if name == "full-page":
+                # The first capture publishes layout. The next full-page
+                # request must use the real content extent, not the fallback.
+                full_image = decode_png(await page.screenshot(full_page=True, timeout=10_000))
+                assert_equal(full_image.height, 900, "published Playwright full-page screenshot height")
+                assert_equal(
+                    full_image.pixel(5, 880),
+                    (20, 30, 40, 255),
+                    "published Playwright full-page bottom pixel",
+                )
         finally:
             await page.close()
-    state.record("playwright_first_screenshot_without_published_layout", {"modes": ["viewport", "clip"]})
+    state.record(
+        "playwright_first_screenshot_without_published_layout",
+        {"modes": ["viewport", "clip", "full-page", "full-page-clip"]},
+    )
 
 
 async def _with_fresh_page(state: SmokeState, body: Callable[[Any, Any], Awaitable[None]]) -> None:

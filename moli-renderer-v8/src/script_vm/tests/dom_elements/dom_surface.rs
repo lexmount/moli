@@ -1383,6 +1383,58 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
 }
 
 #[test]
+fn document_client_size_defaults_to_viewport_without_publishing_layout() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-client-viewport.test/",
+        "<!doctype html><style>html,body{margin:0}main{width:80px;height:900px}</style><main></main>",
+    );
+    let initial_passes = vm.layout_pass_observability_for_test().1;
+    let query = r#"JSON.stringify([
+        document.documentElement.clientWidth, document.documentElement.clientHeight,
+        document.documentElement.offsetWidth, document.documentElement.scrollHeight,
+        document.body.clientWidth, document.querySelector('main').clientHeight,
+        document.querySelector('main').getBoundingClientRect().width
+    ])"#;
+    for (width, height, dpr) in [(320, 240, 1.0), (480, 360, 2.0)] {
+        vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: width,
+            inner_height: height,
+            device_pixel_ratio: dpr,
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(
+            vm.eval(query).unwrap(),
+            format!("[{width},{height},0,0,0,0,0]")
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, initial_passes);
+    }
+
+    publish_layout_for_test(&mut vm);
+    let published = vm.eval(query).unwrap();
+    let published_metrics: serde_json::Value = serde_json::from_str(&published).unwrap();
+    assert_eq!(published_metrics[0], 465); // The viewport now has a scrollbar.
+    assert_eq!(published_metrics[1], 360);
+    assert_eq!(published_metrics[3], 900);
+    assert_eq!(published_metrics[6], 80);
+    let published_passes = vm.layout_pass_observability_for_test().1;
+
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 640,
+        inner_height: 480,
+        ..Default::default()
+    }))
+    .unwrap();
+    assert_eq!(vm.eval(query).unwrap(), published);
+    assert_eq!(vm.layout_pass_observability_for_test().1, published_passes);
+
+    vm.eval("document.documentElement.style.display = 'none'")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(query).unwrap(), "[0,0,0,0,0,0,0]");
+}
+
+#[test]
 fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
     let mut vm = new_storage_test_vm("https://viewport-overflow-policy.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
