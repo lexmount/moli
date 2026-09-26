@@ -502,16 +502,23 @@ fn performance_resource_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(snapshot) =
-        PerformanceResourceTimingJsonSnapshotDeclaration::from_entry(scope, args.this())
-    else {
+    let Some(snapshot) = resource_timing_json_snapshot(scope, args.this()) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let snapshot = snapshot
-        .bind(scope)
-        .expect("PerformanceResourceTiming toJSON snapshot declaration should bind");
     rv.set(snapshot.into());
+}
+
+pub(super) fn resource_timing_json_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let snapshot = PerformanceResourceTimingJsonSnapshotDeclaration::from_entry(scope, entry)?;
+    Some(
+        snapshot
+            .bind(scope)
+            .expect("PerformanceResourceTiming toJSON snapshot declaration should bind"),
+    )
 }
 
 fn performance_entry_base_attribute_getter_callback<'s>(
