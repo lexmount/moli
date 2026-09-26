@@ -6,6 +6,8 @@ async function () {
   async function run({cache, phase, cors = null, crossOrigin = false, name = 'basic',
                       preloadIntegrity = '', consumerIntegrity = '',
                       expectedEvents = ['load', 'load'], expectedRequests = 1}) {
+    // Control fetches also consume the resource timing buffer; isolate each scenario.
+    performance.clearResourceTimings();
     const token = 'style-' + rows.length;
     const url = new URL('/probe-asset', location.href);
     Object.entries({token, as: 'style', cache}).forEach(([key, value]) => url.searchParams.set(key, value));
