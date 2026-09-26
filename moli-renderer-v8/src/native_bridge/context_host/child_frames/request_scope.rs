@@ -847,9 +847,9 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_browsing_context_allows_top_navigation(&self, handle: DomHandle) -> bool {
-        self.dom_host()
-            .get_attribute(handle, "sandbox")
-            .is_none_or(|sandbox| sandbox_attribute_allows_top_navigation(&sandbox))
+        self.child_browsing_contexts
+            .get(&handle)
+            .is_some_and(|entry| entry.document_sandbox_policy().allows_top_navigation)
     }
 }
 
@@ -921,6 +921,7 @@ pub(in crate::native_bridge::context_host) fn document_sandbox_policy_from_attri
         forces_opaque_origin: sandbox_attribute_forces_opaque_origin(value),
         allows_scripts: sandbox_attribute_allows_scripts(value),
         allows_modals: sandbox_attribute_allows_modals(value),
+        allows_top_navigation: sandbox_attribute_allows_top_navigation(value),
         allows_popups_to_escape: sandbox_attribute_allows_popups_to_escape(value),
         sandboxes_document_domain: sandbox_attribute_sets_document_domain_flag(value),
     }
@@ -1023,6 +1024,33 @@ mod tests {
         );
         assert!(document_sandbox_policy_from_attribute(Some("ALLOW-MODALS")).allows_modals);
         assert!(document_sandbox_policy_from_attribute(None).allows_modals);
+    }
+
+    #[test]
+    fn iframe_and_response_sandboxes_must_both_allow_top_navigation() {
+        for (attribute, owner_allows) in [
+            (None, true),
+            (Some("allow-scripts"), false),
+            (Some("ALLOW-TOP-NAVIGATION"), true),
+        ] {
+            for (policies, response_allows) in [
+                (vec!["script-src 'self'"], true),
+                (vec!["sandbox allow-scripts"], false),
+                (vec!["sandbox allow-top-navigation"], true),
+                (vec!["sandbox allow-top-navigation", "sandbox"], false),
+            ] {
+                let response = crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
+                    &policies.iter().map(|policy| (*policy).to_owned()).collect::<Vec<_>>(),
+                );
+                assert_eq!(
+                    document_sandbox_policy_from_attribute(attribute)
+                        .with_response_content_security_policy(response)
+                        .allows_top_navigation,
+                    owner_allows && response_allows,
+                    "attribute={attribute:?}, response={policies:?}"
+                );
+            }
+        }
     }
 
     #[test]

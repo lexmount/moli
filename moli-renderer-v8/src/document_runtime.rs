@@ -651,6 +651,7 @@ pub(crate) struct DocumentSandboxPolicy {
     pub(crate) forces_opaque_origin: bool,
     pub(crate) allows_scripts: bool,
     pub(crate) allows_modals: bool,
+    pub(crate) allows_top_navigation: bool,
     pub(crate) allows_popups_to_escape: bool,
     pub(crate) sandboxes_document_domain: bool,
 }
@@ -661,6 +662,7 @@ impl Default for DocumentSandboxPolicy {
             forces_opaque_origin: false,
             allows_scripts: true,
             allows_modals: true,
+            allows_top_navigation: true,
             allows_popups_to_escape: false,
             sandboxes_document_domain: false,
         }
@@ -682,6 +684,10 @@ impl DocumentSandboxPolicy {
                 crate::content_security_policy::content_security_policy_sandbox_allows_modals(
                     policies,
                 ),
+            allows_top_navigation:
+                crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation(
+                    policies,
+                ),
             allows_popups_to_escape:
                 crate::content_security_policy::content_security_policy_sandbox_allows_popups_to_escape(
                     policies,
@@ -698,6 +704,7 @@ impl DocumentSandboxPolicy {
             self.forces_opaque_origin |= response.forces_opaque_origin;
             self.allows_scripts &= response.allows_scripts;
             self.allows_modals &= response.allows_modals;
+            self.allows_top_navigation &= response.allows_top_navigation;
             self.allows_popups_to_escape = if self.sandboxes_document_domain {
                 self.allows_popups_to_escape && response.allows_popups_to_escape
             } else {

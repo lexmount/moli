@@ -364,6 +364,17 @@ pub(crate) fn content_security_policy_sandbox_allows_modals(policies: &[String])
         .all(|policy| policy_sandbox_allows_modals(policy).unwrap_or(true))
 }
 
+pub(crate) fn content_security_policy_sandbox_allows_top_navigation(policies: &[String]) -> bool {
+    policies.iter().all(|policy| {
+        let directives = parsed_directives(policy);
+        directive_source_list(&directives, SANDBOX).is_none_or(|sources| {
+            sources
+                .iter()
+                .any(|token| token.eq_ignore_ascii_case("allow-top-navigation"))
+        })
+    })
+}
+
 pub(crate) fn content_security_policy_sandbox_allows_popups_to_escape(policies: &[String]) -> bool {
     let mut has_sandbox = false;
     for policy in policies {

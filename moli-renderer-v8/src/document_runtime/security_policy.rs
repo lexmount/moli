@@ -2263,6 +2263,7 @@ mod tests {
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,
+                allows_top_navigation: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }
@@ -2277,6 +2278,7 @@ mod tests {
                 forces_opaque_origin: false,
                 allows_scripts: true,
                 allows_modals: true,
+                allows_top_navigation: false,
                 allows_popups_to_escape: true,
                 sandboxes_document_domain: true,
             }
@@ -2292,6 +2294,7 @@ mod tests {
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,
+                allows_top_navigation: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }

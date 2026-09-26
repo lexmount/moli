@@ -4489,6 +4489,83 @@ async fn reset_navigation_history_updates_prebootstrapped_child_default_realm() 
 }
 
 #[tokio::test]
+async fn history_traversal_uses_active_document_sandbox_until_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let restricted = "allow-scripts allow-same-origin";
+    let permitted = "allow-scripts allow-same-origin allow-top-navigation";
+    for (initial, changed, initially_allowed, subsequently_allowed) in [
+        (None, Some(restricted), true, false),
+        (Some(permitted), Some(restricted), true, false),
+        (Some(restricted), None, false, true),
+        (Some(restricted), Some(permitted), false, true),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://history-active-sandbox.test/parent",
+            &loader,
+        );
+        let initial = serde_json::to_string(&initial).unwrap();
+        let changed = serde_json::to_string(&changed).unwrap();
+        vm.eval(&format!(
+            r#"
+globalThis.frame = document.createElement('iframe');
+if ({initial} !== null) frame.setAttribute('sandbox', {initial});
+frame.srcdoc = '<p>original document</p>';
+(document.body || document.documentElement || document).appendChild(frame);
+"#
+        ))
+        .unwrap();
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+            .await
+            .unwrap();
+        vm.eval(&format!(
+            r#"
+globalThis.originalDocument = frame.contentDocument;
+if ({changed} === null) frame.removeAttribute('sandbox');
+else frame.setAttribute('sandbox', {changed});
+"#
+        ))
+        .unwrap();
+        assert_eq!(
+            vm.eval("frame.contentDocument === originalDocument")
+                .unwrap(),
+            "true"
+        );
+
+        for (navigate, allowed) in [(false, initially_allowed), (true, subsequently_allowed)] {
+            if navigate {
+                vm.eval("frame.srcdoc = '<p>replacement document</p>';")
+                    .unwrap();
+                vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    vm.eval("frame.contentDocument === originalDocument")
+                        .unwrap(),
+                    "false"
+                );
+            }
+            vm.eval(
+                "history.replaceState(0, ''); history.pushState(1, ''); frame.contentWindow.eval('history.back()');",
+            )
+            .unwrap();
+            assert_eq!(
+                vm.run_one_history_traversal_executor_turn(&loader)
+                    .await
+                    .unwrap(),
+                allowed,
+                "initial={initial}, changed={changed}, navigated={navigate}"
+            );
+            assert_eq!(
+                vm.eval("String(history.state)").unwrap(),
+                if allowed { "0" } else { "1" },
+                "initial={initial}, changed={changed}, navigated={navigate}"
+            );
+            assert!(vm.take_pending_top_level_history_traversal().is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn history_methods_from_child_realm_traverse_receiver_history() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
