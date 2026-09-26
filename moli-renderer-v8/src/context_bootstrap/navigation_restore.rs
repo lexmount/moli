@@ -10,7 +10,9 @@ use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_from_seed,
 };
-use super::navigation_window::{navigation_has_current_document, window_history_for_holder, window_navigation_for_holder};
+use super::navigation_window::{
+    navigation_has_current_document, window_history_for_holder, window_navigation_for_holder,
+};
 use crate::native_bridge::NavigationHistoryEntrySeed;
 
 pub(crate) fn install_navigation_bootstrap_entry(
@@ -84,9 +86,9 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
-    let entries = build_history_entries_from_seed(scope, owner, entry_seed);
+    let (entries, current_index) = build_history_entries_from_seed(scope, owner, entry_seed);
     let current_entry = entries
-        .get(entry_seed.current_index as usize)
+        .get(current_index as usize)
         .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(
@@ -99,7 +101,7 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let current_state =
         clone_history_entry_state(scope, current_entry).unwrap_or_else(|| v8::null(scope).into());
     set_history_entries(scope, history, entries);
-    set_history_index(scope, history, entry_seed.current_index);
+    set_history_index(scope, history, current_index);
     cache_current_history_state(scope, history, current_state);
     set_navigation_current_entry(scope, navigation, current_entry);
     if let Some(snapshot) = entry_seed

@@ -5143,10 +5143,10 @@ fn computed_used_size_clamps_infinite_negative_math_to_zero() {
 fn computed_style_child_document_media_queries_use_iframe_viewport() {
     let mut vm = new_storage_test_vm("https://child-document-media-query.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -5164,12 +5164,13 @@ fn computed_style_child_document_media_queries_use_iframe_viewport() {
   document.body.offsetTop;
   const before = getComputedStyle(childDocument.body).color;
   frame.style.width = '200px';
+  yield; // Publish the new viewport before evaluating the child's media query.
   const after = getComputedStyle(childDocument.body).color;
   return `${before}|${after}`;
 })()
 "#,
-        )
-        .expect("child document media queries should use iframe viewport");
+    )
+    .expect("child document media queries should use iframe viewport");
 
     assert_eq!(result, "rgb(255, 0, 0)|rgb(0, 128, 0)");
 }

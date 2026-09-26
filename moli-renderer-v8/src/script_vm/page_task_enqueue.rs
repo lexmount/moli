@@ -857,6 +857,12 @@ impl ScriptVm {
         self.document_runtime.has_ready_timeout()
     }
 
+    // Rendering wakes are independent of callbacks queued by an API.
+    #[cfg(test)]
+    pub(crate) fn has_ready_callback_timer(&self) -> bool {
+        self.document_runtime.has_ready_callback_timer()
+    }
+
     pub(crate) fn next_ready_timeout_deadline(
         &self,
         selection: crate::page_task_queue::RendererPageTimerSelection,

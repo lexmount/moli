@@ -92,9 +92,9 @@ pub(crate) use navigation_window::{
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
+mod session_history_traversal;
 mod shared_event_targets;
 mod world_wrappers;
-mod session_history_traversal;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
@@ -285,11 +285,13 @@ pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value, apply_event_handler_return_value, clear_event_composed_path, event_attribute, event_backing,
-    event_bool_attribute, event_initialized, event_internal_bool_flag, event_is_dispatching,
-    event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
-    initialize_event_wrapper, mark_event_trusted, error_event_handler_arguments, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_source_value, set_event_trusted,
+    EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value,
+    apply_event_handler_return_value, clear_event_composed_path, error_event_handler_arguments,
+    event_attribute, event_backing, event_bool_attribute, event_initialized,
+    event_internal_bool_flag, event_is_dispatching, event_is_error_event, event_is_mouse_event,
+    event_private_value, initialize_event_object, initialize_event_wrapper, mark_event_trusted,
+    new_event_state, new_event_wrapper, set_event_composed_path, set_event_internal_flag,
+    set_event_private_value, set_event_source_value, set_event_trusted,
     submit_event_submitter_value,
 };
 pub(crate) use self::file_api::{

@@ -1051,6 +1051,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
         r##"
         history.replaceState({owner: 'top'}, '', '#top');
         const frame = document.createElement('iframe');
+        frame.srcdoc = '<p>History owner</p>';
         (document.body || document.documentElement || document).appendChild(frame);
         void frame.contentWindow;
         'created'
@@ -1065,6 +1066,11 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
         .await
         .unwrap()
     );
+    // Traversal needs a committed Document: pushState replaces the entry of
+    // the initial empty Document rather than appending one.
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
     let child = vm
         .live_child_default_runtime_realm_inventory()
         .into_iter()
@@ -1080,7 +1086,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     vm.eval_in_child_default_context(
         child,
         r##"
-        history.replaceState({owner: 'child'}, '', '#child');
+        history.replaceState({owner: 'child'}, '', 'about:srcdoc#child');
         history.scrollRestoration = 'manual';
         'ready'
     "##,
@@ -1100,7 +1106,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     vm.eval_in_isolated_context(
         isolated,
         r##"
-        history.pushState({owner: 'isolated-child'}, '', '#next');
+        history.pushState({owner: 'isolated-child'}, '', 'about:srcdoc#next');
         history.scrollRestoration = 'auto';
         'pushed'
     "##,
@@ -1194,6 +1200,8 @@ async fn history_worlds_preserve_the_shared_backing_when_initial_child_window_is
     vm.eval(
         r#"
         const frame = document.createElement('iframe');
+        // Keep the initial empty Window pending until the srcdoc commit.
+        frame.srcdoc = '<p>pending initial load</p>';
         (document.body || document.documentElement || document).appendChild(frame);
         void frame.contentWindow;
     "#,
@@ -1217,7 +1225,7 @@ async fn history_worlds_preserve_the_shared_backing_when_initial_child_window_is
     vm.eval_in_isolated_context(
         isolated,
         r##"
-        originalHistory.replaceState({rebound: true}, '', '#rebound');
+        originalHistory.replaceState({rebound: true}, '', 'about:srcdoc#rebound');
         'replaced'
     "##,
     )
@@ -1273,7 +1281,7 @@ fn history_native_snapshot_survives_isolate_replacement_with_structured_values()
             history.scrollRestoration = 'manual';
             navigation.updateCurrentEntry({state: new Set([7n])});
             history.state.map.set('answer', 99n);
-            location.href = '/next';
+            navigation.navigate('/next', {history: 'push'});
             'queued'
         "##).unwrap();
         let pending = vm.take_pending_location_navigation_with_seed().unwrap();
@@ -1317,7 +1325,7 @@ fn history_native_snapshot_survives_isolate_replacement_with_structured_values()
 }
 
 #[test]
-fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
+fn history_restored_sparse_entries_keep_world_identity_and_refresh_reused_ids() {
     const ENTRIES: &str = r#"JSON.stringify(navigation.entries()
         .filter(entry => entry.url.includes('#'))
         .map(entry => [entry.url, entry.id, entry.key, entry.index, entry.sameDocument,
@@ -1337,7 +1345,8 @@ fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
         )
         .unwrap();
         let expected = vm.eval(ENTRIES).unwrap();
-        vm.eval("location.href = '/next'; 'queued'").unwrap();
+        vm.eval("navigation.navigate('/next', {history: 'push'}); 'queued'")
+            .unwrap();
         let mut seed = vm
             .take_pending_location_navigation_with_seed()
             .unwrap()
@@ -1350,7 +1359,13 @@ fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
             .unwrap()
             .history_index;
         seed.activation = None;
-        // Snapshot order is not the history position stored in each snapshot.
+        // Snapshot positions may be sparse and do not follow serialization order.
+        // The current serialized position still fits in the dense vector, where
+        // using it as an offset would silently select the wrong entry.
+        seed.current_index *= 3;
+        for entry in &mut seed.entries {
+            entry.history_index *= 3;
+        }
         seed.entries.reverse();
         (seed, expected)
     };
@@ -1436,5 +1451,84 @@ fn history_native_fragment_navigation_preserves_structured_navigation_state() {
     "##,
     )
     .unwrap();
-    assert_eq!(vm.eval("String(history.state.value === 5n && navigation.currentEntry.getState().get('value') === 9n && retained.getState().get('value') === 9n)").unwrap(), "true");
+    assert_eq!(vm.eval("String(history.state === null && navigation.currentEntry.getState().get('value') === 9n && retained.getState().get('value') === 9n)").unwrap(), "true");
+}
+
+#[test]
+fn event_worlds_beforeunload_return_value_uses_shared_backing() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.event = document.createEvent('BeforeUnloadEvent');
+        event.initEvent('beforeunload', false, true);
+        event.returnValue = 'original';
+        event.pageOnly = true;
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm
+        .create_isolated_world("beforeunload-state", false)
+        .unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r#"
+        globalThis.facts = [];
+        navigation.addEventListener('beforeunload', event => {
+            facts.push(event instanceof BeforeUnloadEvent, event.returnValue,
+                event.pageOnly === undefined);
+            event.returnValue = 'updated';
+            event.preventDefault();
+        }, {once: true});
+        'ready'
+    "#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("JSON.stringify([navigation.dispatchEvent(event), event.returnValue, event.defaultPrevented])").unwrap(),
+        r#"[false,"updated",true]"#);
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap(),
+        r#"[true,"original",true]"#
+    );
+}
+
+#[tokio::test]
+async fn event_worlds_precommit_controllers_expire_after_navigation_settles() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/base", &loader);
+    let isolated = vm.create_isolated_world("precommit-state", false).unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        r##"
+        globalThis.handlers = 0;
+        navigation.addEventListener('navigate', event => {
+            event.intercept({precommitHandler(controller) {
+                globalThis.savedController = controller;
+                controller.addHandler(() => { handlers++; });
+            }});
+        }, {once: true});
+        'ready'
+    "##,
+    )
+    .unwrap();
+    vm.eval("navigation.navigate('#next'); 'started'").unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        (() => {
+            let errorName = '';
+            try { savedController.addHandler(() => {}); }
+            catch (error) { errorName = error.name; }
+            return JSON.stringify([location.hash, handlers, errorName]);
+        })()
+    "#
+        )
+        .unwrap(),
+        r##"["#next",1,"InvalidStateError"]"##
+    );
 }

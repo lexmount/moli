@@ -16,8 +16,8 @@ use super::navigation_traversal_execution::TraversalTarget;
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active,
-    window_navigation_for_holder, window_task_target_for_runtime_owner,
+    navigation_document_is_active, window_navigation_for_holder,
+    window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::history_traversal::{
@@ -380,7 +380,6 @@ fn settle_aborted_admission<'s>(
     admission: &PendingHistoryTraversalAdmission,
     error: Option<v8::Local<'s, v8::Value>>,
 ) {
-    let canceled = error.is_none();
     let _execution = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     let error = error.unwrap_or_else(|| {
         navigation_dom_exception(scope, "History traversal was canceled", "AbortError")

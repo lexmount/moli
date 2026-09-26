@@ -112,6 +112,11 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     window: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> Result<()> {
+    // A child isolated realm shares the default Window's native records.
+    // Guard the entire reset, including History and Navigation ownership.
+    if window_has_shared_history(scope, window) {
+        return Ok(());
+    }
     reset_window_location_runtime_state(scope, window, href)?;
 
     let initial_seed = initial_navigation_history_seed(scope, window, href);
@@ -122,9 +127,9 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     set_runtime_window_owner(scope, history, window);
     install_history_scroll_restoration_runtime_state(scope, history, "auto");
     install_history_state_runtime_state(scope, history, v8::null(scope).into());
-    let entries = build_history_entries_from_seed(scope, window, &initial_seed);
+    let (entries, current_index) = build_history_entries_from_seed(scope, window, &initial_seed);
     let current_entry = entries
-        .get(initial_seed.current_index as usize)
+        .get(current_index as usize)
         .map(|entry| super::history_runtime::native::entry_wrapper(scope, window, entry.clone()))
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(
@@ -135,7 +140,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
             )
         });
     set_history_entries(scope, history, entries);
-    set_history_index(scope, history, initial_seed.current_index);
+    set_history_index(scope, history, current_index);
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
     let navigation = match window_runtime_object(scope, window, WINDOW_NAVIGATION_SLOT) {

@@ -1,7 +1,5 @@
 use super::history_runtime::native;
-use super::navigation_window::{
-    runtime_window_owner, runtime_window_uses_top_level_history_model,
-};
+use super::navigation_window::{runtime_window_owner, runtime_window_uses_top_level_history_model};
 use crate::util::serialize_v8_iter_array;
 use moli_history::HistoryEntryRef;
 use std::rc::Rc;
@@ -72,7 +70,9 @@ fn visible_navigation_entries<'s>(
     let same_origin = |entry: &HistoryEntryRef| {
         let current = current_entry.borrow();
         let candidate = entry.borrow();
-        current.document == candidate.document || (current.document_origin != "null" && current.document_origin == candidate.document_origin)
+        current.document == candidate.document
+            || (current.document_origin != "null"
+                && current.document_origin == candidate.document_origin)
     };
     let mut start = current_index;
     while start > 0 {
@@ -127,4 +127,3 @@ fn raw_index_for_entry(
                 .position(|entry| entry.borrow().key == target.key)
         })
 }
-

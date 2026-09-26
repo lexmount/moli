@@ -2393,7 +2393,9 @@ document.body.appendChild(frame);
     }
     let (observed, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: "globalThis.__childSelfNavigateEvents.join('|')".to_owned(),
+            // Each owner-driven completion is required exactly once. Posted
+            // messages and load events use separate task sources.
+            expression: "globalThis.__childSelfNavigateEvents.slice().sort().join('|')".to_owned(),
             await_promise: false,
         })
         .await
@@ -4641,9 +4643,16 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
                 expression: r#"(() => {
   globalThis.__lm_shared_isolate_unhandled_rejections = [];
   globalThis.__lm_shared_isolate_rejectionhandled = [];
+  globalThis.__lm_shared_isolate_unhandled_done = new Promise(resolve => {
+    globalThis.__lm_shared_isolate_resolve_unhandled = resolve;
+  });
+  globalThis.__lm_shared_isolate_handled_done = new Promise(resolve => {
+    globalThis.__lm_shared_isolate_resolve_handled = resolve;
+  });
   addEventListener("unhandledrejection", event => {
     event.preventDefault();
     globalThis.__lm_shared_isolate_unhandled_rejections.push(String(event.reason));
+    globalThis.__lm_shared_isolate_resolve_unhandled();
   });
   addEventListener("rejectionhandled", event => {
     globalThis.__lm_shared_isolate_rejectionhandled.push(
@@ -4651,6 +4660,7 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
         ? "same-promise"
         : "wrong-promise"
     );
+    globalThis.__lm_shared_isolate_resolve_handled();
   });
   return "installed";
 })()"#
@@ -4681,13 +4691,18 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
         Some(serde_json::json!("scheduled"))
     );
 
-    let (second_rejections, _) = second_page
-        .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: r#"JSON.stringify(globalThis.__lm_shared_isolate_unhandled_rejections)"#
+    // Rejection notifications are queued tasks. A later Evaluate command is
+    // not a barrier for their delivery; await the originating page's event.
+    let (second_rejections, _) = tokio::time::timeout(
+        Duration::from_secs(2),
+        second_page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"__lm_shared_isolate_unhandled_done.then(() => JSON.stringify(__lm_shared_isolate_unhandled_rejections))"#
                 .to_owned(),
-            await_promise: false,
-        })
+            await_promise: true,
+        }),
+    )
         .await
+        .expect("second page must receive its unhandled rejection task")
         .expect("second page rejection list should evaluate");
     assert_eq!(
         renderer_json_value(second_rejections),
@@ -4725,13 +4740,16 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
         Some(serde_json::json!("handler-added"))
     );
 
-    let (second_rejectionhandled, _) = second_page
-        .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: r#"JSON.stringify(globalThis.__lm_shared_isolate_rejectionhandled)"#
+    let (second_rejectionhandled, _) = tokio::time::timeout(
+        Duration::from_secs(2),
+        second_page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"__lm_shared_isolate_handled_done.then(() => JSON.stringify(__lm_shared_isolate_rejectionhandled))"#
                 .to_owned(),
-            await_promise: false,
-        })
+            await_promise: true,
+        }),
+    )
         .await
+        .expect("second page must receive its rejectionhandled task")
         .expect("second page rejectionhandled list should evaluate");
     assert_eq!(
         renderer_json_value(second_rejectionhandled),

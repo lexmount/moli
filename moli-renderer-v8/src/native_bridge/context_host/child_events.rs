@@ -580,8 +580,16 @@ impl JsContextHost {
         } else {
             window.into()
         };
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(scope, v8str(scope, "target").into(), target);
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(scope, v8str(scope, "currentTarget").into(), window.into());
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "target").into(),
+            target,
+        );
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "currentTarget").into(),
+            window.into(),
+        );
         let _ = crate::context_bootstrap::event_backing(scope, event).set(
             scope,
             v8str(scope, "eventPhase").into(),

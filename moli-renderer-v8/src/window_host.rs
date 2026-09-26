@@ -481,7 +481,11 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
                     event_type.as_deref().unwrap_or_default(),
                     event,
                 );
-                Ok(!crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented"))
+                Ok(!crate::context_bootstrap::event_bool_attribute(
+                    scope,
+                    event,
+                    "defaultPrevented",
+                ))
             } else {
                 host.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)
                     .map(|dispatch| {

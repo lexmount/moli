@@ -47,38 +47,22 @@ pub(crate) fn update_history_for_document_open<'s>(
     let Some(history) = window_history_for_holder(scope, window) else {
         return;
     };
-    let Some(entries) = history_entries(scope, history) else {
+    let Some(history_record) = super::history_runtime::native::history(scope, history) else {
         return;
     };
-    let index = history_index(scope, history);
-    let Some(previous) = entries
-        .get_index(scope, index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(previous_record) = history_record.borrow().current_entry().cloned() else {
         return;
     };
-    let navigation_index = navigation_current_entry_index(scope, window).unwrap_or(index);
-    let key = navigation_entry_key_value(scope, previous)
-        .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
-    let state =
-        clone_history_entry_state(scope, previous).unwrap_or_else(|| v8::null(scope).into());
-    let state_json = stringify_history_state(scope, state);
-    let entry = create_navigation_entry(
-        scope,
-        window,
-        url.as_str(),
-        state_json.as_deref(),
-        None,
-        None,
-        navigation_index,
-        &new_navigation_entry_id(),
-        &key,
-    );
-    copy_navigation_entry_document_id(scope, previous, entry);
-    bind_navigation_entry_runtime_owner(scope, entry, window);
-    set_history_entry_state(scope, entry, state);
-    let _ = entries.set_index(scope, index, entry.into());
-    set_history_entries(scope, history, entries);
+    let previous =
+        super::history_runtime::native::entry_wrapper(scope, window, previous_record.clone());
+    let mut record = previous_record.borrow().clone();
+    record.url = url.as_str().to_owned();
+    record.id =
+        super::navigation_entry::navigation_entry_public_token(new_navigation_entry_id().as_str());
+    let entry = super::history_runtime::native::entry_wrapper(scope, window, record.into_ref());
+    let state = super::history_runtime::state::history_state_value(scope, history);
+    replace_history_entry(scope, history, entry);
+    cache_current_history_state(scope, history, state);
     sync_navigation_current_entry_from_history_entry(scope, window, entry);
     super::session_history::commit(
         scope,

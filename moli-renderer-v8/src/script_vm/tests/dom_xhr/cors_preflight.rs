@@ -424,5 +424,5 @@ async fn cors_preflight_permissions_reach_window_fetch_and_xhr() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cors_preflight_permissions_reach_worker_fetch_and_xhr() {
-    check_preflight_permissions(true, &["fetch", "xhr"]).await;
+    check_preflight_permissions(true, &["fetch", "xhr", "sync-xhr"]).await;
 }

@@ -12,7 +12,7 @@ use super::super::navigation_lifecycle::{
     navigation_attempt_id_from_slot, navigation_attempt_is_active, settle_navigation_committed,
     settle_navigation_finished_rejected_after_reactions,
     settle_navigation_finished_resolved_after_reactions,
-    settle_navigation_transition_finished_local,
+    settle_navigation_finished_resolved_immediately, settle_navigation_transition_finished_local,
 };
 use super::super::navigation_window::{
     navigation_can_update_current_entry, navigation_document_is_active,
@@ -1215,9 +1215,8 @@ fn precommit_commit_fulfilled_callback<'s>(
             Some("reload"),
         );
     }
-    let receiver = v8::undefined(scope).into();
     if let Some(resolve) = data.committed_resolve {
-        let _ = resolve.call(scope, receiver, &[resolved_value]);
+        settle_navigation_finished_resolved_immediately(scope, resolve, resolved_value);
     }
     resolve_navigation_transition_committed(scope, data.navigation);
     let outcome = NavigationDispatchOutcome {
@@ -1412,8 +1411,7 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
     // committed entry captured before a reentrant navigation can replace it.
     set_navigation_active_intercept_settlement(scope, navigation, data);
     if let Some(resolve) = committed_resolve.take() {
-        let receiver = v8::undefined(scope).into();
-        let _ = resolve.call(scope, receiver, &[resolved_value]);
+        settle_navigation_finished_resolved_immediately(scope, resolve, resolved_value);
     }
     if transition_resolver
         .is_some_and(|resolver| navigation_transition_matches_resolver(scope, navigation, resolver))
@@ -1578,7 +1576,7 @@ pub(in crate::context_bootstrap) fn cancel_active_intercepted_same_document_navi
     finish_navigation_error_events(scope, navigation, error, &filename);
     let receiver = v8::undefined(scope).into();
     if let Some(committed_resolve) = committed_resolve {
-        let _ = committed_resolve.call(scope, receiver, &[resolved_value]);
+        settle_navigation_finished_resolved_immediately(scope, committed_resolve, resolved_value);
         resolve_navigation_transition_committed(scope, navigation);
     }
     if let Some(reject) = reject {
@@ -1831,8 +1829,7 @@ fn finish_intercepted_navigation_rejected<'s>(
     }
     finish_navigation_error_events(scope, navigation, error, filename);
     if let Some(committed_resolve) = committed_resolve {
-        let receiver = v8::undefined(scope).into();
-        let _ = committed_resolve.call(scope, receiver, &[resolved_value]);
+        settle_navigation_finished_resolved_immediately(scope, committed_resolve, resolved_value);
         resolve_navigation_transition_committed(scope, navigation);
     }
     if let Some(reject) = finished_reject {

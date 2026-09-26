@@ -566,7 +566,11 @@ impl ParserElementCreationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
             request.intended_parent,
             |document_handle, local_name, namespace, prefix| {
                 request.construction.create_element(
-                    self.host.dom_host_mut(), document_handle, local_name, namespace, prefix,
+                    self.host.dom_host_mut(),
+                    document_handle,
+                    local_name,
+                    namespace,
+                    prefix,
                 )
             },
         )

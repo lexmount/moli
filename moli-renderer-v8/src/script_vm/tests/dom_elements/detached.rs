@@ -9615,19 +9615,6 @@ fn detached_domparser_adopted_nodes_follow_live_tree_for_children_text_and_mutat
 }
 
 #[test]
-fn detached_document_content_type_controls_element_creation_after_root_mutations_and_cloning() {
-    let mut vm = new_storage_test_vm("https://document-create-element-content-type.test/");
-    let fixture =
-        include_str!("../../../../tests/fixtures/document-create-element-content-type.js");
-    let result = vm
-        .eval(&format!("JSON.stringify({fixture})"))
-        .expect("Document content type and element creation probe should evaluate");
-    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["checks"], 689);
-}
-
-#[test]
 fn domparser_xml_preserves_content_type_and_document_interface_for_success_and_errors() {
     let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
 

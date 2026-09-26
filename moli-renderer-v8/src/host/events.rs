@@ -2466,8 +2466,7 @@ fn event_source_target_handle(
     host_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let value = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, "source").into())?;
+    let value = crate::context_bootstrap::event_attribute(scope, event, "source")?;
     if value.is_null_or_undefined() || !value.is_object() {
         return None;
     }

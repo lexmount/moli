@@ -140,6 +140,19 @@ pub(crate) fn event_attribute<'s>(
     property: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let state = event_backing(scope, event);
+    // CommandEvent and ToggleEvent expose source through prototype accessors;
+    // their native state holds the value in a private slot, not an own field.
+    if property == "source" {
+        match event_subclass_kind(scope, state) {
+            Some(EventSubclassKind::CommandEvent) => {
+                return get_private_value(scope, state, COMMAND_EVENT_SOURCE_SLOT);
+            }
+            Some(EventSubclassKind::ToggleEvent) => {
+                return get_private_value(scope, state, TOGGLE_EVENT_SOURCE_SLOT);
+            }
+            _ => {}
+        }
+    }
     state.get(scope, v8_string(scope, property)?.into())
 }
 

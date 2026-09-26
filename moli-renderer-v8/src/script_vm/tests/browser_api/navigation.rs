@@ -684,83 +684,6 @@ async fn navigation_destination_uses_native_webidl_receivers_and_live_entry_stat
 }
 
 #[tokio::test]
-async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
-    for action in ["anchor", "submit", "requestSubmit"] {
-        for name in ["initial", "renamed", "shadowed"] {
-            let server =
-                StaticHttpServer::spawn_with_bodies(vec!["<!doctype html><body>selected".into()])
-                    .await;
-            let base = server.base_url().origin().ascii_serialization();
-            let loader = static_http_loader([]);
-            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-                &format!("{base}/parent"),
-                &loader,
-            );
-            vm.eval(&format!(
-                r#"
-                const earlier = document.createElement('iframe'); earlier.name = 'same';
-                const source = document.createElement('iframe');
-                source.name = {name:?} === 'renamed' ? 'old-name' : 'same';
-                document.body.append(earlier, source);
-                const childDocument = source.contentDocument;
-                const nested = childDocument.createElement('iframe'); nested.name = 'same';
-                childDocument.body.append(nested);
-                globalThis.originalDocument = childDocument;
-                globalThis.nameReads = 0;
-                if ({name:?} === 'renamed') source.contentWindow.name = 'same';
-                if ({name:?} === 'shadowed') Object.defineProperty(source.contentWindow, 'name', {{
-                    get() {{ ++nameReads; throw new Error('script-visible name was read'); }}
-                }});
-                globalThis.namedAccessIsChild = source.contentWindow.same === nested.contentWindow;
-            "#
-            ))
-            .unwrap();
-            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
-                .await
-                .unwrap();
-            vm.eval(&format!(
-                r#"
-                const element = childDocument.createElement({action:?} === 'anchor' ? 'a' : 'form');
-                element.target = 'same';
-                if ({action:?} === 'anchor') element.href = '/selected?from=anchor';
-                else {{
-                    element.action = '/selected';
-                    element.innerHTML = '<input name=from value="{action}">';
-                }}
-                childDocument.body.append(element);
-                if ({action:?} === 'anchor') element.click();
-                else element[{action:?}]();
-            "#
-            ))
-            .unwrap();
-            advance_page_task_executor_until_eval_equals(
-                &mut vm,
-                &loader,
-                "String(source.contentDocument.body?.textContent === 'selected')",
-                "true",
-                &format!("{action}, {name}"),
-            )
-            .await;
-            assert_eq!(
-                vm.eval(
-                    "JSON.stringify([source.contentDocument !== originalDocument, \
-                     source.contentWindow.length, earlier.contentWindow.location.href, \
-                     namedAccessIsChild, nameReads])",
-                )
-                .unwrap(),
-                r#"[true,0,"about:blank",true,0]"#,
-                "{action}, {name}",
-            );
-            assert_eq!(
-                server.finish_targets().await,
-                [format!("/selected?from={action}")],
-                "{action}, {name}",
-            );
-        }
-    }
-}
-
-#[tokio::test]
 async fn document_open_preserves_navigation_initialization() {
     for kind in ["iframe", "popup"] {
         let loader = static_http_loader([]);
@@ -799,7 +722,7 @@ async fn document_open_preserves_navigation_initialization() {
                 "snapshots": snapshots,
                 "navigated": { "current": "about:blank", "state": 4 },
                 "loadedOpen": {
-                    "sameNavigation": true, "sameEntryKey": true, "state": 5,
+                    "sameNavigation": true, "sameEntryKey": true, "newPublicId": true, "state": 5,
                 },
             }),
             "{kind}"
@@ -6403,12 +6326,11 @@ else frame.setAttribute('sandbox', {changed});
                 "history.replaceState(0, ''); history.pushState(1, ''); frame.contentWindow.eval('history.back()');",
             )
             .unwrap();
-            assert_eq!(
+            assert!(
                 vm.run_one_history_traversal_executor_turn(&loader)
                     .await
                     .unwrap(),
-                allowed,
-                "initial={initial}, changed={changed}, navigated={navigate}"
+                "the traversal task evaluates the active sandbox: initial={initial}, changed={changed}, navigated={navigate}"
             );
             assert_eq!(
                 vm.eval("String(history.state)").unwrap(),

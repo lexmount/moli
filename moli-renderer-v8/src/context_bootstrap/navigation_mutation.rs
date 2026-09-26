@@ -11,7 +11,9 @@ use super::navigation_entry::{
     new_navigation_entry_key, set_navigation_entry_document_id,
     sync_navigation_current_entry_from_history_entry,
 };
-use super::navigation_entry_state::{copy_navigation_entry_serialized_state, set_navigation_entry_state};
+use super::navigation_entry_state::{
+    copy_navigation_entry_serialized_state, set_navigation_entry_state,
+};
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_entry_dispose,
 };
