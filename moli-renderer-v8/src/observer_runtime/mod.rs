@@ -23,8 +23,8 @@ pub(crate) use dom_access::{
     coalesce_child_list_replacement_records, deactivate_resize_observer_callback,
     deliver_document_intersections, document_has_rendering_observers, flush_slotchange_microtask,
     queue_intersection_checks, queue_mutation_records, queue_resize_observer_rendering_updates,
-    queue_style_rendering_update, retire_context_token, retire_execution_context_owner,
-    update_document_intersections,
+    queue_style_rendering_update, rendering_observer_documents, retire_context_token,
+    retire_execution_context_owner, update_document_intersections,
 };
 pub(crate) use dom_access::{
     activate_realtime_resize_observer, begin_realtime_resize_observer_sampling,

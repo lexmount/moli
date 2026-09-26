@@ -58,16 +58,19 @@ struct LatestFrozenLayout {
     tree: Box<FrozenLayoutTree<DomHandle>>,
     #[cfg(feature = "devtools")]
     frame_geometry: Rc<PublishedFrameGeometry>,
+    metrics: moli_layout::LayoutPassMetrics,
 }
 
-/// Single-slot storage for the latest successful frozen layout tree.
+/// Single-slot storage for one top-level Document's latest frozen layout tree.
 ///
 /// This owns exactly one recursively frozen snapshot. It has no separately
 /// keyed child tree, working layout world, source index, hit-test index, Taffy
-/// cache, style borrow, pass diagnostics, paint snapshot, timer, or invalidation
-/// policy. The first geometry demand initializes it. Rendering updates, screenshots,
-/// screencast frames and explicit layout refreshes replace this published layout;
-/// print projections never enter this cache.
+/// cache, style borrow, diagnostic buffers, paint snapshot, timer, or invalidation
+/// policy. The first geometry demand initializes it. Rendering updates,
+/// screenshots and screencast frames replace this
+/// published layout; print projections never enter this cache. The main
+/// Document and each live popup own separate instances; embedded Documents
+/// share the member trees in their top-level Document's snapshot.
 #[derive(Default)]
 pub(super) struct LatestLayoutTreeCache {
     latest: Option<LatestFrozenLayout>,
@@ -92,10 +95,15 @@ impl LatestLayoutTreeCache {
             .map(|snapshot| &snapshot.frame_geometry)
     }
 
+    pub(super) fn pass_metrics(&self) -> Option<moli_layout::LayoutPassMetrics> {
+        self.latest.as_ref().map(|snapshot| snapshot.metrics)
+    }
+
     pub(super) fn publish(
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        metrics: moli_layout::LayoutPassMetrics,
         #[cfg(feature = "devtools")] frame_geometry: PublishedFrameGeometry,
     ) {
         self.latest = Some(LatestFrozenLayout {
@@ -103,6 +111,7 @@ impl LatestLayoutTreeCache {
             tree: Box::new(tree),
             #[cfg(feature = "devtools")]
             frame_geometry: Rc::new(frame_geometry),
+            metrics,
         });
     }
 
