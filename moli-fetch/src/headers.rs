@@ -89,12 +89,22 @@ pub fn is_forbidden_request_header_override_value(name: &str, value: &str) -> bo
     ) {
         return false;
     }
-    // Fetch's "get, decode, and split" keeps quoted strings intact, including
-    // their quotes, so commas and method names inside them are ordinary data.
+    split_http_header_list(value).any(|method| {
+        matches!(
+            method.to_ascii_uppercase().as_str(),
+            "CONNECT" | "TRACE" | "TRACK"
+        )
+    })
+}
+
+/// Fetch's "get, decode, and split" list splitting, after combining and
+/// decoding the header fields. Quotes and escapes are preserved, so commas
+/// and tokens inside a quoted string cannot become separate list members.
+pub fn split_http_header_list(value: &str) -> impl Iterator<Item = &str> {
     let mut quoted = false;
     let mut escaped = false;
     value
-        .split(|character| {
+        .split(move |character| {
             if escaped {
                 escaped = false;
                 false
@@ -108,15 +118,7 @@ pub fn is_forbidden_request_header_override_value(name: &str, value: &str) -> bo
                 character == ',' && !quoted
             }
         })
-        .any(|method| {
-            matches!(
-                method
-                    .trim_matches(is_http_whitespace)
-                    .to_ascii_uppercase()
-                    .as_str(),
-                "CONNECT" | "TRACE" | "TRACK"
-            )
-        })
+        .map(|member| member.trim_matches(is_http_whitespace))
 }
 
 pub fn is_no_cors_safelisted_request_header(name: &str, value: &str) -> bool {

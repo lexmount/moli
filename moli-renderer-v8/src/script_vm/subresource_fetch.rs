@@ -3966,10 +3966,7 @@ impl ScriptVm {
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
                             let redirect_mode = fetch.redirect_mode();
-                            let resolver = fetch
-                                .into_resolver()
-                                .expect("detached keepalive completion is handled before V8 entry");
-                            let resolver = v8::Local::new(scope, &resolver);
+                            let body_size = observable_response.body_bytes().len();
                             let (mut head, body) = observable_response.into_body();
                             let response_request = crate::network_host::FetchResponseRequest {
                                 method: &response_request_method,
@@ -3981,9 +3978,20 @@ impl ScriptVm {
                                 &head,
                                 pending.credentials_mode,
                             )));
+                            let entry = fetch.timing.response(
+                                &pending.info.url, &pending.request_origin, &head,
+                                response_filter.as_ref().expect("fetch response filter"),
+                                body_size,
+                            );
+                            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
+                            let resolver = fetch
+                                .into_resolver()
+                                .expect("detached keepalive completion is handled before V8 entry");
+                            let resolver = v8::Local::new(scope, &resolver);
+
                             let body = if opaque_response_blocked {
                                 moli_fetch::ResponseBody::materialized_bytes(Vec::new())
                             } else {
@@ -4177,6 +4185,11 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            if !consumed_preload {
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope, fetch.timing.failure(&pending.info.url),
+                                );
+                            }
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");
@@ -4975,6 +4988,9 @@ impl ScriptVm {
             );
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         };
+        if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
+            fetch.timing.response_started();
+        }
         let trace_fields = async_subresource_trace_fields_for_pending_with_body(
             "streaming_started",
             started.internal_id,
@@ -5103,6 +5119,11 @@ impl ScriptVm {
                     .record_subresource_network(network_record);
                 match &pending.continuation {
                     PendingSubresourceContinuation::Fetch(fetch) => {
+                        if !started.head.preload_state.is_consumed() {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope, fetch.timing.failure(&pending.info.url),
+                            );
+                        }
                         let resolver = fetch
                             .resolver()
                             .expect("detached keepalive stream is handled before V8 entry");
@@ -6059,6 +6080,13 @@ impl ScriptVm {
                                     &response_body,
                                 )
                         {
+                            if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                                && !streaming.head.preload_state.is_consumed()
+                            {
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope, fetch.timing.failure(&streaming.pending.info.url),
+                                );
+                            }
                             let mut record = crate::types::SubresourceNetworkRecord::failure(
                                 streaming.pending.info.frame_id.clone(),
                                 streaming.pending.info.document_url.clone(),
@@ -6083,6 +6111,24 @@ impl ScriptVm {
                             return Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered);
                         }
                         let response_body_size = response_body.len();
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                            let response_request = crate::network_host::FetchResponseRequest {
+                                method: &streaming.request_method,
+                                mode: streaming.pending.request_mode,
+                                redirect_mode: fetch.redirect_mode(),
+                            };
+                            let filter = streaming.response_filter.clone().unwrap_or_else(|| {
+                                response_request.network_response_filter(
+                                    &streaming.pending.request_origin, &streaming.head,
+                                    streaming.pending.credentials_mode,
+                                )
+                            });
+                            let entry = fetch.timing.response(
+                                &streaming.pending.info.url, &streaming.pending.request_origin,
+                                &streaming.head, &filter, response_body_size,
+                            );
+                            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                        }
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
                             trace_fields,
@@ -6282,6 +6328,13 @@ impl ScriptVm {
                         }
                     }
                     Err(error_text) => {
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                            && !streaming.head.preload_state.is_consumed()
+                        {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope, fetch.timing.failure(&streaming.pending.info.url),
+                            );
+                        }
                         let error_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         crate::network_host::error_pending_network_body_stream(

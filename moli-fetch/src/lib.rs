@@ -49,6 +49,7 @@ pub use headers::{
     is_cors_safelisted_request_range, is_cors_unsafe_request_header_byte,
     is_forbidden_request_header_name, is_forbidden_request_header_override_value,
     is_forbidden_response_header_name, is_no_cors_safelisted_request_header,
+    split_http_header_list,
 };
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;

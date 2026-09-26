@@ -15972,6 +15972,7 @@ mod element_click;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
+mod fetch_resource_timing;
 mod frame_element_security;
 mod headers_list;
 mod history_document_identity;

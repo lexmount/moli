@@ -2002,7 +2002,12 @@ fn pending_body_source_cancel_callback<'s>(
                 &mut host.pending_network_body_clones,
                 id,
             ) {
-                let _ = host.cancel_streaming_subresource_body_source(root_id);
+                let timing = host.cancel_streaming_subresource_body_source(root_id);
+                if let Some((context, entry)) = timing {
+                    let context = v8::Local::new(scope, &context);
+                    let scope = &mut v8::ContextScope::new(scope, context);
+                    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                }
             }
         } else if let Some(worker_state) = get_worker_state(scope) {
             let mut worker_state = worker_state.borrow_mut();
