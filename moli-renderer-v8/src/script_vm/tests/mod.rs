@@ -2374,6 +2374,7 @@ mod observer_callbacks;
 
 mod svg_text_position_native_receivers;
 
+mod observer_documents;
 mod observer_receivers;
 mod popup_root_window;
 mod post_parse;
