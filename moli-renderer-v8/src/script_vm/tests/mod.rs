@@ -15197,3 +15197,5 @@ mod websocket;
 mod window_execution_context;
 
 mod string_timers;
+
+mod history_replace_forward;
