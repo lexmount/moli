@@ -4,6 +4,20 @@ use crate::{
 };
 
 impl DocumentRuntime {
+    fn focus_is_in_changing_subtrees(&self, roots: &[DomHandle], active: DomHandle) -> bool {
+        let mut current = Some(active);
+        while let Some(handle) = current {
+            if roots.contains(&handle) {
+                return true;
+            }
+            current = self
+                .dom_host
+                .parent_node(handle)
+                .or_else(|| self.dom_host.shadow_root_host(handle));
+        }
+        false
+    }
+
     pub(super) fn focus_reset_handle_before_tree_change(
         &self,
         roots: &[DomHandle],
@@ -13,9 +27,7 @@ impl DocumentRuntime {
             return None;
         }
         let active = self.active_element_handle()?;
-        roots
-            .iter()
-            .any(|root| *root == active || self.is_ancestor_of(*root, active))
+        self.focus_is_in_changing_subtrees(roots, active)
             .then_some(active)
     }
 
@@ -57,10 +69,7 @@ impl DocumentRuntime {
         let Some(active) = self.active_element_handle() else {
             return;
         };
-        if insertion_roots
-            .iter()
-            .any(|root| *root == active || self.is_ancestor_of(*root, active))
-        {
+        if self.focus_is_in_changing_subtrees(insertion_roots, active) {
             crate::native_bridge::element::update_focus(scope, host_ptr, None);
         }
     }

@@ -1,10 +1,13 @@
 use super::{PageScriptHost, PendingWindowMessageEndpoint};
 use crate::document_runtime::DomHandle;
 
+mod navigation;
+pub(crate) use navigation::SequentialFocusStartingPoint;
+
 #[derive(Default)]
 pub(super) struct DocumentFocusChangeState {
     focused_area: Option<DomHandle>,
-    sequential_starting_point: Option<DomHandle>,
+    sequential_starting_point: Option<SequentialFocusStartingPoint>,
     epoch: u64,
 }
 
@@ -179,8 +182,8 @@ impl PageScriptHost {
         area: Option<DomHandle>,
     ) {
         let state = self.document_focus_changes.entry(document).or_default();
-        if area.is_some() {
-            state.sequential_starting_point = area;
+        if let Some(area) = area {
+            state.sequential_starting_point = Some(SequentialFocusStartingPoint::Element(area));
         }
         if state.focused_area != area {
             state.focused_area = area;
@@ -188,15 +191,19 @@ impl PageScriptHost {
         }
     }
 
-    pub(crate) fn sequential_focus_starting_point(&self, document: DomHandle) -> Option<DomHandle> {
+    pub(crate) fn sequential_focus_starting_point(
+        &self,
+        document: DomHandle,
+    ) -> Option<SequentialFocusStartingPoint> {
         self.document_focus_changes
             .get(&document)
             .and_then(|state| state.sequential_starting_point)
-            .filter(|handle| {
+            .filter(|point| {
+                let handle = point.container();
                 self.dom_host()
-                    .node(*handle)
+                    .node(handle)
                     .is_some_and(|node| node.is_connected())
-                    && self.dom_host().owner_document_handle(*handle) == Some(document)
+                    && self.dom_host().owner_document_handle(handle) == Some(document)
             })
     }
 
@@ -208,7 +215,7 @@ impl PageScriptHost {
         self.document_focus_changes
             .entry(document)
             .or_default()
-            .sequential_starting_point = target;
+            .sequential_starting_point = target.map(SequentialFocusStartingPoint::Element);
     }
 
     pub(crate) fn mark_focus_changed(
