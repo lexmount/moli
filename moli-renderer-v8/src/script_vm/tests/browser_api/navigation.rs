@@ -129,6 +129,210 @@ fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
 }
 
 #[tokio::test]
+async fn form_target_blank_preserves_source_referrer_and_relations() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for child_document in [false, true] {
+        for submitter in ["form", "button", "input"] {
+            for (rel, has_opener, has_referrer) in [
+                ("", false, true),
+                ("noopener", false, true),
+                ("noreferrer", false, false),
+                ("opener", true, true),
+                ("noopener noreferrer", false, false),
+                ("noreferrer opener", false, false),
+                ("opener noopener", false, true),
+            ] {
+                let (popup_url, server) = super::misc::spawn_lightweight_popup_html_responses(
+                    "form popup relation server",
+                    "form popup relation",
+                    "Cache-Control: no-store",
+                    r#"<!doctype html><body><script>
+                    if (location.pathname !== "/child.html") {
+                      new BroadcastChannel("form-popup-relations").postMessage({
+                        hasOpener: opener !== null,
+                        referrer: document.referrer,
+                        openerPath: opener === null ? null : opener.location.pathname
+                      });
+                      window.close();
+                    }
+                    </script>"#,
+                    if child_document { 2 } else { 1 },
+                )
+                .await;
+                let parent_url = format!(
+                    "{}?source=top#fragment",
+                    popup_url.replace("/popup.html", "/parent.html")
+                );
+                let child_url = format!(
+                    "{}?source=child#fragment",
+                    popup_url.replace("/popup.html", "/child.html")
+                );
+                let mut vm = new_broadcast_channel_page_test_vm_with_loader(&parent_url, &loader);
+                vm.eval(&format!(
+                    r#"
+                    globalThis.results = [];
+                    globalThis.channel = new BroadcastChannel("form-popup-relations");
+                    channel.onmessage = event => results.push(event.data);
+                    const html = document.createElement("html");
+                    const body = document.createElement("body");
+                    html.appendChild(body);
+                    document.appendChild(html);
+                    if ({child_document}) {{
+                      globalThis.frame = document.createElement("iframe");
+                      frame.src = {child_url:?};
+                      body.appendChild(frame);
+                    }}
+                    'created'
+                    "#,
+                ))
+                .expect("form source document should be created");
+                if child_document {
+                    advance_page_task_executor_until_eval_equals(
+                        &mut vm,
+                        &loader,
+                        &format!("String(frame.contentDocument?.URL === {child_url:?} && frame.contentDocument.readyState === 'complete')"),
+                        "true",
+                        "form source iframe should load",
+                    )
+                    .await;
+                }
+                vm.eval(&format!(
+                    r#"
+                    const owner = {child_document} ? frame.contentDocument : document;
+                    const form = owner.createElement("form");
+                    form.action = {popup_url:?};
+                    form.rel = {rel:?};
+                    owner.body.appendChild(form);
+                    if ({submitter:?} === "form") {{
+                      form.target = "_BLANK";
+                      form.submit();
+                    }} else {{
+                      const control = owner.createElement({submitter:?});
+                      control.type = "submit";
+                      control.formTarget = "_blank";
+                      form.appendChild(control);
+                      control.click();
+                    }}
+                    'submitted'
+                    "#,
+                ))
+                .expect("form popup submission should evaluate");
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(results.length)",
+                    "1",
+                    "form popup should report its loaded document relations",
+                )
+                .await;
+                let actual: serde_json::Value = serde_json::from_str(
+                    &vm.eval("JSON.stringify(results[0])").expect("popup result"),
+                )
+                .expect("popup JSON");
+                let source_path = if child_document {
+                    "/child.html"
+                } else {
+                    "/parent.html"
+                };
+                let referrer = if has_referrer {
+                    format!(
+                        "{}?source={}",
+                        popup_url.replace("/popup.html", source_path),
+                        if child_document { "child" } else { "top" }
+                    )
+                } else {
+                    String::new()
+                };
+                assert_eq!(
+                    actual,
+                    serde_json::json!({
+                        "hasOpener": has_opener,
+                        "referrer": referrer,
+                        "openerPath": has_opener.then_some(source_path),
+                    }),
+                    "child={child_document}, submitter={submitter}, rel={rel:?}",
+                );
+                server.await.expect("form popup server should finish");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn popup_navigation_applies_referrer_policy_and_link_overrides() {
+    const SOURCE: &str = "http://referrer-source.test/page.html?source=1#fragment";
+    const FULL: &str = "http://referrer-source.test/page.html?source=1";
+    const ORIGIN: &str = "http://referrer-source.test/";
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (tag, document_policy, element_policy, expected) in [
+        ("form", None, None, ORIGIN),
+        ("form", Some("origin"), None, ORIGIN),
+        ("form", Some("no-referrer"), None, ""),
+        ("form", Some("same-origin"), None, ""),
+        ("form", Some("unsafe-url"), None, FULL),
+        ("form", Some("no-referrer"), Some("unsafe-url"), ""),
+        ("a", Some("no-referrer"), Some("unsafe-url"), FULL),
+        ("area", Some("unsafe-url"), Some("no-referrer"), ""),
+        ("a", Some("origin"), Some("invalid-policy"), ORIGIN),
+    ] {
+        let (popup_url, server) = super::misc::spawn_lightweight_popup_html_responses(
+            "popup referrer policy server",
+            "popup referrer policy",
+            "Cache-Control: no-store",
+            r#"<!doctype html><script>
+            opener.postMessage(document.referrer, "*");
+            window.close();
+            </script>"#,
+            1,
+        )
+        .await;
+        let mut vm = new_broadcast_channel_page_test_vm_with_loader(SOURCE, &loader);
+        vm.set_response_referrer_policy(document_policy.map(str::to_owned));
+        vm.eval(&format!(
+            r#"
+            globalThis.results = [];
+            onmessage = event => results.push(event.data);
+            const html = document.createElement("html");
+            const body = document.createElement("body");
+            html.appendChild(body);
+            document.appendChild(html);
+            const element = document.createElement({tag:?});
+            element.target = "_blank";
+            element.rel = "opener";
+            element.setAttribute("referrerpolicy", {element_policy:?});
+            body.appendChild(element);
+            if ({tag:?} === "form") {{
+              element.action = {popup_url:?};
+              element.submit();
+            }} else {{
+              element.href = {popup_url:?};
+              element.click();
+            }}
+            'submitted'
+            "#,
+            element_policy = element_policy.unwrap_or_default(),
+        ))
+        .expect("cross-origin popup should be submitted");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(results.length)",
+            "1",
+            "cross-origin popup should report its referrer",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("results[0]").expect("reported referrer"),
+            expected,
+            "tag={tag}, document policy={document_policy:?}, element policy={element_policy:?}",
+        );
+        server
+            .await
+            .expect("popup referrer policy server should finish");
+    }
+}
+
+#[tokio::test]
 async fn hyperlink_target_blank_reloads_rel_opener_policy_for_each_activation() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
