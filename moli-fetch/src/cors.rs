@@ -1,13 +1,24 @@
-use moli_web_mime::response_header_value;
+use moli_web_mime::response_header_values;
 
 use crate::RequestCredentialsMode;
+
+fn combined_cors_response_header_value(
+    headers: &[(String, Vec<u8>)],
+    name: &str,
+) -> Option<String> {
+    // Fetch combines every matching field, including empty values. Neither
+    // Allow-Origin nor Allow-Credentials permits a list.
+    let values = response_header_values(headers, name);
+    (!values.is_empty()).then(|| values.join(", "))
+}
 
 pub fn validate_cors_response_for_origin(
     origin: &str,
     response_headers: &[(String, Vec<u8>)],
     credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
-    let Some(allow_origin) = response_header_value(response_headers, "access-control-allow-origin")
+    let Some(allow_origin) =
+        combined_cors_response_header_value(response_headers, "access-control-allow-origin")
     else {
         return Err(format!(
             "CORS check failed: no Access-Control-Allow-Origin for {origin}"
@@ -29,8 +40,10 @@ pub fn validate_cors_response_for_origin(
     }
 
     if credentials_mode == RequestCredentialsMode::Include {
-        let allow_credentials =
-            response_header_value(response_headers, "access-control-allow-credentials");
+        let allow_credentials = combined_cors_response_header_value(
+            response_headers,
+            "access-control-allow-credentials",
+        );
         if allow_credentials
             .as_deref()
             .is_none_or(|value| value.trim() != "true")
