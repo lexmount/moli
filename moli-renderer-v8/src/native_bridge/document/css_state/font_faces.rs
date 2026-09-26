@@ -141,13 +141,10 @@ pub(super) fn sync_document_fonts<'s>(
 
 pub(super) fn apply_font_face_owner_projection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    document: DomHandle,
+    holder: v8::Local<'s, v8::Object>,
     owner: DomHandle,
     projection: Option<&OwnerFontFaceProjection>,
 ) -> bool {
-    let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {
-        return false;
-    };
     let Some(fonts) = object_property_as_object(scope, holder, FONTS_SLOT) else {
         return false;
     };
@@ -158,11 +155,9 @@ pub(super) fn apply_font_face_owner_projection<'s>(
 pub(super) fn finish_font_face_owner_projections<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &JsContextHost,
+    holder: v8::Local<'s, v8::Object>,
     document: DomHandle,
 ) {
-    let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {
-        return;
-    };
     let Some(fonts) = object_property_as_object(scope, holder, FONTS_SLOT) else {
         return;
     };

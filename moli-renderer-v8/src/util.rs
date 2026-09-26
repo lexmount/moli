@@ -482,6 +482,25 @@ pub(super) fn node_wrapper_from_handle<'s>(
         .wrap_handle(scope, host_ptr, handle)
 }
 
+/// Update an existing node wrapper in its creation realm. Native lifecycle work
+/// can run before that realm exists, so it must not allocate a wrapper in the
+/// caller's context just to synchronize a JavaScript view of native state.
+pub(crate) fn with_cached_node_wrapper_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &JsContextHost,
+    handle: DomHandle,
+    operation: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
+) {
+    let Some(wrapper) = host.native_bridge().cached_handle_wrapper(scope, handle) else {
+        return;
+    };
+    let Some(context) = wrapper.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    operation(scope, wrapper);
+}
+
 pub(super) fn global_bridge_method<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,

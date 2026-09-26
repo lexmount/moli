@@ -9,7 +9,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::{DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, Node},
     native_bridge::JsContextHost,
-    util::node_wrapper_from_handle,
+    util::with_cached_node_wrapper_realm,
 };
 use std::collections::HashMap;
 
@@ -116,28 +116,42 @@ impl DocumentCssProjections {
     fn apply(self, scope: &mut v8::PinScope<'_, '_>, host: &JsContextHost) {
         let mut font_face_documents = Vec::new();
         for projection in self.projections {
-            match projection {
-                DocumentCssProjection::StyleSheetList { document } => {
-                    let Some(holder) = node_wrapper_from_handle(scope, document) else {
-                        continue;
-                    };
-                    let _ = sync_document_style_sheets(scope, holder, host.dom_host(), document);
-                }
-                DocumentCssProjection::FontFaceOwner {
-                    document,
-                    owner,
-                    projection,
-                } => {
-                    if apply_font_face_owner_projection(scope, document, owner, projection.as_ref())
-                        && !font_face_documents.contains(&document)
-                    {
-                        font_face_documents.push(document);
+            let document = match &projection {
+                DocumentCssProjection::StyleSheetList { document }
+                | DocumentCssProjection::FontFaceOwner { document, .. } => *document,
+            };
+            // CSS getters initialize unexposed objects from prepared native sources.
+            with_cached_node_wrapper_realm(
+                scope,
+                host,
+                document,
+                |scope, holder| match projection {
+                    DocumentCssProjection::StyleSheetList { document } => {
+                        let _ =
+                            sync_document_style_sheets(scope, holder, host.dom_host(), document);
                     }
-                }
-            }
+                    DocumentCssProjection::FontFaceOwner {
+                        document,
+                        owner,
+                        projection,
+                    } => {
+                        if apply_font_face_owner_projection(
+                            scope,
+                            holder,
+                            owner,
+                            projection.as_ref(),
+                        ) && !font_face_documents.contains(&document)
+                        {
+                            font_face_documents.push(document);
+                        }
+                    }
+                },
+            );
         }
         for document in font_face_documents {
-            finish_font_face_owner_projections(scope, host, document);
+            with_cached_node_wrapper_realm(scope, host, document, |scope, holder| {
+                finish_font_face_owner_projections(scope, host, holder, document);
+            });
         }
     }
 }
@@ -154,9 +168,10 @@ pub(crate) fn apply_stylesheet_owner_css_projections(
         } else {
             owner_change_detaches_cached_inline_sheet(host, change)
         };
-        if owner_change_projects_css(host, change)
-            && let Some(owner_wrapper) = node_wrapper_from_handle(scope, owner)
-        {
+        if !owner_change_projects_css(host, change) {
+            continue;
+        }
+        with_cached_node_wrapper_realm(scope, host, owner, |scope, owner_wrapper| {
             if matches!(
                 change.kind(),
                 DomStylesheetOwnerChangeKind::Attribute {
@@ -186,7 +201,7 @@ pub(crate) fn apply_stylesheet_owner_css_projections(
                     stylesheet.id(),
                 );
             }
-        }
+        });
     }
     DocumentCssProjections::from_owner_changes(host, changes).apply(scope, host);
 }
@@ -249,13 +264,14 @@ pub(crate) fn apply_stylesheet_source_css_projection(
         && let Some(expected_id) = host
             .linked_stylesheet_source_for_owner(owner)
             .and_then(|source| source.live_stylesheet_id())
-        && let Some(owner_wrapper) = node_wrapper_from_handle(scope, owner)
     {
-        crate::native_bridge::element::detach_cached_style_sheet_if_live_stylesheet_changed(
-            scope,
-            owner_wrapper,
-            expected_id,
-        );
+        with_cached_node_wrapper_realm(scope, host, owner, |scope, owner_wrapper| {
+            crate::native_bridge::element::detach_cached_style_sheet_if_live_stylesheet_changed(
+                scope,
+                owner_wrapper,
+                expected_id,
+            );
+        });
     }
     DocumentCssProjections::for_source_change(host, owner).apply(scope, host);
 }

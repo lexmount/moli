@@ -6663,6 +6663,148 @@ async fn element_matches_delegates_loaded_child_document_elements() {
 }
 
 #[tokio::test]
+async fn child_parser_css_preserves_document_and_result_realms() {
+    for head in [
+        "<style>div { color: green; }</style>",
+        "<link rel=author href=/author>",
+    ] {
+        let mut vm = new_storage_test_vm("https://child-parser-css-realm.test/");
+        let markup = serde_json::to_string(&format!(
+            "<!doctype html><head>{head}</head><body><div id=target>child</div>"
+        ))
+        .unwrap();
+        vm.exec(
+            &format!(
+                r#"
+globalThis.realmFrame = document.createElement('iframe');
+realmFrame.srcdoc = {markup};
+(document.body || document.documentElement || document).appendChild(realmFrame);
+"#
+            ),
+            None,
+        )
+        .expect("child CSS document should be queued");
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "child CSS realm document")
+            .await;
+
+        let result = vm
+            .eval(
+                r#"
+(() => {
+  const w = realmFrame.contentWindow, d = realmFrame.contentDocument;
+  const element = d.getElementById('target');
+  const list = d.querySelectorAll('div'), range = d.createRange();
+  let typeError, syntaxError;
+  try { element.matches(); } catch (error) { typeError = error; }
+  try { element.matches('['); } catch (error) { syntaxError = error; }
+  return JSON.stringify({
+    document: d === w.document && d instanceof w.Document && !(d instanceof Document),
+    element: element instanceof w.Element && !(element instanceof Element),
+    list: list instanceof w.NodeList && !(list instanceof NodeList),
+    range: range instanceof w.Range && !(range instanceof Range),
+    typeError: typeError instanceof w.TypeError && !(typeError instanceof TypeError),
+    syntaxError: syntaxError instanceof w.DOMException && !(syntaxError instanceof DOMException),
+    sheets: d.styleSheets instanceof w.StyleSheetList &&
+      Array.from(d.styleSheets).every(sheet => sheet instanceof w.CSSStyleSheet &&
+        sheet.cssRules[0] instanceof w.CSSStyleRule),
+    sheetCount: d.styleSheets.length,
+    fonts: d.fonts instanceof w.FontFaceSet
+  });
+})()
+"#,
+            )
+            .expect("child CSS wrappers and DOM results should remain in the child realm");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+            serde_json::json!({
+                "document": true,
+                "element": true,
+                "list": true,
+                "range": true,
+                "typeError": true,
+                "syntaxError": true,
+                "sheets": true,
+                "sheetCount": usize::from(head.starts_with("<style>")),
+                "fonts": true,
+            }),
+            "child markup: {head}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn child_parser_css_updates_held_collections_in_their_realm() {
+    let mut vm = new_storage_test_vm("https://child-parser-css-held-realm.test/");
+    vm.exec(
+        r#"
+globalThis.realmFrame = document.createElement('iframe');
+realmFrame.srcdoc = `<!doctype html><head><script>
+  globalThis.heldSheets = document.styleSheets;
+  globalThis.heldFonts = document.fonts;
+</` + `script><style>
+  @font-face { font-family: ChildParser; src: local('ChildParser'); }
+  div { color: green; }
+</style></head><body><div>child</div>`;
+(document.body || document.documentElement || document).appendChild(realmFrame);
+"#,
+        None,
+    )
+    .expect("child CSS collection setup should be queued");
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "child should commit before the script captures CSS collections",
+    )
+    .await;
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "child script should capture collections before parsing style",
+    )
+    .await;
+    run_child_document_lifecycle_and_host_load_for_test(&mut vm, "child CSS collection update")
+        .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const w = realmFrame.contentWindow;
+  // Inspect held objects before any Document getter can initialize or resync them.
+  const sheets = w.heldSheets, fonts = w.heldFonts;
+  const faces = Array.from(fonts);
+  const result = {
+    sheetCount: sheets.length,
+    ruleCount: sheets[0].cssRules.length,
+    sheetRealm: sheets[0] instanceof w.CSSStyleSheet &&
+      sheets[0].cssRules[0] instanceof w.CSSFontFaceRule,
+    fontCount: faces.length,
+    fontRealm: faces.every(face => face instanceof w.FontFace && !(face instanceof FontFace)),
+    sheetListRealm: sheets instanceof w.StyleSheetList,
+    fontSetRealm: fonts instanceof w.FontFaceSet
+  };
+  result.identity = sheets === w.document.styleSheets && fonts === w.document.fonts;
+  return JSON.stringify(result);
+})()
+"#,
+        )
+        .expect("parser should update already exposed child CSS collections");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "sheetCount": 1,
+            "ruleCount": 2,
+            "sheetRealm": true,
+            "fontCount": 1,
+            "fontRealm": true,
+            "sheetListRealm": true,
+            "fontSetRealm": true,
+            "identity": true,
+        })
+    );
+}
+
+#[tokio::test]
 async fn child_content_document_getter_does_not_enumerate_script_wrappers_after_load() {
     let mut vm = new_storage_test_vm("https://child-content-document-getter-script-state.test/");
     vm.eval(
