@@ -1042,8 +1042,6 @@ mod tests {
                         NavigationHistoryDocumentId::allocate(),
                         NavigationHistoryEntryId::allocate(),
                         NavigationHistoryEntryKey::allocate(),
-                        None,
-                        None,
                     )
                 })
                 .collect();

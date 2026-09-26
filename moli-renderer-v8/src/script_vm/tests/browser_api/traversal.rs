@@ -387,6 +387,11 @@ frame.contentWindow;
         ] {
             vm.eval(&format!("frame.contentWindow.history.{call}"))
                 .unwrap();
+            assert!(
+                vm.run_one_history_traversal_executor_turn(&loader)
+                    .await
+                    .unwrap()
+            );
             let pending = vm
                 .take_pending_top_level_history_traversal()
                 .map(|pending| pending.delta);
@@ -399,6 +404,11 @@ frame.contentWindow;
         // A method borrowed from the child still uses its top-level History receiver.
         vm.eval("frame.contentWindow.history.back.call(history)")
             .unwrap();
+        assert!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             vm.take_pending_top_level_history_traversal().unwrap().delta,
             -1

@@ -52,20 +52,10 @@ struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
 enum DocumentWriteParserMutationTarget {
     LiveDocument,
     WindowlessDocument { owner_document: DomHandle },
-    DetachedFragment { owner_document: DomHandle },
+    DetachedFragment,
 }
 
 impl DocumentWriteParserMutationOwner<'_, '_, '_> {
-    fn owner_document_handle(&self) -> DomHandle {
-        match self.target {
-            DocumentWriteParserMutationTarget::LiveDocument => self.runtime.document_handle(),
-            DocumentWriteParserMutationTarget::WindowlessDocument { owner_document }
-            | DocumentWriteParserMutationTarget::DetachedFragment { owner_document } => {
-                owner_document
-            }
-        }
-    }
-
     fn targets_live_document(&self) -> bool {
         matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument)
     }
@@ -77,7 +67,7 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
         if matches!(
             self.target,
-            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+            DocumentWriteParserMutationTarget::DetachedFragment
         ) {
             return;
         }
@@ -196,7 +186,7 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         if matches!(
             self.target,
-            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+            DocumentWriteParserMutationTarget::DetachedFragment
         ) {
             let _ = mutation
                 .apply_to_detached_dom_host(self.runtime.dom_host_mut_for_active_parser_step());
@@ -253,7 +243,7 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         // attributes also need registration without waiting for connection.
         let window_handlers = if matches!(
             self.target,
-            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+            DocumentWriteParserMutationTarget::DetachedFragment
         ) || self.runtime.dom_host().is_connected(node_id)
         {
             crate::native_bridge::element::ParserAddedEventHandlers::capture(

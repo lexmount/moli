@@ -126,11 +126,11 @@ pub(crate) use navigation_window::{
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
+mod session_history_traversal;
 mod shared_event_targets;
 pub(crate) use shared_event_targets::resolve_event_target;
 #[cfg(test)]
 pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
-mod session_history_traversal;
 mod world_wrappers;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{

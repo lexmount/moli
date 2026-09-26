@@ -196,16 +196,6 @@ pub(super) fn navigation_entry_origin<'s>(
     navigation_entry_stored_string(scope, entry, EntryStringField::Origin)
 }
 
-pub(super) fn set_navigation_entry_origin<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    origin: &str,
-) {
-    if let Some(entry) = native::entry(scope, entry) {
-        entry.borrow_mut().document_origin = origin.to_owned();
-    }
-}
-
 pub(super) fn navigation_entries_share_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     left: v8::Local<'s, v8::Object>,
