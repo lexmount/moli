@@ -239,11 +239,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "native_bridge/element/focus.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "native_bridge/element/forms/submission.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
