@@ -19,10 +19,6 @@ struct FileReaderConstantsDeclaration {
 struct FileApiRuntimeQueuesDeclaration {
     #[webapi(slot = FILE_READER_QUEUE_SLOT, init = "array")]
     file_reader_queue: (),
-    #[webapi(slot = RESIZE_OBSERVER_QUEUE_SLOT, init = "array")]
-    resize_observer_queue: (),
-    #[webapi(slot = RESIZE_OBSERVER_REGISTRY_SLOT, init = "array")]
-    resize_observer_registry: (),
 }
 
 pub(in crate::context_bootstrap) fn install_file_api_template_bindings<'s>(

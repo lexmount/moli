@@ -42,12 +42,22 @@ pub(super) struct CompletedIntersectionCheckBatch {
 }
 
 impl ObserverStore {
-    pub(super) fn take_intersection_check_batch(&mut self) -> Option<IntersectionCheckBatch> {
+    pub(super) fn take_intersection_check_batch(
+        &mut self,
+        owner: crate::native_bridge::WindowExecutionContextOwner,
+    ) -> Option<IntersectionCheckBatch> {
         if self.intersection_observers.is_empty() {
             return None;
         }
         let mut observers = Vec::with_capacity(self.intersection_observers.len());
         for (observer_id, state) in &self.intersection_observers {
+            if state
+                .callback
+                .observer_identity()
+                .is_none_or(|identity| identity.owner() != owner)
+            {
+                continue;
+            }
             observers.push(IntersectionObserverCheckInput {
                 observer_id: *observer_id,
                 options: state.options.clone(),
