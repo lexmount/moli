@@ -20,5 +20,4 @@ pub(super) use values::{
     selection_owner_document, selection_range, selection_range_belongs_to_document,
     selection_range_update_states, selection_set_collapsed, selection_store,
     selection_store_with_composed_boundaries, selection_sync_associated_range,
-    selection_update_composed_boundaries_for_child_removal,
 };
