@@ -656,6 +656,7 @@ pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
     node_insert_adjacent_node_callback, node_insert_adjacent_text_callback,
 };
+pub(in crate::native_bridge) use url_attributes::parse_url_with_document_query_encoding;
 pub(super) use url_attributes::update_iframe_snapshot_navigation;
 use url_attributes::{
     disconnected_iframe_can_materialize_detached_content, iframe_has_inactive_child_context,
