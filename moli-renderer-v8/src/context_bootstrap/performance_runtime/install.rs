@@ -1400,15 +1400,3 @@ fn performance_navigation_timing_to_json_callback<'s>(
     }
     rv.set(output.into());
 }
-
-fn object_json_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    keys: &[&str],
-) -> v8::Local<'s, v8::Object> {
-    let output = ObjectLiteralDeclaration::bind(scope);
-    for key in keys {
-        output.copy_string_property(scope, source, key);
-    }
-    output.into_object()
-}

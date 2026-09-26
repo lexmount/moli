@@ -70,7 +70,8 @@ fn navigation_timing_json_reads_native_inherited_state_after_freezing_and_lifecy
               const read = (prototype, key) =>
                 Object.getOwnPropertyDescriptor(prototype, key).get.call(navigationEntry);
               return JSON.stringify({
-                identity: ['name', 'entryType', 'startTime'].every(key =>
+                identity: ['id', 'navigationId'].every(key => typeof json[key] === 'number')
+                  && ['name', 'entryType', 'startTime', 'id', 'navigationId'].every(key =>
                   json[key] === initialNavigationSnapshot[key]
                   && base[key] === json[key] && resource[key] === json[key]
                   && read(PerformanceEntry.prototype, key) === json[key]),
