@@ -89,7 +89,18 @@ impl DocumentRuntime {
                 return false;
             }
             let insertion_roots = [old_child];
-            let live_range_plan = if unsafe { &mut *host_ptr }.live_ranges_is_empty() {
+            self.reset_focus_for_non_preserving_connected_move_before_insert(
+                scope,
+                host_ptr,
+                &insertion_roots,
+                self.dom_host.is_connected(old_child),
+            );
+            if self.dom_host.node(old_child).and_then(Node::parent_node) != Some(parent) {
+                return false;
+            }
+            let live_range_plan = if !unsafe { &mut *host_ptr }
+                .needs_live_tree_boundary_updates(insertion_roots.iter().copied())
+            {
                 None
             } else {
                 self.live_range_replace_plan(parent, &insertion_roots, old_child)
