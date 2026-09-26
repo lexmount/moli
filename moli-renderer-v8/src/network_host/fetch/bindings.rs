@@ -55,7 +55,14 @@ fn window_fetch_abort_signal_callback<'s>(
         .and_then(|signal| host.abort_signal_reason(scope, signal))
         .unwrap_or_else(|| abort_error_value(scope));
     let reason_payload = structured_serialize_fetch_abort_reason(scope, reason);
-    let _ = host.abort_fetch_promise(scope, internal_id, reason, reason_payload);
+    let timing = host.abort_fetch_promise(scope, internal_id, reason, reason_payload);
+    // The signal can belong to another realm. Report in the fetch's client
+    // realm, after releasing the mutable request-host borrow.
+    if let Some((context, entry)) = timing {
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+    }
     rv.set_undefined();
 }
 
