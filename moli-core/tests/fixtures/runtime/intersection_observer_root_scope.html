@@ -13,15 +13,13 @@
     let seen = [];
     const observer = new IntersectionObserver((entries) => {
       seen = seen.concat(entries.map((entry) => entry.target.id));
+      window.intersectionObserverRootScopedIds = seen.join(',');
+      window.intersectionObserverRootScopedCount = seen.length;
+      observer.disconnect();
     }, { root });
 
     observer.observe(outside);
     observer.observe(inside);
-
-    setTimeout(() => {
-      window.intersectionObserverRootScopedIds = seen.join(',');
-      window.intersectionObserverRootScopedCount = seen.length;
-    }, 0);
   </script>
 </body>
 </html>

@@ -27,6 +27,7 @@ pub enum LayoutFlushReason {
     Print,
     Explicit,
     SynchronousGeometry,
+    RenderingUpdate,
     Test,
 }
 

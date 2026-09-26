@@ -214,11 +214,41 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
-        self.with_fresh_layout_pass_in_environment(request, None, consume)
+        let document = self._context_host.borrow().document_handle();
+        self.with_fresh_document_layout_pass(document, request, consume)
     }
 
     fn with_fresh_layout_pass_in_environment<T>(
         &mut self,
+        request: moli_layout::LayoutPassRequest,
+        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+        consume: impl FnOnce(
+            &mut moli_layout::LayoutPassResult<DomHandle>,
+        ) -> Result<T, moli_layout::LayoutError>,
+    ) -> Result<Option<T>, moli_layout::LayoutError> {
+        let document = self._context_host.borrow().document_handle();
+        self.with_fresh_document_layout_pass_in_environment(
+            document,
+            request,
+            environment_override,
+            consume,
+        )
+    }
+
+    fn with_fresh_document_layout_pass<T>(
+        &mut self,
+        document: DomHandle,
+        request: moli_layout::LayoutPassRequest,
+        consume: impl FnOnce(
+            &mut moli_layout::LayoutPassResult<DomHandle>,
+        ) -> Result<T, moli_layout::LayoutError>,
+    ) -> Result<Option<T>, moli_layout::LayoutError> {
+        self.with_fresh_document_layout_pass_in_environment(document, request, None, consume)
+    }
+
+    fn with_fresh_document_layout_pass_in_environment<T>(
+        &mut self,
+        document: DomHandle,
         request: moli_layout::LayoutPassRequest,
         environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
         consume: impl FnOnce(
@@ -231,10 +261,10 @@ impl ScriptVm {
         // Printing consumes a temporary projection. Screenshots, screencast
         // frames and explicit refreshes publish geometry for subsequent reads.
         let publishes_layout = request.reason != moli_layout::LayoutFlushReason::Print;
-        let (document, result) = {
+        let rendering_update = request.reason == moli_layout::LayoutFlushReason::RenderingUpdate;
+        let result = {
             let context_host = self._context_host.borrow();
-            let document = context_host.document_handle();
-            let result = context_host
+            context_host
                 .build_layout_pass_for_document_in_environment(
                     document,
                     request,
@@ -254,8 +284,7 @@ impl ScriptVm {
                         context_host.publish_layout_pass_for_document(document, pass);
                     }
                     Ok(Some((value, css_images)))
-                });
-            (document, result)
+                })
         };
         let (result, css_images) = match result {
             Ok(Some((value, css_images))) => (Ok(Some(value)), css_images),
@@ -266,7 +295,13 @@ impl ScriptVm {
         if publishes_layout
             && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
-                crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+                if !rendering_update {
+                    crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+                    crate::observer_runtime::queue_resize_observer_rendering_updates(
+                        scope,
+                        runtime_ptr,
+                    );
+                }
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,
