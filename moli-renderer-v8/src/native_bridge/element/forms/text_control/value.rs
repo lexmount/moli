@@ -1,6 +1,7 @@
 use super::*;
 use crate::native_bridge::document::detached_native_handle_for_runtime;
 use crate::util::utf16_len;
+pub(in crate::native_bridge) use moli_dom::forms::normalize_textarea_api_value;
 
 pub(crate) fn text_control_value(runtime: &JsContextHost, handle: DomHandle) -> String {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -17,22 +18,6 @@ pub(crate) fn text_control_value(runtime: &JsContextHost, handle: DomHandle) -> 
         return normalize_textarea_api_value(&default_value);
     }
     String::new()
-}
-
-pub(in crate::native_bridge) fn normalize_textarea_api_value(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
-            }
-            output.push('\n');
-        } else {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 pub(super) fn clamp_text_control_offset(
@@ -144,7 +129,11 @@ pub(in crate::native_bridge) fn textarea_value_setter_function<'s>(
     let current_value = text_control_value(runtime, handle);
     if current_value != previous_value {
         let end = utf16_len(&current_value) as u32;
-        let _ = runtime.set_selection_range(handle, end, end);
+        let selection_changed = runtime.set_text_control_selection(handle, end, end, "none");
+        restore_focused_text_control_selection(scope, runtime_ptr, handle);
+        if selection_changed || unsafe { &*runtime_ptr }.active_element_handle() == Some(handle) {
+            queue_text_control_selection_change_event(scope, runtime_ptr, handle);
+        }
     }
     rv.set_undefined();
 }

@@ -3,7 +3,6 @@ use crate::context_bootstrap::selection_text_for_clipboard;
 use crate::dom::{forms::InputType, native::Node};
 use crate::native_bridge::element::*;
 use crate::runtime::ClipboardSnapshot;
-use crate::util::utf16_units;
 
 pub(crate) fn document_copy_command_supported(
     runtime: &JsContextHost,
@@ -72,15 +71,12 @@ fn copy_selection_text(
     document: DomHandle,
 ) -> Option<String> {
     if runtime.document_selected_text_control(document).is_some() {
-        let control = selected_control(runtime, document)?;
-        let element = runtime.dom_host().node(control)?.as_element()?;
         if selected_password(runtime, document) {
             return None;
         }
-        let units = utf16_units(&text_control_value(runtime, control));
-        let start = (element.selection_start() as usize).min(units.len());
-        let end = (element.selection_end() as usize).min(units.len());
-        return (start < end).then(|| String::from_utf16_lossy(&units[start..end]));
+        return runtime
+            .document_text_control_selection_text(document)
+            .filter(|text| !text.is_empty());
     }
     let selection = runtime.document_selection_snapshot(document)?;
     if selection.start == selection.end {

@@ -69,15 +69,7 @@ fn selection_attribute_value<'s>(
             v8::Integer::new(scope, count).into()
         }
         SelectionAttribute::Type => {
-            let value = if !selection_has_range(scope, selection) {
-                "None"
-            } else if selection_is_collapsed_internal(scope, selection)
-                && !selection_spans_dom_roots(scope, selection)
-            {
-                "Caret"
-            } else {
-                "Range"
-            };
+            let value = selection_type(scope, selection);
             v8str(scope, value).into()
         }
         SelectionAttribute::IsCollapsed => {

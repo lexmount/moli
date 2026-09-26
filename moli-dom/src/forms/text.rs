@@ -1,3 +1,19 @@
+pub fn normalize_textarea_api_value(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                let _ = chars.next();
+            }
+            output.push('\n');
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
 pub fn normalize_custom_validation_message(message: &str) -> String {
     message.replace("\r\n", "\n").replace('\r', "\n")
 }
