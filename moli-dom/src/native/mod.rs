@@ -28,7 +28,7 @@ pub use host::{
     DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
     DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
     DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
-    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
     StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{

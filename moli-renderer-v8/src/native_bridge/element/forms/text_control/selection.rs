@@ -107,7 +107,7 @@ pub(crate) fn text_control_set_selection_range_with_direction_internal(
     } else {
         (end, end)
     };
-    let changed = runtime.set_selection_range_with_direction(handle, start, end, direction);
+    let changed = runtime.set_text_control_selection(handle, start, end, direction);
     finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
     changed
 }
@@ -118,6 +118,18 @@ fn finish_text_control_selection_update(
     handle: DomHandle,
     changed: bool,
 ) {
+    restore_focused_text_control_selection(scope, runtime_ptr, handle);
+    if changed {
+        queue_text_control_select_event(scope, runtime_ptr, handle);
+        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
+    }
+}
+
+pub(crate) fn restore_focused_text_control_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) {
     // The control's cached offsets and the Document's Selection are separate.
     // Even an unchanged setter restores a cleared/replaced Selection while the
     // control is focused. Background changes must only update the cache.
@@ -125,10 +137,6 @@ fn finish_text_control_selection_update(
         && crate::context_bootstrap::focus_element_selection(scope, runtime_ptr, handle).is_some()
     {
         unsafe { &mut *runtime_ptr }.note_text_control_selection(handle);
-    }
-    if changed {
-        queue_text_control_select_event(scope, runtime_ptr, handle);
-        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
     }
 }
 
@@ -202,12 +210,10 @@ pub(crate) fn replace_text_control_selection(
     let value = text_control_value(runtime, handle);
     let value_units = utf16_units(&value);
     let (start, end) = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(|element| {
-            let start = element.selection_start();
-            let end = element.selection_end();
+        .text_control_selection(handle)
+        .map(|selection| {
+            let start = selection.start;
+            let end = selection.end;
             if start <= end {
                 (start, end)
             } else {
@@ -351,12 +357,10 @@ fn current_selection_or_end(
     value_len: u32,
 ) -> (u32, u32) {
     runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(|element| {
-            let start = element.selection_start().min(value_len);
-            let end = element.selection_end().min(value_len);
+        .text_control_selection(handle)
+        .map(|selection| {
+            let start = selection.start.min(value_len);
+            let end = selection.end.min(value_len);
             if start <= end {
                 (start, end)
             } else {
@@ -383,10 +387,8 @@ pub(in crate::native_bridge) fn text_control_selection_start_getter_function<'s>
         return;
     }
     let value = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(Element::selection_start)
+        .text_control_selection(handle)
+        .map(|selection| selection.start)
         .unwrap_or(0);
     rv.set_uint32(value);
 }
@@ -412,10 +414,18 @@ pub(in crate::native_bridge) fn text_control_selection_start_setter_function<'s>
     else {
         return;
     };
-    let runtime = unsafe { &mut *runtime_ptr };
+    let runtime = unsafe { &*runtime_ptr };
     let next = clamp_text_control_offset(runtime, handle, next);
-    let changed = runtime.set_selection_start(handle, next);
-    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
+    if let Some(current) = runtime.text_control_selection(handle) {
+        text_control_set_selection_range_with_direction_internal(
+            scope,
+            runtime_ptr,
+            handle,
+            next,
+            next.max(current.end),
+            current.direction,
+        );
+    }
     rv.set_undefined();
 }
 
@@ -436,10 +446,8 @@ pub(in crate::native_bridge) fn text_control_selection_end_getter_function<'s>(
         return;
     }
     let value = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(Element::selection_end)
+        .text_control_selection(handle)
+        .map(|selection| selection.end)
         .unwrap_or(0);
     rv.set_uint32(value);
 }
@@ -465,10 +473,18 @@ pub(in crate::native_bridge) fn text_control_selection_end_setter_function<'s>(
     else {
         return;
     };
-    let runtime = unsafe { &mut *runtime_ptr };
+    let runtime = unsafe { &*runtime_ptr };
     let next = clamp_text_control_offset(runtime, handle, next);
-    let changed = runtime.set_selection_end(handle, next);
-    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
+    if let Some(current) = runtime.text_control_selection(handle) {
+        text_control_set_selection_range_with_direction_internal(
+            scope,
+            runtime_ptr,
+            handle,
+            current.start.min(next),
+            next,
+            current.direction,
+        );
+    }
     rv.set_undefined();
 }
 
@@ -488,10 +504,8 @@ pub(in crate::native_bridge) fn text_control_selection_direction_getter_function
         return;
     }
     let direction = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(Element::selection_direction)
+        .text_control_selection(handle)
+        .map(|selection| selection.direction)
         .unwrap_or("none");
     rv.set(v8str(scope, direction).into());
 }
@@ -518,8 +532,16 @@ pub(in crate::native_bridge) fn text_control_selection_direction_setter_function
     else {
         return;
     };
-    let changed = unsafe { &mut *runtime_ptr }.set_selection_direction(handle, &direction);
-    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
+    if let Some(current) = unsafe { &*runtime_ptr }.text_control_selection(handle) {
+        text_control_set_selection_range_with_direction_internal(
+            scope,
+            runtime_ptr,
+            handle,
+            current.start,
+            current.end,
+            &direction,
+        );
+    }
     rv.set_undefined();
 }
 
@@ -606,6 +628,7 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
 
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_input_value(handle, &next_value);
+    let value_changed = text_control_value(runtime, handle) != value;
     let replacement_end = start + replacement_len;
     let (next_start, next_end) = match mode {
         "select" => (start, replacement_end),
@@ -624,6 +647,9 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
     };
     let _ =
         text_control_set_selection_range_internal(scope, runtime_ptr, handle, next_start, next_end);
+    if value_changed && unsafe { &*runtime_ptr }.active_element_handle() == Some(handle) {
+        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
+    }
     rv.set_undefined();
 }
 
@@ -658,9 +684,19 @@ pub(in crate::native_bridge) fn text_control_select_callback(
         rv.set_undefined();
         return;
     };
-    let len = text_control_value(unsafe { &*runtime_ptr }, handle)
-        .encode_utf16()
-        .count() as u32;
-    let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
+    if unsafe { &*runtime_ptr }.text_control_has_selection_editor(handle) {
+        let len = text_control_value(unsafe { &*runtime_ptr }, handle)
+            .encode_utf16()
+            .count() as u32;
+        let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
+    }
+    crate::native_bridge::element::focus_text_control_preserving_selection(
+        scope,
+        runtime_ptr,
+        handle,
+    );
+    // Focus listeners may redirect focus, replace the value, or set a different
+    // cached selection. Restore only the state left by those listeners.
+    restore_focused_text_control_selection(scope, runtime_ptr, handle);
     rv.set_undefined();
 }
