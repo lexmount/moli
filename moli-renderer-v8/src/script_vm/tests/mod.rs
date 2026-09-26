@@ -15989,6 +15989,7 @@ mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
 mod mouse_snapshot;
+mod navigation_timing_inheritance;
 mod no_cors_header_fill;
 mod observable;
 mod observer_callbacks;

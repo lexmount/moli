@@ -1453,7 +1453,8 @@ fn performance_navigation_timing_constructor_matches_navigation_entries() {
               ];
               const descriptorStable = name => {
                 const descriptor =
-                  Object.getOwnPropertyDescriptor(PerformanceNavigationTiming.prototype, name);
+                  Object.getOwnPropertyDescriptor(PerformanceNavigationTiming.prototype, name)
+                  ?? Object.getOwnPropertyDescriptor(PerformanceResourceTiming.prototype, name);
                 return !!descriptor
                   && typeof descriptor.get === "function"
                   && descriptor.get.name === `get ${name}`
@@ -1474,6 +1475,9 @@ fn performance_navigation_timing_constructor_matches_navigation_entries() {
                 name: navigation && navigation.name,
                 entryType: navigation && navigation.entryType,
                 isNavigationTiming: navigation instanceof PerformanceNavigationTiming,
+                isResourceTiming: navigation instanceof PerformanceResourceTiming,
+                constructorParent: Object.getPrototypeOf(PerformanceNavigationTiming) === PerformanceResourceTiming,
+                prototypeParent: Object.getPrototypeOf(PerformanceNavigationTiming.prototype) === PerformanceResourceTiming.prototype,
                 inheritsPerformanceEntry: PerformanceNavigationTiming.prototype instanceof PerformanceEntry,
                 prototypeAttributeNames: Object.getOwnPropertyNames(PerformanceNavigationTiming.prototype)
                   .filter(name => attributeNames.includes(name))
@@ -1488,7 +1492,7 @@ fn performance_navigation_timing_constructor_matches_navigation_entries() {
 
     assert_eq!(
         result,
-        r#"{"ctor":"function","name":"https://performance-navigation-timing.test/","entryType":"navigation","isNavigationTiming":true,"inheritsPerformanceEntry":true,"prototypeAttributeNames":"initiatorType,nextHopProtocol,workerStart,redirectStart,redirectEnd,fetchStart,domainLookupStart,domainLookupEnd,connectStart,connectEnd,secureConnectionStart,requestStart,responseStart,responseEnd,transferSize,encodedBodySize,decodedBodySize,unloadEventStart,unloadEventEnd,domInteractive,domContentLoadedEventStart,domContentLoadedEventEnd,domComplete,loadEventStart,loadEventEnd,type,redirectCount","descriptorsStable":true,"constructError":"TypeError"}"#
+        r#"{"ctor":"function","name":"https://performance-navigation-timing.test/","entryType":"navigation","isNavigationTiming":true,"isResourceTiming":true,"constructorParent":true,"prototypeParent":true,"inheritsPerformanceEntry":true,"prototypeAttributeNames":"unloadEventStart,unloadEventEnd,domInteractive,domContentLoadedEventStart,domContentLoadedEventEnd,domComplete,loadEventStart,loadEventEnd,type,redirectCount","descriptorsStable":true,"constructError":"TypeError"}"#
     );
 }
 
@@ -1628,8 +1632,8 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
                 byRealMark: performance.getEntriesByName("real-mark", "mark").length,
                 bySpoofMark: performance.getEntriesByName("spoof", "resource").length,
                 fakeName: getterResult(entryNameGetter, fake),
-                fakeNavigationType: String(navTypeGetter.call(fake)),
-                fakeLoadEventEnd: String(navLoadGetter.call(fake)),
+                fakeNavigationType: getterResult(navTypeGetter, fake),
+                fakeLoadEventEnd: getterResult(navLoadGetter, fake),
                 fakeResourceValues: resourceGetters.map(getter => getterResult(getter, {})).join("|")
               });
             })()
@@ -1639,7 +1643,7 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"TypeError","fakeNavigationType":"undefined","fakeLoadEventEnd":"undefined","fakeResourceValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
+        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"TypeError","fakeNavigationType":"TypeError","fakeLoadEventEnd":"TypeError","fakeResourceValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
     );
 }
 
@@ -2353,7 +2357,7 @@ fn performance_to_json_preserves_legacy_objects_and_declared_snapshots() {
                 toJsonDescriptors: [
                   methodSummary(PerformanceTiming.prototype, "toJSON"),
                   methodSummary(PerformanceNavigation.prototype, "toJSON"),
-                  methodSummary(navigationEntry, "toJSON")
+                  methodSummary(PerformanceNavigationTiming.prototype, "toJSON")
                 ]
               });
             })()
@@ -2363,7 +2367,7 @@ fn performance_to_json_preserves_legacy_objects_and_declared_snapshots() {
 
     assert_eq!(
         result,
-        r#"{"timeOriginNumber":true,"timeOriginEnumerable":true,"timingEnumerable":true,"navigationEnumerable":true,"timingSnapshot":true,"navigationSnapshot":true,"navigationEntrySnapshot":true,"timingSameObject":true,"navigationSameObject":true,"timingOwn":true,"navigationOwn":true,"toJsonDescriptors":["toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:false:true:true:true"]}"#
+        r#"{"timeOriginNumber":true,"timeOriginEnumerable":true,"timingEnumerable":true,"navigationEnumerable":true,"timingSnapshot":true,"navigationSnapshot":true,"navigationEntrySnapshot":true,"timingSameObject":true,"navigationSameObject":true,"timingOwn":true,"navigationOwn":true,"toJsonDescriptors":["toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:true:true:true:true"]}"#
     );
 }
 

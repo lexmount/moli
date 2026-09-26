@@ -329,7 +329,7 @@ interfaces! {
     PerformanceMark: PerformanceEntry;
     PerformanceMeasure: PerformanceEntry;
     PerformanceNavigation;
-    PerformanceNavigationTiming: PerformanceEntry;
+    PerformanceNavigationTiming: PerformanceResourceTiming;
     PerformanceObserver;
     PerformanceObserverEntryList;
     PerformanceResourceTiming: PerformanceEntry;
