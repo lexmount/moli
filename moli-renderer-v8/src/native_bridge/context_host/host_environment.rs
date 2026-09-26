@@ -2286,15 +2286,8 @@ impl JsContextHost {
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
         }
-        let changed_iframe_attributes = effects.iter().filter_map(|effect| {
-            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
-                return None;
-            };
-            (StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
-                && self.dom_host().is_html_element_named(*element, "iframe"))
-            .then_some(*element)
-        });
-        self.invalidate_published_frame_viewports(changed_iframe_attributes);
+        // Frame viewports belong to the last published layout. Style mutations
+        // invalidate style inputs; the next layout publishes their new sizes.
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();

@@ -333,6 +333,12 @@ impl DocumentRuntime {
         self.timeouts.has_ready_timer()
     }
 
+    // Rendering wakes are independent of callbacks queued by an API.
+    #[cfg(test)]
+    pub(crate) fn has_ready_callback_timer(&self) -> bool {
+        self.timeouts.has_ready_callback_timer()
+    }
+
     pub(crate) fn next_ready_timeout_deadline(
         &self,
         selection: crate::page_task_queue::RendererPageTimerSelection,

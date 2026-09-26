@@ -18,7 +18,10 @@ use xmlparser::{
     ElementEnd as XmlElementEnd, Token as XmlTokenizerToken, Tokenizer as XmlTokenizer,
 };
 
-use super::{html_chunks, xml_preprocess::prepare_xml_for_xml5ever, xml_tree_viewer::transform_document_to_xml_tree_view};
+use super::{
+    html_chunks, xml_preprocess::prepare_xml_for_xml5ever,
+    xml_tree_viewer::transform_document_to_xml_tree_view,
+};
 use moli_dom::native::{
     Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node, ParserConstruction,
 };

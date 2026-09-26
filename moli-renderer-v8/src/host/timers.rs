@@ -825,6 +825,18 @@ impl HostTimeoutScheduler {
             .has_ready_timer(Instant::now(), min_delay_ready_allowance())
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_ready_callback_timer(&self) -> bool {
+        self.scheduler
+            .next_ready_deadline_matching(Instant::now(), min_delay_ready_allowance(), |task| {
+                !matches!(
+                    task.callback,
+                    ScheduledTimerCallback::AnimationFrameWake { .. }
+                )
+            })
+            .is_some()
+    }
+
     pub(crate) fn has_ready_from_schedule_ranges(&self, ranges: &[TimerScheduleRange]) -> bool {
         self.scheduler.has_ready_from_schedule_ranges(
             ranges,

@@ -153,7 +153,7 @@ pub(in crate::context_bootstrap) fn entry_in_realm<'s>(
     source: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> v8::Local<'s, v8::Object> {
-    if source.get_creation_context(scope) == Some(context) {
+    if super::super::world_wrappers::belongs_to_world(scope, source, context) {
         return source;
     }
     let Some(record) = entry(scope, source) else {
@@ -173,7 +173,7 @@ pub(in crate::context_bootstrap) fn entry_in_realm<'s>(
     };
     for candidate in candidates {
         if let Some(wrapper) = candidate.to_local(scope)
-            && wrapper.get_creation_context(scope) == Some(context)
+            && super::super::world_wrappers::belongs_to_world(scope, wrapper, context)
         {
             return wrapper;
         }

@@ -20,7 +20,6 @@ struct ErrorEventInitDeclaration<'scope> {
     error: v8::Local<'scope, v8::Value>,
 }
 
-
 pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinScope<'_, '_>) {
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;

@@ -1086,9 +1086,12 @@ pub(super) fn finish_navigation_precommit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if let Some(controller) =
-        get_private_value(scope, event, NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    if let Some(controller) = crate::context_bootstrap::event_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
         set_private_value(
             scope,
@@ -1096,7 +1099,7 @@ pub(super) fn finish_navigation_precommit<'s>(
             "__lmPrecommitControllerActive",
             v8::Boolean::new(scope, false).into(),
         );
-        set_private_value(
+        crate::context_bootstrap::set_event_private_value(
             scope,
             event,
             NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
@@ -1428,7 +1431,12 @@ pub(super) fn navigation_destination_for_realm<'s>(
         return Some(wrapper);
     }
     let wrapper = create_navigation_destination(scope, "", false, None);
-    set_private_value(scope, wrapper, NAVIGATION_DESTINATION_BACKING_SLOT, destination.into());
+    set_private_value(
+        scope,
+        wrapper,
+        NAVIGATION_DESTINATION_BACKING_SLOT,
+        destination.into(),
+    );
     super::world_wrappers::insert(scope, destination, wrapper);
     Some(wrapper)
 }
@@ -1446,8 +1454,9 @@ fn create_navigation_destination_for_entry<'s>(
         .and_then(|history| history_entries(scope, history))
         .and_then(|entries| {
             let current = navigation_current_entry(scope, owner);
+            let record = super::history_runtime::native::entry(scope, entry)?;
             super::navigation_projection::visible_navigation_index_for_entry(
-                scope, entries, current, entry,
+                scope, &entries, current, &record,
             )
         })
         .map(|_| entry);

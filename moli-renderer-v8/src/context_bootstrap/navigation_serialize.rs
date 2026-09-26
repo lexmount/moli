@@ -1,6 +1,7 @@
 use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
-    history_index, navigation_current_entry, navigation_entry_referrer_policy_value,
+    history_index, navigation_current_entry, navigation_entry_document_id,
+    navigation_entry_referrer_policy_value,
 };
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
@@ -157,6 +158,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
     let Some(record) = super::history_runtime::native::entry(scope, entry) else {
         return NavigationHistorySerializedEntry {
             url: "about:blank".to_owned(),
+            document_origin: "null".to_owned(),
             history_state: None,
             navigation_state: None,
             scroll_restoration: Default::default(),

@@ -201,7 +201,11 @@ pub(super) fn navigation_document_origin<'s>(
             crate::util::context_host_ptr_from_global_bridge(scope)
                 .and_then(|host| unsafe { &*host }.window_document_origin(dispatch_scope))
         })
-        .or_else(|| url::Url::parse(url).ok().map(|url| url.origin().ascii_serialization()))
+        .or_else(|| {
+            url::Url::parse(url)
+                .ok()
+                .map(|url| url.origin().ascii_serialization())
+        })
         .unwrap_or_else(|| "null".to_owned())
 }
 
@@ -210,16 +214,6 @@ pub(super) fn navigation_entry_origin<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
     navigation_entry_stored_string(scope, entry, EntryStringField::Origin)
-}
-
-pub(super) fn set_navigation_entry_origin<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    origin: &str,
-) {
-    if let Some(entry) = native::entry(scope, entry) {
-        entry.borrow_mut().document_origin = origin.to_owned();
-    }
 }
 
 pub(super) fn navigation_entries_share_origin<'s>(

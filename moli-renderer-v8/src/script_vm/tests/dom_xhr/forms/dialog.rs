@@ -558,8 +558,8 @@ async fn dialog_form_submission_closes_with_submitter_result_and_queues_reentran
     );
 
     assert!(
-        !vm.has_ready_timeout(),
-        "dialog close must not create a synthetic Page timer"
+        !vm.has_ready_callback_timer(),
+        "dialog close must not create a callback timer; focus rendering wakes are separate"
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
