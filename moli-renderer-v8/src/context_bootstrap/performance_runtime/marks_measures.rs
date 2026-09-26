@@ -528,6 +528,9 @@ fn resolve_named_measure_boundary<'s>(
         );
         return Err(());
     }
+    if name == "navigationStart" {
+        return Ok(0.0);
+    }
     let timing = match super::lazy_subobjects::ensure_performance_subobject(
         scope,
         performance,
@@ -545,14 +548,9 @@ fn resolve_named_measure_boundary<'s>(
             return Err(());
         }
     };
-    let Some(key) = v8_string(scope, name) else {
-        return Err(());
-    };
-    let value = timing
-        .get(scope, key.into())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite())
-        .unwrap_or(0.0);
+    let value = install::performance_timing_value(scope, timing, name)
+        .number_value(scope)
+        .expect("native PerformanceTiming attributes should be numeric");
     if value == 0.0 {
         webidl::throw_dom_exception(
             scope,
@@ -561,11 +559,9 @@ fn resolve_named_measure_boundary<'s>(
         );
         return Err(());
     }
-    let navigation_start = timing
-        .get(scope, v8str(scope, "navigationStart").into())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite())
-        .unwrap_or(0.0);
+    let navigation_start = install::performance_timing_value(scope, timing, "navigationStart")
+        .number_value(scope)
+        .expect("native navigationStart should be numeric");
     Ok(value - navigation_start)
 }
 

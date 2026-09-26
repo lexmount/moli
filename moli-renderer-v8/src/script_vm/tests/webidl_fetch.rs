@@ -5840,7 +5840,7 @@ fn plain_data_surfaces_preserve_expected_shapes() {
       Array.from(headers.values()).join(','),
       Array.from(headers.entries()).map((pair) => pair.join('=')).join(',')
     ].join('|'),
-    perfTiming: Object.keys(performance.timing).join(','),
+    perfTiming: [Object.keys(performance.timing).length, Object.keys(performance.timing.toJSON()).join(',')].join('|'),
     perfNavigation: [Object.keys(performance.navigation).join(','), performance.navigation.type, performance.navigation.redirectCount].join('|'),
     perfSupported: PerformanceObserver.supportedEntryTypes.join(',')
   });
@@ -5851,7 +5851,7 @@ fn plain_data_surfaces_preserve_expected_shapes() {
 
     assert_eq!(
         result,
-        r#"{"encodeInto":"read,written|2|3|104,195,169","params":"1,2|a=1,a=2,b=3","headers":"x-a,x-b|1,2|x-a=1,x-b=2","perfTiming":"navigationStart,unloadEventStart,unloadEventEnd,redirectStart,redirectEnd,fetchStart,domainLookupStart,domainLookupEnd,connectStart,connectEnd,secureConnectionStart,requestStart,responseStart,responseEnd,domLoading,domInteractive,domContentLoadedEventStart,domContentLoadedEventEnd,domComplete,loadEventStart,loadEventEnd","perfNavigation":"|0|0","perfSupported":"mark,measure,navigation,resource"}"#
+        r#"{"encodeInto":"read,written|2|3|104,195,169","params":"1,2|a=1,a=2,b=3","headers":"x-a,x-b|1,2|x-a=1,x-b=2","perfTiming":"0|navigationStart,unloadEventStart,unloadEventEnd,redirectStart,redirectEnd,fetchStart,domainLookupStart,domainLookupEnd,connectStart,connectEnd,secureConnectionStart,requestStart,responseStart,responseEnd,domLoading,domInteractive,domContentLoadedEventStart,domContentLoadedEventEnd,domComplete,loadEventStart,loadEventEnd","perfNavigation":"|0|0","perfSupported":"mark,measure,navigation,resource"}"#
     );
 }
 

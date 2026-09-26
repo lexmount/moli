@@ -2130,7 +2130,7 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                 jsonNavigationType: json.navigation.type,
                 fakeTimeOrigin: capture(() => timeOriginGetter.call(fakePerformance)),
                 fakeTiming: capture(() => timingGetter.call(fakePerformance)),
-                fakeNavigationType: String(navigationTypeGetter.call(fakeNavigation)),
+                fakeNavigationType: capture(() => navigationTypeGetter.call(fakeNavigation)),
                 fakeEventCountsGet: String(eventCountsPrototype.get.call(fakeEventCounts, "click")),
                 fakeEventCountsValue: String(eventCountsPrototype.values.call(fakeEventCounts).next().value)
               });
@@ -2141,7 +2141,7 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"TypeError","fakeTiming":"TypeError","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
+        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"TypeError","fakeTiming":"TypeError","fakeNavigationType":"TypeError","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
     );
 }
 
@@ -2309,7 +2309,7 @@ fn host_event_timestamp_uses_performance_private_time_origin() {
 }
 
 #[test]
-fn performance_to_json_returns_declared_snapshot_objects() {
+fn performance_to_json_preserves_legacy_objects_and_declared_snapshots() {
     let mut vm = new_storage_test_vm("https://performance-json.test/");
 
     let result = vm
@@ -2346,11 +2346,13 @@ fn performance_to_json_returns_declared_snapshot_objects() {
                 navigationSnapshot: json.navigation.type === navigationJson.type,
                 navigationEntrySnapshot: navigationEntryJson.type === navigationEntry.type
                   && navigationEntryJson.loadEventEnd === navigationEntry.loadEventEnd,
-                timingOwn: Object.prototype.hasOwnProperty.call(json.timing, "navigationStart"),
-                navigationOwn: Object.prototype.hasOwnProperty.call(json.navigation, "redirectCount"),
+                timingSameObject: json.timing === performance.timing,
+                navigationSameObject: json.navigation === performance.navigation,
+                timingOwn: Object.prototype.hasOwnProperty.call(timingJson, "navigationStart"),
+                navigationOwn: Object.prototype.hasOwnProperty.call(navigationJson, "redirectCount"),
                 toJsonDescriptors: [
-                  methodSummary(performance.timing, "toJSON"),
-                  methodSummary(performance.navigation, "toJSON"),
+                  methodSummary(PerformanceTiming.prototype, "toJSON"),
+                  methodSummary(PerformanceNavigation.prototype, "toJSON"),
                   methodSummary(navigationEntry, "toJSON")
                 ]
               });
@@ -2361,7 +2363,7 @@ fn performance_to_json_returns_declared_snapshot_objects() {
 
     assert_eq!(
         result,
-        r#"{"timeOriginNumber":true,"timeOriginEnumerable":true,"timingEnumerable":true,"navigationEnumerable":true,"timingSnapshot":true,"navigationSnapshot":true,"navigationEntrySnapshot":true,"timingOwn":true,"navigationOwn":true,"toJsonDescriptors":["toJSON:function:toJSON:0:false:true:true:true","toJSON:function:toJSON:0:false:true:true:true","toJSON:function:toJSON:0:false:true:true:true"]}"#
+        r#"{"timeOriginNumber":true,"timeOriginEnumerable":true,"timingEnumerable":true,"navigationEnumerable":true,"timingSnapshot":true,"navigationSnapshot":true,"navigationEntrySnapshot":true,"timingSameObject":true,"navigationSameObject":true,"timingOwn":true,"navigationOwn":true,"toJsonDescriptors":["toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:true:true:true:true","toJSON:function:toJSON:0:false:true:true:true"]}"#
     );
 }
 
