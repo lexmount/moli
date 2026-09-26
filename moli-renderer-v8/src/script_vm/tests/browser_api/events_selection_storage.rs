@@ -6,6 +6,18 @@ use tokio::{
 };
 
 #[test]
+fn text_control_selection_setters_restore_the_focused_document_selection() {
+    let mut vm = new_storage_test_vm("https://text-control-selection-restoration.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/text-control-selection-restoration.js"
+        ))
+        .expect("text control selection updates should restore only their focused document"),
+        ""
+    );
+}
+
+#[test]
 fn selection_tracks_associated_range_document_across_realms() {
     let mut vm = new_storage_test_vm("https://selection-range-owner.test/");
     assert_eq!(

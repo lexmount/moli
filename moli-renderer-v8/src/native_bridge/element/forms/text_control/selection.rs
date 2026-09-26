@@ -108,14 +108,28 @@ pub(crate) fn text_control_set_selection_range_with_direction_internal(
         (end, end)
     };
     let changed = runtime.set_selection_range_with_direction(handle, start, end, direction);
-    if runtime.active_element_handle() == Some(handle) {
-        runtime.note_text_control_selection(handle);
+    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
+    changed
+}
+
+fn finish_text_control_selection_update(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    changed: bool,
+) {
+    // The control's cached offsets and the Document's Selection are separate.
+    // Even an unchanged setter restores a cleared/replaced Selection while the
+    // control is focused. Background changes must only update the cache.
+    if unsafe { &*runtime_ptr }.active_element_handle() == Some(handle)
+        && crate::context_bootstrap::focus_element_selection(scope, runtime_ptr, handle).is_some()
+    {
+        unsafe { &mut *runtime_ptr }.note_text_control_selection(handle);
     }
     if changed {
         queue_text_control_select_event(scope, runtime_ptr, handle);
         queue_text_control_selection_change_event(scope, runtime_ptr, handle);
     }
-    changed
 }
 
 pub(crate) fn replace_text_control_selection(
@@ -400,10 +414,8 @@ pub(in crate::native_bridge) fn text_control_selection_start_setter_function<'s>
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let next = clamp_text_control_offset(runtime, handle, next);
-    if runtime.set_selection_start(handle, next) {
-        queue_text_control_select_event(scope, runtime_ptr, handle);
-        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
-    }
+    let changed = runtime.set_selection_start(handle, next);
+    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
     rv.set_undefined();
 }
 
@@ -455,10 +467,8 @@ pub(in crate::native_bridge) fn text_control_selection_end_setter_function<'s>(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let next = clamp_text_control_offset(runtime, handle, next);
-    if runtime.set_selection_end(handle, next) {
-        queue_text_control_select_event(scope, runtime_ptr, handle);
-        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
-    }
+    let changed = runtime.set_selection_end(handle, next);
+    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
     rv.set_undefined();
 }
 
@@ -508,10 +518,8 @@ pub(in crate::native_bridge) fn text_control_selection_direction_setter_function
     else {
         return;
     };
-    if unsafe { &mut *runtime_ptr }.set_selection_direction(handle, &direction) {
-        queue_text_control_select_event(scope, runtime_ptr, handle);
-        queue_text_control_selection_change_event(scope, runtime_ptr, handle);
-    }
+    let changed = unsafe { &mut *runtime_ptr }.set_selection_direction(handle, &direction);
+    finish_text_control_selection_update(scope, runtime_ptr, handle, changed);
     rv.set_undefined();
 }
 
