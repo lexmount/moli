@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn clearing_selection_resets_focused_text_control_offsets() {
+    let mut vm = new_storage_html_test_vm("https://clear-focused-selection.test/");
+    let result = vm
+        .eval(
+            r#"
+        const input = document.body.appendChild(document.createElement('input'));
+        input.value = 'selection';
+        input.focus();
+        input.setSelectionRange(2, 6);
+        const text = document.body.appendChild(document.createTextNode('document text'));
+        const selection = getSelection();
+        selection.setBaseAndExtent(text, 0, text, 4);
+        const before = [document.activeElement === input, selection.rangeCount,
+          input.selectionStart, input.selectionEnd];
+        selection.removeAllRanges();
+        [before, [input.selectionStart, input.selectionEnd], selection.rangeCount]
+          .flat().join(',');
+    "#,
+        )
+        .expect("clearing the active selection should evaluate");
+    assert_eq!(result, "true,1,2,6,0,0,0");
+}
+
+#[test]
 fn editing_focus_initializes_selection_before_events_and_preserves_existing_ranges() {
     let mut vm = new_storage_html_test_vm("https://example.com/");
     let result = vm.eval(r#"(() => {
