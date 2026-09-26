@@ -92,7 +92,7 @@ pub(crate) fn broadcast_document_resize_observers(
             else {
                 continue;
             };
-            let Some(context) = observer.get_creation_context(scope) else {
+            let Some(context) = callback.relevant_context(scope) else {
                 continue;
             };
             let scope = &mut v8::ContextScope::new(scope, context);
