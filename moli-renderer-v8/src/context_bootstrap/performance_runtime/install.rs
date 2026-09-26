@@ -789,6 +789,12 @@ pub(crate) fn record_performance_dom_content_loaded_event_start(scope: &mut v8::
         super::window_state::record_pending_dom_content_loaded_start(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        return;
+    }
     let previous = 0.0;
     let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
     apply_dom_content_loaded_start(scope, performance, timestamp);
@@ -823,6 +829,12 @@ pub(crate) fn record_performance_dom_content_loaded_event_end(scope: &mut v8::Pi
         super::window_state::record_pending_dom_content_loaded_end(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_END_INDEX)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        return;
+    }
     let previous =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
             .unwrap_or(0.0);
@@ -857,6 +869,9 @@ pub(crate) fn record_performance_load_event_start(scope: &mut v8::PinScope<'_, '
         super::window_state::record_pending_load_start(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, LOAD_START_INDEX).unwrap_or(0.0) > 0.0 {
+        return;
+    }
     let previous =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_END_INDEX)
             .unwrap_or(0.0);
