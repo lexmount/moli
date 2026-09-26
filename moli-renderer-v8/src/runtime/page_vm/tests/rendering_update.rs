@@ -116,6 +116,48 @@ getComputedStyle(document.getElementById('fallback')).display
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn explicit_layout_metrics_publication_skips_paint_and_preserves_default_reads() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/layout-metrics-publication.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0;padding:0}#target{width:120px;height:40px}</style>';
+document.body.innerHTML = '<div id="target"></div>';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let before = page_vm.vm().layout_pass_observability_for_test();
+
+        let error = page_vm.layout_metrics().expect_err("ordinary reads stay side effect free");
+        assert!(error.to_string().contains("no published layout"));
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, before.1);
+
+        let metrics = page_vm.publish_layout_metrics()?;
+        assert_eq!(metrics.content_width, 1920.0);
+        assert_eq!(metrics.content_height, 1080.0);
+        let after = page_vm.vm().layout_pass_observability_for_test();
+        assert_eq!(after.1, before.1 + 1);
+        let pass = after.3.expect("publication records one layout pass");
+        assert_eq!(pass.reason, moli_layout::LayoutFlushReason::SynchronousGeometry);
+        assert_eq!(pass.paint_operation_count, 0);
+
+        let cached = page_vm.layout_metrics()?;
+        assert_eq!(cached, metrics);
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, after.1);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("explicit layout metrics publication should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn geometry_batch_requires_explicit_output_and_reuses_it_until_the_next_output() {
     run_page_vm_async_test(async move {
         let loader =

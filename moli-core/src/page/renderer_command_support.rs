@@ -1456,6 +1456,10 @@ impl Page {
         self.start_page_command(RendererPageCommand::LayoutMetrics)
     }
 
+    pub fn start_published_layout_metrics(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::PublishLayoutMetrics)
+    }
+
     pub fn finish_layout_metrics(
         &mut self,
         completion: CompletedPageCommand,
