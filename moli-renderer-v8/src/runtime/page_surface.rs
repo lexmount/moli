@@ -5195,6 +5195,7 @@ pub enum RendererPageCommand {
     },
     SerializeHtml,
     LayoutMetrics,
+    PublishLayout,
     CaptureScreenshot(RendererCaptureScreenshotRequest),
     CaptureScreencastFrame(RendererCaptureScreencastFrameRequest),
     BlobBytesForUuid {
@@ -5794,6 +5795,7 @@ impl RendererPageCommand {
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
             Self::SerializeHtml => Some("SerializeHtml"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
+            Self::PublishLayout => Some("PublishLayout"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
             Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),
             Self::ScrollBackendNodeIntoViewIfNeeded { .. } => {

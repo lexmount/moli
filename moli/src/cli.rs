@@ -581,6 +581,8 @@ pub struct CommonArgs {
     pub disable_subframes: bool,
 
     /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// With `fetch --eval` or `--eval-file`, refresh layout once before running
+    /// the script so geometry APIs can read it. Script mutations do not refresh it.
     ///
     /// Without this flag Moli keeps deterministic compatibility
     /// geometry and does not construct layout or paint output.

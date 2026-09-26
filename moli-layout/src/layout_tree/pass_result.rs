@@ -25,6 +25,7 @@ pub enum LayoutFlushReason {
     Screenshot,
     Screencast,
     Print,
+    Explicit,
     SynchronousGeometry,
     Test,
 }

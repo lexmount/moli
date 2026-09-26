@@ -1452,6 +1452,16 @@ impl Page {
         self.start_page_command(RendererPageCommand::SerializeHtml)
     }
 
+    /// Publishes current layout for subsequent geometry reads without painting.
+    ///
+    /// This is an explicit refresh, used by CLI `fetch --layout --eval` after
+    /// readiness. Ordinary script evaluation and geometry reads do not call it.
+    /// When real layout is disabled, this is a no-op.
+    pub async fn publish_layout_async(&mut self) -> Result<()> {
+        self.dispatch_unit_page_command_async(RendererPageCommand::PublishLayout, "publish layout")
+            .await
+    }
+
     pub fn start_layout_metrics(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::LayoutMetrics)
     }

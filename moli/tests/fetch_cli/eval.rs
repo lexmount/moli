@@ -125,7 +125,56 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
 }
 
 #[test]
-fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Result<()> {
+fn eval_with_layout_publishes_static_geometry() -> Result<()> {
+    let url = "data:text/html,<!doctype html><body style='margin:0'><div id=target style='position:absolute;left:20px;top:30px;width:120px;height:40px;overflow:hidden'>geometry<span style='display:block;height:200px'></span></div>";
+    let script = r#"(() => {
+      const target = document.getElementById('target');
+      const rect = target.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(target.firstChild);
+      const rangeRect = range.getBoundingClientRect();
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return {
+        rect: [rect.x, rect.y, rect.width, rect.height],
+        offset: [target.offsetWidth, target.offsetHeight],
+        client: [target.clientWidth, target.clientHeight],
+        scrolls: target.scrollHeight >= 200,
+        range: rangeRect.width > 0 && rangeRect.height > 0 && range.getClientRects().length > 0,
+        selection: selection.getRangeAt(0).getBoundingClientRect().width === rangeRect.width,
+        hit: document.elementFromPoint(25, 35)?.id,
+        computed: getComputedStyle(target).width
+      };
+    })()"#;
+    for args in [vec!["--layout"], vec!["--layout", "--disable-js"]] {
+        let output = run_eval(url, script, &args)?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            clean_output(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "rect": [20, 30, 120, 40],
+                "offset": [120, 40],
+                "client": [120, 40],
+                "scrolls": true,
+                "range": true,
+                "selection": true,
+                "hit": "target",
+                "computed": "120px"
+            }),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_computed_sizes_follow_layout_option_with_or_without_css() -> Result<()> {
     let url = "data:text/html,<!doctype html><div id=target style=\"max-width:20px\"></div><canvas id=canvas style=\"max-width:40px\"></canvas>";
     let script = r#"(() => {
       const target = document.getElementById('target');
@@ -136,7 +185,7 @@ fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Resul
       const before = read();
       const logicalBefore = readLogical();
       const geometry = [target.offsetWidth, target.offsetHeight, canvas.offsetWidth, canvas.offsetHeight];
-      return { before, logicalBefore, geometry, after: read(), logicalAfter: readLogical() };
+      return { before, logicalBefore, geometry, after: read(), logicalAfter: readLogical(), viewportWidth: innerWidth };
     })()"#;
     for args in [
         vec![],
@@ -160,22 +209,85 @@ fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Resul
             "sampled axes: {args:?}"
         );
         assert_eq!(
-            value["before"],
-            serde_json::json!(["auto", "auto", "auto", "auto"]),
-            "width/height must not initiate layout: {args:?}: {value}"
-        );
-        assert_eq!(
             value["after"], value["before"],
             "geometry reads cannot publish used sizes: {args:?}: {value}"
         );
         if args.contains(&"--layout") {
+            let sizes = if args.contains(&"--disable-css") {
+                [value["viewportWidth"].as_u64().unwrap() - 16, 0, 300, 150]
+            } else {
+                [20, 0, 40, 20]
+            };
             assert_eq!(
                 value["geometry"],
-                serde_json::json!([0, 0, 0, 0]),
-                "real geometry is empty before an explicit output"
+                serde_json::json!(sizes),
+                "CLI must publish layout before eval: {args:?}"
+            );
+            assert_eq!(
+                value["before"],
+                serde_json::json!(sizes.map(|size| format!("{size}px"))),
+                "computed sizes must use the published layout: {args:?}"
+            );
+        } else {
+            assert_eq!(
+                value["before"],
+                serde_json::json!(["auto", "auto", "auto", "auto"]),
+                "eval without --layout must not publish used sizes: {args:?}"
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn eval_with_layout_keeps_geometry_frozen_during_script() -> Result<()> {
+    let output = run_eval(
+        "data:text/html,<!doctype html><div id=target style='width:120px;height:40px'></div>",
+        r#"(() => {
+          const target = document.getElementById('target');
+          const before = target.offsetWidth;
+          target.style.width = '240px';
+          const added = document.createElement('div');
+          added.style.width = '50px';
+          document.body.appendChild(added);
+          return {
+            before,
+            after: target.getBoundingClientRect().width,
+            added: added.offsetWidth
+          };
+        })()"#,
+        &["--layout"],
+    )?;
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        value,
+        serde_json::json!({ "before": 120, "after": 120, "added": 0 })
+    );
+    Ok(())
+}
+
+#[test]
+fn eval_file_with_layout_publishes_after_readiness() -> Result<()> {
+    let script_file = unique_temp_file_path("eval-file-layout", "geometry.js")?;
+    std::fs::write(
+        &script_file,
+        "document.getElementById('target').getBoundingClientRect().width",
+    )?;
+    let output = run_eval_file(
+        "data:text/html,<!doctype html><div id=target style='width:120px;height:40px'></div>",
+        &script_file,
+        &[
+            "--layout",
+            "--wait-script",
+            "() => { document.getElementById('target').style.width = '240px'; return true; }",
+        ],
+    )?;
+    if let Some(directory) = script_file.parent() {
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    assert_eq!(clean_output(&output.stdout), "240\n");
     Ok(())
 }
 

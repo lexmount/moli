@@ -2434,6 +2434,21 @@ impl ScriptVm {
         )
     }
 
+    pub(super) fn publish_layout(&mut self) -> anyhow::Result<()> {
+        let viewport = {
+            let host = self._context_host.borrow();
+            if !host.layout_policy().uses_real_layout() {
+                return Ok(());
+            }
+            host.layout_viewport_for_document(host.document_handle())
+        };
+        self.with_fresh_layout_pass(
+            moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Explicit),
+            |_| Ok(()),
+        )?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn screenshot_layout_snapshot(
         &mut self,
@@ -2525,8 +2540,8 @@ impl ScriptVm {
         // call.
         self.reconcile_document_web_fonts_for_layout();
         let requests_paint = request.requests_paint();
-        // Printing consumes a temporary projection. Screenshots and screencast
-        // frames publish geometry for input, observers and subsequent DOM reads.
+        // Printing consumes a temporary projection. Screenshots, screencast
+        // frames and explicit refreshes publish geometry for subsequent reads.
         let publishes_layout = request.reason != moli_layout::LayoutFlushReason::Print;
         let (document, result) = {
             let context_host = self._context_host.borrow();

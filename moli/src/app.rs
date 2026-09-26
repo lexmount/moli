@@ -135,6 +135,12 @@ pub async fn run_cli_with_config<W: Write>(
             }
 
             let rendered = if let Some(expression) = eval_expression.as_deref() {
+                if config.browser.layout_policy().uses_real_layout() {
+                    page.publish_layout_async()
+                        .await
+                        .context("failed to publish layout before evaluating JavaScript")
+                        .map_err(|error| with_fetch_context(error, &args.url))?;
+                }
                 eval_output::evaluate(&mut page, expression).await
             } else {
                 fetch_dump::render_page_output_async(&mut page, &config.fetch).await

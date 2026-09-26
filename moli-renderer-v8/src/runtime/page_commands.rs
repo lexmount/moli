@@ -856,6 +856,10 @@ impl PageVm {
             RendererPageCommand::LayoutMetrics => self
                 .layout_metrics()
                 .map(RendererPageReply::LayoutMetrics),
+            RendererPageCommand::PublishLayout => {
+                self.vm_mut().publish_layout()?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::CaptureScreenshot(request) => self
                 .capture_screenshot(request)
                 .map(RendererPageReply::CaptureScreenshot),
