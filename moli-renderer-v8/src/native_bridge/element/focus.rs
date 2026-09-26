@@ -1,4 +1,4 @@
-use crate::dom::native::{ContentEditableState, Element, FocusSupport, Node};
+use crate::dom::native::{Element, FocusSupport, Node};
 
 use super::super::{
     PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
@@ -8,8 +8,7 @@ use super::forms::{
     text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
-use super::rendered_state::ElementRenderedStyle;
-use super::styles::{StyleMode, StyleObservation, style_property_value};
+use super::styles::{StyleMode, style_property_value};
 use super::{
     ClickEventSource, InputEventCoordinates, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
@@ -22,7 +21,6 @@ use super::{
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererDomFocusOutcome;
-use crate::style_engine::{ComputedDisplayKind, ComputedWhiteSpaceCollapseKind};
 use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 
 struct SequentialFocusEntry {
@@ -59,123 +57,6 @@ pub(crate) fn contenteditable_editing_host(
         .dom_host()
         .dom()
         .contenteditable_editing_host(handle)
-}
-
-fn initial_caret_can_descend(element: &Element) -> bool {
-    !element.has_attribute("inert")
-        && element.content_editable_state() != ContentEditableState::False
-        && !matches!(
-            element.local_name(),
-            "br" | "img"
-                | "input"
-                | "textarea"
-                | "select"
-                | "iframe"
-                | "object"
-                | "embed"
-                | "canvas"
-                | "video"
-                | "audio"
-                | "hr"
-                | "svg"
-                | "math"
-        )
-}
-
-fn initial_caret_text_offset(
-    text: &str,
-    white_space: ComputedWhiteSpaceCollapseKind,
-) -> Option<u32> {
-    if text.is_empty() {
-        return None;
-    }
-    if matches!(
-        white_space,
-        ComputedWhiteSpaceCollapseKind::Preserve | ComputedWhiteSpaceCollapseKind::BreakSpaces
-    ) {
-        return Some(0);
-    }
-    // Only CSS collapsible ASCII characters can precede this candidate, so
-    // their byte count also gives the DOM UTF-16 offset. NBSP and other Unicode
-    // spacing characters remain caret candidates.
-    text.char_indices()
-        .find(|&(_, ch)| match ch {
-            ' ' | '\t' | '\u{000c}' => false,
-            '\r' | '\n' => white_space == ComputedWhiteSpaceCollapseKind::PreserveBreaks,
-            _ => true,
-        })
-        .map(|(offset, _)| u32::try_from(offset).unwrap_or(u32::MAX))
-}
-
-pub(crate) fn initial_contenteditable_caret(
-    runtime: &PageScriptHost,
-    target: DomHandle,
-) -> (DomHandle, u32) {
-    let dom_host = runtime.dom_host();
-    let dom = dom_host.dom();
-    let mut styles = StyleObservation::new(runtime);
-    let mut current = dom.first_child(target);
-    while let Some(handle) = current {
-        let node = dom.node(handle).expect("an editing descendant exists");
-        let mut descend = false;
-        if let Some(text) = node.as_text() {
-            let parent = dom
-                .parent_node(handle)
-                .expect("an editing descendant has a parent");
-            let style = ElementRenderedStyle::read_in_scope(&mut styles, parent);
-            if style.visibility_visible
-                && let Some(offset) =
-                    initial_caret_text_offset(text.data(), style.white_space_collapse)
-            {
-                return (handle, offset);
-            }
-        } else if let Some(element) = node.as_element() {
-            let can_descend = initial_caret_can_descend(element);
-            let style = ElementRenderedStyle::read_in_scope(&mut styles, handle);
-            if style.display != ComputedDisplayKind::None && !style.hides_contents {
-                let visible = style.visibility_visible;
-                if !can_descend {
-                    if visible {
-                        let parent = dom
-                            .parent_node(handle)
-                            .expect("an editing descendant has a parent");
-                        return (
-                            parent,
-                            u32::try_from(dom_host.child_index(parent, handle).unwrap())
-                                .unwrap_or(u32::MAX),
-                        );
-                    }
-                } else if visible
-                    && dom.first_child(handle).is_none()
-                    && matches!(
-                        style.display,
-                        ComputedDisplayKind::Block
-                            | ComputedDisplayKind::ListItem
-                            | ComputedDisplayKind::TableCell
-                    )
-                {
-                    return (handle, 0);
-                } else {
-                    descend = true;
-                }
-            }
-        }
-        if descend && let Some(child) = dom.first_child(handle) {
-            current = Some(child);
-            continue;
-        }
-        let mut cursor = handle;
-        current = loop {
-            if let Some(sibling) = dom.next_sibling(cursor) {
-                break Some(sibling);
-            }
-            match dom.parent_node(cursor) {
-                Some(parent) if parent != target => cursor = parent,
-                _ => break None,
-            }
-        };
-    }
-    (target, 0)
 }
 
 fn html_area_has_associated_image_map(runtime: &PageScriptHost, handle: DomHandle) -> bool {
@@ -951,7 +832,7 @@ fn update_focus_from_previous_with_previous_focus_within(
     }
     runtime.note_focus_style_activity(None, next);
     if let Some(handle) = next {
-        let _ = crate::context_bootstrap::focus_text_control_selection(scope, runtime_ptr, handle);
+        let _ = crate::context_bootstrap::focus_element_selection(scope, runtime_ptr, handle);
         let runtime = unsafe { &mut *runtime_ptr };
         if is_text_control(runtime, handle) {
             runtime.note_text_control_selection(handle);
@@ -961,19 +842,6 @@ fn update_focus_from_previous_with_previous_focus_within(
         .then(|| wrap_handle_value(scope, runtime_ptr, previous))
         .flatten();
     if let Some(next_handle) = next {
-        if selection == FocusSelection::Initialize
-            && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
-            && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle)
-                == Some(next_handle)
-            && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
-                scope,
-                runtime_ptr,
-                next_handle,
-            )
-        {
-            let scope = &mut v8::ContextScope::new(scope, context);
-            crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
-        }
         if let Some(event) = construct_node_focus_event(
             scope,
             runtime_ptr,

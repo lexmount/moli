@@ -331,7 +331,7 @@ pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
-    contenteditable_editing_host, focus_element, initial_contenteditable_caret,
+    contenteditable_editing_host, focus_element,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,

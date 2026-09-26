@@ -92,38 +92,42 @@ impl NativeDom {
             .find(|child| self.is_html_element_named(*child, "summary"))
     }
 
-    /// The nearest explicit editable element used by input and selection.
+    /// The outermost explicit editing host before a non-editable ancestor.
     pub fn contenteditable_editing_host(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {
-        self.editable_ancestor(node_id, false)
+        let mut current = Some(node_id);
+        let mut editing_host = None;
+        while let Some(id) = current {
+            let node = self.node(id)?;
+            match node.as_element().map(Element::content_editable_state) {
+                Some(ContentEditableState::True | ContentEditableState::PlaintextOnly) => {
+                    editing_host = Some(id);
+                }
+                Some(ContentEditableState::False) => break,
+                _ => {}
+            }
+            current = node.parent_node_id();
+        }
+        editing_host
     }
 
     pub fn is_content_editable(&self, node_id: NativeNodeId) -> bool {
-        self.editable_ancestor(node_id, true).is_some()
-    }
-
-    fn editable_ancestor(
-        &self,
-        node_id: NativeNodeId,
-        include_design_mode: bool,
-    ) -> Option<NativeNodeId> {
-        let mut current = Some(node_id);
-        while let Some(id) = current {
-            let node = self.node(id)?;
+        let mut current = self.node(node_id);
+        while let Some(node) = current {
             if let Some(document) = node.as_document() {
-                return (include_design_mode && document.design_mode_enabled()).then_some(id);
+                return document.design_mode_enabled();
             }
             if let Some(element) = node.as_element() {
                 match element.content_editable_state() {
                     ContentEditableState::True | ContentEditableState::PlaintextOnly => {
-                        return Some(id);
+                        return true;
                     }
-                    ContentEditableState::False => return None,
+                    ContentEditableState::False => return false,
                     ContentEditableState::Inherit => {}
                 }
             }
-            current = node.parent_node_id();
+            current = node.parent_node_id().and_then(|parent| self.node(parent));
         }
-        None
+        false
     }
 
     pub fn focus_support(&self, node_id: NativeNodeId) -> FocusSupport {
@@ -146,15 +150,25 @@ impl NativeDom {
             return false;
         };
         let native_behavior = match (element.namespace(), element.local_name()) {
-            (HTML_NS, "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog" | "object") => true,
+            (
+                HTML_NS,
+                "button" | "input" | "select" | "textarea" | "frame" | "iframe" | "dialog"
+                | "object",
+            ) => true,
             (HTML_NS, "audio" | "video") => element.has_attribute_ns("", "controls"),
-            (HTML_NS, "summary") => self.parent_node(node_id)
-                .and_then(|parent| self.main_summary_child(parent)) == Some(node_id),
+            (HTML_NS, "summary") => {
+                self.parent_node(node_id)
+                    .and_then(|parent| self.main_summary_child(parent))
+                    == Some(node_id)
+            }
             ("http://www.w3.org/1998/Math/MathML", "a") => element.has_attribute_ns("", "href"),
             _ => element.hyperlink_href().is_some(),
         };
-        native_behavior || (element.content_editable_state().is_editable()
-            && self.parent_node(node_id).is_none_or(|parent| !self.is_content_editable(parent)))
+        native_behavior
+            || (element.content_editable_state().is_editable()
+                && self
+                    .parent_node(node_id)
+                    .is_none_or(|parent| !self.is_content_editable(parent)))
     }
 
     /// Native disabled state. Form-associated custom elements use the same
