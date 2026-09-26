@@ -9,9 +9,9 @@ use crate::module_runtime::{
 use crate::planning::{ScriptFetchMetadata, module_script_credentials_mode};
 use crate::service_worker_runtime::ServiceWorkerRequestDestination;
 use crate::stylesheet_blocking::{
-    StylesheetFetchOptions, connected_preload_like_link_url,
-    document_owned_blocking_stylesheet_candidate_for_node, link_rel_includes_token,
-    preload_like_link_loads_stylesheet, stylesheet_link_disposition,
+    DocumentOwnedBlockingStylesheetDiscoveryInput, StylesheetFetchOptions,
+    connected_preload_like_link_url, document_owned_blocking_stylesheet_candidate_for_node,
+    link_rel_includes_token, preload_like_link_loads_stylesheet, stylesheet_link_disposition,
     stylesheet_preload_link_request,
 };
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
@@ -236,6 +236,24 @@ impl DocumentRuntime {
             .pre_initial_scan_processed_owners
             .clear();
         prepared
+    }
+
+    pub(crate) fn prepare_parser_discovered_style_import_loads(
+        &mut self,
+        inputs: &[DocumentOwnedBlockingStylesheetDiscoveryInput],
+    ) -> Vec<PreparedConnectedStyleLoad> {
+        inputs
+            .iter()
+            .filter(|input| {
+                matches!(
+                    input.signature(),
+                    DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
+                )
+            })
+            .flat_map(|input| {
+                self.prepare_connected_style_loads(DomHandle::new(input.node_id().index()), true)
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -581,6 +599,21 @@ impl DocumentRuntime {
         self.connected_style_load_is_queued(handle)
     }
 
+    #[cfg(test)]
+    pub(crate) fn pending_style_import_binding_for_test(
+        &self,
+        handle: DomHandle,
+    ) -> Option<(usize, bool)> {
+        let operation = self
+            .stylesheet_lifecycle
+            .owner_states
+            .pending_operation(handle)?;
+        let ConnectedLoadParameters::StyleImports { roots, .. } = &operation.parameters else {
+            return None;
+        };
+        Some((roots.len(), operation.blocking_operation.is_some()))
+    }
+
     pub(super) fn push_ready_connected_style_load(&mut self, ready: ReadyConnectedStyleLoad) {
         let producer = self
             .stylesheet_lifecycle
@@ -672,11 +705,17 @@ impl DocumentRuntime {
         if !node.flags().parser_created() || !node.is_html_element_named("style") {
             return false;
         }
-        document_owned_blocking_stylesheet_candidate_for_node(
+        let Some(candidate) = document_owned_blocking_stylesheet_candidate_for_node(
             &self.dom_host,
             NodeId::new(handle.index()),
-        )
-        .is_some()
+        ) else {
+            return false;
+        };
+        let signature = DocumentBlockingStylesheetSignature::from_candidate(&candidate);
+        self.stylesheet_lifecycle
+            .fetches
+            .blocking_operation(NodeId::new(handle.index()), &signature)
+            .is_none()
     }
 
     pub(crate) fn has_pending_style_loads(&self) -> bool {

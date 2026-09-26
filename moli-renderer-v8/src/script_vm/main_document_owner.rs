@@ -63,6 +63,22 @@ impl ScriptVm {
             .document_runtime
             .note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
         self.settle_stylesheet_link_clients(completed_stylesheet_clients);
+        if inputs.iter().any(|input| {
+            matches!(
+                input.signature(),
+                crate::stylesheet_blocking::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
+            )
+        }) {
+            // The import graph owns the parser gate, while the connected
+            // style operation owns its CSSOM installation. Bind both views to
+            // the same live root before an already-fast graph can release the
+            // parser-blocking script.
+            self.sync_live_document_style_sources();
+            let prepared = self
+                .document_runtime
+                .prepare_parser_discovered_style_import_loads(inputs);
+            self.commit_and_apply_connected_style_loads(prepared);
+        }
         inputs.len()
     }
 
