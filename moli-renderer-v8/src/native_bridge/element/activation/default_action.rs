@@ -1861,7 +1861,7 @@ fn anchor_click_default_action(
     pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
 ) -> Option<RendererPendingDownloadActivation> {
     let resolved = resolve_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href");
-    if resolved.is_empty() {
+    if resolved.is_empty() || url::Url::parse(&resolved).is_err() {
         return None;
     }
     send_anchor_ping_requests(scope, runtime_ptr, handle, &resolved);
