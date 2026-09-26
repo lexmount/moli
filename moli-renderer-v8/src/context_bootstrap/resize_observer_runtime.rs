@@ -1,5 +1,6 @@
 use super::*;
 mod delivery;
+mod entry;
 use crate::host::report_event_callback_exception;
 use crate::observer_runtime::ObserverCallbackId;
 use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value};
@@ -9,6 +10,8 @@ use crate::window_webidl_callback::WindowWebIdlCallbackFunctionOutcome;
 pub(crate) use delivery::{
     broadcast_document_resize_observers, report_document_resize_observer_loop_error,
 };
+use entry::ResizeObserverEntryData;
+pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi_declare::WebApiObject;
 
 pub(crate) fn resize_observer_observed_targets<'s>(
@@ -50,36 +53,12 @@ struct ResizeObserverObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ResizeObserverEntry, prototype = "Object")]
-struct ResizeObserverEntryDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    target: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    content_rect: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    content_box_size: Vec<ResizeObserverSizeDeclaration>,
-    #[webapi(data_property, enumerable)]
-    border_box_size: Vec<ResizeObserverSizeDeclaration>,
-    #[webapi(data_property, enumerable)]
-    device_pixel_content_box_size: Vec<ResizeObserverSizeDeclaration>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(plain)]
 struct ResizeObserverObservedRecordDeclaration<'scope> {
     #[webapi(slot = RESIZE_OBSERVER_RECORD_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
     #[webapi(slot = RESIZE_OBSERVER_RECORD_BOX_SLOT)]
     observed_box: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ResizeObserverSize, prototype = "Object")]
-struct ResizeObserverSizeDeclaration {
-    #[webapi(data_property, enumerable)]
-    inline_size: f64,
-    #[webapi(data_property, enumerable)]
-    block_size: f64,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -365,7 +344,7 @@ struct SampledResizeObservation<'s> {
     record: v8::Local<'s, v8::Object>,
     handle: Option<crate::document_runtime::DomHandle>,
     observed_size: (f64, f64),
-    entry: ResizeObserverEntryDeclaration<'s>,
+    entry: ResizeObserverEntryData<'s>,
 }
 
 fn build_resize_observer_entries<'s>(
@@ -379,12 +358,7 @@ fn build_resize_observer_entries<'s>(
             continue;
         }
         set_resize_observer_last_reported_size(scope, sample.record, sample.observed_size);
-        entries.push(
-            sample
-                .entry
-                .bind(scope)
-                .expect("ResizeObserverEntry declaration should bind"),
-        );
+        entries.push(sample.entry.into_object(scope));
     }
     Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
 }
@@ -489,8 +463,7 @@ fn sample_resize_observations<'s>(
             box_geometry.map_or(0.0, |geometry| f64::from(geometry.border_size.width));
         let border_height =
             box_geometry.map_or(0.0, |geometry| f64::from(geometry.border_size.height));
-        let rect = build_dom_rect_object(
-            scope,
+        let rect = (
             box_geometry.map_or(0.0, |geometry| f64::from(geometry.content_rect.x)),
             box_geometry.map_or(0.0, |geometry| f64::from(geometry.content_rect.y)),
             content_width,
@@ -511,10 +484,6 @@ fn sample_resize_observations<'s>(
             (content_width * device_scale).round(),
             (content_height * device_scale).round(),
         );
-        let content_box_size = resize_observer_box_size_list(content_size.0, content_size.1);
-        let border_box_size = resize_observer_box_size_list(border_size.0, border_size.1);
-        let device_pixel_content_box_size =
-            resize_observer_box_size_list(device_size.0, device_size.1);
         let observed_size = match entry
             .record
             .and_then(|record| observed_record_box(scope, record))
@@ -526,12 +495,12 @@ fn sample_resize_observations<'s>(
         let Some(record) = entry.record else {
             continue;
         };
-        let declaration = ResizeObserverEntryDeclaration {
+        let declaration = ResizeObserverEntryData {
             target: entry.target,
             content_rect: rect,
-            content_box_size,
-            border_box_size,
-            device_pixel_content_box_size,
+            content_box_size: content_size,
+            border_box_size: border_size,
+            device_pixel_content_box_size: device_size,
         };
         entries.push(SampledResizeObservation {
             record,
@@ -644,16 +613,6 @@ fn observed_record_index<'s>(
             .get_index(scope, index)
             .is_some_and(|candidate| observed_record_matches_target(scope, candidate, target))
     })
-}
-
-fn resize_observer_box_size_list(
-    inline_size: f64,
-    block_size: f64,
-) -> Vec<ResizeObserverSizeDeclaration> {
-    vec![ResizeObserverSizeDeclaration {
-        inline_size,
-        block_size,
-    }]
 }
 
 fn throw_resize_observer_layout_error(
