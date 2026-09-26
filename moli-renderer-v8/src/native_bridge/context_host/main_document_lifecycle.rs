@@ -181,22 +181,20 @@ impl JsContextHost {
                 let binding = self.accept_current_main_style_load_event(element)?;
                 Some(ConnectedStyleLoadEventAdmission::LoadDelaying(binding))
             }
-            ConnectedStyleLoadEventPlan::NonBlockingModulepreload { element } => {
-                let owner = self.accept_current_main_modulepreload_event_owner(element)?;
-                Some(ConnectedStyleLoadEventAdmission::NonBlockingModulepreload(
-                    owner,
-                ))
+            ConnectedStyleLoadEventPlan::NonBlockingLink { element } => {
+                let owner = self.accept_current_main_link_event_owner(element)?;
+                Some(ConnectedStyleLoadEventAdmission::NonBlockingLink(owner))
             }
         }
     }
 
-    pub(crate) fn accept_current_main_modulepreload_event_owner(
+    pub(crate) fn accept_current_main_link_event_owner(
         &self,
         element: crate::document_runtime::DomHandle,
     ) -> Option<DocumentLinkEventOwner> {
         let owner = self.current_main_document_task_owner()?;
         self.frame_owner_store
-            .accept_current_main_modulepreload_event_owner(owner, element)
+            .accept_current_main_link_event_owner(owner, element)
     }
 
     pub(crate) fn main_style_load_event_is_current(

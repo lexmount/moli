@@ -386,10 +386,8 @@ impl DocumentRuntime {
                 if !csp_blocked && !kind.uses_connected_load_lifecycle() {
                     return None;
                 }
-                let event_plan = if !csp_blocked
-                    && self.connected_owner_uses_non_blocking_modulepreload_identity(handle)
-                {
-                    ConnectedStyleLoadEventPlan::non_blocking_modulepreload(handle)
+                let event_plan = if self.connected_owner_uses_non_blocking_link_identity(handle) {
+                    ConnectedStyleLoadEventPlan::non_blocking_link(handle)
                 } else {
                     ConnectedStyleLoadEventPlan::load_delaying(handle)
                 };
@@ -455,8 +453,8 @@ impl DocumentRuntime {
                         ),
                     )
                 }
-                ConnectedStyleLoadEventPlan::NonBlockingModulepreload { element } => {
-                    ConnectedStyleLoadEventAdmission::NonBlockingModulepreload(
+                ConnectedStyleLoadEventPlan::NonBlockingLink { element } => {
+                    ConnectedStyleLoadEventAdmission::NonBlockingLink(
                         crate::frame_owner_model::DocumentLinkEventOwner::unowned_for_document_runtime_test(
                             element,
                         ),
@@ -511,11 +509,11 @@ impl DocumentRuntime {
     /// Choose the load-event lifecycle from the link relation, independently
     /// of whether the current request is valid or fetchable.
     ///
-    /// HTML requires every `modulepreload` processing outcome to be
+    /// HTML requires every `preload` and `modulepreload` processing outcome to be
     /// non-load-delaying. Invalid `as`, non-matching media and malformed URLs
     /// therefore retain only exact Document/element identity for any terminal
     /// event. A stylesheet relation takes precedence when both tokens occur.
-    fn connected_owner_uses_non_blocking_modulepreload_identity(&self, handle: DomHandle) -> bool {
+    fn connected_owner_uses_non_blocking_link_identity(&self, handle: DomHandle) -> bool {
         let node_id = NodeId::new(handle.index());
         if stylesheet_link_disposition(&self.dom_host, node_id).is_some() {
             return false;
@@ -525,9 +523,10 @@ impl DocumentRuntime {
             .and_then(Node::as_element)
             .is_some_and(|element| {
                 element.is_html_element("link")
-                    && element
-                        .attribute("rel")
-                        .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"))
+                    && element.attribute("rel").is_some_and(|rel| {
+                        link_rel_includes_token(rel, "preload")
+                            || link_rel_includes_token(rel, "modulepreload")
+                    })
             })
     }
 
@@ -731,14 +730,12 @@ impl DocumentRuntime {
             return result;
         }
         if let Some(admission) = event_admission {
-            let expects_modulepreload_identity =
-                self.connected_owner_uses_non_blocking_modulepreload_identity(handle);
+            let expects_non_blocking_identity =
+                self.connected_owner_uses_non_blocking_link_identity(handle);
             let admission_matches_current_processing = matches!(
-                (expects_modulepreload_identity, admission),
-                (
-                    true,
-                    ConnectedStyleLoadEventAdmission::NonBlockingModulepreload(_)
-                ) | (false, ConnectedStyleLoadEventAdmission::LoadDelaying(_))
+                (expects_non_blocking_identity, admission),
+                (true, ConnectedStyleLoadEventAdmission::NonBlockingLink(_))
+                    | (false, ConnectedStyleLoadEventAdmission::LoadDelaying(_))
             );
             if !admission_matches_current_processing {
                 self.settle_connected_style_load_admission(
@@ -749,7 +746,7 @@ impl DocumentRuntime {
                 self.invalidate_stylesheet_owner_operations(handle);
                 tracing::debug!(
                     ?handle,
-                    expects_modulepreload_identity,
+                    expects_non_blocking_identity,
                     "discarded stale connected-style lifecycle commit"
                 );
                 return result;
@@ -831,8 +828,9 @@ impl DocumentRuntime {
             let resource_type = element
                 .map(preload_like_link_resource_type)
                 .unwrap_or(SubresourceResourceType::Fetch);
-            let is_modulepreload =
-                self.connected_owner_uses_non_blocking_modulepreload_identity(handle);
+            let is_modulepreload = element
+                .and_then(|element| element.attribute("rel"))
+                .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"));
             if !self.document_scripting_enabled()
                 && (is_modulepreload || resource_type == SubresourceResourceType::Script)
             {
@@ -865,9 +863,7 @@ impl DocumentRuntime {
                 }
                 let main_document_event_owner =
                     event_admission.and_then(|admission| match admission {
-                        ConnectedStyleLoadEventAdmission::NonBlockingModulepreload(owner) => {
-                            Some(owner)
-                        }
+                        ConnectedStyleLoadEventAdmission::NonBlockingLink(owner) => Some(owner),
                         ConnectedStyleLoadEventAdmission::LoadDelaying(_) => None,
                     });
                 let Some(main_document_event_owner) = main_document_event_owner else {
@@ -3677,98 +3673,103 @@ mod tests {
 
     #[tokio::test]
     async fn stylesheet_and_modulepreload_switches_drop_stale_event_bindings() -> Result<()> {
-        let parser = HtmlParser::SCRIPTING_ENABLED;
-        let document = parser.parse(
-            Url::parse("https://example.test/page").unwrap(),
-            "<!doctype html><html><head><link rel=preload as=style href='http://127.0.0.1:9/shared'></head><body></body></html>"
-                .to_owned(),
-        );
-        let link = first_link_handle(&document);
-        let loader = ResourceRequestClient::new(&FetchConfig::default())?;
-        let mut runtime = DocumentRuntime::new_networked(&document, &loader);
+        for style_rel in ["stylesheet", "preload"] {
+            let parser = HtmlParser::SCRIPTING_ENABLED;
+            let document = parser.parse(
+                Url::parse("https://example.test/page").unwrap(),
+                format!(
+                    "<!doctype html><html><head><link rel={style_rel} as=style \
+                     href='http://127.0.0.1:9/shared'></head><body></body></html>"
+                ),
+            );
+            let link = first_link_handle(&document);
+            let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+            let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.queue_connected_style_loads(link);
-        let first_style_client = runtime
-            .active_stylesheet_link_client_for_test(link)
-            .expect("initial stylesheet preload client");
-        assert_eq!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .cancelable_load_event_bindings(link)
-                .len(),
-            1
-        );
-
-        assert!(runtime.dom_host.set_attribute(link, "rel", "modulepreload"));
-        drop(runtime.invalidate_style_related_state(link));
-        assert!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .cancelable_load_event_bindings(link)
-                .is_empty(),
-            "stylesheet invalidation must remove its event binding"
-        );
-        runtime.queue_connected_style_loads(link);
-        let (modulepreload_starts, warnings) =
-            runtime.prime_pending_connected_style_loads().into_parts();
-        assert!(warnings.is_empty(), "runtime warnings: {warnings:?}");
-        assert_eq!(modulepreload_starts.len(), 1);
-        assert!(
-            runtime
+            runtime.queue_initial_connected_style_loads();
+            let first_style_client = runtime
                 .active_stylesheet_link_client_for_test(link)
-                .is_none()
-        );
-        assert!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .cancelable_load_event_bindings(link)
-                .is_empty(),
-            "an in-flight modulepreload must retain identity without a load-delay binding"
-        );
+                .expect("initial stylesheet resource client");
+            assert_eq!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .cancelable_load_event_bindings(link)
+                    .len(),
+                usize::from(style_rel == "stylesheet"),
+                "only stylesheet consumers carry load-delay bindings"
+            );
 
-        assert!(runtime.dom_host.set_attribute(link, "rel", "preload"));
-        drop(runtime.invalidate_style_related_state(link));
-        assert!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .cancelable_load_event_bindings(link)
-                .is_empty(),
-            "modulepreload invalidation must remove its event binding"
-        );
-        runtime.queue_connected_style_loads(link);
-        let second_style_client = runtime
-            .active_stylesheet_link_client_for_test(link)
-            .expect("replacement stylesheet preload client");
+            assert!(runtime.dom_host.set_attribute(link, "rel", "modulepreload"));
+            drop(runtime.invalidate_style_related_state(link));
+            assert!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .cancelable_load_event_bindings(link)
+                    .is_empty(),
+                "stylesheet invalidation must remove its event binding"
+            );
+            runtime.queue_connected_style_loads(link);
+            let (modulepreload_starts, warnings) =
+                runtime.prime_pending_connected_style_loads().into_parts();
+            assert!(warnings.is_empty(), "runtime warnings: {warnings:?}");
+            assert_eq!(modulepreload_starts.len(), 1);
+            assert!(
+                runtime
+                    .active_stylesheet_link_client_for_test(link)
+                    .is_none()
+            );
+            assert!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .cancelable_load_event_bindings(link)
+                    .is_empty(),
+                "an in-flight modulepreload must retain identity without a load-delay binding"
+            );
 
-        assert!(!StylesheetLinkClient::ptr_eq(
-            &first_style_client,
-            &second_style_client
-        ));
-        assert!(
-            !runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .accepts_stylesheet_link_client(&first_style_client)
-        );
-        assert!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .accepts_stylesheet_link_client(&second_style_client)
-        );
-        assert_eq!(
-            runtime
-                .stylesheet_lifecycle
-                .owner_states
-                .cancelable_load_event_bindings(link)
-                .len(),
-            1,
-            "only the replacement stylesheet processing may retain a binding"
-        );
+            assert!(runtime.dom_host.set_attribute(link, "rel", style_rel));
+            drop(runtime.invalidate_style_related_state(link));
+            assert!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .cancelable_load_event_bindings(link)
+                    .is_empty(),
+                "modulepreload invalidation must remove its event binding"
+            );
+            runtime.queue_connected_style_loads(link);
+            let second_style_client = runtime
+                .active_stylesheet_link_client_for_test(link)
+                .expect("replacement stylesheet resource client");
+
+            assert!(!StylesheetLinkClient::ptr_eq(
+                &first_style_client,
+                &second_style_client
+            ));
+            assert!(
+                !runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .accepts_stylesheet_link_client(&first_style_client)
+            );
+            assert!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .accepts_stylesheet_link_client(&second_style_client)
+            );
+            assert_eq!(
+                runtime
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .cancelable_load_event_bindings(link)
+                    .len(),
+                usize::from(style_rel == "stylesheet"),
+                "only the replacement stylesheet consumer may retain a binding"
+            );
+        }
         Ok(())
     }
 

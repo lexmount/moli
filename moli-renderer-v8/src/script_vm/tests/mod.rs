@@ -14186,6 +14186,40 @@ fn cached_connected_modulepreload_never_acquires_a_load_delay() {
     );
 }
 
+#[tokio::test]
+async fn connected_preload_stylesheet_consumers_keep_their_load_delay() {
+    for rel in ["preload", "preload stylesheet", "stylesheet preload"] {
+        let mut vm = new_parsed_test_vm(
+            "https://example.test/page.html",
+            &format!(
+                "<!doctype html><link id=preload rel='{rel}' as=style href='data:text/css,body{{}}'>"
+            ),
+        );
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        vm.replace_document_resource_runtime(&loader);
+        let owner = vm.current_main_document_task_owner().unwrap();
+        vm.queue_initial_connected_style_loads_for_current_owner();
+        assert_eq!(
+            vm.current_main_document_has_style_load_event_delay(owner),
+            Some(rel.contains("stylesheet")),
+            "only stylesheet consumers of the preload acquire a load delay: {rel}"
+        );
+        if rel == "preload" {
+            vm.exec(
+                "document.getElementById('preload').rel = 'stylesheet'",
+                None,
+            )
+            .unwrap();
+            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            assert_eq!(
+                vm.current_main_document_has_style_load_event_delay(owner),
+                Some(true),
+                "converting an in-flight preload to a stylesheet acquires the consumer's load delay"
+            );
+        }
+    }
+}
+
 // Mirrors WPT `preload/avoid-delaying-onload-link-modulepreload.html`: the
 // response stays pending until after Window load has been observed.
 #[tokio::test]

@@ -2704,7 +2704,7 @@ impl FrameOwnerStore {
         ))
     }
 
-    pub(crate) fn accept_current_main_modulepreload_event_owner(
+    pub(crate) fn accept_current_main_link_event_owner(
         &self,
         owner: FrameDocumentTaskOwner,
         element: DomHandle,

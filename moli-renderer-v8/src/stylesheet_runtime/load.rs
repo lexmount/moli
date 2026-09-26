@@ -195,7 +195,7 @@ impl NativeModulepreloadLinkFetchOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConnectedStyleLoadEventPlan {
     LoadDelaying { element: DomHandle },
-    NonBlockingModulepreload { element: DomHandle },
+    NonBlockingLink { element: DomHandle },
 }
 
 impl ConnectedStyleLoadEventPlan {
@@ -203,22 +203,22 @@ impl ConnectedStyleLoadEventPlan {
         Self::LoadDelaying { element }
     }
 
-    pub(in crate::document_runtime) fn non_blocking_modulepreload(element: DomHandle) -> Self {
-        Self::NonBlockingModulepreload { element }
+    pub(in crate::document_runtime) fn non_blocking_link(element: DomHandle) -> Self {
+        Self::NonBlockingLink { element }
     }
 }
 
 /// Lifecycle authority committed for one connected style/link plan.
 ///
-/// `modulepreload` links take the identity-only variant, which captures the
-/// exact Document and element without touching the Document load gate. This
+/// `preload` and `modulepreload` links take the identity-only variant, capturing
+/// the exact Document and element without touching the Document load gate. This
 /// classification is independent of request validity, so error outcomes also
 /// remain non-load-delaying. All other owners retain the stylesheet
 /// load-event lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConnectedStyleLoadEventAdmission {
     LoadDelaying(MainDocumentStyleLoadEventBinding),
-    NonBlockingModulepreload(DocumentLinkEventOwner),
+    NonBlockingLink(DocumentLinkEventOwner),
 }
 
 impl ConnectedStyleLoadEventAdmission {
@@ -232,17 +232,11 @@ impl ConnectedStyleLoadEventAdmission {
                 ConnectedStyleLoadEventPlan::LoadDelaying { element },
             ) => binding.element() == element,
             (
-                Self::NonBlockingModulepreload(owner),
-                ConnectedStyleLoadEventPlan::NonBlockingModulepreload { element },
+                Self::NonBlockingLink(owner),
+                ConnectedStyleLoadEventPlan::NonBlockingLink { element },
             ) => owner.element() == element,
-            (
-                Self::LoadDelaying(_),
-                ConnectedStyleLoadEventPlan::NonBlockingModulepreload { .. },
-            )
-            | (
-                Self::NonBlockingModulepreload(_),
-                ConnectedStyleLoadEventPlan::LoadDelaying { .. },
-            ) => false,
+            (Self::LoadDelaying(_), ConnectedStyleLoadEventPlan::NonBlockingLink { .. })
+            | (Self::NonBlockingLink(_), ConnectedStyleLoadEventPlan::LoadDelaying { .. }) => false,
         }
     }
 
@@ -251,7 +245,7 @@ impl ConnectedStyleLoadEventAdmission {
     ) -> Option<MainDocumentStyleLoadEventBinding> {
         match self {
             Self::LoadDelaying(binding) => Some(binding),
-            Self::NonBlockingModulepreload(_) => None,
+            Self::NonBlockingLink(_) => None,
         }
     }
 }

@@ -826,6 +826,12 @@ async fn style_preload_csp_blocks_before_typed_resource_and_dispatches_async_err
         "",
         "CSP failure must not synchronously dispatch the preload error"
     );
+    let owner = vm.current_main_document_task_owner().unwrap();
+    assert_eq!(
+        vm.current_main_document_has_style_load_event_delay(owner),
+        Some(false),
+        "the queued CSP error must not delay Window load for a preload"
+    );
 
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
