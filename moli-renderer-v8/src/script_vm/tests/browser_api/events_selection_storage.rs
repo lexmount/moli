@@ -6,6 +6,18 @@ use tokio::{
 };
 
 #[test]
+fn selection_range_membership_uses_native_document_relationships() {
+    let mut vm = new_storage_test_vm("https://selection-native-membership.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/selection-native-membership.js"
+        ))
+        .expect("selection membership should ignore author relationship properties"),
+        ""
+    );
+}
+
+#[test]
 fn captured_mouse_event_constructor_validates_coordinates_and_inherits_event_init() {
     let mut vm = new_storage_test_vm("https://captured-mouse-event.test/");
 
