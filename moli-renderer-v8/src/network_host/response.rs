@@ -4,7 +4,7 @@ mod cors;
 mod materialize;
 
 use super::headers::{
-    HeadersGuard, build_headers_object_with_state, filter_headers_for_guard, headers_entries,
+    HeadersGuard, build_headers_object_with_state, filter_headers_for_guard,
     headers_entries_from_init,
 };
 use super::*;
