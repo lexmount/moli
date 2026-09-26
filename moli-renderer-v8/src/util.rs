@@ -167,14 +167,6 @@ pub(crate) fn apply_webidl_constructor_prototype_fallback<'s>(
     let _ = receiver.set_prototype(scope, prototype.into());
 }
 
-pub(super) fn create_script_origin<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resource_name: &str,
-    line_offset: i32,
-) -> v8::ScriptOrigin<'s> {
-    create_script_origin_with_base_url(scope, resource_name, line_offset, None)
-}
-
 pub(super) fn create_script_origin_with_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,

@@ -1580,6 +1580,7 @@ impl DocumentRuntime {
                         start.node,
                         &start.host_script_handle,
                         source,
+                        &start.script,
                         Some(insertion.parser_bridge.clone()),
                         DocumentWriteCurrentScriptEventBehavior::DispatchImmediately(
                             ScriptEventKind::Load,
