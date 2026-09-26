@@ -386,12 +386,11 @@ else frame.setAttribute('sandbox', {changed});
                 "history.replaceState(0, ''); history.pushState(1, ''); frame.contentWindow.eval('history.back()');",
             )
             .unwrap();
-            assert_eq!(
+            assert!(
                 vm.run_one_history_traversal_executor_turn(&loader)
                     .await
                     .unwrap(),
-                allowed,
-                "initial={initial}, changed={changed}, navigated={navigate}"
+                "the traversal task evaluates the active sandbox: initial={initial}, changed={changed}, navigated={navigate}"
             );
             assert_eq!(
                 vm.eval("String(history.state)").unwrap(),

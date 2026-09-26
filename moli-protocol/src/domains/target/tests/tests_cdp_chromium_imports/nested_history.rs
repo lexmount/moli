@@ -265,14 +265,20 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
                     .collect::<Vec<_>>();
                 // The URL changes at commit, before the restored child document
                 // finishes parsing. Read its body only after that load completes.
-                wait(
+                let loaded = wait(
                     &mut page,
                     &format!(
                         "({list}).every(f=>f.contentDocument?.readyState === 'complete') && JSON.stringify(({list}).map(f=>f.contentWindow.location.href)) === {}",
                         serde_json::to_string(&serde_json::to_string(&urls)?)?
                     ),
                 )
-                .await?;
+                .await;
+                if let Err(error) = loaded {
+                    let observed = snapshot(&mut page, root).await;
+                    return Err(error.context(format!(
+                        "popup={popup}, {layout}: traversing {urls:?}; observed={observed:?}"
+                    )));
+                }
                 let current = snapshot(&mut page, root).await.with_context(|| {
                     format!("popup={popup}, {layout}: traversed child entries {urls:?}")
                 })?;

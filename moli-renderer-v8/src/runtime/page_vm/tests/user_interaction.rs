@@ -545,8 +545,8 @@ getSelection().collapse(text, 1);
         )?;
 
         assert!(
-            !page_vm.vm().has_ready_timeout(),
-            "user-interaction tasks must not acquire PageTimer descriptors"
+            !page_vm.vm().has_ready_callback_timer(),
+            "user-interaction callbacks must stay on their task source; rendering wakes are separate"
         );
         // The value setter already queued selectionchange before the range
         // setter queues select; later selection changes coalesce with it.

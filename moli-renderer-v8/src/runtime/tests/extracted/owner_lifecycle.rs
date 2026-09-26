@@ -426,7 +426,9 @@ document.body.appendChild(frame);
     }
     let (observed, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: "globalThis.__childSelfNavigateEvents.join('|')".to_owned(),
+            // Each owner-driven completion is required exactly once. Posted
+            // messages and load events use separate task sources.
+            expression: "globalThis.__childSelfNavigateEvents.slice().sort().join('|')".to_owned(),
             await_promise: false,
         })
         .await
