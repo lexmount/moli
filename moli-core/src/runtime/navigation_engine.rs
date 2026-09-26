@@ -23,8 +23,8 @@ use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererReservedServiceWorkerClient,
-    RendererServiceWorkerMainResourceFetch, RendererWebStorageHandles, SharedStorageBucketStore,
-    WeakIndexedDbManager,
+    RendererServiceWorkerMainResourceFetch, RendererTopLevelWindowName, RendererWebStorageHandles,
+    SharedStorageBucketStore, WeakIndexedDbManager,
     network::{
         BrowserResourceRuntime, BrowserResourceRuntimeOwner, PageNetworkPolicy,
         navigation::{DocumentFetchContextSeed, NavigationResourceLoader},
@@ -424,6 +424,7 @@ pub struct NavigationEngine {
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
+    top_level_window_name: RendererTopLevelWindowName,
     document_activity: moli_page_types::DocumentActivity,
     // Standalone engines share this last-drop owner. BrowserContext engines
     // leave it empty and borrow only the context's weak, bound access.
@@ -583,6 +584,7 @@ impl NavigationEngine {
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
+            top_level_window_name: RendererTopLevelWindowName::default(),
             document_activity: Default::default(),
             standalone_lifetime_owner,
         })
@@ -634,6 +636,7 @@ impl NavigationEngine {
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
+            top_level_window_name: RendererTopLevelWindowName::default(),
             document_activity: Default::default(),
             standalone_lifetime_owner: renderer_owner_source.standalone_lifetime_owner.clone(),
         })
@@ -1277,6 +1280,8 @@ impl NavigationEngine {
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.build_inline_html_document_page_best_effort_with_inspector_session_restores_async(
             cookie_store,
             web_storage,
@@ -1446,6 +1451,8 @@ impl NavigationEngine {
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.build_html_page_from_response_with_inspector_session_restores_async(
             cookie_store,
             web_storage,
@@ -1641,6 +1648,8 @@ impl NavigationEngine {
     ) -> Result<PendingBuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.start_build_html_page_from_response(
             page_reservation,
             cookie_store,
@@ -1923,6 +1932,8 @@ impl NavigationEngine {
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.build_streaming_raw_page_from_external_body_async(
             cookie_store,
             web_storage,
@@ -1991,6 +2002,8 @@ impl NavigationEngine {
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
             cookie_store,
@@ -2199,6 +2212,8 @@ impl NavigationEngine {
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.prepare_document_page_from_response_options_best_effort_async(
             page_reservation,
             cookie_store,
@@ -2261,6 +2276,8 @@ impl NavigationEngine {
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
+        let web_storage =
+            web_storage.with_top_level_window_name(self.top_level_window_name.clone());
         self.build_document_page_from_response_options_best_effort_async(
             cookie_store,
             web_storage,

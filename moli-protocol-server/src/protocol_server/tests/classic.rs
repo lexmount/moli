@@ -4080,6 +4080,84 @@ async fn webdriver_classic_execute_script_window_reference_keeps_id_after_cross_
         window_before["value"][CLASSIC_WINDOW_REFERENCE_KEY],
         json!(current_window_id)
     );
+    let forged_receiver = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": r#"
+                const descriptor = Object.getOwnPropertyDescriptor(window, 'name');
+                const receiver = {};
+                descriptor.set.call(receiver, 'receiver-only-name');
+                return [window.name, descriptor.get.call(receiver)];
+            "#,
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        forged_receiver,
+        json!({ "value": ["", "receiver-only-name"] })
+    );
+    let assigned_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "window.name = 'cross-origin-context-name'; return window.name;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        assigned_name,
+        json!({ "value": "cross-origin-context-name" })
+    );
+    let inserted_child = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "const frame = document.createElement('iframe'); frame.id = 'named-child'; frame.name = 'child-context-name'; frame.srcdoc = '<!doctype html><body>child</body>'; document.body.append(frame); return true;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(inserted_child, json!({ "value": true }));
+    let child_frame_id =
+        classic_find_css_element_id(app.clone(), &session_id, "#named-child").await;
+    let switched_child = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/frame"),
+        json!({ "id": { CLASSIC_ELEMENT_REFERENCE_KEY: child_frame_id } }),
+    )
+    .await;
+    assert_eq!(switched_child, json!({ "value": null }));
+    let child_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({ "script": "return window.name;", "args": [] }),
+    )
+    .await;
+    assert_eq!(child_name, json!({ "value": "child-context-name" }));
+    let switched_parent = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/frame/parent"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(switched_parent, json!({ "value": null }));
+    let parent_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({ "script": "return window.name;", "args": [] }),
+    )
+    .await;
+    assert_eq!(parent_name, json!({ "value": "cross-origin-context-name" }));
 
     let second_url = format!("http://{second_addr}/page");
     let second_navigation = classic_request_json_with_body(
@@ -4104,6 +4182,20 @@ async fn webdriver_classic_execute_script_window_reference_keeps_id_after_cross_
         window_after["value"][CLASSIC_WINDOW_REFERENCE_KEY],
         json!(current_window_id)
     );
+    let preserved_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return window.name;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        preserved_name,
+        json!({ "value": "cross-origin-context-name" })
+    );
 
     let current_after_navigation = classic_request_json(
         app.clone(),
@@ -4113,7 +4205,60 @@ async fn webdriver_classic_execute_script_window_reference_keeps_id_after_cross_
     .await;
     assert_eq!(
         current_after_navigation,
-        json!({ "value": current_window_id })
+        json!({ "value": current_window_id.clone() })
+    );
+
+    let new_window = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/window/new"),
+        json!({ "type": "tab" }),
+    )
+    .await;
+    let new_window_id = new_window["value"]["handle"]
+        .as_str()
+        .expect("new window handle")
+        .to_owned();
+    let switched = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/window"),
+        json!({ "handle": new_window_id }),
+    )
+    .await;
+    assert_eq!(switched, json!({ "value": null }));
+    let isolated_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return window.name;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(isolated_name, json!({ "value": "" }));
+    let switched_back = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/window"),
+        json!({ "handle": current_window_id }),
+    )
+    .await;
+    assert_eq!(switched_back, json!({ "value": null }));
+    let original_name = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return window.name;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        original_name,
+        json!({ "value": "cross-origin-context-name" })
     );
 
     let _ = classic_request_json(

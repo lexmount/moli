@@ -329,7 +329,7 @@ pub(crate) use types::{
 };
 #[allow(unused_imports)]
 pub use types::{ScriptKind, ScriptMode, ScriptRunOutcome, ScriptSourceKind};
-pub use web_storage_handles::RendererWebStorageHandles;
+pub use web_storage_handles::{RendererTopLevelWindowName, RendererWebStorageHandles};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageVmInitStage {

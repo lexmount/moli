@@ -26,4 +26,16 @@ impl PageVm {
             device_pixel_ratio: f64::from(metrics.viewport.device_pixel_ratio),
         })
     }
+
+    pub(crate) fn publish_layout_metrics(&mut self) -> Result<RendererLayoutMetrics> {
+        self.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)?;
+        if !self
+            .vm_mut()
+            .publish_layout_snapshot()
+            .map_err(anyhow::Error::new)?
+        {
+            return Err(anyhow!("layout publication requires a loaded document"));
+        }
+        self.layout_metrics()
+    }
 }

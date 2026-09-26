@@ -1149,6 +1149,71 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         "content size should come from a one-shot live layout: {metrics:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_layout_metrics_can_explicitly_publish_without_a_screenshot() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-PUBLISH-LAYOUT-METRICS",
+        "TID-PUBLISH-LAYOUT-METRICS",
+        "SID-PUBLISH-LAYOUT-METRICS",
+        "about:blank",
+    );
+    let page_url = "data:text/html,<html style='width:2300px;height:1500px'><body style='margin:0;width:2300px;height:1500px'><div style='width:2300px;height:1500px'></div></body></html>";
+    let page = ctx
+        .conn
+        .load_page_via_runtime_async(page_url)
+        .await
+        .expect("page should load");
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .active_page_target_mut()
+        .runtime_slot
+        .replace_loaded_page(Some(page));
+
+    ctx.process_async(json!({
+        "id": 126,
+        "method": "Page.getLayoutMetrics",
+        "sessionId": "SID-PUBLISH-LAYOUT-METRICS"
+    }))
+    .await;
+    let missing = take_response_by_id(&mut ctx, 126);
+    assert!(
+        missing["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no published layout")),
+        "ordinary Page.getLayoutMetrics must remain a side-effect-free read: {missing:?}"
+    );
+
+    ctx.process_async(json!({
+        "id": 127,
+        "method": "Page.getLayoutMetrics",
+        "sessionId": "SID-PUBLISH-LAYOUT-METRICS",
+        "params": {"publishLayout": true}
+    }))
+    .await;
+    let published = take_response_by_id(&mut ctx, 127);
+    assert_eq!(
+        published["result"]["contentSize"],
+        json!({ "x": 0, "y": 0, "width": 2300.0, "height": 1500.0 })
+    );
+
+    ctx.process_async(json!({
+        "id": 128,
+        "method": "Page.getLayoutMetrics",
+        "sessionId": "SID-PUBLISH-LAYOUT-METRICS"
+    }))
+    .await;
+    let cached = take_response_by_id(&mut ctx, 128);
+    assert_eq!(
+        cached["result"]["contentSize"],
+        published["result"]["contentSize"]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();

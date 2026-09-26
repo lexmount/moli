@@ -817,6 +817,7 @@ pub(crate) struct JsContextHost {
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     page_context_resources_closed: bool,
     page_default_context: Option<v8::Weak<v8::Context>>,
+    top_level_window_name: crate::RendererTopLevelWindowName,
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     pub(super) bridge: NativeDomBridge,
     backend_node_registry: SharedRendererBackendNodeRegistry,

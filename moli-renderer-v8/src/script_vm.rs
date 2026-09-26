@@ -2444,13 +2444,26 @@ impl ScriptVm {
 
     #[cfg(test)]
     pub(crate) fn publish_layout_for_test(&mut self) -> anyhow::Result<()> {
+        self.publish_layout_snapshot()
+            .map_err(anyhow::Error::new)?
+            .then_some(())
+            .ok_or_else(|| anyhow::anyhow!("fixture layout publication requires a document"))?;
+        Ok(())
+    }
+
+    pub(super) fn publish_layout_snapshot(&mut self) -> Result<bool, moli_layout::LayoutError> {
         let viewport = {
             let host = self._context_host.borrow();
             host.layout_viewport_for_document(host.document_handle())
         };
-        self.screenshot_layout_snapshot(viewport)?
-            .ok_or_else(|| anyhow::anyhow!("fixture screenshot requires a document"))?;
-        Ok(())
+        self.with_fresh_layout_pass(
+            moli_layout::LayoutPassRequest::new(
+                viewport,
+                moli_layout::LayoutFlushReason::SynchronousGeometry,
+            ),
+            |_| Ok(()),
+        )
+        .map(|result| result.is_some())
     }
 
     #[cfg(test)]
@@ -4817,6 +4830,7 @@ impl ScriptVm {
             host.web_storage_store(),
             host.session_storage_store(),
         )
+        .with_top_level_window_name(host.top_level_window_name_state())
     }
 
     pub(super) fn set_wpt_extensions_enabled(&mut self, enabled: bool) -> Result<()> {

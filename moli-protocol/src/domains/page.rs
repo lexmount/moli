@@ -5673,6 +5673,13 @@ struct ScreenshotParams {
     optimize_for_speed: Option<bool>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetLayoutMetricsParams {
+    #[serde(default)]
+    publish_layout: bool,
+}
+
 fn unsupported_cdp_screenshot_option(option: &str) -> CommandOutputPlan {
     CommandOutputPlan::error(
         -32000,
@@ -6033,13 +6040,16 @@ async fn execute_devtools_get_layout_metrics_command(
     command: DevToolsGetLayoutMetricsCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let owner = page_command_owner(conn, &command.context)?;
-    let result = execute_devtools_get_layout_metrics_for_current_owner(conn, &owner).await;
+    let result =
+        execute_devtools_get_layout_metrics_for_current_owner(conn, &owner, command.publish_layout)
+            .await;
     result.map(DevToolsCommandResult::LayoutMetrics)
 }
 
 async fn execute_devtools_get_layout_metrics_for_current_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
+    publish_layout: bool,
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
     let fallback =
         layout_metrics_result_from_surface(current_viewport_surface_for_owner(conn, owner));
@@ -6050,7 +6060,12 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
     else {
         return Ok(fallback);
     };
-    let pending = page.start_layout_metrics().map_err(|error| {
+    let pending = if publish_layout {
+        page.start_published_layout_metrics()
+    } else {
+        page.start_layout_metrics()
+    }
+    .map_err(|error| {
         devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
     })?;
     let completed = pending.wait().await.map_err(|error| {
@@ -7080,14 +7095,19 @@ fn start_devtools_print_to_pdf_command(
 fn build_cdp_get_layout_metrics_command(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
-) -> crate::devtools_runtime::DevToolsGetLayoutMetricsCommand {
+) -> Result<crate::devtools_runtime::DevToolsGetLayoutMetricsCommand, CommandOutputPlan> {
+    let params = cmd
+        .get_params::<GetLayoutMetricsParams>()
+        .map_err(|message| CommandOutputPlan::error(-32602, message))?
+        .unwrap_or_default();
     let (browser_context_id, target_id) = conn
         .target_owner_identity_for_session(cmd.session_id)
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
-    crate::devtools_runtime::DevToolsGetLayoutMetricsCommand {
+    Ok(crate::devtools_runtime::DevToolsGetLayoutMetricsCommand {
         context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
-    }
+        publish_layout: params.publish_layout,
+    })
 }
 
 fn start_devtools_get_frame_tree_command(
@@ -7251,7 +7271,7 @@ mod protocol_neutral_tests {
             r#"{"id":122,"method":"Page.getLayoutMetrics"}"#,
         );
 
-        let command = build_cdp_get_layout_metrics_command(&conn, &cmd);
+        let command = build_cdp_get_layout_metrics_command(&conn, &cmd).expect("valid command");
 
         assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
         assert_eq!(
@@ -7260,6 +7280,7 @@ mod protocol_neutral_tests {
         );
         assert_eq!(command.context.target_id, None);
         assert_eq!(command.context.browser_context_id, None);
+        assert!(!command.publish_layout);
     }
 
     #[test]
@@ -7273,7 +7294,7 @@ mod protocol_neutral_tests {
             None,
             r#"{"id":123,"method":"Page.getLayoutMetrics"}"#,
         );
-        let command = build_cdp_get_layout_metrics_command(&conn, &cmd);
+        let command = build_cdp_get_layout_metrics_command(&conn, &cmd).expect("valid command");
 
         let step = start_devtools_page_command(
             &mut conn,
@@ -7650,7 +7671,10 @@ fn try_start_page_get_layout_metrics_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
-    let command = build_cdp_get_layout_metrics_command(conn, cmd);
+    let command = match build_cdp_get_layout_metrics_command(conn, cmd) {
+        Ok(command) => command,
+        Err(plan) => return PageCommandTaskStep::Complete(plan),
+    };
     start_devtools_page_command(conn, cmd.id, DevToolsCommand::GetLayoutMetrics(command))
 }
 
@@ -7672,7 +7696,12 @@ fn start_devtools_get_layout_metrics_command(
             DevToolsCommandResult::LayoutMetrics(fallback),
         ));
     };
-    match page.start_layout_metrics() {
+    let pending = if command.publish_layout {
+        page.start_published_layout_metrics()
+    } else {
+        page.start_layout_metrics()
+    };
+    match pending {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
