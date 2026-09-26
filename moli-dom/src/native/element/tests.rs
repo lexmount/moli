@@ -417,3 +417,45 @@ fn parser_created_link_processing_state_is_consumed_at_children_finish() {
     assert!(!parser_created.link_created_by_parser());
     assert!(!parser_created.finish_parsing_link_children());
 }
+
+#[test]
+fn range_input_value_uses_live_min_max_and_step_attributes() {
+    let attribute = |name: &str, value: &str| {
+        Attribute::new(name.to_owned(), String::new(), None, value.to_owned())
+    };
+    let mut input = Element::new(
+        "input".to_owned(),
+        "http://www.w3.org/1999/xhtml".to_owned(),
+        None,
+        vec![
+            attribute("type", "range"),
+            attribute("min", "0"),
+            attribute("max", "100"),
+            attribute("step", "20"),
+            attribute("value", "40"),
+        ],
+    );
+
+    assert_eq!(input.input_value(), "40");
+    assert!(input.set_input_value(""));
+    assert_eq!(input.input_value(), "60");
+    assert!(input.input_value_dirty());
+
+    assert!(input.set_input_value("80"));
+    assert!(input.set_attribute("max".to_owned(), String::new(), None, "50".to_owned()));
+    assert_eq!(input.input_value(), "40");
+    assert!(input.input_value_dirty());
+
+    let defaulted = Element::new(
+        "input".to_owned(),
+        "http://www.w3.org/1999/xhtml".to_owned(),
+        None,
+        vec![
+            attribute("type", "range"),
+            attribute("min", "2"),
+            attribute("max", "6"),
+        ],
+    );
+    assert_eq!(defaulted.input_value(), "4");
+    assert!(!defaulted.input_value_dirty());
+}

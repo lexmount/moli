@@ -21,7 +21,10 @@ use thin_vec::ThinVec;
 use super::NativeDom;
 use super::node::{NativeNodeId, Node};
 use crate::custom_elements::is_valid_custom_element_name;
-use crate::forms::{InputType, is_valid_number_input_value, sanitize_input_value_for_type};
+use crate::forms::{
+    InputType, InputValueSanitizationContext, is_valid_number_input_value,
+    sanitize_input_value_for_type_with_context,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomElementState {
@@ -561,6 +564,32 @@ impl Element {
         self.is_html_element("link") && self.control_state().link_created_by_parser()
     }
 
+    fn sanitized_input_value(&self, value: &str) -> String {
+        sanitize_input_value_for_type_with_context(
+            self.input_type(),
+            value,
+            InputValueSanitizationContext {
+                min: self.attribute("min"),
+                max: self.attribute("max"),
+                step: self.attribute("step"),
+                value_attribute: self.attribute("value"),
+            },
+        )
+    }
+
+    pub(crate) fn resanitize_input_value_after_parser_attributes(&mut self) -> bool {
+        if !self.is_html_input()
+            || self.input_type() != InputType::Range
+            || self.input_value_dirty()
+        {
+            return false;
+        }
+        let source = self.attribute("value").unwrap_or_default().to_owned();
+        let value = self.sanitized_input_value(&source);
+        self.control_state_mut()
+            .set_input_value_with_dirty(&value, false)
+    }
+
     pub fn set_input_value(&mut self, value: &str) -> bool {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
@@ -572,7 +601,7 @@ impl Element {
             return self.set_selected_files(Vec::new());
         }
         let value = if self.is_html_input() {
-            sanitize_input_value_for_type(self.input_type(), value)
+            self.sanitized_input_value(value)
         } else {
             value.to_owned()
         };
@@ -590,7 +619,7 @@ impl Element {
             return self.set_selected_files(Vec::new());
         }
         let value = if self.is_html_input() {
-            sanitize_input_value_for_type(self.input_type(), value)
+            self.sanitized_input_value(value)
         } else {
             value.to_owned()
         };
@@ -620,7 +649,7 @@ impl Element {
             let value = if bad_input {
                 String::new()
             } else {
-                sanitize_input_value_for_type(input_type, value)
+                self.sanitized_input_value(value)
             };
             (value, bad_input)
         } else {
@@ -1152,10 +1181,25 @@ impl Element {
         } else {
             self.input_type()
         };
+        let range_attribute = |name| {
+            (input_type == InputType::Range)
+                .then(|| self.attribute(name).map(str::to_owned))
+                .flatten()
+        };
+        let input_min = range_attribute("min");
+        let input_max = range_attribute("max");
+        let input_step = range_attribute("step");
+        let input_value = range_attribute("value");
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
             input_type,
+            InputValueSanitizationContext {
+                min: input_min.as_deref(),
+                max: input_max.as_deref(),
+                step: input_step.as_deref(),
+                value_attribute: input_value.as_deref(),
+            },
             attribute_name,
             attribute_value,
         );
