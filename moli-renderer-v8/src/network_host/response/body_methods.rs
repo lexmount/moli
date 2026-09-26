@@ -1,11 +1,8 @@
 mod binary;
 mod text_json;
 
-use super::super::fetch_surface::{
-    REQUEST_BODY_USED_SLOT, REQUEST_HEADERS_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
-};
+use super::super::fetch_surface::{REQUEST_BODY_USED_SLOT, RESPONSE_BODY_USED_SLOT};
 use super::*;
-use moli_web_mime::extract_response_mime_type;
 
 use self::binary::{
     response_array_buffer_callback, response_blob_callback, response_bytes_callback,
@@ -51,18 +48,16 @@ fn response_form_data_callback<'s>(
         return;
     };
 
-    let content_type = body_mime_type(scope, &consumption);
     finish_body_consumption(
         scope,
         &mut rv,
         consumption,
-        NetworkBodyConsumptionKind::FormData { content_type },
+        NetworkBodyConsumptionKind::FormData,
     );
 }
 
 struct BodyConsumptionPromise<'scope> {
     object: v8::Local<'scope, v8::Object>,
-    receiver: BodyReceiver,
     resolver: v8::Local<'scope, v8::PromiseResolver>,
     promise: v8::Local<'scope, v8::Promise>,
 }
@@ -96,7 +91,6 @@ fn begin_body_consumption_promise<'s>(
     }
     Some(BodyConsumptionPromise {
         object,
-        receiver,
         resolver,
         promise,
     })
@@ -135,33 +129,6 @@ fn reject_body_already_used<'s>(
         resolver,
         "Failed to execute body consumption: body stream already used",
     );
-}
-
-fn body_headers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    receiver: BodyReceiver,
-) -> Option<Vec<(String, Vec<u8>)>> {
-    match receiver {
-        BodyReceiver::Response => response_slot_object(scope, object, RESPONSE_HEADERS_SLOT)
-            .map(|headers| headers_entries(scope, headers)),
-        BodyReceiver::Request => request_slot_object(scope, object, REQUEST_HEADERS_SLOT)
-            .map(|headers| headers_entries(scope, headers)),
-    }
-    .map(|headers| {
-        moli_fetch::headers_from_byte_strings(&headers).expect("Headers contain ByteStrings")
-    })
-}
-
-fn body_mime_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    consumption: &BodyConsumptionPromise<'s>,
-) -> String {
-    body_headers(scope, consumption.object, consumption.receiver)
-        .as_deref()
-        .and_then(extract_response_mime_type)
-        .map(|mime| mime.to_string())
-        .unwrap_or_default()
 }
 
 fn begin_body_consumption<'s>(
