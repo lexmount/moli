@@ -18184,7 +18184,7 @@ source = "upstream-wpt"
 source_path = "html/semantics/forms/the-fieldset-element/disabled-003.html"
 source_commit = "59c8d70847593453e2e611b184d6e9072a527ba0"
 tags = ["forms", "html", "fieldset", "focus"]
-notes = "Imported upstream WPT disabled nested fieldset focus cleanup coverage."
+notes = "Imported upstream WPT disabled nested fieldset focus cleanup coverage. Local timing adaptation follows HTML update-the-rendering focus fixup: assert focus is retained synchronously, then moves to the viewport after animation callbacks. The upstream copy still assumes synchronous blur."
 
 [[test]]
 id = "upstream-html-semantics-forms-the-fieldset-element-fieldset-checkvalidity"

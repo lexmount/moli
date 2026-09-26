@@ -2426,10 +2426,12 @@ fn focus_pseudo_matches_wpt_shadow_host_matrix() {
     assert_eq!(result, "");
 }
 #[tokio::test]
-async fn focused_display_none_shadow_host_blurs_on_timer_task() {
+async fn focused_display_none_shadow_host_blurs_during_rendering_update() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_storage_test_vm_with_loader("https://shadow-focus-display-none-blur.test/", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://shadow-focus-display-none-blur.test/",
+        &loader,
+    );
 
     let plain_sync_state = vm
         .eval(
@@ -2466,11 +2468,9 @@ async fn focused_display_none_shadow_host_blurs_on_timer_task() {
         )
         .expect("plain display:none focus setup should evaluate");
 
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("plain display:none focus blur timer should run")
-    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("plain display:none focus fixup should run during rendering");
 
     let plain_async_state = vm
         .eval(
@@ -2509,11 +2509,9 @@ async fn focused_display_none_shadow_host_blurs_on_timer_task() {
         )
         .expect("delegated display:none focus setup should evaluate");
 
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("delegated display:none focus blur timer should run")
-    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("delegated display:none focus fixup should run during rendering");
 
     let delegated_async_state = vm
         .eval(
@@ -2536,7 +2534,10 @@ async fn focused_display_none_shadow_host_blurs_on_timer_task() {
 #[tokio::test]
 async fn focused_display_none_blur_listener_sees_updated_focus_state() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://shadow-focus-blur-order.test/", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://shadow-focus-blur-order.test/",
+        &loader,
+    );
 
     let sync_state = vm
         .eval(
@@ -2580,15 +2581,9 @@ async fn focused_display_none_blur_listener_sees_updated_focus_state() {
         )
         .expect("display none focus setup should evaluate");
 
-    assert!(
-        vm.apply_next_connected_style_event_body_for_test(),
-        "the inline setup stylesheet queues its own event body before focus-update work"
-    );
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("exact display-none focus blur timer should run")
-    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the production executor should deliver style events and rendering focus fixup");
 
     let blur_state = vm
         .eval(
@@ -2608,8 +2603,10 @@ async fn focused_display_none_blur_listener_sees_updated_focus_state() {
 #[tokio::test]
 async fn focused_element_blurs_after_it_becomes_inert() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_storage_test_vm_with_loader("https://dynamic-inert-focus-fixup.test/", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://dynamic-inert-focus-fixup.test/",
+        &loader,
+    );
 
     let direct_sync_state = vm
         .eval(
@@ -2631,11 +2628,9 @@ async fn focused_element_blurs_after_it_becomes_inert() {
         )
         .expect("direct inert focus setup should evaluate");
 
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("direct inert focus-fixup timer should run")
-    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("direct inert focus fixup should run during rendering");
     let direct_async_state = vm
         .eval(
             r#"
@@ -2658,11 +2653,9 @@ async fn focused_element_blurs_after_it_becomes_inert() {
         )
         .expect("ancestor inert focus setup should evaluate");
 
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("ancestor inert focus-fixup timer should run")
-    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("ancestor inert focus fixup should run during rendering");
     let ancestor_async_state = vm
         .eval(
             r#"
