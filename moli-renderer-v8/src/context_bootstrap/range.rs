@@ -3,14 +3,12 @@ pub(super) use crate::native_bridge::RangeBoundarySide;
 
 mod arguments;
 mod exceptions;
-mod mutation;
 mod object;
 mod static_storage;
 mod validation;
 
 pub(super) use arguments::{callback_arg_node_object, webidl_node_arg};
 pub(super) use exceptions::throw_named_dom_exception;
-pub(super) use mutation::range_set_boundary_relative;
 pub(super) use object::{
     RANGE_WRAPPER_INTERNAL_FIELD_COUNT, current_document_object, initialize_range_object,
     native_range_boundary_handles, native_range_boundary_point, new_range_for_document,

@@ -599,10 +599,37 @@ impl JsContextHost {
             .is_collapsed(dom_host, handle)
     }
 
+    pub(crate) fn selection_document_for_range(
+        &self,
+        range: RangeRecordHandle,
+    ) -> Option<DomHandle> {
+        self.selection_record_registry
+            .records
+            .values()
+            .find_map(|record| {
+                (record.associated_range == Some(range))
+                    .then_some(record.owner_document)
+                    .flatten()
+            })
+    }
+
     pub(crate) fn document_selection_snapshot(
         &self,
         document: DomHandle,
     ) -> Option<DocumentSelectionSnapshot> {
         self.selection_record_registry.document_snapshot(document)
+    }
+
+    pub(crate) fn selection_record_spans_dom_roots(&self, handle: SelectionRecordHandle) -> bool {
+        let Some(record) = self.selection_record_registry.records.get(&handle) else {
+            return false;
+        };
+        let (Some(start), Some(end)) = (record.composed_start, record.composed_end) else {
+            return false;
+        };
+        let dom = self.dom_host();
+        dom.root_node_handle(start.container)
+            .zip(dom.root_node_handle(end.container))
+            .is_some_and(|(start, end)| start != end)
     }
 }

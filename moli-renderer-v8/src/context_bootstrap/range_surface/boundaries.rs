@@ -110,33 +110,13 @@ pub(super) fn range_set_start_callback<'s>(
         );
         return;
     }
-    let selection_update = selection_range_update_state(scope, args.this());
-    set_range_boundary(
+    range_set_boundary_and_sync_selection(
         scope,
         args.this(),
         RangeBoundarySide::Start,
         container,
         offset,
     );
-    let Some(end_container) =
-        range_boundary_container_object(scope, args.this(), RangeBoundarySide::End)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let end_offset = range_boundary_offset(scope, args.this(), RangeBoundarySide::End) as u32;
-    if point_order(scope, container, offset, end_container, end_offset)
-        .is_none_or(|order| order == std::cmp::Ordering::Greater)
-    {
-        set_range_boundary(
-            scope,
-            args.this(),
-            RangeBoundarySide::End,
-            container,
-            offset,
-        );
-    }
-    range_sync_selection_after_set_start(scope, selection_update, args.this(), container, offset);
     rv.set_undefined();
 }
 
@@ -166,33 +146,13 @@ pub(super) fn range_set_end_callback<'s>(
         );
         return;
     }
-    let selection_update = selection_range_update_state(scope, args.this());
-    set_range_boundary(
+    range_set_boundary_and_sync_selection(
         scope,
         args.this(),
         RangeBoundarySide::End,
         container,
         offset,
     );
-    let Some(start_container) =
-        range_boundary_container_object(scope, args.this(), RangeBoundarySide::Start)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let start_offset = range_boundary_offset(scope, args.this(), RangeBoundarySide::Start) as u32;
-    if point_order(scope, start_container, start_offset, container, offset)
-        .is_none_or(|order| order == std::cmp::Ordering::Greater)
-    {
-        set_range_boundary(
-            scope,
-            args.this(),
-            RangeBoundarySide::Start,
-            container,
-            offset,
-        );
-    }
-    range_sync_selection_after_set_end(scope, selection_update, args.this(), container, offset);
     rv.set_undefined();
 }
 
@@ -358,6 +318,98 @@ fn node_is_doctype<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8:
     object_number_property(scope, node, "nodeType")
         .map(|t| t as u32 == 10)
         .unwrap_or(false)
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Range boundary method")]
+struct RangeRelativeBoundaryArgs<'s> {
+    #[webidl(with = range_relative_boundary_node_arg)]
+    node: v8::Local<'s, v8::Object>,
+}
+
+fn range_relative_boundary_node_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
+    webidl_node_arg(scope, args, index, "Range boundary method requires a Node")
+}
+
+fn range_set_boundary_relative<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    is_start: bool,
+    after: bool,
+) {
+    let Some(parsed) = webidl::parse_args::<RangeRelativeBoundaryArgs<'s>>(scope, &args) else {
+        return;
+    };
+    let node = parsed.node;
+    // Spec setStartBefore/setStartAfter/setEndBefore/setEndAfter(node):
+    // If node has no parent, throw InvalidNodeTypeError (the node is not a
+    // child of any container, so before/after has no boundary point). WPT
+    // tests this explicitly with detached / document-root nodes.
+    let Some(parent) = object_property_as_object(scope, node, "parentNode") else {
+        throw_named_dom_exception(
+            scope,
+            "InvalidNodeTypeError",
+            "Range boundary method requires a node with a parent.",
+        );
+        return;
+    };
+    let Some(index) = child_index(scope, parent, node) else {
+        rv.set_undefined();
+        return;
+    };
+    let offset = index + u32::from(after);
+    let side = if is_start {
+        RangeBoundarySide::Start
+    } else {
+        RangeBoundarySide::End
+    };
+    range_set_boundary_and_sync_selection(scope, args.this(), side, parent, offset);
+    rv.set_undefined();
+}
+
+// Direct and relative setters use the same Range adjustment and Selection
+// notification, after their argument and boundary validation has succeeded.
+fn range_set_boundary_and_sync_selection<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+    side: RangeBoundarySide,
+    container: v8::Local<'s, v8::Object>,
+    offset: u32,
+) {
+    let selection_update = selection_range_update_state(scope, range);
+    set_range_boundary(scope, range, side, container, offset);
+    let other_side = match side {
+        RangeBoundarySide::Start => RangeBoundarySide::End,
+        RangeBoundarySide::End => RangeBoundarySide::Start,
+    };
+    let Some(other_container) = range_boundary_container_object(scope, range, other_side) else {
+        return;
+    };
+    let other_offset = range_boundary_offset(scope, range, other_side) as u32;
+    let order = match side {
+        RangeBoundarySide::Start => {
+            point_order(scope, container, offset, other_container, other_offset)
+        }
+        RangeBoundarySide::End => {
+            point_order(scope, other_container, other_offset, container, offset)
+        }
+    };
+    if order.is_none_or(|order| order == std::cmp::Ordering::Greater) {
+        set_range_boundary(scope, range, other_side, container, offset);
+    }
+    match side {
+        RangeBoundarySide::Start => {
+            range_sync_selection_after_set_start(scope, selection_update, range, container, offset)
+        }
+        RangeBoundarySide::End => {
+            range_sync_selection_after_set_end(scope, selection_update, range, container, offset)
+        }
+    }
 }
 
 fn range_sync_selection_after_set_start<'s>(

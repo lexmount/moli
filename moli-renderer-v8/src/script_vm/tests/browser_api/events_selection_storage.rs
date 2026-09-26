@@ -6,6 +6,18 @@ use tokio::{
 };
 
 #[test]
+fn selection_tracks_associated_range_document_across_realms() {
+    let mut vm = new_storage_test_vm("https://selection-range-owner.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/selection-range-ownership.js"
+        ))
+        .expect("associated Range mutations should update their owning Selection"),
+        ""
+    );
+}
+
+#[test]
 fn selection_shadow_direction_and_composed_boundaries_follow_native_mutations() {
     let mut vm = new_storage_test_vm("https://selection-shadow-state.test/");
     assert_eq!(

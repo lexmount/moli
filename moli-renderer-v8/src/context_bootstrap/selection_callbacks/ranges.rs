@@ -96,35 +96,6 @@ fn selection_contains_node_boundary_points<'s>(
     Some((parent, index, parent, index + 1, false))
 }
 
-fn range_belongs_to_current_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    selection: v8::Local<'s, v8::Object>,
-    start_node: v8::Local<'s, v8::Object>,
-    end_node: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(document) =
-        selection_owner_document(scope, selection).or_else(|| current_document_object(scope))
-    else {
-        return true;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return false;
-    };
-    let Some(document) = callback_value_dom_handle(scope, document.into()) else {
-        return false;
-    };
-    // Connectivity and ownership are native relationships. Author properties
-    // named parentNode, nodeType or host must not change Selection membership
-    // (or run script while checking an associated Range).
-    let dom = unsafe { &*host_ptr }.dom_host();
-    [start_node, end_node].into_iter().all(|node| {
-        callback_value_dom_handle(scope, node.into()).is_some_and(|handle| {
-            dom.is_connected_to_document(handle)
-                && (handle == document || dom.owner_document_handle(handle) == Some(document))
-        })
-    })
-}
-
 pub(in crate::context_bootstrap) fn selection_get_range_at_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -149,7 +120,7 @@ pub(in crate::context_bootstrap) fn selection_get_range_at_callback<'s>(
             throw_index_size_error(scope, "Index or offset is out of range.");
             return;
         };
-        if !range_belongs_to_current_document(scope, args.this(), start_node, end_node) {
+        if !selection_range_belongs_to_document(scope, args.this(), start_node, end_node) {
             throw_index_size_error(scope, "Index or offset is out of range.");
             return;
         }
@@ -423,7 +394,7 @@ pub(in crate::context_bootstrap) fn selection_add_range_callback<'s>(
     else {
         return;
     };
-    if !range_belongs_to_current_document(scope, args.this(), start_node, end_node) {
+    if !selection_range_belongs_to_document(scope, args.this(), start_node, end_node) {
         return;
     }
     let start_offset = range_boundary_offset(scope, range, RangeBoundarySide::Start) as u32;
