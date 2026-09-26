@@ -2,6 +2,7 @@
 <meta charset="utf-8">
 <title>Disable nested fieldsets with focused element</title>
 <link rel="help" href="https://html.spec.whatwg.org/multipage/#the-fieldset-element">
+<link rel="help" href="https://html.spec.whatwg.org/multipage/webappapis.html#update-the-rendering">
 <link rel="help" href="https://bugs.chromium.org/p/chromium/issues/detail?id=1427047">
 <link rel="author" href="mailto:xiaochengh@chromium.org">
 <script src="/resources/testharness.js"></script>
@@ -17,23 +18,34 @@
   </fieldset>
 </div>
 <script>
-test(() => {
+// Local timing adaptation: HTML's update-the-rendering focus fixup runs after
+// animation callbacks. The imported test predates that asynchronous requirement.
+function waitForFocusFixup() {
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+promise_test(async () => {
   input1.focus();
+  assert_equals(document.activeElement, input1);
   target1.disabled = true;
-  assert_not_equals(document.activeElement, input1);
+  assert_equals(document.activeElement, input1, 'Disabling a fieldset does not synchronously blur');
+  await waitForFocusFixup();
+  assert_equals(document.activeElement, document.body);
 }, 'Disable light-nested fieldsets should not crash');
 </script>
 
 <div id=container2></div>
 <script>
-test(() => {
+promise_test(async () => {
   let n = 100;
   let markup = '<fieldset><legend>foo</legend>'.repeat(n) +
                '<input id=input2>' + '</fieldset>'.repeat(n);
   container2.innerHTML = markup;
   input2.focus();
+  assert_equals(document.activeElement, input2);
   container2.firstChild.disabled = true;
-  assert_not_equals(document.activeElement, input2);
+  assert_equals(document.activeElement, input2, 'Disabling a fieldset does not synchronously blur');
+  await waitForFocusFixup();
+  assert_equals(document.activeElement, document.body);
 }, 'Disable deep-nested fieldsets should not hang');
 </script>
-
