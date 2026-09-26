@@ -37,6 +37,7 @@ pub(crate) enum RendererPageRenderingUpdateTaskKind {
     AnimationStartScan,
     PostParseAutofocus,
     AnimationFrameCallbacks,
+    IntersectionObserverDelivery,
     EnvironmentChange,
 }
 

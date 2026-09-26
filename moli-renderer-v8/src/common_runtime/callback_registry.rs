@@ -156,9 +156,10 @@ struct CallbackRegistryState {
     // Activation order is distinct from construction order. Disconnect
     // removes the root; observing again appends it to the registered set.
     active: IndexMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
+    active_resize: HashMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
 }
 
-/// A weak identity table plus the explicitly active PerformanceObserver roots.
+/// A weak identity table plus the explicitly active observer roots.
 /// Callback values remain V8-traced. Native finalizers use a weak reference to
 /// this table, avoiding raw host pointers and independent callback GC roots.
 #[derive(Default)]
@@ -229,7 +230,7 @@ impl CallbackRegistry {
             if let Some(state) = state.upgrade() {
                 let retired = {
                     let mut state = state.borrow_mut();
-                    (state.bindings.remove(&id), state.active.shift_remove(&id))
+                    (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id))
                 };
                 drop(retired);
             }
@@ -302,6 +303,70 @@ impl CallbackRegistry {
                 PreparedWebIdlCallbackExecution::worker(scope, callback, context)
             }
         }
+    }
+
+    pub(crate) fn activate_resize_observer(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        id: CallbackRegistrationId,
+        observer: v8::Local<'_, v8::Object>,
+    ) -> Option<WindowExecutionContextIdentity> {
+        let binding = self.lookup(scope, id, observer, CallbackRegistrationKind::ResizeObserver)?;
+        if !binding.is_current(scope) { return None; }
+        let identity = binding.window_identities()[0]?;
+        let root = Rc::new(v8::Global::new(scope, observer));
+        {
+            let mut state = self.state.borrow_mut();
+            if !state.bindings.contains_key(&id) { return None; }
+            state.active_resize.entry(id).or_insert_with(|| Rc::clone(&root));
+        }
+        Some(identity)
+    }
+
+    pub(crate) fn deactivate_resize_observer(&self, id: CallbackRegistrationId) {
+        let retired = self.state.borrow_mut().active_resize.remove(&id);
+        drop(retired);
+    }
+
+    pub(crate) fn active_resize_observers<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: Option<WindowExecutionContextOwner>,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let mut registrations: Vec<_> = {
+            let state = self.state.borrow();
+            state.active_resize.iter().filter_map(|(id, root)| {
+                Some((*id, Rc::clone(root), state.bindings.get(id)?.clone()))
+            }).collect()
+        };
+        registrations.sort_unstable_by_key(|(id, _, _)| id.as_u32());
+        registrations.into_iter().filter_map(|(_, root, binding)| {
+            let identity = binding.window_identities()[0]?;
+            if owner.is_some_and(|owner| owner != identity.owner()) || !binding.is_current(scope) {
+                return None;
+            }
+            Some(v8::Local::new(scope, root.as_ref()))
+        }).collect()
+    }
+
+    pub(crate) fn resize_observer_identities(&self) -> Vec<WindowExecutionContextIdentity> {
+        let bindings: Vec<_> = {
+            let state = self.state.borrow();
+            state.active_resize.keys().filter_map(|id| state.bindings.get(id).cloned()).collect()
+        };
+        let mut identities = Vec::new();
+        for binding in bindings {
+            let Some(host_ptr) = binding.execution.window_host_ptr() else { continue; };
+            let [Some(observer), Some(callback)] = binding.window_identities() else { continue; };
+            let host = unsafe { &*host_ptr };
+            if host.window_execution_context_identity_is_current(observer)
+                && host.window_execution_context_identity_is_current(callback)
+                && !identities.contains(&observer)
+            {
+                identities.push(observer);
+            }
+        }
+        identities
     }
 
     pub(crate) fn activate_performance_observer(
@@ -384,7 +449,7 @@ impl CallbackRegistry {
                 .filter_map(|(id, binding)| retire(binding).then_some(*id))
                 .collect();
             ids.into_iter()
-                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id)))
+                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id)))
                 .collect::<Vec<_>>()
         };
         retired.len()
@@ -396,6 +461,7 @@ impl CallbackRegistry {
             (
                 std::mem::take(&mut state.bindings),
                 std::mem::take(&mut state.active),
+                std::mem::take(&mut state.active_resize),
             )
         };
         drop(retired);

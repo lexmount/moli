@@ -12,59 +12,63 @@ globalThis.runGeometryProbe = () => {
     const targetRect = target.getBoundingClientRect();
 
     let entry = null;
+    let resolveEntry;
+    const entryReady = new Promise(resolve => { resolveEntry = resolve; });
     const observer = new IntersectionObserver((entries) => {
       entry = entries[0];
+      resolveEntry();
     }, { root });
     let marginEntry = null;
+    let resolveMarginEntry;
+    const marginEntryReady = new Promise(resolve => { resolveMarginEntry = resolve; });
     const marginObserver = new IntersectionObserver((entries) => {
       marginEntry = entries[0];
+      resolveMarginEntry();
     }, { root, rootMargin: "10px" });
 
     observer.observe(target);
     marginObserver.observe(target);
 
-    Promise.resolve().then(() => {
-      setTimeout(() => {
-        window.ioRootBoundsWidth = entry && entry.rootBounds && entry.rootBounds.width;
-        window.ioRootBoundsHeight = entry && entry.rootBounds && entry.rootBounds.height;
-        window.ioTargetRectWidth = entry && entry.boundingClientRect && entry.boundingClientRect.width;
-        window.ioTargetRectHeight = entry && entry.boundingClientRect && entry.boundingClientRect.height;
-        window.ioIntersectionRectWidth = entry && entry.intersectionRect && entry.intersectionRect.width;
-        window.ioIntersectionRectHeight = entry && entry.intersectionRect && entry.intersectionRect.height;
-        window.ioRootMatchesRect = !!entry &&
-          entry.rootBounds.width === rootRect.width &&
-          entry.rootBounds.height === rootRect.height;
-        window.ioTargetMatchesRect = !!entry &&
-          entry.boundingClientRect.width === targetRect.width &&
-          entry.boundingClientRect.height === targetRect.height;
-        window.ioIntersectionWithinTarget = !!entry &&
-          entry.intersectionRect.width > 0 &&
-          entry.intersectionRect.height > 0 &&
-          entry.intersectionRect.width <= targetRect.width &&
-          entry.intersectionRect.height <= targetRect.height;
-        window.ioPartialIntersectionRatio = entry && entry.intersectionRatio;
-        window.ioPartialRatioIsGeometric = !!entry &&
-          entry.intersectionRatio > 0 &&
-          entry.intersectionRatio < 1;
-        window.ioMarginRootBoundsWidth =
-          marginEntry && marginEntry.rootBounds && marginEntry.rootBounds.width;
-        window.ioMarginRootBoundsHeight =
-          marginEntry && marginEntry.rootBounds && marginEntry.rootBounds.height;
-        window.ioMarginIntersectionRectWidth =
-          marginEntry && marginEntry.intersectionRect && marginEntry.intersectionRect.width;
-        window.ioMarginIntersectionRectHeight =
-          marginEntry && marginEntry.intersectionRect && marginEntry.intersectionRect.height;
-        window.ioMarginIntersectionRatio = marginEntry && marginEntry.intersectionRatio;
-        window.ioMarginExpandsRootBounds = !!marginEntry &&
-          marginEntry.rootBounds.width === rootRect.width + 20 &&
-          marginEntry.rootBounds.height === rootRect.height + 20;
-        window.ioMarginExpandsIntersection = !!entry && !!marginEntry &&
-          marginEntry.intersectionRect.width > entry.intersectionRect.width;
-        window.ioMarginIncreasesRatio = !!entry && !!marginEntry &&
-          marginEntry.intersectionRatio > entry.intersectionRatio;
-        observer.disconnect();
-        marginObserver.disconnect();
-      }, 0);
+    return Promise.all([entryReady, marginEntryReady]).then(() => {
+      window.ioRootBoundsWidth = entry && entry.rootBounds && entry.rootBounds.width;
+      window.ioRootBoundsHeight = entry && entry.rootBounds && entry.rootBounds.height;
+      window.ioTargetRectWidth = entry && entry.boundingClientRect && entry.boundingClientRect.width;
+      window.ioTargetRectHeight = entry && entry.boundingClientRect && entry.boundingClientRect.height;
+      window.ioIntersectionRectWidth = entry && entry.intersectionRect && entry.intersectionRect.width;
+      window.ioIntersectionRectHeight = entry && entry.intersectionRect && entry.intersectionRect.height;
+      window.ioRootMatchesRect = !!entry &&
+        entry.rootBounds.width === rootRect.width &&
+        entry.rootBounds.height === rootRect.height;
+      window.ioTargetMatchesRect = !!entry &&
+        entry.boundingClientRect.width === targetRect.width &&
+        entry.boundingClientRect.height === targetRect.height;
+      window.ioIntersectionWithinTarget = !!entry &&
+        entry.intersectionRect.width > 0 &&
+        entry.intersectionRect.height > 0 &&
+        entry.intersectionRect.width <= targetRect.width &&
+        entry.intersectionRect.height <= targetRect.height;
+      window.ioPartialIntersectionRatio = entry && entry.intersectionRatio;
+      window.ioPartialRatioIsGeometric = !!entry &&
+        entry.intersectionRatio > 0 &&
+        entry.intersectionRatio < 1;
+      window.ioMarginRootBoundsWidth =
+        marginEntry && marginEntry.rootBounds && marginEntry.rootBounds.width;
+      window.ioMarginRootBoundsHeight =
+        marginEntry && marginEntry.rootBounds && marginEntry.rootBounds.height;
+      window.ioMarginIntersectionRectWidth =
+        marginEntry && marginEntry.intersectionRect && marginEntry.intersectionRect.width;
+      window.ioMarginIntersectionRectHeight =
+        marginEntry && marginEntry.intersectionRect && marginEntry.intersectionRect.height;
+      window.ioMarginIntersectionRatio = marginEntry && marginEntry.intersectionRatio;
+      window.ioMarginExpandsRootBounds = !!marginEntry &&
+        marginEntry.rootBounds.width === rootRect.width + 20 &&
+        marginEntry.rootBounds.height === rootRect.height + 20;
+      window.ioMarginExpandsIntersection = !!entry && !!marginEntry &&
+        marginEntry.intersectionRect.width > entry.intersectionRect.width;
+      window.ioMarginIncreasesRatio = !!entry && !!marginEntry &&
+        marginEntry.intersectionRatio > entry.intersectionRatio;
+      observer.disconnect();
+      marginObserver.disconnect();
     });
   };
 </script>

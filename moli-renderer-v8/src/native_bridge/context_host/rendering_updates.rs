@@ -14,6 +14,7 @@ pub(super) enum PendingRenderingUpdatePayload {
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
     AnimationFrameCallbacks(super::WindowExecutionContextOwner),
+    IntersectionObserverDelivery(super::WindowExecutionContextOwner),
     EnvironmentChange(PendingEnvironmentChange),
 }
 
@@ -43,6 +44,18 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_document_intersection_delivery(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        owner: super::WindowExecutionContextOwner,
+    ) {
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::IntersectionObserverDelivery,
+            PendingRenderingUpdatePayload::IntersectionObserverDelivery(owner),
+        );
+    }
+
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document after DOMContentLoaded or a subsequent candidate insertion.
     ///
@@ -246,12 +259,16 @@ impl JsContextHost {
         task_id: RendererPageRenderingUpdateTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
-    ) -> Option<bool> {
+    ) -> Option<(bool, Option<super::WindowExecutionContextOwner>)> {
         let payload = self
             .rendering_updates
             .remove_exact(task_id, target, kind)?
             .into_payload();
-        Some(match payload {
+        let animation_owner = match payload {
+            PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => Some(owner),
+            _ => None,
+        };
+        let invoked = match payload {
             PendingRenderingUpdatePayload::DocumentScrollEvents => {
                 self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
             }
@@ -264,10 +281,31 @@ impl JsContextHost {
             PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => {
                 self.dispatch_authorized_animation_frame_callbacks(scope, host_ptr, target, owner)
             }
+            PendingRenderingUpdatePayload::IntersectionObserverDelivery(owner) => {
+                let Some(resolved) =
+                    self.resolve_authorized_window_document_task_context(scope, target)
+                else {
+                    return Some((false, None));
+                };
+                let scope = &mut v8::ContextScope::new(scope, resolved.context);
+                let previous = target.dispatch_scope().enter(scope);
+                let watchdog = crate::v8_execution_watchdog::V8ExecutionWatchdog::arm(
+                    crate::v8_execution_watchdog::V8ExecutionWatchdogKind::RenderingObservers,
+                    scope.thread_safe_handle(),
+                    crate::v8_execution_watchdog::SCRIPT_TURN_WATCHDOG_TIMEOUT,
+                );
+                crate::observer_runtime::deliver_document_intersections(
+                    scope, host_ptr, owner, target,
+                );
+                watchdog.disarm();
+                target.dispatch_scope().restore(scope, previous);
+                true
+            }
             PendingRenderingUpdatePayload::EnvironmentChange(change) => {
                 self.dispatch_authorized_environment_change(scope, host_ptr, target, change)
             }
-        })
+        };
+        Some((invoked, animation_owner))
     }
 
     pub(crate) fn discard_pending_rendering_update_task(

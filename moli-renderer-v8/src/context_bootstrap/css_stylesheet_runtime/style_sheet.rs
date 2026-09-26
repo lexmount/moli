@@ -853,6 +853,7 @@ pub(crate) fn sync_document_adopted_style_sheet_installations<'s>(
     let installations = adopted_style_sheet_installations_from_value(scope, sheets.into());
     unsafe { &mut *host_ptr }
         .set_document_adopted_style_sheet_installations(style_document, installations);
+    crate::observer_runtime::queue_style_rendering_update(scope, host_ptr);
     crate::native_bridge::document::sync_document_fonts_for_handle(
         scope,
         unsafe { &*host_ptr },
@@ -872,6 +873,7 @@ pub(crate) fn sync_shadow_root_adopted_style_sheet_installations<'s>(
     let installations = adopted_style_sheet_installations_from_value(scope, sheets.into());
     unsafe { &mut *host_ptr }
         .set_shadow_root_adopted_style_sheet_installations(root, installations);
+    crate::observer_runtime::queue_style_rendering_update(scope, host_ptr);
 }
 
 pub(crate) fn sync_css_style_sheet_change<'s>(
@@ -911,6 +913,7 @@ fn notify_live_css_style_sheet_change<'s>(
         return;
     };
     unsafe { &mut *host_ptr }.note_owner_live_stylesheet_mutation(owner, stylesheet.id());
+    crate::observer_runtime::queue_style_rendering_update(scope, host_ptr);
 }
 
 pub(crate) fn sync_adopted_style_sheet_installations_for_sheet<'s>(
@@ -1223,6 +1226,7 @@ fn notify_css_style_sheet_runtime_state_change<'s>(
     };
     let stylesheet_id = require_css_style_sheet_live_stylesheet(scope, sheet).id();
     unsafe { &mut *host_ptr }.note_owner_live_stylesheet_runtime_state_change(owner, stylesheet_id);
+    crate::observer_runtime::queue_style_rendering_update(scope, host_ptr);
 }
 
 pub(crate) fn css_import_rule_style_sheet_getter_callback<'s>(
