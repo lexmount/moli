@@ -154,12 +154,14 @@ pub(super) fn bind_navigation_entry_runtime_owner<'s>(
 
 pub(super) fn create_navigation_activation_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Context>,
     current_entry: v8::Local<'s, v8::Object>,
     activation: Option<&NavigationActivationSeed>,
 ) -> v8::Local<'s, v8::Value> {
     let Some(activation) = activation else {
         return v8::null(scope).into();
     };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let entry = navigation_activation_entry_object(scope, current_entry, activation);
     let from = activation
         .from
@@ -173,7 +175,6 @@ pub(super) fn create_navigation_activation_object<'s>(
         .and_then(|value| v8_string(scope, value))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
-    let context = scope.get_current_context();
     let entry = super::history_runtime::native::entry_in_realm(scope, entry, context);
     let from = if let Ok(from) = v8::Local::<v8::Object>::try_from(from) {
         super::history_runtime::native::entry_in_realm(scope, from, context).into()
@@ -192,7 +193,11 @@ pub(super) fn install_navigation_activation_runtime_state<'s>(
     current_entry: v8::Local<'s, v8::Object>,
     activation: Option<&NavigationActivationSeed>,
 ) {
-    let activation_value = create_navigation_activation_object(scope, current_entry, activation);
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let activation_value =
+        create_navigation_activation_object(scope, context, current_entry, activation);
     set_navigation_activation_value(scope, navigation, activation_value);
     if super::shared_event_targets::shared_target_owner(scope, navigation)
         .strict_equals(navigation.into())

@@ -13281,6 +13281,50 @@ const initialDocument = frame.contentDocument;
 }
 
 #[test]
+fn initial_about_blank_navigation_activation_uses_child_realm() {
+    let mut vm = new_storage_test_vm("https://activation-realm.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+String(frame.contentWindow.navigation.activation === null)
+"#,
+        )
+        .expect("initial child should have no activation"),
+        "true"
+    );
+    vm.exec(
+        "frame.contentWindow.navigation.navigate('about:blank?next');",
+        None,
+    )
+    .expect("parent should navigate the initial child");
+    vm.drain_pending_child_frame_work_for_test();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const child = frame.contentWindow;
+  const activation = child.navigation.activation;
+  return JSON.stringify([
+    activation.entry === child.navigation.currentEntry,
+    Object.getPrototypeOf(activation) === child.NavigationActivation.prototype,
+    Object.getPrototypeOf(activation.entry) === child.NavigationHistoryEntry.prototype,
+    Object.getPrototypeOf(activation.from) === child.NavigationHistoryEntry.prototype,
+    activation.from.url,
+    activation.from.index,
+    activation.navigationType
+  ]);
+})()
+"#,
+        )
+        .expect("activation and its entries should belong to the child realm"),
+        r#"[true,true,true,true,"about:blank",-1,"replace"]"#
+    );
+}
+
+#[test]
 fn non_initial_about_blank_iframe_assign_appends_history_after_replace() {
     for initial_srcdoc in [false, true] {
         let mut vm = new_storage_test_vm("https://non-initial-blank-history.test/");
