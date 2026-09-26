@@ -13,6 +13,80 @@ struct SetBlockedUrlsParams {
     urls: Vec<String>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableBodyParams {
+    max_total_buffer_size: Option<usize>,
+    max_resource_buffer_size: Option<usize>,
+}
+
+impl DurableBodyParams {
+    fn limits(&self, total: usize) -> moli_bounded_buffer::ByteLimits {
+        moli_bounded_buffer::ByteLimits::new(total, self.max_resource_buffer_size.unwrap_or(total))
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnableDurableBodyParams {
+    enable_durable_messages: Option<bool>,
+    #[serde(flatten)]
+    buffers: DurableBodyParams,
+}
+
+pub(super) enum DurableBodyConfiguration {
+    Unchanged,
+    Set(Option<moli_bounded_buffer::ByteLimits>),
+}
+
+pub(super) fn durable_body_configuration_for_enable(
+    cmd: &Cmd<'_>,
+) -> Result<DurableBodyConfiguration, CommandOutputPlan> {
+    let params = cmd
+        .get_params::<EnableDurableBodyParams>()
+        .map_err(|_| CommandOutputPlan::error(-32602, "InvalidParams"))?
+        .unwrap_or_default();
+    match params.enable_durable_messages {
+        None => Ok(DurableBodyConfiguration::Unchanged),
+        Some(false) => Ok(DurableBodyConfiguration::Set(None)),
+        Some(true) => {
+            // The legacy enable flag requires a nonzero total; the independent
+            // configureDurableMessages command uses zero to disable instead.
+            let Some(total) = params
+                .buffers
+                .max_total_buffer_size
+                .filter(|size| *size > 0)
+            else {
+                return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
+            };
+            Ok(DurableBodyConfiguration::Set(Some(
+                params.buffers.limits(total),
+            )))
+        }
+    }
+}
+
+pub(super) fn configure_durable_messages_command_output_plan(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> CommandOutputPlan {
+    let params = match cmd.get_params::<DurableBodyParams>() {
+        Ok(params) => params.unwrap_or_default(),
+        Err(_) => return CommandOutputPlan::error(-32602, "InvalidParams"),
+    };
+    let limits = params
+        .max_total_buffer_size
+        .filter(|size| *size > 0)
+        .map(|total| params.limits(total));
+    // This command must not wait for renderer policy replay or change the
+    // listener: clients may configure retention while waiting for a debugger.
+    if conn.configure_durable_response_bodies_for_session_owner(cmd.session_id, limits) {
+        CommandOutputPlan::success()
+    } else {
+        CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
+    }
+}
+
 pub(super) fn enabled_command_output_plan(
     conn: &mut CdpConnection,
     session_id: Option<&str>,

@@ -20,6 +20,16 @@ pub fn http_status_text(status: u16) -> &'static str {
         .unwrap_or("")
 }
 
+/// Root commands and the target's primary wire session share one owner.
+pub(crate) fn network_session_key(
+    session_id: Option<&str>,
+    primary_session_id: Option<&str>,
+) -> moli_page_types::DevToolsSessionKey {
+    moli_page_types::DevToolsSessionKey::from_wire_session_id(
+        session_id.filter(|id| Some(*id) != primary_session_id),
+    )
+}
+
 pub fn cdp_cookie_query_report(
     report: &moli_cookie_jar::StoredCookieQueryReport,
 ) -> serde_json::Value {
@@ -44,6 +54,7 @@ mod load_resource;
 mod main_document_progress;
 mod output;
 mod output_queue;
+mod redirect_request;
 mod response_body;
 pub(crate) mod settings;
 #[cfg(test)]
@@ -246,6 +257,9 @@ pub(crate) fn start_network_domain_command_dispatch(
         ),
         NetworkAction::Disable => NetworkDomainCommandTaskStep::Network(
             start_set_network_domain_enabled_command(conn, cmd, false),
+        ),
+        NetworkAction::ConfigureDurableMessages => NetworkDomainCommandTaskStep::Complete(
+            settings::configure_durable_messages_command_output_plan(conn, cmd),
         ),
         NetworkAction::SetCacheDisabled => {
             NetworkDomainCommandTaskStep::Network(start_set_cache_disabled_command(conn, cmd))
@@ -504,6 +518,14 @@ fn start_set_network_domain_enabled_command(
     cmd: &Cmd<'_>,
     enabled: bool,
 ) -> NetworkCommandTaskStep {
+    let durable_configuration = if enabled {
+        match settings::durable_body_configuration_for_enable(cmd) {
+            Ok(limits) => limits,
+            Err(plan) => return NetworkCommandTaskStep::Complete(plan),
+        }
+    } else {
+        settings::DurableBodyConfiguration::Unchanged
+    };
     let updated = if enabled {
         conn.enable_network_listener_for_session_owner(cmd.session_id)
     } else {
@@ -514,6 +536,10 @@ fn start_set_network_domain_enabled_command(
             -31998,
             "BrowserContextNotLoaded",
         ));
+    }
+
+    if let settings::DurableBodyConfiguration::Set(limits) = durable_configuration {
+        conn.configure_durable_response_bodies_for_session_owner(cmd.session_id, limits);
     }
 
     let kind = if enabled {

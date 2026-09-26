@@ -76,7 +76,7 @@ impl PageTargetHost {
         host.target_identity = target_identity;
         host.runtime_slot = TargetRuntimeSlot::from_page_slot(target_page_slot);
         if let Some(session_id) = primary_session_id {
-            host.devtools_sessions.attach_primary(session_id);
+            host.attach_session(session_id);
         }
         host
     }
@@ -133,6 +133,8 @@ impl PageTargetHost {
     }
 
     pub(crate) fn attach_session(&mut self, session_id: String) {
+        self.runtime_slot
+            .bind_response_body_primary_session(&session_id);
         self.devtools_sessions.attach_primary(session_id);
     }
 

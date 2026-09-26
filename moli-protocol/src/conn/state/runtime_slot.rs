@@ -1119,6 +1119,19 @@ impl TargetRuntimeSlot {
         self.network_agent.captured_response_body(request_id)
     }
 
+    pub(crate) fn captured_response_body_for_session(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> Option<&CapturedResponseBody> {
+        self.network_agent.captured_response_body_for_session(
+            request_id,
+            session_id,
+            primary_session_id,
+        )
+    }
+
     pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
         self.network_agent.captured_request_body(request_id)
     }
@@ -1133,16 +1146,39 @@ impl TargetRuntimeSlot {
         self.network_agent.clear_captured_response_bodies();
     }
 
+    pub(crate) fn configure_durable_response_bodies(
+        &mut self,
+        session_key: moli_page_types::DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+        limits: Option<moli_bounded_buffer::ByteLimits>,
+    ) {
+        self.network_agent.configure_durable_response_bodies(
+            session_key,
+            primary_session_id,
+            limits,
+        );
+    }
+
+    pub(crate) fn bind_response_body_primary_session(&mut self, session_id: &str) {
+        self.network_agent
+            .bind_response_body_primary_session(session_id);
+    }
+
+    pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
+        self.network_agent.prepare_response_bodies_for_navigation();
+    }
+
     pub(crate) fn clear_network_body_artifacts(&mut self) {
         self.network_agent.clear_body_artifacts();
     }
 
     pub(crate) fn remove_captured_response_body_visibility_for_session(
         &mut self,
-        session_id: Option<&str>,
+        session_key: &moli_page_types::DevToolsSessionKey,
+        primary_session_id: Option<&str>,
     ) {
         self.network_agent
-            .remove_captured_response_body_visibility_for_session(session_id);
+            .remove_captured_response_body_visibility_for_session(session_key, primary_session_id);
     }
 
     pub(crate) fn allocate_io_stream_handle(&mut self) -> String {

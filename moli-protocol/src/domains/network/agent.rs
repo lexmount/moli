@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use moli_bounded_buffer::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 use moli_core::page::{ScriptNetworkOutputItem, SubresourceNetworkRequestHandle};
+use moli_page_types::DevToolsSessionKey;
+
+use super::network_session_key;
 
 use crate::conn::{CapturedBody, ConnectionNetworkRequestIdAllocator};
 use crate::devtools_runtime::DevToolsNetworkDataType;
@@ -15,6 +18,8 @@ use super::{
 
 const RESPONSE_BODY_BUFFER_MAX_TOTAL_BYTES: usize = 20_000_000;
 const RESPONSE_BODY_BUFFER_MAX_ENTRY_BYTES: usize = 2_000_000;
+// Bound zero-byte bodies and payload-free failure/eviction metadata as well.
+const DURABLE_RESPONSE_BODY_MAX_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererSubresourceTeardownDisposition {
@@ -693,6 +698,18 @@ impl TargetNetworkAgentState {
             .captured_response_body(request_id)
     }
 
+    pub(crate) fn captured_response_body_for_session(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> Option<&CapturedResponseBody> {
+        self.artifacts
+            .body_artifacts
+            .captured_response_bodies
+            .get_for_session(request_id, session_id, primary_session_id)
+    }
+
     pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
         self.artifacts
             .body_artifacts
@@ -705,17 +722,44 @@ impl TargetNetworkAgentState {
             .clear_captured_response_bodies();
     }
 
+    pub(crate) fn configure_durable_response_bodies(
+        &mut self,
+        session_key: DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+        limits: Option<ByteLimits>,
+    ) {
+        self.artifacts
+            .body_artifacts
+            .captured_response_bodies
+            .configure_durable(session_key, primary_session_id, limits);
+    }
+
+    pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
+        self.artifacts
+            .body_artifacts
+            .captured_response_bodies
+            .prepare_navigation();
+    }
+
+    pub(crate) fn bind_response_body_primary_session(&mut self, session_id: &str) {
+        let bodies = &mut self.artifacts.body_artifacts.captured_response_bodies;
+        if !bodies.durable_sessions.is_empty() {
+            bodies.primary_session_id = Some(session_id.to_owned());
+        }
+    }
+
     pub(crate) fn clear_body_artifacts(&mut self) {
         self.artifacts.body_artifacts.clear_session_scoped();
     }
 
     pub(crate) fn remove_captured_response_body_visibility_for_session(
         &mut self,
-        session_id: Option<&str>,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
     ) {
         self.artifacts
             .body_artifacts
-            .remove_session_visibility(session_id);
+            .remove_session_visibility(session_key, primary_session_id);
     }
 
     pub(crate) fn allocate_io_stream_handle(&mut self) -> String {
@@ -1176,6 +1220,17 @@ impl CapturedResponseBody {
             .contains(&session_id.map(std::borrow::ToOwned::to_owned))
     }
 
+    pub(crate) fn is_visible_to_session_owner(
+        &self,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> bool {
+        let owner = network_session_key(session_id, primary_session_id);
+        self.session_ids
+            .iter()
+            .any(|id| network_session_key(id.as_deref(), primary_session_id) == owner)
+    }
+
     pub(crate) fn was_collected_by(&self, collector_id: &str) -> bool {
         self.collector_ids.contains(collector_id)
     }
@@ -1203,9 +1258,13 @@ impl CapturedResponseBody {
         })
     }
 
-    pub(crate) fn remove_session_visibility(&mut self, session_id: Option<&str>) -> bool {
+    pub(crate) fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) -> bool {
         self.session_ids
-            .remove(&session_id.map(std::borrow::ToOwned::to_owned));
+            .retain(|id| network_session_key(id.as_deref(), primary_session_id) != *session_key);
         !self.session_ids.is_empty()
     }
 
@@ -1247,6 +1306,17 @@ impl CapturedRequestBody {
             .contains(&session_id.map(std::borrow::ToOwned::to_owned))
     }
 
+    pub(crate) fn is_visible_to_session_owner(
+        &self,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> bool {
+        let owner = network_session_key(session_id, primary_session_id);
+        self.session_ids
+            .iter()
+            .any(|id| network_session_key(id.as_deref(), primary_session_id) == owner)
+    }
+
     pub(crate) fn was_collected_by(&self, collector_id: &str) -> bool {
         self.collector_ids.contains(collector_id)
     }
@@ -1271,9 +1341,13 @@ impl CapturedRequestBody {
         })
     }
 
-    pub(crate) fn remove_session_visibility(&mut self, session_id: Option<&str>) -> bool {
+    pub(crate) fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) -> bool {
         self.session_ids
-            .remove(&session_id.map(std::borrow::ToOwned::to_owned));
+            .retain(|id| network_session_key(id.as_deref(), primary_session_id) != *session_key);
         !self.session_ids.is_empty()
     }
 }
@@ -1324,18 +1398,23 @@ impl CapturedRequestBodyStore {
         self.bodies.clear();
     }
 
-    pub(crate) fn remove_session_visibility(&mut self, session_id: Option<&str>) {
+    pub(crate) fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) {
         self.bodies
-            .retain(|_, body| body.remove_session_visibility(session_id));
+            .retain(|_, body| body.remove_session_visibility(session_key, primary_session_id));
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CapturedResponseBodyStore {
-    /// Terminal entries without retained payloads. Ready entries live only in
-    /// `buffered_bodies`, making the bounded buffer the single body owner.
-    bodies: HashMap<String, CapturedResponseBody>,
-    buffered_bodies: BoundedByteBuffer<String, CapturedResponseBody>,
+    current_document: ResponseBodyBuffer,
+    // Each collector owns its quota and eviction order. CapturedBody clones
+    // share the underlying allocation/spool through Arc, not copied payloads.
+    durable_sessions: HashMap<DevToolsSessionKey, ResponseBodyBuffer>,
+    primary_session_id: Option<String>,
 }
 
 impl Default for CapturedResponseBodyStore {
@@ -1350,9 +1429,59 @@ impl Default for CapturedResponseBodyStore {
 impl CapturedResponseBodyStore {
     fn with_limits(limits: ByteLimits) -> Self {
         Self {
-            bodies: HashMap::new(),
-            buffered_bodies: BoundedByteBuffer::new(limits),
+            current_document: ResponseBodyBuffer::new(limits, None),
+            durable_sessions: HashMap::new(),
+            primary_session_id: None,
         }
+    }
+
+    fn configure_durable(
+        &mut self,
+        session_key: DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+        limits: Option<ByteLimits>,
+    ) {
+        self.primary_session_id = primary_session_id.map(str::to_owned);
+        if let Some(limits) = limits {
+            let collector = self.durable_sessions.entry(session_key).or_insert_with(|| {
+                ResponseBodyBuffer::new(limits, Some(DURABLE_RESPONSE_BODY_MAX_ENTRIES))
+            });
+            // Like Chromium's collector, reconfiguration only grows a live
+            // quota. Disable first to discard its claims and start smaller.
+            let previous = collector.buffered_bodies.limits();
+            let evicted = collector.buffered_bodies.set_limits(ByteLimits::new(
+                previous.max_total_bytes.max(limits.max_total_bytes),
+                previous.max_entry_bytes.max(limits.max_entry_bytes),
+            ));
+            debug_assert!(evicted.is_empty());
+        } else {
+            self.durable_sessions.remove(&session_key);
+        }
+        if self.durable_sessions.is_empty() {
+            self.primary_session_id = None;
+        }
+    }
+
+    fn prepare_navigation(&mut self) {
+        self.current_document.clear();
+    }
+
+    fn insert_body(&mut self, request_id: String, body: CapturedResponseBody) {
+        if !matches!(body.state, CapturedResponseBodyState::Pending) {
+            for (session_key, collector) in &mut self.durable_sessions {
+                if body.session_ids.iter().any(|id| {
+                    network_session_key(id.as_deref(), self.primary_session_id.as_deref())
+                        == *session_key
+                }) {
+                    let mut claim = body.clone();
+                    claim.session_ids = [session_key.wire_session_id().map(str::to_owned)].into();
+                    // CDP retention does not grant BiDi collection rights.
+                    claim.collector_ids.clear();
+                    collector.insert(request_id.clone(), claim);
+                }
+            }
+        }
+        self.current_document.insert(request_id, body);
     }
 
     #[cfg(test)]
@@ -1366,7 +1495,7 @@ impl CapturedResponseBodyStore {
             request_id,
             CapturedBody::from_string(body),
             session_ids,
-            std::iter::empty::<String>(),
+            [],
             false,
         );
     }
@@ -1379,29 +1508,15 @@ impl CapturedResponseBodyStore {
         collector_ids: impl IntoIterator<Item = String>,
         collection_was_gated: bool,
     ) {
-        let byte_len = body.len();
-        let captured = CapturedResponseBody::from_captured_body_with_collector_scope(
-            body,
-            session_ids,
-            collector_ids,
-            collection_was_gated,
+        self.insert_body(
+            request_id,
+            CapturedResponseBody::from_captured_body_with_collector_scope(
+                body,
+                session_ids,
+                collector_ids,
+                collection_was_gated,
+            ),
         );
-        self.bodies.remove(&request_id);
-        match self.buffered_bodies.insert(request_id, captured, byte_len) {
-            InsertOutcome::Stored { evicted } => {
-                for (evicted_request_id, mut evicted_body) in evicted {
-                    evicted_body.mark_evicted();
-                    self.bodies.insert(evicted_request_id, evicted_body);
-                }
-            }
-            InsertOutcome::Rejected {
-                key: request_id,
-                value: mut rejected_body,
-            } => {
-                rejected_body.mark_evicted();
-                self.bodies.insert(request_id, rejected_body);
-            }
-        }
     }
 
     pub(crate) fn insert_pending_with_collector_scope(
@@ -1411,19 +1526,16 @@ impl CapturedResponseBodyStore {
         collector_ids: impl IntoIterator<Item = String>,
         collection_was_gated: bool,
     ) {
-        if self.bodies.contains_key(&request_id)
-            || self.buffered_bodies.contains_key(request_id.as_str())
-        {
-            return;
+        if self.current_document.get(&request_id).is_none() {
+            self.current_document.insert(
+                request_id,
+                CapturedResponseBody::pending_with_collector_scope(
+                    session_ids,
+                    collector_ids,
+                    collection_was_gated,
+                ),
+            );
         }
-        self.bodies.insert(
-            request_id,
-            CapturedResponseBody::pending_with_collector_scope(
-                session_ids,
-                collector_ids,
-                collection_was_gated,
-            ),
-        );
     }
 
     pub(crate) fn insert_failed_with_collector_scope(
@@ -1434,8 +1546,7 @@ impl CapturedResponseBodyStore {
         collector_ids: impl IntoIterator<Item = String>,
         collection_was_gated: bool,
     ) {
-        self.buffered_bodies.remove(&request_id);
-        self.bodies.insert(
+        self.insert_body(
             request_id,
             CapturedResponseBody::failed_with_collector_scope(
                 error_text,
@@ -1447,57 +1558,166 @@ impl CapturedResponseBodyStore {
     }
 
     pub(crate) fn get(&self, request_id: &str) -> Option<&CapturedResponseBody> {
-        self.buffered_bodies
+        self.current_document.get(request_id)
+    }
+
+    fn get_for_session(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> Option<&CapturedResponseBody> {
+        let current = self
+            .current_document
             .get(request_id)
-            .or_else(|| self.bodies.get(request_id))
+            .filter(|body| body.is_visible_to_session_owner(session_id, primary_session_id));
+        let retained = self
+            .durable_sessions
+            .get(&network_session_key(session_id, primary_session_id))
+            .and_then(|collector| collector.get(request_id));
+        // The current document cache can still serve a body that exceeded the
+        // durable quota, just as the renderer cache can in Chromium.
+        retained
+            .filter(|body| matches!(body.state, CapturedResponseBodyState::Ready(_)))
+            .or(current)
+            .or(retained)
     }
 
     fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
-        self.buffered_bodies
+        self.current_document
+            .buffered_bodies
             .iter()
-            .chain(self.bodies.iter())
+            .chain(self.current_document.bodies.iter())
             .filter_map(|(request_id, body)| body.collected_network_data_artifact(request_id))
             .collect()
     }
 
     pub(crate) fn clear(&mut self) {
-        self.bodies.clear();
-        self.buffered_bodies.clear();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.bodies.is_empty() && self.buffered_bodies.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn contains_key(&self, request_id: &str) -> bool {
-        self.bodies.contains_key(request_id) || self.buffered_bodies.contains_key(request_id)
-    }
-
-    pub(crate) fn remove_session_visibility(&mut self, session_id: Option<&str>) {
-        self.bodies
-            .retain(|_, body| body.remove_session_visibility(session_id));
-
-        let buffered_request_ids = self
-            .buffered_bodies
-            .iter()
-            .map(|(request_id, _)| request_id.clone())
-            .collect::<Vec<_>>();
-        for request_id in buffered_request_ids {
-            let retain = self
-                .buffered_bodies
-                .get_mut(request_id.as_str())
-                .is_some_and(|body| body.remove_session_visibility(session_id));
-            if !retain {
-                self.buffered_bodies.remove(request_id.as_str());
-            }
+        self.current_document.clear();
+        for collector in self.durable_sessions.values_mut() {
+            collector.clear();
         }
     }
 
     #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.current_document.is_empty()
+            && self
+                .durable_sessions
+                .values()
+                .all(ResponseBodyBuffer::is_empty)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(&self, request_id: &str) -> bool {
+        self.current_document.get(request_id).is_some()
+            || self
+                .durable_sessions
+                .values()
+                .any(|collector| collector.get(request_id).is_some())
+    }
+
+    pub(crate) fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) {
+        self.durable_sessions.remove(session_key);
+        if self.durable_sessions.is_empty() {
+            self.primary_session_id = None;
+        }
+        self.current_document
+            .remove_session_visibility(session_key, primary_session_id);
+    }
+
+    #[cfg(test)]
     fn buffered_body_bytes(&self) -> usize {
-        self.buffered_bodies.used_bytes()
+        self.current_document.buffered_bodies.used_bytes()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResponseBodyBuffer {
+    /// Pending/failed/evicted metadata has no payload charge.
+    bodies: HashMap<String, CapturedResponseBody>,
+    buffered_bodies: BoundedByteBuffer<String, CapturedResponseBody>,
+    entry_order: VecDeque<String>,
+    max_entries: Option<usize>,
+}
+
+impl ResponseBodyBuffer {
+    fn new(limits: ByteLimits, max_entries: Option<usize>) -> Self {
+        Self {
+            bodies: HashMap::new(),
+            buffered_bodies: BoundedByteBuffer::new(limits),
+            entry_order: VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    fn insert(&mut self, request_id: String, body: CapturedResponseBody) {
+        self.bodies.remove(&request_id);
+        self.buffered_bodies.remove(&request_id);
+        if let CapturedResponseBodyState::Ready(payload) = &body.state {
+            let byte_len = payload.len();
+            match self
+                .buffered_bodies
+                .insert(request_id.clone(), body, byte_len)
+            {
+                InsertOutcome::Stored { evicted } => {
+                    for (id, mut body) in evicted {
+                        body.mark_evicted();
+                        self.bodies.insert(id, body);
+                    }
+                }
+                InsertOutcome::Rejected { key, mut value } => {
+                    value.mark_evicted();
+                    self.bodies.insert(key, value);
+                }
+            }
+        } else {
+            self.bodies.insert(request_id.clone(), body);
+        }
+        if let Some(max_entries) = self.max_entries {
+            self.entry_order.retain(|id| *id != request_id);
+            self.entry_order.push_back(request_id);
+            while self.entry_order.len() > max_entries {
+                if let Some(id) = self.entry_order.pop_front() {
+                    self.bodies.remove(&id);
+                    self.buffered_bodies.remove(&id);
+                }
+            }
+        }
+    }
+
+    fn get(&self, request_id: &str) -> Option<&CapturedResponseBody> {
+        self.buffered_bodies
+            .get(request_id)
+            .or_else(|| self.bodies.get(request_id))
+    }
+
+    fn clear(&mut self) {
+        self.bodies.clear();
+        self.buffered_bodies.clear();
+        self.entry_order.clear();
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.bodies.is_empty() && self.buffered_bodies.is_empty()
+    }
+
+    fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) {
+        self.bodies
+            .retain(|_, body| body.remove_session_visibility(session_key, primary_session_id));
+        self.buffered_bodies
+            .retain(|_, body| body.remove_session_visibility(session_key, primary_session_id));
+        self.entry_order
+            .retain(|id| self.bodies.contains_key(id) || self.buffered_bodies.contains_key(id));
     }
 }
 
@@ -1738,11 +1958,15 @@ impl TargetNetworkBodyArtifacts {
         self.captured_response_bodies.clear();
     }
 
-    pub(crate) fn remove_session_visibility(&mut self, session_id: Option<&str>) {
+    pub(crate) fn remove_session_visibility(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+        primary_session_id: Option<&str>,
+    ) {
         self.captured_request_bodies
-            .remove_session_visibility(session_id);
+            .remove_session_visibility(session_key, primary_session_id);
         self.captured_response_bodies
-            .remove_session_visibility(session_id);
+            .remove_session_visibility(session_key, primary_session_id);
     }
 
     pub(crate) fn allocate_io_stream_handle(&mut self) -> String {
@@ -1954,9 +2178,234 @@ mod tests {
         let store = CapturedResponseBodyStore::default();
 
         assert_eq!(
-            store.buffered_bodies.limits(),
+            store.current_document.buffered_bodies.limits(),
             moli_bounded_buffer::ByteLimits::new(20_000_000, 2_000_000)
         );
+    }
+
+    #[test]
+    fn durable_response_body_smaller_peer_or_reconfiguration_cannot_evict_owner() {
+        let mut store = CapturedResponseBodyStore::default();
+        let owner = moli_page_types::DevToolsSessionKey::Attached("a".into());
+        let peer = moli_page_types::DevToolsSessionKey::Attached("b".into());
+        store.configure_durable(
+            owner.clone(),
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(10_000_000, 10_000_000)),
+        );
+        store.insert("large".into(), "x".repeat(5_000_000), [Some("a".into())]);
+        store.configure_durable(
+            peer,
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(1_000_000, 1_000_000)),
+        );
+        store.configure_durable(
+            owner.clone(),
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(1_000_000, 1_000_000)),
+        );
+        store.prepare_navigation();
+        assert_eq!(
+            store
+                .get_for_session("large", Some("a"), None)
+                .unwrap()
+                .body_bytes_limited(5_000_000)
+                .unwrap()
+                .len(),
+            5_000_000
+        );
+        assert!(store.get_for_session("large", Some("b"), None).is_none());
+        assert_eq!(
+            store.durable_sessions[&owner].buffered_bodies.used_bytes(),
+            5_000_000
+        );
+    }
+
+    #[test]
+    fn durable_response_body_quotas_evict_only_the_requesting_collectors_claim() {
+        let mut store = CapturedResponseBodyStore::default();
+        let owner = moli_page_types::DevToolsSessionKey::Attached("a".into());
+        let peer = moli_page_types::DevToolsSessionKey::Attached("b".into());
+        store.configure_durable(
+            owner.clone(),
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(10, 10)),
+        );
+        store.configure_durable(
+            peer.clone(),
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(4, 4)),
+        );
+        store.insert(
+            "shared".into(),
+            "body".into(),
+            [Some("a".into()), Some("b".into())],
+        );
+        store.prepare_navigation();
+        for session in ["a", "b"] {
+            assert_eq!(
+                store
+                    .get_for_session("shared", Some(session), None)
+                    .unwrap()
+                    .body_bytes_limited(10)
+                    .unwrap(),
+                b"body"
+            );
+        }
+        store.insert("b-only".into(), "b".into(), [Some("b".into())]);
+        store.prepare_navigation();
+        assert_eq!(
+            store
+                .get_for_session("shared", Some("a"), None)
+                .unwrap()
+                .body_bytes_limited(10)
+                .unwrap(),
+            b"body"
+        );
+        assert_eq!(
+            store
+                .get_for_session("shared", Some("b"), None)
+                .unwrap()
+                .body_bytes_limited(10)
+                .unwrap_err()
+                .to_string(),
+            "Request content was evicted from inspector cache"
+        );
+        assert_eq!(
+            store.durable_sessions[&owner].buffered_bodies.used_bytes(),
+            4
+        );
+        assert_eq!(
+            store.durable_sessions[&peer].buffered_bodies.used_bytes(),
+            1
+        );
+        store.configure_durable(owner, None, None);
+        assert!(store.get_for_session("shared", Some("a"), None).is_none());
+        assert_eq!(
+            store
+                .get_for_session("b-only", Some("b"), None)
+                .unwrap()
+                .body_bytes_limited(10)
+                .unwrap(),
+            b"b"
+        );
+    }
+
+    #[test]
+    fn durable_response_body_metadata_limit_is_per_collector() {
+        let mut store = CapturedResponseBodyStore::default();
+        let owner = moli_page_types::DevToolsSessionKey::Attached("a".into());
+        let peer = moli_page_types::DevToolsSessionKey::Attached("b".into());
+        for key in [&owner, &peer] {
+            store.configure_durable(
+                key.clone(),
+                None,
+                Some(moli_bounded_buffer::ByteLimits::new(100, 100)),
+            );
+        }
+        store.insert("a-only".into(), "a".into(), [Some("a".into())]);
+        for n in 0..super::DURABLE_RESPONSE_BODY_MAX_ENTRIES + 10 {
+            store.insert(format!("empty-{n}"), String::new(), [Some("b".into())]);
+            store.insert_failed_with_collector_scope(
+                format!("failed-{n}"),
+                "failed".into(),
+                [Some("b".into())],
+                [],
+                false,
+            );
+        }
+        store.prepare_navigation();
+        let collector = &store.durable_sessions[&peer];
+        assert_eq!(
+            collector.entry_order.len(),
+            super::DURABLE_RESPONSE_BODY_MAX_ENTRIES
+        );
+        assert_eq!(
+            collector.bodies.len() + collector.buffered_bodies.len(),
+            super::DURABLE_RESPONSE_BODY_MAX_ENTRIES
+        );
+        assert_eq!(
+            store
+                .get_for_session("a-only", Some("a"), None)
+                .unwrap()
+                .body_bytes_limited(10)
+                .unwrap(),
+            b"a"
+        );
+        store.remove_session_visibility(&peer, None);
+        assert_eq!(
+            store
+                .get_for_session("a-only", Some("a"), None)
+                .unwrap()
+                .body_bytes_limited(10)
+                .unwrap(),
+            b"a"
+        );
+        store.remove_session_visibility(&owner, None);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn durable_response_body_navigation_keeps_only_claims_acquired_during_capture() {
+        let mut store = CapturedResponseBodyStore::default();
+        let owner = moli_page_types::DevToolsSessionKey::Attached("a".into());
+        let late = moli_page_types::DevToolsSessionKey::Attached("late".into());
+        store.configure_durable(
+            owner.clone(),
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(100, 50)),
+        );
+        store.insert(
+            "old".into(),
+            "body".into(),
+            [Some("a".into()), Some("late".into())],
+        );
+        store.insert_pending_with_collector_scope("pending".into(), [Some("a".into())], [], false);
+        store.configure_durable(
+            late,
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(100, 50)),
+        );
+        store.prepare_navigation();
+        assert!(store.get_for_session("old", Some("a"), None).is_some());
+        assert!(store.get_for_session("old", Some("late"), None).is_none());
+        assert!(!store.contains_key("pending"));
+        assert!(
+            store.get("old").is_none(),
+            "CDP retention is not the current document/BiDi cache"
+        );
+        store.insert("current".into(), "current".into(), [Some("a".into())]);
+        store.configure_durable(owner, None, None);
+        assert!(store.get_for_session("old", Some("a"), None).is_none());
+        assert!(store.get_for_session("current", Some("a"), None).is_some());
+        store.prepare_navigation();
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn durable_response_body_budget_is_not_clamped_to_default_document_cache() {
+        let mut store = CapturedResponseBodyStore::default();
+        store.configure_durable(
+            moli_page_types::DevToolsSessionKey::Primary,
+            None,
+            Some(moli_bounded_buffer::ByteLimits::new(24_000_000, 12_000_000)),
+        );
+        store.insert("large-a".into(), "a".repeat(11_000_000), [None]);
+        store.insert("large-b".into(), "b".repeat(11_000_000), [None]);
+        store.prepare_navigation();
+        for id in ["large-a", "large-b"] {
+            assert_eq!(
+                store
+                    .get_for_session(id, None, None)
+                    .unwrap()
+                    .body_bytes_limited(12_000_000)
+                    .unwrap()
+                    .len(),
+                11_000_000
+            );
+        }
+        store.clear();
+        assert!(store.is_empty());
     }
 
     #[test]
@@ -2042,7 +2491,10 @@ mod tests {
             false,
         );
         assert_eq!(store.buffered_body_bytes(), 3);
-        store.remove_session_visibility(Some("SID-1"));
+        store.remove_session_visibility(
+            &moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("SID-1")),
+            None,
+        );
         assert_eq!(store.buffered_body_bytes(), 0);
         assert!(store.get("REQ-session").is_none());
     }

@@ -350,9 +350,13 @@ impl BrowserContext {
         target
             .runtime_slot
             .remove_network_session_observation_cursor(listener_session_id.as_deref());
+        let primary_session_id = target.session_id().map(str::to_owned);
         target
             .runtime_slot
-            .remove_captured_response_body_visibility_for_session(listener_session_id.as_deref());
+            .remove_captured_response_body_visibility_for_session(
+                session_key,
+                primary_session_id.as_deref(),
+            );
         if !target.runtime_slot.has_network_event_listeners() {
             target.runtime_slot.clear_captured_response_bodies();
             target.runtime_slot.clear_websocket_request_ids();

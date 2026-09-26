@@ -15,6 +15,433 @@ use crate::domains::network::{
 
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_preserves_body_across_real_navigation_and_disables() {
+    async fn navigate(ctx: &mut TestContext, id: u64, url: &str) -> String {
+        ctx.sent.clear();
+        ctx.process_async(json!({"id":id,"method":"Page.navigate","params":{"url":url}}))
+            .await;
+        wait_until_messages(
+            ctx,
+            Some("SID-primary"),
+            "durable document response finished",
+            |messages| {
+                messages
+                    .iter()
+                    .find_map(|message| {
+                        (message["method"] == "Network.requestWillBeSent"
+                            && message["params"]["request"]["url"] == url)
+                            .then(|| message["params"]["requestId"].as_str())
+                            .flatten()
+                    })
+                    .is_some_and(|request_id| {
+                        messages.iter().any(|message| {
+                            message["method"] == "Network.loadingFinished"
+                                && message["params"]["requestId"] == request_id
+                        })
+                    })
+            },
+        )
+        .await;
+        ctx.sent
+            .iter()
+            .find(|message| {
+                message["method"] == "Network.requestWillBeSent"
+                    && message["params"]["request"]["url"] == url
+            })
+            .unwrap()["params"]["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/{page}",
+                get(|| async { axum::response::Html("<!doctype html><p>retained document</p>") }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    for disable in [json!({}), json!({"maxTotalBufferSize":0})] {
+        let mut ctx = TestContext::new();
+        let mut bc = BrowserContext::new("BID-configure".into());
+        bc.set_active_target_id("TID-configure");
+        bc.attach_active_session("SID-primary");
+        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.process_async(json!({"id":79_500,"method":"Network.enable"}))
+            .await;
+        ctx.expect_result(79_500, json!({}), None);
+        ctx.process_async(json!({"id":79_501,"method":"Network.configureDurableMessages","params":{"maxTotalBufferSize":4096}})).await;
+        ctx.expect_result(79_501, json!({}), None);
+        let old_id = navigate(&mut ctx, 79_502, &format!("http://{addr}/first")).await;
+        navigate(&mut ctx, 79_503, &format!("http://{addr}/second")).await;
+        ctx.process_async(
+            json!({"id":79_504,"method":"Network.getResponseBody","params":{"requestId":old_id}}),
+        )
+        .await;
+        ctx.expect_result(
+            79_504,
+            json!({"body":"<!doctype html><p>retained document</p>","base64Encoded":false}),
+            None,
+        );
+        ctx.process_async(json!({"id":79_505,"method":"Network.configureDurableMessages","sessionId":"SID-primary","params":disable})).await;
+        ctx.expect_result(79_505, json!({}), Some("SID-primary"));
+        ctx.process_async(
+            json!({"id":79_506,"method":"Network.getResponseBody","params":{"requestId":old_id}}),
+        )
+        .await;
+        ctx.expect_error(79_506, -32000, "No resource with given identifier found");
+        let ordinary_id = navigate(&mut ctx, 79_507, &format!("http://{addr}/third")).await;
+        navigate(&mut ctx, 79_508, &format!("http://{addr}/fourth")).await;
+        ctx.process_async(json!({"id":79_509,"method":"Network.getResponseBody","params":{"requestId":ordinary_id}})).await;
+        ctx.expect_error(79_509, -32000, "No resource with given identifier found");
+        assert!(
+            ctx.conn
+                .runtime_session_owner_slot(None)
+                .unwrap()
+                .primary_network_events_enabled()
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_is_independent_of_network_listener() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-configure".into());
+    bc.set_active_target_id("TID-configure");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.process_async(json!({"id":79_520,"method":"Network.configureDurableMessages","params":{"maxTotalBufferSize":128}})).await;
+    ctx.expect_result(79_520, json!({}), None);
+    // A root collector can exist before the primary wire identity is bound.
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .attach_active_session("SID-primary");
+    assert!(
+        !ctx.conn
+            .runtime_session_owner_slot(None)
+            .unwrap()
+            .has_network_event_listeners()
+    );
+    ctx.process_async(json!({"id":79_521,"method":"Network.enable"}))
+        .await;
+    ctx.expect_result(79_521, json!({}), None);
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.record_captured_response_body(
+        "REQ-configured".into(),
+        "retained".into(),
+        [Some("SID-primary".into())],
+    );
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_522,"method":"Network.getResponseBody","params":{"requestId":"REQ-configured"}})).await;
+    ctx.expect_result(
+        79_522,
+        json!({"body":"retained","base64Encoded":false}),
+        None,
+    );
+    ctx.process_async(json!({"id":79_523,"method":"Network.configureDurableMessages","params":{}}))
+        .await;
+    ctx.expect_result(79_523, json!({}), None);
+    assert!(
+        ctx.conn
+            .runtime_session_owner_slot(None)
+            .unwrap()
+            .primary_network_events_enabled()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_durable_messages_validates_sizes_and_accepts_zero_resource_budget() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-configure".into());
+    bc.set_active_target_id("TID-configure");
+    bc.attach_active_session("SID-primary");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    for (index, params) in [
+        json!({"maxTotalBufferSize":-1}),
+        json!({"maxTotalBufferSize":"128"}),
+        json!({"maxTotalBufferSize":128,"maxResourceBufferSize":-1}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 79_530 + index as u64;
+        ctx.process_async(
+            json!({"id":id,"method":"Network.configureDurableMessages","params":params}),
+        )
+        .await;
+        ctx.expect_error(id, -32602, "InvalidParams");
+    }
+    for (id, method, params) in [
+        (
+            79_540,
+            "Network.enable",
+            json!({"enableDurableMessages":true,"maxTotalBufferSize":128,"maxResourceBufferSize":0}),
+        ),
+        (
+            79_541,
+            "Network.configureDurableMessages",
+            json!({"maxTotalBufferSize":128,"maxResourceBufferSize":0}),
+        ),
+    ] {
+        ctx.process_async(json!({"id":id,"method":method,"params":params}))
+            .await;
+        ctx.expect_result(id, json!({}), None);
+    }
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.record_captured_response_body(
+        "REQ-no-capacity".into(),
+        "body".into(),
+        [Some("SID-primary".into())],
+    );
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_542,"method":"Network.getResponseBody","params":{"requestId":"REQ-no-capacity"}})).await;
+    ctx.expect_error(
+        79_542,
+        -32000,
+        "Request content was evicted from inspector cache",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_primary_aliases_share_configuration_access_and_revocation() {
+    for configure_session in [None, Some("SID-primary")] {
+        for recorded_session in [None, Some("SID-primary")] {
+            let mut ctx = TestContext::new();
+            let mut bc = BrowserContext::new("BID-alias".into());
+            bc.set_active_target_id("TID-alias");
+            bc.attach_active_session("SID-primary");
+            assert!(bc.assign_attached_session_to_target("TID-alias", "SID-peer".into()));
+            ctx.conn.install_browser_context_fixture_for_test(bc);
+            let params = json!({"enableDurableMessages":true,"maxTotalBufferSize":1024});
+            for (id, session) in [(79_400, configure_session), (79_401, Some("SID-peer"))] {
+                ctx.process_async(
+                    json!({"id":id,"method":"Network.enable","sessionId":session,"params":params}),
+                )
+                .await;
+                ctx.expect_result(id, json!({}), session);
+            }
+            let bc = ctx.conn.browser_context.as_mut().unwrap();
+            bc.record_captured_response_body(
+                "REQ-primary".into(),
+                "retained".into(),
+                [recorded_session.map(str::to_owned), Some("SID-peer".into())],
+            );
+            bc.active_page_target_mut()
+                .prepare_document_navigation_request_ids(
+                    &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+                    true,
+                    true,
+                    false,
+                );
+            for (id, session) in [(79_402, None), (79_403, Some("SID-primary"))] {
+                ctx.process_async(json!({"id":id,"method":"Network.getResponseBody","sessionId":session,"params":{"requestId":"REQ-primary"}})).await;
+                ctx.expect_result(
+                    id,
+                    json!({"body":"retained","base64Encoded":false}),
+                    session,
+                );
+            }
+            let disable_session = configure_session.is_none().then_some("SID-primary");
+            ctx.process_async(
+                json!({"id":79_404,"method":"Network.disable","sessionId":disable_session}),
+            )
+            .await;
+            ctx.expect_result(79_404, json!({}), disable_session);
+            ctx.process_async(json!({"id":79_405,"method":"Network.enable","sessionId":configure_session,"params":params})).await;
+            ctx.expect_result(79_405, json!({}), configure_session);
+            ctx.process_async(json!({"id":79_406,"method":"Network.getResponseBody","sessionId":configure_session,"params":{"requestId":"REQ-primary"}})).await;
+            ctx.expect_error(79_406, -32000, "No resource with given identifier found");
+            ctx.process_async(json!({"id":79_407,"method":"Network.getResponseBody","sessionId":"SID-peer","params":{"requestId":"REQ-primary"}})).await;
+            ctx.expect_result(
+                79_407,
+                json!({"body":"retained","base64Encoded":false}),
+                Some("SID-peer"),
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_survives_navigation_only_for_opted_session() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-durable".into());
+    bc.set_active_target_id("TID-durable".to_owned());
+    bc.attach_active_session("SID-durable".to_owned());
+    assert!(bc.assign_attached_session_to_target("TID-durable", "SID-ordinary".to_owned()));
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    for (id, session, params) in [
+        (
+            79_100,
+            "SID-durable",
+            json!({"enableDurableMessages":true,"maxTotalBufferSize":1024,"maxResourceBufferSize":128}),
+        ),
+        (79_101, "SID-ordinary", json!({})),
+    ] {
+        ctx.process_async(
+            json!({"id":id,"method":"Network.enable","sessionId":session,"params":params}),
+        )
+        .await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.record_captured_response_body(
+        "REQ-durable".into(),
+        "retained".into(),
+        [Some("SID-durable".into()), Some("SID-ordinary".into())],
+    );
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_102,"method":"Network.getResponseBody","sessionId":"SID-durable","params":{"requestId":"REQ-durable"}})).await;
+    ctx.expect_result(
+        79_102,
+        json!({"body":"retained","base64Encoded":false}),
+        Some("SID-durable"),
+    );
+    ctx.process_async(json!({"id":79_103,"method":"Network.getResponseBody","sessionId":"SID-ordinary","params":{"requestId":"REQ-durable"}})).await;
+    ctx.expect_error(79_103, -32000, "No resource with given identifier found");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_requires_explicit_positive_total_budget() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-durable".into());
+    bc.set_active_target_id("TID-durable".to_owned());
+    bc.attach_active_session("SID-durable".to_owned());
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    for (index, params) in [
+        json!({"enableDurableMessages":true}),
+        json!({"enableDurableMessages":true,"maxTotalBufferSize":0}),
+        json!({"enableDurableMessages":true,"maxTotalBufferSize":-1}),
+        json!({"enableDurableMessages":"true","maxTotalBufferSize":100}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 79_104 + index as u64;
+        ctx.process_async(
+            json!({"id":id,"method":"Network.enable","sessionId":"SID-durable","params":params}),
+        )
+        .await;
+        ctx.expect_error(id, -32602, "InvalidParams");
+    }
+    assert!(
+        !ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .runtime_slot
+            .has_network_event_listeners()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_disable_detach_close_and_other_target_do_not_leak() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-durable".into());
+    bc.set_active_target_id("TID-durable".to_owned());
+    bc.attach_active_session("SID-owner".to_owned());
+    assert!(bc.assign_attached_session_to_target("TID-durable", "SID-detach".to_owned()));
+    bc.insert_page_target_host(PageTargetHost::new(
+        "TID-other".into(),
+        Some("SID-other".into()),
+        TargetIdentityState::about_blank(),
+        TargetPageSlot::empty_for_test_fixture(),
+    ));
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    let params =
+        json!({"enableDurableMessages":true,"maxTotalBufferSize":1024,"maxResourceBufferSize":128});
+    for (index, session) in ["SID-owner", "SID-detach", "SID-other"]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 79_200 + index as u64;
+        ctx.process_async(
+            json!({"id":id,"method":"Network.enable","sessionId":session,"params":params}),
+        )
+        .await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    bc.page_target_mut("TID-durable")
+        .unwrap()
+        .runtime_slot
+        .record_captured_response_body(
+            "REQ-old".into(),
+            "retained".into(),
+            [Some("SID-owner".into()), Some("SID-detach".into())],
+        );
+    bc.page_target_mut("TID-durable")
+        .unwrap()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    ctx.process_async(json!({"id":79_203,"method":"Network.getResponseBody","sessionId":"SID-other","params":{"requestId":"REQ-old"}})).await;
+    ctx.expect_error(79_203, -32000, "No resource with given identifier found");
+    ctx.process_async(json!({"id":79_204,"method":"Network.disable","sessionId":"SID-owner"}))
+        .await;
+    ctx.expect_result(79_204, json!({}), Some("SID-owner"));
+    ctx.process_async(
+        json!({"id":79_205,"method":"Network.enable","sessionId":"SID-owner","params":params}),
+    )
+    .await;
+    ctx.expect_result(79_205, json!({}), Some("SID-owner"));
+    ctx.process_async(json!({"id":79_206,"method":"Network.getResponseBody","sessionId":"SID-owner","params":{"requestId":"REQ-old"}})).await;
+    ctx.expect_error(79_206, -32000, "No resource with given identifier found");
+    ctx.process_async(
+        json!({"id":79_207,"method":"Target.detachFromTarget","params":{"sessionId":"SID-detach"}}),
+    )
+    .await;
+    ctx.expect_result(79_207, json!({}), None);
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .page_target("TID-durable")
+            .unwrap()
+            .runtime_slot
+            .captured_response_body("REQ-old")
+            .is_none()
+    );
+    ctx.process_async(
+        json!({"id":79_208,"method":"Target.closeTarget","params":{"targetId":"TID-durable"}}),
+    )
+    .await;
+    ctx.expect_result(79_208, json!({"success":true}), None);
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert!(bc.page_target("TID-durable").is_none());
+    assert!(bc.page_target("TID-other").is_some());
+}
+
 fn bidi_network_context(session_id: &str) -> crate::devtools_runtime::DevToolsCommandContext {
     crate::devtools_runtime::DevToolsCommandContext {
         protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
