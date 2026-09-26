@@ -610,15 +610,15 @@ async fn websocket_cdp_renderer_navigation_replaces_pending_response_without_cli
         }),
     )
     .await;
-    timeout(Duration::from_secs(3), async {
-        while !messages.iter().any(|message| {
-            message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
-        }) {
-            messages.push(recv_ws_json(&mut socket).await);
-        }
-    })
-    .await
-    .expect("replacement must load while the first response is still pending");
+    let replacement_loaded = |message: &serde_json::Value| {
+        message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
+    };
+    if !messages.iter().any(replacement_loaded) {
+        // /hang never responds, so reaching load proves replacement without
+        // imposing a scheduling deadline on a fully parallel test run.
+        // This helper only receives events; it sends no extra client commands.
+        messages.extend(recv_until_match(&mut socket, replacement_loaded).await);
+    }
     let committed_urls = messages
         .iter()
         .filter(|message| {
