@@ -3,11 +3,14 @@ use crate::table::Table;
 use crate::visibility::nonrendered_serialized_state;
 use crate::writer::{Style, Writer, longest_run};
 use crate::{Dom, NodeKind, Options};
+use std::collections::HashSet;
 
 enum Task<'a, Id> {
     Visit(Id, usize),
     Children(Option<Id>, usize),
     Boundary,
+    ChoiceBoundary,
+    RestoreSvg(bool),
     PopStyle,
     EndLink(usize),
     EndQuote,
@@ -38,6 +41,9 @@ struct Machine<'a, D: Dom + ?Sized> {
     tables: Vec<Table<D::NodeId>>,
     raw: String,
     serial: usize,
+    in_svg: bool,
+    anchor_targets: HashSet<String>,
+    emitted_anchors: HashSet<String>,
 }
 
 pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Options) -> String {
@@ -50,6 +56,9 @@ pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Optio
         tables: Vec::new(),
         raw: String::new(),
         serial: 0,
+        in_svg: false,
+        anchor_targets: crate::anchors::referenced(dom, root, options.max_depth),
+        emitted_anchors: HashSet::new(),
     };
     machine.run();
     machine.take_writer().into_string()
@@ -69,6 +78,8 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 Task::Children(None, _) | Task::RawChildren(None, _, _) => {}
                 Task::Boundary => self.writer().boundary(2),
+                Task::ChoiceBoundary => self.writer().boundary(1),
+                Task::RestoreSvg(previous) => self.in_svg = previous,
                 Task::PopStyle => self.writer().pop_style(),
                 Task::EndLink(serial) => self.writer().end_link(serial),
                 Task::EndQuote => {
@@ -187,6 +198,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if depth >= self.options.max_depth {
             return;
         }
+        if self.dom.has_block_layout(node) {
+            self.writer().boundary(2);
+            self.tasks.push(Task::Boundary);
+        } else if self.dom.has_text_boundary(node) {
+            self.writer().boundary(1);
+            self.tasks.push(Task::ChoiceBoundary);
+        }
         let tag = match self.dom.node_kind(node) {
             NodeKind::Document => {
                 self.children(node, depth + 1);
@@ -202,11 +220,70 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if nonrendered_serialized_state(self.dom, node) {
             return;
         }
-        if let Some(table) = self.tables.last_mut() {
-            table.visit_element(tag);
+        let tooltip = self
+            .dom
+            .attribute(node, "data-toggle")
+            .is_some_and(|value| value.eq_ignore_ascii_case("tooltip"));
+        if tooltip
+            && !subtree_has_content(self.dom, node, self.options.max_depth - depth)
+            && let Some(value) = self
+                .dom
+                .attribute(node, "data-original-title")
+                .filter(|value| !value.trim().is_empty())
+        {
+            self.writer().text(value);
+            return;
+        }
+        if tooltip && self.dom.attribute(node, "title").is_some() {
+            self.writer().boundary(1);
+            self.tasks.push(Task::ChoiceBoundary);
+        }
+        if tag == "i"
+            && self.dom.first_child(node).is_none()
+            && self.dom.attribute(node, "class").is_some_and(|class| {
+                class.split_ascii_whitespace().any(|token| {
+                    let token = token.to_ascii_lowercase();
+                    matches!(
+                        token.as_str(),
+                        "check" | "fa-check" | "icon-check" | "bi-check"
+                    )
+                })
+            })
+        {
+            self.writer().text("✓");
+            return;
+        }
+        if tag != "table"
+            && !matches!(
+                tag,
+                "head" | "script" | "style" | "noscript" | "template" | "title"
+            )
+        {
+            for attribute in ["id", "name"] {
+                if attribute == "name" && tag != "a" {
+                    continue;
+                }
+                if let Some(id) = self.dom.attribute(node, attribute)
+                    && self.anchor_targets.contains(id)
+                {
+                    if self.emitted_anchors.insert(id.to_owned()) {
+                        self.writer().inline_html(&crate::anchors::markup(id));
+                    }
+                }
+            }
         }
         match tag {
+            "math" => {
+                let markup = crate::mathml::render(self.dom, node, self.options.max_depth - depth);
+                self.writer().inline_html(&markup);
+                return;
+            }
             "head" | "script" | "style" | "noscript" | "template" => return,
+            "title" if !self.in_svg => return,
+            "svg" | "foreignObject" | "foreignobject" => {
+                self.tasks.push(Task::RestoreSvg(self.in_svg));
+                self.in_svg = tag == "svg";
+            }
             "br" => {
                 self.writer().hard_break();
                 return;
@@ -215,14 +292,29 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 self.writer().block("---".into(), 2, 2);
                 return;
             }
+            "select" | "optgroup" | "option" | "button" | "time" => {
+                self.writer().boundary(1);
+                if matches!(tag, "optgroup" | "option")
+                    && let Some(label) = self.dom.attribute(node, "label")
+                {
+                    self.writer().text(label);
+                    self.writer().boundary(1);
+                    if tag == "option" {
+                        return;
+                    }
+                }
+                self.tasks.push(Task::ChoiceBoundary);
+            }
             "strong" | "b" => self.style(Style::Strong),
             "em" | "i" => self.style(Style::Emphasis),
             "del" | "s" | "strike" => self.style(Style::Strike),
+            "sup" => self.style(Style::Superscript),
+            "sub" => self.style(Style::Subscript),
             "a" => {
                 if let Some(href) = self
                     .dom
                     .attribute(node, "href")
-                    .filter(|href| !href.is_empty())
+                    .filter(|href| !href.is_empty() && crate::media::safe_url(href, false))
                 {
                     self.serial += 1;
                     let serial = self.serial;
@@ -239,16 +331,50 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "img" => {
                 let alt = self.dom.attribute(node, "alt").unwrap_or_default();
                 let title = self.dom.attribute(node, "title");
-                if let Some(src) = self
-                    .dom
-                    .attribute(node, "src")
-                    .filter(|src| !src.is_empty())
-                {
-                    self.writer().image(alt, src, title);
+                if let Some(src) = crate::media::source(self.dom, node) {
+                    self.writer().image(alt, &src, title);
+                } else {
+                    // A failed or absent resource must not erase its textual
+                    // alternative, especially when it is a link's only label.
+                    self.writer().text(alt);
                 }
                 return;
             }
+            "input" => {
+                if let Some(value) = crate::form::input_text(self.dom, node) {
+                    self.writer().text(&value);
+                }
+                return;
+            }
+            "iframe" | "video" | "audio" => {
+                if self.media(node, tag, depth) {
+                    return;
+                }
+                if is_block(tag) {
+                    self.writer().boundary(2);
+                    self.tasks.push(Task::Boundary);
+                }
+            }
             "code" | "pre" => {
+                let remaining = self.options.max_depth - depth;
+                if subtree_has_link(self.dom, node, remaining)
+                    || (!self.anchor_targets.is_empty()
+                        && crate::anchors::contains(
+                            self.dom,
+                            node,
+                            remaining,
+                            &self.anchor_targets,
+                        ))
+                {
+                    let html =
+                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    if tag == "pre" {
+                        self.writer().block(html.into(), 2, 2);
+                    } else {
+                        self.writer().inline_html(&html);
+                    }
+                    return;
+                }
                 self.raw.clear();
                 let end = if tag == "pre" {
                     Task::EndPre(self.language(node))
@@ -266,6 +392,23 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 return;
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                let remaining = self.options.max_depth - depth;
+                if !subtree_has_content(self.dom, node, remaining) {
+                    self.writer().boundary(2);
+                    return;
+                }
+                if subtree_has_nested_heading(self.dom, node, remaining) {
+                    self.writer().boundary(2);
+                    self.tasks.push(Task::Boundary);
+                    self.children(node, depth + 1);
+                    return;
+                }
+                if subtree_has_block(self.dom, node, remaining) {
+                    let html =
+                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    self.writer().block(html.into(), 2, 2);
+                    return;
+                }
                 self.capture();
                 self.writer().heading();
                 self.tasks
@@ -278,6 +421,27 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "ul" | "ol" => self.start_list(node, tag == "ol"),
             "li" => self.start_item(),
             "table" => {
+                let presentation = self.dom.attribute(node, "role").is_some_and(|role| {
+                    matches!(
+                        role.trim().to_ascii_lowercase().as_str(),
+                        "presentation" | "none"
+                    )
+                });
+                if (!presentation
+                    && crate::html_table::needed(self.dom, node, depth, self.options.max_depth))
+                    || (!self.anchor_targets.is_empty()
+                        && crate::anchors::contains(
+                            self.dom,
+                            node,
+                            self.options.max_depth - depth,
+                            &self.anchor_targets,
+                        ))
+                {
+                    let html =
+                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    self.writer().block(html.into(), 2, 2);
+                    return;
+                }
                 if let Some(mut table) =
                     Table::from_dom(self.dom, node, depth, self.options.max_depth)
                 {
@@ -289,8 +453,20 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     }
                     return;
                 }
+                if !presentation
+                    && crate::html_table::has_cells(self.dom, node, depth, self.options.max_depth)
+                {
+                    let html =
+                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    self.writer().block(html.into(), 2, 2);
+                    return;
+                }
                 self.writer().boundary(2);
                 self.tasks.push(Task::Boundary);
+            }
+            _ if quote_container(tag, self.dom.attribute(node, "class")) => {
+                self.capture();
+                self.tasks.push(Task::EndQuote);
             }
             _ if is_block(tag) => {
                 self.writer().boundary(2);
@@ -298,14 +474,67 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             }
             _ => {}
         }
+        if let Some((math, relative_depth)) =
+            crate::mathml::primary_alternative(self.dom, node, self.options.max_depth - depth)
+        {
+            let markup = crate::mathml::render(
+                self.dom,
+                math,
+                self.options.max_depth - depth - relative_depth,
+            );
+            self.writer().inline_html(&markup);
+            return;
+        }
+        if self.dom.first_child(node).is_none()
+            && let Some(label) = self
+                .dom
+                .attribute(node, "aria-label")
+                .filter(|label| !label.trim().is_empty())
+        {
+            self.writer().text(label);
+            return;
+        }
         self.children(node, depth + 1);
+    }
+
+    fn media(&mut self, node: D::NodeId, tag: &str, depth: usize) -> bool {
+        let urls = crate::media::sources(self.dom, node, tag, depth, self.options.max_depth);
+        if urls.is_empty() {
+            return false;
+        }
+        self.writer().boundary(2);
+        if tag == "video"
+            && let Some(poster) = self
+                .dom
+                .attribute(node, "poster")
+                .filter(|src| !src.is_empty())
+        {
+            self.writer().image("", poster, None);
+            self.writer().boundary(1);
+        }
+        let label = crate::media::label(self.dom, node, tag);
+        for href in urls {
+            self.serial += 1;
+            let serial = self.serial;
+            let opened = self.writer().push_style(Style::Link {
+                serial,
+                href,
+                title: None,
+            });
+            self.writer().text(label);
+            if opened {
+                self.writer().end_link(serial);
+            }
+            self.writer().boundary(1);
+        }
+        self.writer().boundary(2);
+        true
     }
 
     fn table_cell(&mut self) {
         let table = self.tables.last_mut().expect("table conversion is active");
         if let Some(cell) = table.next_cell() {
             self.capture();
-            self.writer().table_cell();
             self.tasks.push(Task::TableCell);
             self.tasks.push(Task::EndTableCell);
             self.children(cell.node, cell.depth + 1);
@@ -387,8 +616,17 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if nonrendered_serialized_state(self.dom, node) {
             return;
         }
+        if self.dom.attribute(node, "class").is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                let token = token.to_ascii_lowercase();
+                token.contains("copy") && (token.contains("btn") || token.contains("button"))
+            })
+        }) {
+            return;
+        }
         match self.dom.node_kind(node) {
             NodeKind::Text(text) => self.raw.push_str(text),
+            NodeKind::Element("script" | "style" | "template" | "noscript") => {}
             // Inline code normalizes line endings to spaces. Keep explicit
             // breaks without converting descendant formatting into Markdown.
             NodeKind::Element("br") => self.raw.push('\n'),
@@ -447,6 +685,116 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         block.push_str(&fence);
         self.writer().block(block.into(), 2, 2);
     }
+}
+
+fn quote_container(tag: &str, class: Option<&str>) -> bool {
+    matches!(tag, "div" | "section" | "article" | "aside")
+        && class.is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                matches!(
+                    token.to_ascii_lowercase().as_str(),
+                    "quote" | "quoteblock" | "quote-block" | "quoted-text"
+                )
+            })
+        })
+}
+
+fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
+    let mut pending = vec![(root, 0)];
+    while let Some((node, depth)) = pending.pop() {
+        match dom.node_kind(node) {
+            NodeKind::Text(text) if !text.trim_matches(char::is_whitespace).is_empty() => {
+                return true;
+            }
+            NodeKind::Element("img") if crate::media::source(dom, node).is_some() => {
+                return true;
+            }
+            NodeKind::Element(_)
+                if dom.first_child(node).is_none()
+                    && dom
+                        .attribute(node, "aria-label")
+                        .is_some_and(|label| !label.trim().is_empty()) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        if depth + 1 >= limit {
+            continue;
+        }
+        let mut child = dom.first_child(node);
+        while let Some(id) = child {
+            pending.push((id, depth + 1));
+            child = dom.next_sibling(id);
+        }
+    }
+    false
+}
+
+fn subtree_has_nested_heading<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
+    let mut pending = Vec::new();
+    let mut child = dom.first_child(root);
+    while let Some(id) = child {
+        pending.push((id, 1));
+        child = dom.next_sibling(id);
+    }
+    while let Some((node, depth)) = pending.pop() {
+        if matches!(
+            dom.node_kind(node),
+            NodeKind::Element("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+        ) {
+            return true;
+        }
+        if depth + 1 >= limit {
+            continue;
+        }
+        let mut child = dom.first_child(node);
+        while let Some(id) = child {
+            pending.push((id, depth + 1));
+            child = dom.next_sibling(id);
+        }
+    }
+    false
+}
+
+fn subtree_has_link<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
+    let mut pending = vec![(dom.first_child(root), 1)];
+    while let Some((node, depth)) = pending.pop() {
+        let Some(node) = node else {
+            continue;
+        };
+        if depth >= limit {
+            continue;
+        }
+        pending.push((dom.next_sibling(node), depth));
+        if matches!(dom.node_kind(node), NodeKind::Element("a"))
+            && dom
+                .attribute(node, "href")
+                .is_some_and(|href| !href.is_empty() && crate::media::safe_url(href, false))
+        {
+            return true;
+        }
+        pending.push((dom.first_child(node), depth + 1));
+    }
+    false
+}
+
+fn subtree_has_block<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
+    let mut pending = vec![(dom.first_child(root), 1)];
+    while let Some((node, depth)) = pending.pop() {
+        let Some(node) = node else {
+            continue;
+        };
+        if depth >= limit {
+            continue;
+        }
+        pending.push((dom.next_sibling(node), depth));
+        if matches!(dom.node_kind(node), NodeKind::Element(tag) if is_structural_block(tag)) {
+            return true;
+        }
+        pending.push((dom.first_child(node), depth + 1));
+    }
+    false
 }
 
 fn class_language(class: Option<&str>) -> Option<&str> {

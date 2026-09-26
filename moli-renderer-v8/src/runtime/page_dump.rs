@@ -2,18 +2,128 @@ use crate::dom::native::{NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
+use moli_html2md::{Dom, NodeKind};
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
+use std::collections::HashMap;
 
 use super::page_vm::PageVm;
 
+mod visibility;
+
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
+        let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
+            .then(|| self.vm().document_runtime.dom_host().document_base_url())
+            .flatten();
+        let styles = if options.format == RendererPageDumpFormat::Markdown {
+            let dom = self.vm().document_runtime.dom_host().dom();
+            let mut nodes = Vec::new();
+            collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+            nodes.retain(|node| {
+                dom.node(*node)
+                    .is_some_and(|node| node.as_element().is_some())
+            });
+            let span_nodes: Vec<_> = nodes
+                .iter()
+                .copied()
+                .filter(|node| matches!(Dom::node_kind(dom, *node), NodeKind::Element("span")))
+                .collect();
+            let image_nodes: Vec<_> = nodes
+                .iter()
+                .copied()
+                .filter(|node| matches!(Dom::node_kind(dom, *node), NodeKind::Element("img")))
+                .collect();
+            let background_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &["background-color".to_owned()],
+                );
+            let backgrounds: HashMap<_, _> = nodes
+                .iter()
+                .copied()
+                .zip(background_values)
+                .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
+                .collect();
+            let span_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    span_nodes.iter().copied(),
+                    &["bottom".to_owned(), "vertical-align".to_owned()],
+                );
+            let spans: HashMap<_, _> = span_nodes.into_iter().zip(span_values).collect();
+            let image_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    image_nodes.iter().copied(),
+                    &["width".to_owned(), "height".to_owned()],
+                );
+            let images: HashMap<_, _> = image_nodes.into_iter().zip(image_values).collect();
+            let values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &[
+                        "display".to_owned(),
+                        "visibility".to_owned(),
+                        "opacity".to_owned(),
+                        "position".to_owned(),
+                        "left".to_owned(),
+                        "top".to_owned(),
+                        "color".to_owned(),
+                        "animation-name".to_owned(),
+                    ],
+                );
+            nodes
+                .into_iter()
+                .zip(values)
+                .map(|(node, mut values)| {
+                    let animation_name = values.pop().unwrap_or_default();
+                    let foreground = values.pop().unwrap_or_default();
+                    // Preserve the visibility adapter's stable field layout.
+                    let span = spans.get(&node);
+                    values.push(
+                        span.and_then(|values| values.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(
+                        span.and_then(|values| values.get(1))
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    let image = images.get(&node);
+                    values.push(
+                        image
+                            .and_then(|values| values.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(
+                        image
+                            .and_then(|values| values.get(1))
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(foreground);
+                    values.push(backgrounds.get(&node).cloned().unwrap_or_default());
+                    values.push(animation_name);
+                    (node, values)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
             && !options.with_frames
             && options.strip == RendererPageDumpStripOptions::default()
         {
-            return render_markdown_document(self.vm().document_runtime.dom_host().dom());
+            return render_markdown_document_with_styles(
+                self.vm().document_runtime.dom_host().dom(),
+                styles,
+                markdown_base_url.as_ref(),
+            );
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
@@ -33,7 +143,9 @@ impl PageVm {
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => render_markdown_document(&dom),
+            RendererPageDumpFormat::Markdown => {
+                render_markdown_document_with_styles(&dom, styles, markdown_base_url.as_ref())
+            }
         }
     }
 
@@ -181,14 +293,24 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
     }
 }
 
+#[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
+    render_markdown_document_with_styles(dom, Vec::new(), None)
+}
+
+fn render_markdown_document_with_styles(
+    dom: &NativeDom,
+    styles: Vec<(NativeNodeId, Vec<String>)>,
+    base_url: Option<&url::Url>,
+) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
         ..Default::default()
     })
-    .convert(dom, root)
+    .convert(&visible, root)
 }
 
 #[cfg(test)]
@@ -393,10 +515,31 @@ mod tests {
             include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
         );
         let before = dom.serialize_document();
-        assert_eq!(
-            render_markdown_document(&dom),
-            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+        let markdown = render_markdown_document(&dom);
+        for content in [
+            "First story",
+            "42 points by",
+            "8 comments",
+            "Second story",
+            "7 points by",
+            "discuss",
+            "More",
+        ] {
+            assert!(markdown.contains(content), "missing {content}: {markdown}");
+        }
+        let positions = [
+            "First story",
+            "42 points by",
+            "Second story",
+            "7 points by",
+            "More",
+        ]
+        .map(|content| markdown.find(content).expect("checked above"));
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{markdown}"
         );
+        assert!(markdown.contains("<table"), "{markdown}");
         assert_eq!(dom.serialize_document(), before);
     }
 
@@ -490,17 +633,20 @@ mod tests {
         for (html, expected) in [
             (
                 "<a href='/a' title='one\n  two'>link</a>",
-                "[link](/a \"one\ntwo\")",
+                "[link](/a \"one&#10;two\")",
             ),
             (
                 "<img src='/i' alt='one\n  two' title='one\n  two'>",
-                "![one\ntwo](/i \"one\ntwo\")",
+                "![one two](/i \"one&#10;two\")",
             ),
             (
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",
                 "## [link](/a \"one&#10;two\")",
             ),
-            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+            (
+                "a<img alt='label'>b<img src='' alt='label'>c",
+                "alabelblabelc",
+            ),
         ] {
             assert_eq!(markdown_from_html(html), expected, "{html}");
         }

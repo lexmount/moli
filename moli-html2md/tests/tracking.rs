@@ -1,7 +1,4 @@
-//! Open review findings, separate from regressions asserting desired behavior.
-//! These tests run normally and fail if the recorded behavior changes. When a
-//! gap is fixed, replace its current-output assertion with the desired result
-//! and update turndown/README.md; do not refresh the snapshot automatically.
+//! Review findings: explicit compatibility choices and semantic regressions.
 
 mod support;
 
@@ -46,67 +43,50 @@ fn track_nested_list_spacing_before_a_trailing_empty_element() {
 }
 
 #[test]
-fn track_multiline_image_alt_becoming_a_heading() {
+fn multiline_image_alt_preserves_the_image() {
     let result = markdown("<img src='/x' alt='first\n# heading'>");
     // Turndown emits the same Markdown. Matching it does not preserve the image.
-    assert_eq!(result, "![first\n# heading](/x)");
     let actual_html = rendered_html(&result);
-    assert_eq!(actual_html, "<p>![first</p>\n<h1>heading](/x)</h1>\n");
     let desired_html = "<p><img src=\"/x\" alt=\"first # heading\" /></p>\n";
-    assert_ne!(
+    assert_eq!(
         actual_html, desired_html,
         "review the resolved image-alt gap"
     );
 }
 
 #[test]
-fn track_multiline_link_title_becoming_a_heading() {
+fn multiline_link_title_preserves_the_link() {
     let result = markdown("<a href='/' title='first\n# heading'>link</a>");
     // Turndown has this loss too; the link and its title must survive rendering.
-    assert_eq!(result, "[link](/ \"first\n# heading\")");
     let actual_html = rendered_html(&result);
-    assert_eq!(
-        actual_html,
-        "<p>[link](/ \"first</p>\n<h1>heading\")</h1>\n"
-    );
     let desired_html = "<p><a href=\"/\" title=\"first\n# heading\">link</a></p>\n";
-    assert_ne!(
+    assert_eq!(
         actual_html, desired_html,
         "review the resolved link-title gap"
     );
 }
 
 #[test]
-fn track_multiple_nested_spans_at_the_end_of_a_paragraph() {
+fn multiple_nested_spans_keep_their_styles_at_paragraph_end() {
     // This predates the closing-edge fix: with no following character there
     // is no punctuation fallback, but sibling delimiters can still mispair.
     let result = markdown("<em><strong>x</strong>b<strong>c</strong></em>");
-    assert_eq!(result, "***x**b**c***");
     let actual_html = rendered_html(&result);
-    assert_eq!(
-        actual_html,
-        "<p><em><strong>x</strong>b</em><em>c</em>**</p>\n"
-    );
     let desired_html = "<p><em><strong>x</strong>b<strong>c</strong></em></p>\n";
-    assert_ne!(
+    assert_eq!(
         actual_html, desired_html,
         "review the resolved sibling-span gap"
     );
 }
 
 #[test]
-fn track_mixed_emphasis_markers_at_an_intraword_opening() {
+fn mixed_emphasis_markers_preserve_intraword_styles() {
     // The opening check sees the text 'x', although the nested styles emit
     // punctuation first. This is separate from closing a same-marker run.
     let result = markdown("before<em><del><strong>x</strong></del></em>");
-    assert_eq!(result, "before*~~**x**~~*");
     let actual_html = rendered_html(&result);
-    assert_eq!(
-        actual_html,
-        "<p>before*<del><strong>x</strong></del>*</p>\n"
-    );
     let desired_html = "<p>before<em><del><strong>x</strong></del></em></p>\n";
-    assert_ne!(
+    assert_eq!(
         actual_html, desired_html,
         "review the resolved mixed-marker gap"
     );
