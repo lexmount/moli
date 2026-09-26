@@ -3616,7 +3616,10 @@ mod tests {
             (Some("SHA256-testdigest"), false),
             (Some("sha256-testdigest\u{a0}"), false),
             (Some("sha256-testdigest sha1-ignored"), true),
-            (Some("sha256-testdigest sha512-*** sha512-abc==="), true),
+            (Some("sha256-testdigest sha512-***"), true),
+            (Some("sha256-testdigest sha512-*** sha512-abc==="), false),
+            (Some("sha256-testdigest sha512-A=AAA"), false),
+            (Some("sha256-testdigest sha512-===="), false),
             (Some("sha256-testdigest?ignored sha-256-testdigest"), true),
             (Some(" \tsha256-testdigest\r\n\x0csha256-testdigest "), true),
         ] {
