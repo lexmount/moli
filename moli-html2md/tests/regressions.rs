@@ -651,7 +651,7 @@ fn fragment_links_keep_explicit_targets_without_copying_unreferenced_ids() {
 #[test]
 fn percent_encoded_named_anchor_matches_its_fragment_link() {
     let result = markdown(
-        "<a href='#Run%20the%20program'>Run</a><h2><a name='Run%20the%20program'></a>Run the program</h2>",
+        "<a href='#Run%20the%20program'>Run</a><h2><a name='Run the program'></a>Run the program</h2>",
         false,
     );
     assert!(result.contains("[Run](#Run%20the%20program)"), "{result}");
@@ -659,6 +659,14 @@ fn percent_encoded_named_anchor_matches_its_fragment_link() {
         result.contains("## <a id=\"Run the program\"></a>Run the program"),
         "{result}"
     );
+}
+
+#[test]
+fn fragment_decoding_does_not_rewrite_dom_ids() {
+    let result = markdown("<a href='#x%2520y'>Go</a><p id='x%20y'>Target</p>", false);
+    assert!(result.contains("[Go](#x%2520y)"), "{result}");
+    assert!(result.contains("<a id=\"x%20y\"></a>"), "{result}");
+    assert!(result.contains("Target"), "{result}");
 }
 
 #[test]
@@ -779,17 +787,53 @@ fn conventional_quote_container_retains_quote_semantics() {
 }
 
 #[test]
+fn quote_classes_do_not_replace_list_or_table_semantics() {
+    let list = markdown(
+        "<ul class='quote'><li>First</li><li>Second</li></ul>",
+        false,
+    );
+    assert_eq!(list, "- First\n- Second");
+    let table = rendered_html(&markdown(
+        "<table class='quote'><tr><th>Name</th></tr><tr><td>Ada</td></tr></table>",
+        false,
+    ));
+    assert!(table.contains("<table>"), "{table}");
+    assert!(table.contains("<td>Ada</td>"), "{table}");
+}
+
+#[test]
 fn tooltip_trigger_retains_its_reader_facing_detail() {
     let result = markdown(
         "<p>Paid Orientation <span data-toggle='tooltip' data-original-title='$100/day'>Details</span></p>",
         false,
     );
-    assert_eq!(result, "Paid Orientation $100/day");
+    assert_eq!(result, "Paid Orientation Details");
+    let link = markdown(
+        "<a href='/download' data-toggle='tooltip' data-original-title='Download the latest version'>Download</a>",
+        false,
+    );
+    assert_eq!(link, "[Download](/download)");
+    let fallback = markdown(
+        "<span data-toggle='tooltip' data-original-title='$100/day'></span>",
+        false,
+    );
+    assert_eq!(fallback, "$100/day");
     let metadata = markdown(
         "<span data-toggle='tooltip' title='Published'>January 24, 2018</span><span data-toggle='tooltip' title='Reading Time'>3 mins read</span>",
         false,
     );
     assert_eq!(metadata, "January 24, 2018\n3 mins read");
+}
+
+#[test]
+fn resource_only_headings_are_not_dropped() {
+    let result = markdown(
+        "<h1><a href='/home'><img src='/logo.svg'></a></h1><h2><span aria-label='Accessible title'></span></h2><p>Article</p>",
+        false,
+    );
+    assert!(result.contains("# [![](/logo.svg)](/home)"), "{result}");
+    assert!(result.contains("## Accessible title"), "{result}");
+    assert!(result.contains("Article"), "{result}");
 }
 
 #[test]
@@ -819,6 +863,19 @@ fn preformatted_navigation_retains_link_targets() {
         "{result}"
     );
     assert!(result.contains("Scores stay aligned"), "{result}");
+}
+
+#[test]
+fn preformatted_code_preserves_externally_referenced_targets() {
+    let result = markdown(
+        "<a href='#L1'>Line 1</a><pre><code><span id='L1'>let x = 1;</span>\n<span id='L2'>let y = 2;</span></code></pre>",
+        false,
+    );
+    assert!(result.contains("[Line 1](#L1)"), "{result}");
+    assert!(
+        result.contains("<span id=\"L1\">let x = 1;</span>"),
+        "{result}"
+    );
 }
 
 #[test]

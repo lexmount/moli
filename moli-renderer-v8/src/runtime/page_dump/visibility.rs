@@ -76,6 +76,19 @@ impl<'a> MarkdownDom<'a> {
             {
                 disclosures.extend(targets.split_ascii_whitespace());
             }
+            for attribute_name in dom.get_attribute_names(*node).unwrap_or_default() {
+                if !attribute_name.starts_with("on") {
+                    continue;
+                }
+                let Some(handler) = Dom::attribute(dom, *node, &attribute_name) else {
+                    continue;
+                };
+                for literal in quoted_literals(handler) {
+                    if let Some((&id, _)) = targets.get_key_value(literal) {
+                        disclosures.insert(id);
+                    }
+                }
+            }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
             // dialog or a matching paragraph elsewhere is not such a pair.
@@ -138,12 +151,12 @@ impl<'a> MarkdownDom<'a> {
             let lazy_media = matches!(
                 Dom::node_kind(dom, node),
                 NodeKind::Element("img" | "iframe" | "video" | "audio")
-            ) && ["data-original", "data-src", "data-lazy-src"].iter().any(
-                |attribute| {
+            ) && ["data-original", "data-src", "data-lazy-src", "data-srcset"]
+                .iter()
+                .any(|attribute| {
                     Dom::attribute(dom, node, attribute)
                         .is_some_and(|value| !value.trim().is_empty())
-                },
-            );
+                });
             let disclosure = role.eq_ignore_ascii_case("tabpanel")
                 || Dom::attribute(dom, node, "hidden") == Some("until-found")
                 || (!matches!(role, "dialog" | "alertdialog" | "menu")
@@ -177,12 +190,7 @@ impl<'a> MarkdownDom<'a> {
                     .get(9)
                     .and_then(|value| px(value))
                     .is_some_and(|height| height <= 1.5);
-            let foreground = match Dom::node_kind(dom, node) {
-                NodeKind::Element("font") => Dom::attribute(dom, node, "color")
-                    .and_then(css_color)
-                    .or_else(|| values.get(10).and_then(|value| css_color(value))),
-                _ => values.get(10).and_then(|value| css_color(value)),
-            };
+            let foreground = values.get(10).and_then(|value| css_color(value));
             let zero_contrast_leaf = !has_element_child(dom, node)
                 && foreground
                     .filter(|color| color.3 > 0.99)
@@ -204,7 +212,7 @@ impl<'a> MarkdownDom<'a> {
                     && !animated
                     && !document_root)
                 && !disclosure)
-                || aria_hidden
+                || (aria_hidden && !disclosure)
                 || uninitialized_template
                 || far_offscreen
                 || tracking_pixel
@@ -254,9 +262,14 @@ impl<'a> MarkdownDom<'a> {
             if let Some(base_url) = base_url {
                 let names: &[&str] = match Dom::node_kind(dom, node) {
                     NodeKind::Element("a") => &["href"],
-                    NodeKind::Element("img") => {
-                        &["src", "data-original", "data-src", "data-lazy-src"]
-                    }
+                    NodeKind::Element("img") => &[
+                        "src",
+                        "data-original",
+                        "data-src",
+                        "data-lazy-src",
+                        "srcset",
+                        "data-srcset",
+                    ],
                     NodeKind::Element("iframe" | "audio" | "source") => {
                         &["src", "data-src", "data-lazy-src"]
                     }
@@ -270,11 +283,16 @@ impl<'a> MarkdownDom<'a> {
                     else {
                         continue;
                     };
-                    if let Ok(url) = base_url.join(value) {
+                    let resolved = if matches!(name, "srcset" | "data-srcset") {
+                        resolve_srcset(base_url, value)
+                    } else {
+                        base_url.join(value).ok().map(|url| url.to_string())
+                    };
+                    if let Some(url) = resolved {
                         resolved_urls
                             .entry(node)
                             .or_insert_with(HashMap::new)
-                            .insert(name.to_owned(), url.to_string());
+                            .insert(name.to_owned(), url);
                     }
                 }
             }
@@ -311,8 +329,48 @@ impl<'a> MarkdownDom<'a> {
     }
 }
 
+fn quoted_literals(value: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut quote = None;
+    let mut start = 0;
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                result.push(&value[start..index]);
+                quote = None;
+            }
+        } else if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            start = index + character.len_utf8();
+        }
+    }
+    result
+}
+
 fn px(value: &str) -> Option<f32> {
     value.strip_suffix("px")?.trim().parse().ok()
+}
+
+fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
+    let mut resolved = Vec::new();
+    for candidate in value.split(',') {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let split = candidate
+            .find(char::is_whitespace)
+            .unwrap_or(candidate.len());
+        let (source, descriptor) = candidate.split_at(split);
+        let url = base_url.join(source).ok()?;
+        resolved.push(format!("{}{descriptor}", url));
+    }
+    (!resolved.is_empty()).then(|| resolved.join(", "))
 }
 
 fn css_color(value: &str) -> Option<(u8, u8, u8, f32)> {

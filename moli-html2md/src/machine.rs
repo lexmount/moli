@@ -225,6 +225,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             .attribute(node, "data-toggle")
             .is_some_and(|value| value.eq_ignore_ascii_case("tooltip"));
         if tooltip
+            && !subtree_has_content(self.dom, node, self.options.max_depth - depth)
             && let Some(value) = self
                 .dom
                 .attribute(node, "data-original-title")
@@ -233,7 +234,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             self.writer().text(value);
             return;
         }
-        if tooltip {
+        if tooltip && self.dom.attribute(node, "title").is_some() {
             self.writer().boundary(1);
             self.tasks.push(Task::ChoiceBoundary);
         }
@@ -263,11 +264,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     continue;
                 }
                 if let Some(id) = self.dom.attribute(node, attribute)
-                    && self.anchor_targets.contains(&crate::anchors::normalize(id))
+                    && self.anchor_targets.contains(id)
                 {
-                    let id = crate::anchors::normalize(id);
-                    if self.emitted_anchors.insert(id.clone()) {
-                        self.writer().inline_html(&crate::anchors::markup(&id));
+                    if self.emitted_anchors.insert(id.to_owned()) {
+                        self.writer().inline_html(&crate::anchors::markup(id));
                     }
                 }
             }
@@ -356,7 +356,16 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
             }
             "code" | "pre" => {
-                if subtree_has_link(self.dom, node, self.options.max_depth - depth) {
+                let remaining = self.options.max_depth - depth;
+                if subtree_has_link(self.dom, node, remaining)
+                    || (!self.anchor_targets.is_empty()
+                        && crate::anchors::contains(
+                            self.dom,
+                            node,
+                            remaining,
+                            &self.anchor_targets,
+                        ))
+                {
                     let html =
                         crate::html_table::render(self.dom, node, depth, self.options.max_depth);
                     if tag == "pre" {
@@ -409,10 +418,6 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 self.capture();
                 self.tasks.push(Task::EndQuote);
             }
-            _ if quote_container(self.dom.attribute(node, "class")) => {
-                self.capture();
-                self.tasks.push(Task::EndQuote);
-            }
             "ul" | "ol" => self.start_list(node, tag == "ol"),
             "li" => self.start_item(),
             "table" => {
@@ -458,6 +463,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 self.writer().boundary(2);
                 self.tasks.push(Task::Boundary);
+            }
+            _ if quote_container(tag, self.dom.attribute(node, "class")) => {
+                self.capture();
+                self.tasks.push(Task::EndQuote);
             }
             _ if is_block(tag) => {
                 self.writer().boundary(2);
@@ -678,15 +687,16 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
     }
 }
 
-fn quote_container(class: Option<&str>) -> bool {
-    class.is_some_and(|class| {
-        class.split_ascii_whitespace().any(|token| {
-            matches!(
-                token.to_ascii_lowercase().as_str(),
-                "quote" | "quoteblock" | "quote-block" | "quoted-text"
-            )
+fn quote_container(tag: &str, class: Option<&str>) -> bool {
+    matches!(tag, "div" | "section" | "article" | "aside")
+        && class.is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                matches!(
+                    token.to_ascii_lowercase().as_str(),
+                    "quote" | "quoteblock" | "quote-block" | "quoted-text"
+                )
+            })
         })
-    })
 }
 
 fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
@@ -696,10 +706,14 @@ fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) 
             NodeKind::Text(text) if !text.trim_matches(char::is_whitespace).is_empty() => {
                 return true;
             }
-            NodeKind::Element("img")
-                if dom
-                    .attribute(node, "alt")
-                    .is_some_and(|alt| !alt.trim().is_empty()) =>
+            NodeKind::Element("img") if crate::media::source(dom, node).is_some() => {
+                return true;
+            }
+            NodeKind::Element(_)
+                if dom.first_child(node).is_none()
+                    && dom
+                        .attribute(node, "aria-label")
+                        .is_some_and(|label| !label.trim().is_empty()) =>
             {
                 return true;
             }
