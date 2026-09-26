@@ -9,7 +9,8 @@ pub(crate) use events::{
     queue_text_control_selection_change_event,
 };
 pub(crate) use selection::{
-    replace_text_control_selection, text_control_set_selection_range_internal,
+    replace_text_control_selection, restore_focused_text_control_selection,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal,
 };
 pub(in crate::native_bridge) use selection::{

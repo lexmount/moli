@@ -222,7 +222,8 @@ pub(crate) use events::{
 use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
     contenteditable_editing_host, contenteditable_editing_host_in_dom, focus_element,
-    focus_live_element_for_inspector, perform_access_key_default_action_for_dispatched_event,
+    focus_live_element_for_inspector, focus_text_control_preserving_selection,
+    perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_document_navigation_focus,
@@ -347,7 +348,8 @@ pub(crate) use forms::{
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
     queue_text_control_document_selection_change_event, queue_text_control_selection_change_event,
-    replace_text_control_selection, text_control_set_selection_range_internal,
+    replace_text_control_selection, restore_focused_text_control_selection,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};

@@ -506,6 +506,7 @@ pub(in crate::native_bridge) fn reset_form_default_action(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let mut did_change = false;
+    let mut changed_text_controls = Vec::new();
     for plan in plans {
         match plan {
             FormResetPlan::InputValue { handle, value } => {
@@ -513,8 +514,13 @@ pub(in crate::native_bridge) fn reset_form_default_action(
                 did_change |= runtime.set_input_value_with_dirty(handle, &value, false);
                 let next_value = text_control_value(runtime, handle);
                 if next_value != previous_value {
-                    let end = next_value.chars().count() as u32;
-                    did_change |= runtime.dom_host_mut().set_selection_range(handle, end, end);
+                    let end = next_value.encode_utf16().count() as u32;
+                    let selection_changed =
+                        runtime.set_text_control_selection(handle, end, end, "none");
+                    did_change |= selection_changed;
+                    if runtime.text_control_has_selection_editor(handle) {
+                        changed_text_controls.push((handle, selection_changed));
+                    }
                 }
             }
             FormResetPlan::Checked { handle, checked } => {
@@ -546,6 +552,12 @@ pub(in crate::native_bridge) fn reset_form_default_action(
                     .dom_host_mut()
                     .set_output_default_value_state(handle, None);
             }
+        }
+    }
+    for (handle, selection_changed) in changed_text_controls {
+        restore_focused_text_control_selection(scope, runtime_ptr, handle);
+        if selection_changed || unsafe { &*runtime_ptr }.active_element_handle() == Some(handle) {
+            queue_text_control_selection_change_event(scope, runtime_ptr, handle);
         }
     }
     match callback_timing {

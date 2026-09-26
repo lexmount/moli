@@ -6,6 +6,30 @@ use tokio::{
 };
 
 #[test]
+fn document_selection_tracks_visible_text_controls_independently_of_cached_offsets() {
+    let mut vm = new_storage_test_vm("https://text-control-visible-selection.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/text-control-visible-selection.js"
+        ))
+        .expect("visible text control selections should follow their document and focus lifecycle"),
+        ""
+    );
+}
+
+#[test]
+fn text_control_selections_follow_value_default_value_and_form_reset() {
+    let mut vm = new_storage_test_vm("https://text-control-selection-values.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/text-control-selection-values.js"
+        ))
+        .expect("value mutations should reconcile both cached and visible selections"),
+        ""
+    );
+}
+
+#[test]
 fn text_control_selection_setters_restore_the_focused_document_selection() {
     let mut vm = new_storage_test_vm("https://text-control-selection-restoration.test/");
     assert_eq!(

@@ -6,7 +6,6 @@ use super::{
 };
 use crate::context_bootstrap::selection_value_for_window;
 use crate::document_runtime::DomHandle;
-use crate::dom::forms::InputType;
 use crate::native_bridge::element::{
     contenteditable_editing_host, queue_text_control_selection_change_event,
 };
@@ -20,20 +19,8 @@ pub(crate) fn focus_element_selection(
     target: DomHandle,
 ) -> Option<()> {
     let runtime = unsafe { &mut *runtime_ptr };
-    let element = runtime.dom_host().node(target)?.as_element()?;
     // Picker controls have a separate focus behavior from text fields.
-    let text_field = element.is_html_textarea()
-        || (element.is_html_input()
-            && matches!(
-                element.input_type(),
-                InputType::Text
-                    | InputType::Search
-                    | InputType::Tel
-                    | InputType::Url
-                    | InputType::Email
-                    | InputType::Password
-                    | InputType::Number
-            ));
+    let text_field = runtime.text_control_has_selection_editor(target);
     if !text_field && contenteditable_editing_host(runtime, target) != Some(target) {
         return None;
     }

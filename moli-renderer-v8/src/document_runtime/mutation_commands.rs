@@ -349,7 +349,6 @@ impl DocumentRuntime {
             prepublished_removals,
         );
         if changed {
-            self.reset_non_dirty_textarea_selection_after_child_list_change(handle);
             for root in disconnected_lifecycle_roots {
                 if self.dom_host.is_connected(root)
                     || custom_elements::is_shadow_including_rooted_in_document(&self.dom_host, root)
@@ -393,17 +392,6 @@ impl DocumentRuntime {
             effects,
             RuntimeMutationOptions::js_dom_api(),
         )
-    }
-
-    fn reset_non_dirty_textarea_selection_after_child_list_change(&mut self, handle: DomHandle) {
-        let should_reset = self
-            .dom_host
-            .node(handle)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.is_html_textarea() && !element.input_value_dirty());
-        if should_reset {
-            let _ = self.dom_host.set_selection_range(handle, 0, 0);
-        }
     }
 
     pub(crate) fn split_text(
@@ -1652,18 +1640,6 @@ impl DocumentRuntime {
             .set_selection_range_with_direction(handle, start, end, direction)
     }
 
-    pub(crate) fn set_selection_start(&mut self, handle: DomHandle, start: u32) -> bool {
-        self.dom_host.set_selection_start(handle, start)
-    }
-
-    pub(crate) fn set_selection_end(&mut self, handle: DomHandle, end: u32) -> bool {
-        self.dom_host.set_selection_end(handle, end)
-    }
-
-    pub(crate) fn set_selection_direction(&mut self, handle: DomHandle, direction: &str) -> bool {
-        self.dom_host.set_selection_direction(handle, direction)
-    }
-
     pub(crate) fn set_media_paused(&mut self, handle: DomHandle, paused: bool) -> bool {
         self.dom_host.set_media_paused(handle, paused)
     }
@@ -1900,6 +1876,8 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
         prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> RuntimeMutationApplyResult {
+        let changed_text_controls =
+            unsafe { &mut *host_ptr }.reconcile_text_control_selection_dom_mutations(&effects);
         self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
         let mut result = apply_runtime_mutation_effects_to_dom_host(
             &mut self.mutations,
@@ -1912,6 +1890,7 @@ impl DocumentRuntime {
             effects,
             options,
         );
+        result.changed_text_controls = changed_text_controls;
         devtools_mutations::attach_prepublished_removals(
             &mut result.devtools_dom_mutations,
             prepublished_removals,
@@ -1932,6 +1911,7 @@ pub(crate) struct RuntimeMutationApplyResult {
     inline_style_attribute_csp_mutations: Vec<InlineStyleAttributeCspMutation>,
     connected_style_csp_roots: Vec<DomHandle>,
     font_face_use_roots: Vec<DomHandle>,
+    changed_text_controls: Vec<(DomHandle, bool)>,
 }
 
 impl RuntimeMutationApplyResult {
@@ -1976,7 +1956,19 @@ pub(super) fn finish_runtime_mutation_effects(
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
         font_face_use_roots,
+        changed_text_controls,
     } = result;
+
+    for (control, selection_changed) in changed_text_controls {
+        crate::native_bridge::element::restore_focused_text_control_selection(
+            scope, host_ptr, control,
+        );
+        if selection_changed || unsafe { &*host_ptr }.active_element_handle() == Some(control) {
+            crate::native_bridge::element::queue_text_control_selection_change_event(
+                scope, host_ptr, control,
+            );
+        }
+    }
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
@@ -2369,6 +2361,7 @@ pub(super) fn prepare_runtime_mutation_effects(
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
         font_face_use_roots,
+        changed_text_controls: Vec::new(),
     }
 }
 

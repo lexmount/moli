@@ -97,6 +97,7 @@ impl DomHost {
             .unwrap_or_default();
         let previous_sibling = self.node(child).and_then(Node::prev_sibling);
         let next_sibling = self.node(child).and_then(Node::next_sibling);
+        let previous_textarea_value = self.textarea_value_excluding_children(parent, &[]);
         let candidate_changes = self
             .dom
             .remove_child_with_stylesheet_candidate_changes(parent, child);
@@ -105,6 +106,12 @@ impl DomHost {
             self.prune_disconnected_hovered_elements();
             self.reset_parser_form_owners_after_subtree_removal(child, &parser_form_owner_resets);
             let mut effects = DomMutationEffects::changed();
+            effects.record_textarea_value_change(
+                parent,
+                previous_textarea_value.as_deref(),
+                self.textarea_value_excluding_children(parent, &[])
+                    .as_deref(),
+            );
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             self.clear_popover_open_states(&removal_context.open_popovers, &mut effects);
             effects.extend_stylesheet_owner_changes(
@@ -161,12 +168,16 @@ impl DomHost {
         if self.node(child).and_then(Node::parent_node) != Some(parent) {
             return DomMutationEffects::default();
         }
+        let mut effects = DomMutationEffects::default();
+        let value = self.textarea_value_excluding_children(parent, &[]);
+        let after_removal = self.textarea_value_excluding_children(parent, &[child]);
+        effects.record_textarea_value_change(parent, value.as_deref(), after_removal.as_deref());
+        effects.record_textarea_value_change(parent, after_removal.as_deref(), value.as_deref());
         if !self.mutation_records_enabled() {
-            return DomMutationEffects::default();
+            return effects;
         }
         let previous_sibling = self.node(child).and_then(Node::prev_sibling);
         let next_sibling = self.node(child).and_then(Node::next_sibling);
-        let mut effects = DomMutationEffects::default();
         effects.mark_child_list_mutation(
             parent,
             &[],
@@ -328,6 +339,17 @@ impl DomHost {
         let inserted_shadow_slot_assignment_snapshots =
             self.slot_assignment_snapshots_for_inserted_shadow_tree_slots(parent, &inserted_roots);
         let previous_shadow_root = self.containing_shadow_root(child);
+        let removed_textarea_value = removal_record.as_ref().map(|(old_parent, removed, _, _)| {
+            (
+                *old_parent,
+                self.textarea_value_excluding_children(*old_parent, &[]),
+                self.textarea_value_excluding_children(*old_parent, removed),
+            )
+        });
+        let previous_textarea_value = match &removed_textarea_value {
+            Some((old_parent, _, after)) if *old_parent == parent => after.clone(),
+            _ => self.textarea_value_excluding_children(parent, &[]),
+        };
         let candidate_changes = self.dom.insert_before_with_stylesheet_candidate_changes(
             parent,
             child,
@@ -386,6 +408,19 @@ impl DomHost {
                 self.tree_insertion_effects(parent, child, &inserted_fragment_children);
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             effects.extend_stylesheet_owner_changes(shadow_stylesheet_owner_changes);
+            if let Some((old_parent, before, after)) = removed_textarea_value {
+                effects.record_textarea_value_change(
+                    old_parent,
+                    before.as_deref(),
+                    after.as_deref(),
+                );
+            }
+            effects.record_textarea_value_change(
+                parent,
+                previous_textarea_value.as_deref(),
+                self.textarea_value_excluding_children(parent, &[])
+                    .as_deref(),
+            );
             if single_child_was_connected_before_insert && !self.is_connected(child) {
                 effects.mark_disconnected_root(child);
                 if let Some((_, _, removal_context, _)) = implicit_removal_slot_state.as_ref() {
@@ -584,6 +619,10 @@ impl DomHost {
 
         match node_type {
             NodeType::Text | NodeType::CDataSection => {
+                let textarea = self.parent_node(handle).and_then(|parent| {
+                    self.textarea_value_excluding_children(parent, &[])
+                        .map(|value| (parent, value))
+                });
                 let records_enabled = self.mutation_records_enabled();
                 let old_value = if records_enabled {
                     self.node(handle)
@@ -629,6 +668,14 @@ impl DomHost {
                 self.record_mutation(MutationScope::QueryState);
                 let mut effects = self.node_update_effects(handle);
                 effects.mark_style_character_data_mutation(handle);
+                if let Some((parent, before)) = textarea {
+                    effects.record_textarea_value_change(
+                        parent,
+                        Some(&before),
+                        self.textarea_value_excluding_children(parent, &[])
+                            .as_deref(),
+                    );
+                }
                 if let Some(parent) = self.parent_node(handle) {
                     self.mark_stylesheet_owner_contents_change_for_parent(&mut effects, parent);
                 }

@@ -3091,6 +3091,7 @@ dependencies = [
  "html5ever",
  "http",
  "httpdate",
+ "icu_segmenter",
  "indexmap",
  "kurbo",
  "markup5ever",

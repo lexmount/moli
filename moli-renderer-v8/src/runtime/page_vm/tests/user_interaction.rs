@@ -548,12 +548,14 @@ getSelection().collapse(text, 1);
             !page_vm.vm().has_ready_timeout(),
             "user-interaction tasks must not acquire PageTimer descriptors"
         );
+        // The value setter already queued selectionchange before the range
+        // setter queues select; later selection changes coalesce with it.
         let expected_after_each_turn = [
-            "input:select|microtask:select",
-            "input:select|microtask:select|input:selectionchange|microtask:selectionchange",
-            "input:select|microtask:select|input:selectionchange|microtask:selectionchange|data-transfer:alpha|microtask:data-transfer",
-            "input:select|microtask:select|input:selectionchange|microtask:selectionchange|data-transfer:alpha|microtask:data-transfer|dialog:close|microtask:close",
-            "input:select|microtask:select|input:selectionchange|microtask:selectionchange|data-transfer:alpha|microtask:data-transfer|dialog:close|microtask:close|document:selectionchange|microtask:document",
+            "input:selectionchange|microtask:selectionchange",
+            "input:selectionchange|microtask:selectionchange|input:select|microtask:select",
+            "input:selectionchange|microtask:selectionchange|input:select|microtask:select|data-transfer:alpha|microtask:data-transfer",
+            "input:selectionchange|microtask:selectionchange|input:select|microtask:select|data-transfer:alpha|microtask:data-transfer|dialog:close|microtask:close",
+            "input:selectionchange|microtask:selectionchange|input:select|microtask:select|data-transfer:alpha|microtask:data-transfer|dialog:close|microtask:close|document:selectionchange|microtask:document",
         ];
         for expected in expected_after_each_turn {
             assert!(

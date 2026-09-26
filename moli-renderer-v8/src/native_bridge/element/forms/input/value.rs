@@ -184,6 +184,16 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         );
         return;
     }
+    set_input_value_and_selection(scope, runtime_ptr, handle, &next_value);
+    rv.set_undefined();
+}
+
+fn set_input_value_and_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    next_value: &str,
+) {
     let previous_value: String = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
@@ -191,7 +201,7 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         .map(Element::input_value)
         .unwrap_or_default();
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_input_value(handle, &next_value);
+    let _ = runtime.set_input_value(handle, next_value);
     let current_value = runtime
         .dom_host()
         .node(handle)
@@ -199,22 +209,30 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         .map(Element::input_value)
         .unwrap_or_default();
     if current_value != previous_value {
-        reset_input_selection_to_end(runtime, handle);
+        let selection_changed = reset_input_selection_to_end(runtime, handle);
+        if runtime.text_control_has_selection_editor(handle) {
+            restore_focused_text_control_selection(scope, runtime_ptr, handle);
+            if selection_changed || unsafe { &*runtime_ptr }.active_element_handle() == Some(handle)
+            {
+                queue_text_control_selection_change_event(scope, runtime_ptr, handle);
+            }
+        }
     }
-    rv.set_undefined();
 }
 
-fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) {
+fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) -> bool {
+    if !runtime.text_control_has_selection_editor(handle) {
+        return false;
+    }
     let Some(end) = runtime
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .filter(|element| element.input_type().supports_variable_length_selection())
         .map(|element| utf16_len(&element.input_value()) as u32)
     else {
-        return;
+        return false;
     };
-    let _ = runtime.set_selection_range(handle, end, end);
+    runtime.set_text_control_selection(handle, end, end, "none")
 }
 
 pub(in crate::native_bridge) fn input_value_as_number_getter_function<'s>(
@@ -304,7 +322,7 @@ fn input_value_as_number_setter_on_object<'s>(
     } else {
         moli_dom::forms::input_number_to_value_string(input_type, number).unwrap_or_default()
     };
-    let _ = runtime.set_input_value(handle, &next_value);
+    set_input_value_and_selection(scope, runtime_ptr, handle, &next_value);
 }
 
 pub(in crate::native_bridge) fn input_value_as_date_getter_function<'s>(
@@ -395,7 +413,7 @@ fn input_value_as_date_setter_on_object<'s>(
         };
         input_date_value_from_milliseconds(input_type, date.value_of()).unwrap_or_default()
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_input_value(handle, &next_value);
+    set_input_value_and_selection(scope, runtime_ptr, handle, &next_value);
 }
 
 pub(in crate::native_bridge) fn input_step_up_callback<'s>(
@@ -475,8 +493,7 @@ fn input_step_by(
 
     match outcome {
         Ok(InputStepOutcome::Set(value)) => {
-            let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.set_input_value(handle, &value);
+            set_input_value_and_selection(scope, runtime_ptr, handle, &value);
         }
         Ok(InputStepOutcome::NoChange) => {}
         Err(InputStepError::Unsupported) => {

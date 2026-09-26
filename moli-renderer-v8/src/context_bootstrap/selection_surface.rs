@@ -1,7 +1,7 @@
 use super::range_algorithms::{range_clipboard_string_contents, range_selection_string_contents};
 use super::selection::{
     new_selection_runtime_object, selection_bind_owner_document, selection_owner_document,
-    selection_range,
+    selection_range, selection_text_control_text,
 };
 use super::selection_callbacks::{
     selection_add_range_callback, selection_attribute_getter_callback, selection_collapse_callback,
@@ -140,7 +140,9 @@ fn selection_to_string_callback<'s>(
         rv.set(v8str(scope, "").into());
         return;
     };
-    let value = range_selection_string_contents(scope, range).unwrap_or_default();
+    let value = selection_text_control_text(scope, args.this())
+        .or_else(|| range_selection_string_contents(scope, range))
+        .unwrap_or_default();
     match v8_string(scope, &value) {
         Some(value) => rv.set(value.into()),
         None => rv.set(v8str(scope, "").into()),

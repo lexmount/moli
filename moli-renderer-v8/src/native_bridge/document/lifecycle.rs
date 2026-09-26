@@ -8,7 +8,8 @@ use crate::native_bridge::element::{
     TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
     document_copy_command_supported, form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
-    replace_text_control_selection, run_document_copy_command, text_control_value,
+    replace_text_control_selection, restore_focused_text_control_selection,
+    run_document_copy_command, text_control_value,
 };
 use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
@@ -1178,12 +1179,10 @@ fn exec_command_delete_text_control(
     let value_units = utf16_units(&value);
     let value_len = value_units.len() as u32;
     let (start, end) = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .map(|element| {
-            let start = element.selection_start().min(value_len);
-            let end = element.selection_end().min(value_len);
+        .text_control_selection(handle)
+        .map(|selection| {
+            let start = selection.start.min(value_len);
+            let end = selection.end.min(value_len);
             if start <= end {
                 (start, end)
             } else {
@@ -1224,9 +1223,11 @@ fn exec_command_delete_text_control(
     if changed {
         runtime.mark_text_control_change_pending(handle, &value);
     }
+    let direction = runtime.text_control_selection_direction(handle, "none");
     let selection_changed =
-        runtime.set_selection_range_with_direction(handle, caret, caret, "none");
+        runtime.set_selection_range_with_direction(handle, caret, caret, direction);
     if changed || selection_changed {
+        restore_focused_text_control_selection(scope, runtime_ptr, handle);
         dispatch_text_control_event(scope, runtime_ptr, handle, "input");
         queue_text_control_document_selection_change_event(scope, runtime_ptr, handle);
     }

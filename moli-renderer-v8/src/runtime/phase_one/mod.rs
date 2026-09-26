@@ -12343,7 +12343,7 @@ JSON.stringify(window.parserSelectionStates)
     }
 
     #[test]
-    fn parser_textarea_child_list_mutations_reset_selection_like_js() {
+    fn parser_textarea_child_list_mutations_adjust_selection_like_js() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -12497,9 +12497,9 @@ JSON.stringify({
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"jsAppend":{"value":"abcd","text":"abcd","start":0,"end":0},"parserAppend":{"value":"abcd","text":"abcd","start":0,"end":0},"appendSame":true,"jsInsertBefore":{"value":"abc","text":"abc","start":0,"end":0},"parserInsertBefore":{"value":"abc","text":"abc","start":0,"end":0},"insertBeforeSame":true,"jsRemove":{"value":"","text":"","start":0,"end":0},"parserRemove":{"value":"","text":"","start":0,"end":0},"removeSame":true}"#
+                    r#"{"jsAppend":{"value":"abcd","text":"abcd","start":2,"end":3},"parserAppend":{"value":"abcd","text":"abcd","start":2,"end":3},"appendSame":true,"jsInsertBefore":{"value":"abc","text":"abc","start":1,"end":2},"parserInsertBefore":{"value":"abc","text":"abc","start":1,"end":2},"insertBeforeSame":true,"jsRemove":{"value":"","text":"","start":0,"end":0},"parserRemove":{"value":"","text":"","start":0,"end":0},"removeSame":true}"#
                 ),
-                "parser textarea append/insertBefore/remove should reset non-dirty selection like JS child-list mutations"
+                "parser textarea append/insertBefore/remove should clamp non-dirty selection like JS child-list mutations"
             );
         }));
     }

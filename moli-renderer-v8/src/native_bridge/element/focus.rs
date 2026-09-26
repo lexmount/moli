@@ -510,6 +510,7 @@ pub(crate) fn reset_document_navigation_focus(
             viewport,
             None,
             Some(document),
+            SelectionBehaviorOnFocus::Restore,
         );
     }
     unsafe { &mut *runtime_ptr }.set_sequential_focus_starting_point(document, focus_target);
@@ -728,6 +729,33 @@ pub(crate) fn update_focus(
     update_focus_from_previous(scope, runtime_ptr, previous, next);
 }
 
+#[derive(Clone, Copy)]
+enum SelectionBehaviorOnFocus {
+    Restore,
+    Preserve,
+}
+
+pub(crate) fn focus_text_control_preserving_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    if !is_focusable(runtime, target) {
+        return;
+    }
+    let previous = runtime.active_element_handle();
+    update_focus_from_previous_with_previous_focus_within(
+        scope,
+        runtime_ptr,
+        previous,
+        Some(target),
+        None,
+        None,
+        SelectionBehaviorOnFocus::Preserve,
+    );
+}
+
 pub(crate) fn reset_focus_from_previous_handle(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -740,6 +768,7 @@ pub(crate) fn reset_focus_from_previous_handle(
         None,
         None,
         None,
+        SelectionBehaviorOnFocus::Restore,
     );
 }
 
@@ -756,6 +785,7 @@ pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
         None,
         Some(previous_focus_within),
         None,
+        SelectionBehaviorOnFocus::Restore,
     );
 }
 
@@ -772,6 +802,7 @@ fn update_focus_from_previous(
         next,
         None,
         None,
+        SelectionBehaviorOnFocus::Restore,
     );
 }
 
@@ -782,6 +813,7 @@ fn update_focus_from_previous_with_previous_focus_within(
     next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
     viewport_document: Option<DomHandle>,
+    selection_behavior: SelectionBehaviorOnFocus,
 ) {
     // A viewport has no element handle. Its Document must stay explicit:
     // clearing a parent's focus does not clear its inactive child's focused area.
@@ -906,7 +938,9 @@ fn update_focus_from_previous_with_previous_focus_within(
         runtime.mark_focus_changed(previous, next);
     }
     runtime.note_focus_style_activity(None, next);
-    if let Some(handle) = next {
+    if let Some(handle) = next
+        && matches!(selection_behavior, SelectionBehaviorOnFocus::Restore)
+    {
         let _ = crate::context_bootstrap::focus_element_selection(scope, runtime_ptr, handle);
         let runtime = unsafe { &mut *runtime_ptr };
         if is_text_control(runtime, handle) {
