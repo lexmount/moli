@@ -3077,7 +3077,7 @@ def _make_handler(
                 self.send_header(name, value)
             if auto_content_length and not _headers_include(header_block, "Content-Length"):
                 self.send_header("Content-Length", str(len(body)))
-            if cache_control is not None:
+            if cache_control is not None and not _headers_include(header_block, "Cache-Control"):
                 self.send_header("Cache-Control", cache_control)
             self.end_headers()
             if emit_body:
