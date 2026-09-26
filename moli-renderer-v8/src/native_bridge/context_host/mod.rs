@@ -70,7 +70,7 @@ use std::{
 use url::Url;
 use widestring::U16String;
 
-use self::resource_timing::SharedResourceTimingBufferRegistry;
+pub(crate) use self::resource_timing::SharedResourceTimingBufferRegistry;
 
 mod activity;
 mod bridge_install;

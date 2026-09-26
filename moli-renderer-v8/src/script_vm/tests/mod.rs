@@ -2254,6 +2254,7 @@ mod observable;
 mod observer_callbacks;
 mod observer_documents;
 mod observer_receivers;
+mod performance_receivers;
 mod popup_root_window;
 mod post_parse;
 mod queue_microtask;
