@@ -103,93 +103,7 @@ fn wheel_default_action_scrolls_unless_canceled() {
         "120"
     );
 }
-#[test]
-fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
-    let mut vm = new_storage_test_vm("https://scroll-intersection-observer.test/");
-    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
-        inner_width: 800,
-        inner_height: 600,
-        device_pixel_ratio: 1.0,
-        ..Default::default()
-    }))
-    .expect("intersection observer viewport should match the layout fixture");
-    vm.eval(
-        r#"
-        (() => {
-          if (!document.documentElement) {
-            document.appendChild(document.createElement("html"));
-          }
-          if (!document.body) {
-            document.documentElement.appendChild(document.createElement("body"));
-          }
-          document.documentElement.style.margin = "0";
-          document.body.style.margin = "0";
-          document.body.innerHTML =
-            '<div style="height: 800px"></div>' +
-            '<div id="lazy-target" style="height: 20px"></div>' +
-            '<div style="height: 1000px"></div>';
-        })()
-        "#,
-    )
-    .expect("intersection scroll fixture should initialize");
-    publish_layout_for_test(&mut vm);
 
-    vm.eval(
-        r#"
-        (() => {
-          window.__intersectionStates = [];
-          window.__intersectionObserver = new IntersectionObserver(entries => {
-            window.__intersectionStates.push(entries[0].isIntersecting);
-          });
-          window.__intersectionObserver.observe(
-            document.getElementById("lazy-target")
-          );
-        })()
-        "#,
-    )
-    .expect("intersection observer should register");
-    assert_eq!(
-        vm.eval("JSON.stringify(window.__intersectionStates)")
-            .expect("initial intersection state should flush"),
-        "[false]"
-    );
-
-    let mut previous = "[false]";
-    for (scroll_y, reason, expected) in [
-        (
-            400,
-            moli_layout::LayoutFlushReason::Screenshot,
-            "[false,true]",
-        ),
-        (
-            0,
-            moli_layout::LayoutFlushReason::Screencast,
-            "[false,true,false]",
-        ),
-    ] {
-        let passes_before = vm.layout_pass_observability_for_test().1;
-        vm.eval(&format!("window.scrollTo(0, {scroll_y})"))
-            .expect("window scroll should evaluate");
-        assert_eq!(
-            vm.eval("JSON.stringify(window.__intersectionStates)")
-                .expect("scroll should retain the published intersection geometry"),
-            previous
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
-        vm.paint_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0), reason)
-            .expect("fresh paint publishes the scrolled geometry")
-            .expect("document layout");
-        vm.eval("void 0")
-            .expect("complete the turn and deliver queued observers");
-        assert_eq!(
-            vm.eval("JSON.stringify(window.__intersectionStates)")
-                .expect("publication should queue observer delivery without another mutation"),
-            expected
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
-        previous = expected;
-    }
-}
 #[test]
 fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root() {
     let mut vm = new_storage_test_vm("https://wheel-scroll-chain.test/");
@@ -1448,4 +1362,99 @@ fn single_line_text_input_preserves_programmatic_scroll_across_select() {
             .expect("selection should preserve the text input scroll"),
         "33"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_checks_after_scroll_wait_for_rendering_and_reuse_published_geometry() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://scroll-intersection-observer.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        device_pixel_ratio: 1.0,
+        ..Default::default()
+    }))
+    .expect("intersection observer viewport should match the layout fixture");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML =
+            '<div style="height: 800px"></div>' +
+            '<div id="lazy-target" style="height: 20px"></div>' +
+            '<div style="height: 1000px"></div>';
+        })()
+        "#,
+    )
+    .expect("intersection scroll fixture should initialize");
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
+
+    vm.eval(
+        r#"
+        (() => {
+          window.__intersectionStates = [];
+          window.__intersectionObserver = new IntersectionObserver(entries => {
+            window.__intersectionStates.push(entries[0].isIntersecting);
+          });
+          window.__intersectionObserver.observe(
+            document.getElementById("lazy-target")
+          );
+        })()
+        "#,
+    )
+    .expect("intersection observer should register");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(window.__intersectionStates)")
+            .expect("initial intersection state should flush"),
+        "[false]"
+    );
+
+    let mut previous = "[false]";
+    for (scroll_y, reason, expected) in [
+        (
+            400,
+            moli_layout::LayoutFlushReason::Screenshot,
+            "[false,true]",
+        ),
+        (
+            0,
+            moli_layout::LayoutFlushReason::Screencast,
+            "[false,true,false]",
+        ),
+    ] {
+        let passes_before = vm.layout_pass_observability_for_test().1;
+        vm.eval(&format!("window.scrollTo(0, {scroll_y})"))
+            .expect("window scroll should evaluate");
+        assert_eq!(
+            vm.eval("JSON.stringify(window.__intersectionStates)")
+                .expect("scroll should retain the published intersection geometry"),
+            previous
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
+        vm.paint_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0), reason)
+            .expect("fresh paint publishes the scrolled geometry")
+            .expect("document layout");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("render and deliver observers");
+        assert_eq!(
+            vm.eval("JSON.stringify(window.__intersectionStates)")
+                .expect("publication should queue observer delivery without another mutation"),
+            expected
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+        previous = expected;
+    }
 }
