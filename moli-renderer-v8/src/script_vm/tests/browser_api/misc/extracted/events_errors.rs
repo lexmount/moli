@@ -334,7 +334,10 @@ async fn showing_popover_focuses_autofocus_descendant_before_toggle_event() {
         "beforetoggle:closed->open|button blur|focusTarget focus"
     );
 
-    assert!(!vm.has_ready_timeout());
+    assert!(
+        !vm.has_ready_callback_timer(),
+        "popover toggle must not create a callback timer; focus rendering wakes are separate"
+    );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
             PageDomManipulationTestFamily::ElementToggle,
