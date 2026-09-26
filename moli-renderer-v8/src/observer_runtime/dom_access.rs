@@ -567,6 +567,47 @@ pub(crate) fn document_has_rendering_observers(
             .any(|identity| identity.owner() == owner)
 }
 
+/// Collect the independent layout roots needed by this Document's observers.
+/// This reads native target identity only; layout publication and callbacks
+/// remain separate phases owned by ScriptVm's rendering update.
+pub(crate) fn rendering_observer_documents(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    owner: WindowExecutionContextOwner,
+) -> Vec<NativeNodeId> {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let (mut targets, registry) = access.store(|store| {
+        let mut targets = Vec::new();
+        for state in store.intersection_observers.values() {
+            if !state.observed_targets.is_empty()
+                && state
+                    .callback
+                    .observer_identity()
+                    .is_some_and(|identity| identity.owner() == owner)
+            {
+                targets.extend(state.observed_targets.iter().copied());
+                targets.extend(state.options.root);
+            }
+        }
+        (targets, store.callback_registry.clone())
+    });
+    let observers = access.read(|host| registry.active_resize_observers(scope, host, Some(owner)));
+    for observer in observers {
+        targets.extend(crate::context_bootstrap::resize_observer_observed_targets(
+            scope, observer,
+        ));
+    }
+    access.read(|host| {
+        targets
+            .into_iter()
+            .filter_map(|target| {
+                let document = host.dom_host().owner_document_handle(target)?;
+                host.top_level_document_for_document(document)
+            })
+            .collect()
+    })
+}
+
 /// Sample intersections after the ResizeObserver loop and focus fixup. Delivery
 /// receives its own exact-Document task, so callback cleanup cannot run it in
 /// the middle of another rendering phase.
