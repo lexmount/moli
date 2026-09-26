@@ -364,17 +364,42 @@ impl JsContextHost {
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        let answers = self
+        self.with_published_layout_for_document(document, |tree, metrics| LayoutAnswers {
+            answers: queries
+                .queries
+                .iter()
+                .map(|query| self.answer_layout_query(tree, query))
+                .collect(),
+            metrics,
+        })
+    }
+
+    pub(crate) fn answer_layout_query_for_document(
+        &self,
+        document: DomHandle,
+        query: &LayoutQuery<DomHandle>,
+    ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
+        self.with_published_layout_for_document(document, |tree, _| {
+            self.answer_layout_query(tree, query)
+        })
+    }
+
+    fn with_published_layout_for_document<T>(
+        &self,
+        document: DomHandle,
+        inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>, moli_layout::LayoutPassMetrics) -> T,
+    ) -> Result<T, LayoutError> {
+        let value = self
             .with_latest_layout_tree_for_document(document, |tree| {
-                self.last_layout_pass_metrics.get().map(|metrics| {
-                    self.answer_layout_queries(tree, metrics, tree.viewport, queries)
-                })
+                self.last_layout_pass_metrics
+                    .get()
+                    .map(|metrics| inspect(tree, metrics))
             })
             .flatten();
-        if let Some(answers) = answers {
+        if let Some(value) = value {
             self.layout_snapshot_cache_hits
                 .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
-            Ok(answers)
+            Ok(value)
         } else {
             self.layout_snapshot_cache_misses
                 .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
@@ -406,46 +431,31 @@ impl JsContextHost {
             .map(inspect)
     }
 
-    fn answer_layout_queries(
+    fn answer_layout_query(
         &self,
         tree: &FrozenLayoutTree<DomHandle>,
-        metrics: moli_layout::LayoutPassMetrics,
-        viewport: LayoutViewport,
-        queries: &LayoutQueryBatch<DomHandle>,
-    ) -> LayoutAnswers<DomHandle> {
-        let answers = queries
-            .queries
-            .iter()
-            .map(|query| match query {
-                LayoutQuery::DocumentMetrics => {
-                    // Geometry and its coordinate environment come from the
-                    // same published frame, even after live viewport changes.
-                    LayoutQueryAnswer::DocumentMetrics(moli_layout::LayoutDocumentMetrics {
-                        viewport,
-                        viewport_scroll: tree.viewport_scroll,
-                        content_size: tree.content_size,
-                    })
-                }
-                LayoutQuery::ElementMetrics { source } => LayoutQueryAnswer::ElementMetrics(
-                    tree.element_metrics_for_source_with_offset_parent_filter(
-                        *source,
-                        |candidate| self.offset_parent_candidate_is_exposed(*source, candidate),
-                    ),
-                ),
-                // An out-of-viewport point needs no fragment walk.
-                LayoutQuery::HitTest { point, .. } if !viewport.contains(*point) => {
-                    LayoutQueryAnswer::HitTest(None)
-                }
-                LayoutQuery::HitTestAll { point, .. } if !viewport.contains(*point) => {
-                    LayoutQueryAnswer::HitTestAll(Vec::new())
-                }
-                LayoutQuery::CaretPosition { point } if !viewport.contains(*point) => {
-                    LayoutQueryAnswer::CaretPosition(None)
-                }
-                _ => tree.answer_query(query),
-            })
-            .collect();
-        LayoutAnswers { answers, metrics }
+        query: &LayoutQuery<DomHandle>,
+    ) -> LayoutQueryAnswer<DomHandle> {
+        // Geometry and its coordinate environment come from the same
+        // published frame, even after live viewport changes.
+        match query {
+            LayoutQuery::ElementMetrics { source } => LayoutQueryAnswer::ElementMetrics(
+                tree.element_metrics_for_source_with_offset_parent_filter(*source, |candidate| {
+                    self.offset_parent_candidate_is_exposed(*source, candidate)
+                }),
+            ),
+            // An out-of-viewport point needs no fragment walk.
+            LayoutQuery::HitTest { point, .. } if !tree.viewport.contains(*point) => {
+                LayoutQueryAnswer::HitTest(None)
+            }
+            LayoutQuery::HitTestAll { point, .. } if !tree.viewport.contains(*point) => {
+                LayoutQueryAnswer::HitTestAll(Vec::new())
+            }
+            LayoutQuery::CaretPosition { point } if !tree.viewport.contains(*point) => {
+                LayoutQueryAnswer::CaretPosition(None)
+            }
+            _ => tree.answer_query(query),
+        }
     }
 
     /// Blink exposes only offset-parent candidates whose TreeScope is one of

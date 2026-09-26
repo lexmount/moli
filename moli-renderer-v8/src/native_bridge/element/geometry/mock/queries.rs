@@ -20,123 +20,10 @@ pub(crate) fn answer_queries(
     reason: LayoutFlushReason,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> LayoutAnswers<DomHandle> {
-    let viewport = runtime.layout_viewport_for_document(document);
     let answers = batch
         .queries
         .iter()
-        .map(|query| match query {
-            LayoutQuery::DocumentMetrics => {
-                let viewport_scroll = runtime
-                    .dom_host()
-                    .dom()
-                    .document_element_handle_for_document(document)
-                    .and_then(|root| runtime.dom_host().node(root))
-                    .and_then(Node::as_element)
-                    .map(|element| {
-                        LayoutPoint::new(element.scroll_left() as f32, element.scroll_top() as f32)
-                    })
-                    .unwrap_or(LayoutPoint::ZERO);
-                LayoutQueryAnswer::DocumentMetrics(LayoutDocumentMetrics {
-                    viewport,
-                    viewport_scroll,
-                    content_size: LayoutSize::new(
-                        viewport.css_width as f32,
-                        viewport.css_height as f32,
-                    ),
-                })
-            }
-            LayoutQuery::BoxModel { source } => {
-                LayoutQueryAnswer::BoxModel(mock_box_model(runtime, *source))
-            }
-            LayoutQuery::ClientRects { source } => LayoutQueryAnswer::ClientRects(
-                mock_layout_client_rect_for_node(runtime, *source)
-                    .map(quad_from_client_rect)
-                    .into_iter()
-                    .collect(),
-            ),
-            LayoutQuery::ContentQuads { source } => LayoutQueryAnswer::ContentQuads(
-                mock_layout_client_rect_for_node(runtime, *source)
-                    .map(quad_from_client_rect)
-                    .into_iter()
-                    .collect(),
-            ),
-            LayoutQuery::TextRangeRects { source, .. } => LayoutQueryAnswer::TextRangeRects(
-                mock_layout_client_rect_for_node(runtime, *source)
-                    .map(quad_from_client_rect)
-                    .into_iter()
-                    .collect(),
-            ),
-            LayoutQuery::ElementMetrics { source } => {
-                LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
-            }
-            LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
-            LayoutQuery::ScrollIntoViewGeometry { source } => {
-                LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
-                    runtime, document, *source,
-                ))
-            }
-            LayoutQuery::IntersectionGeometry { target, root } => {
-                LayoutQueryAnswer::IntersectionGeometry(mock_intersection_geometry(
-                    runtime, document, *target, *root,
-                ))
-            }
-            LayoutQuery::HitTest {
-                point,
-                ignore_pointer_events_none: _,
-            } => LayoutQueryAnswer::HitTest(
-                mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y))
-                    .map(|source| LayoutHit {
-                        source,
-                        fragment: None,
-                        paint_order: None,
-                        local_point: *point,
-                        is_text: false,
-                        local_content_box: None,
-                        viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                    }),
-            ),
-            LayoutQuery::HitTestAll {
-                point,
-                ignore_pointer_events_none: _,
-            } => LayoutQueryAnswer::HitTestAll(
-                mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y))
-                    .map(|source| {
-                        vec![LayoutHit {
-                            source,
-                            fragment: None,
-                            paint_order: None,
-                            local_point: *point,
-                            is_text: false,
-                            local_content_box: None,
-                            viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                        }]
-                    })
-                    .unwrap_or_default(),
-            ),
-            LayoutQuery::CaretPosition { point } => LayoutQueryAnswer::CaretPosition(
-                mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y))
-                    .map(|source| {
-                        let model = mock_box_model(runtime, source);
-                        LayoutCaretPosition {
-                            source,
-                            utf16_offset: None,
-                            rect: model
-                                .map(|model| model.border)
-                                .unwrap_or_else(|| quad_from_client_rect(zero_client_rect())),
-                            ancestor_boxes: model
-                                .map(|model| vec![(source, model)])
-                                .unwrap_or_default(),
-                        }
-                    }),
-            ),
-            LayoutQuery::EventOffset { source, point } => {
-                let rect = compute_mock_client_rect(runtime, *source);
-                LayoutQueryAnswer::EventOffset(Some(LayoutPoint::new(
-                    point.x - rect.left as f32,
-                    point.y - rect.top as f32,
-                )))
-            }
-        })
+        .map(|query| answer_query(runtime, document, query))
         .collect();
     LayoutAnswers {
         answers,
@@ -166,6 +53,129 @@ pub(crate) fn answer_queries(
             paint_operation_count: 0,
             fallback_count: 1,
         },
+    }
+}
+
+pub(crate) fn answer_query(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    query: &LayoutQuery<DomHandle>,
+) -> LayoutQueryAnswer<DomHandle> {
+    match query {
+        LayoutQuery::DocumentMetrics => {
+            let viewport = runtime.layout_viewport_for_document(document);
+            let viewport_scroll = runtime
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(document)
+                .and_then(|root| runtime.dom_host().node(root))
+                .and_then(Node::as_element)
+                .map(|element| {
+                    LayoutPoint::new(element.scroll_left() as f32, element.scroll_top() as f32)
+                })
+                .unwrap_or(LayoutPoint::ZERO);
+            LayoutQueryAnswer::DocumentMetrics(LayoutDocumentMetrics {
+                viewport,
+                viewport_scroll,
+                content_size: LayoutSize::new(
+                    viewport.css_width as f32,
+                    viewport.css_height as f32,
+                ),
+            })
+        }
+        LayoutQuery::BoxModel { source } => {
+            LayoutQueryAnswer::BoxModel(mock_box_model(runtime, *source))
+        }
+        LayoutQuery::ClientRects { source } => LayoutQueryAnswer::ClientRects(
+            mock_layout_client_rect_for_node(runtime, *source)
+                .map(quad_from_client_rect)
+                .into_iter()
+                .collect(),
+        ),
+        LayoutQuery::ContentQuads { source } => LayoutQueryAnswer::ContentQuads(
+            mock_layout_client_rect_for_node(runtime, *source)
+                .map(quad_from_client_rect)
+                .into_iter()
+                .collect(),
+        ),
+        LayoutQuery::TextRangeRects { source, .. } => LayoutQueryAnswer::TextRangeRects(
+            mock_layout_client_rect_for_node(runtime, *source)
+                .map(quad_from_client_rect)
+                .into_iter()
+                .collect(),
+        ),
+        LayoutQuery::ElementMetrics { source } => {
+            LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
+        }
+        LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
+        LayoutQuery::ScrollIntoViewGeometry { source } => {
+            LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
+                runtime, document, *source,
+            ))
+        }
+        LayoutQuery::IntersectionGeometry { target, root } => {
+            LayoutQueryAnswer::IntersectionGeometry(mock_intersection_geometry(
+                runtime, document, *target, *root,
+            ))
+        }
+        LayoutQuery::HitTest {
+            point,
+            ignore_pointer_events_none: _,
+        } => LayoutQueryAnswer::HitTest(
+            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y)).map(
+                |source| LayoutHit {
+                    source,
+                    fragment: None,
+                    paint_order: None,
+                    local_point: *point,
+                    is_text: false,
+                    local_content_box: None,
+                    viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
+                },
+            ),
+        ),
+        LayoutQuery::HitTestAll {
+            point,
+            ignore_pointer_events_none: _,
+        } => LayoutQueryAnswer::HitTestAll(
+            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y))
+                .map(|source| {
+                    vec![LayoutHit {
+                        source,
+                        fragment: None,
+                        paint_order: None,
+                        local_point: *point,
+                        is_text: false,
+                        local_content_box: None,
+                        viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
+                    }]
+                })
+                .unwrap_or_default(),
+        ),
+        LayoutQuery::CaretPosition { point } => LayoutQueryAnswer::CaretPosition(
+            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y)).map(
+                |source| {
+                    let model = mock_box_model(runtime, source);
+                    LayoutCaretPosition {
+                        source,
+                        utf16_offset: None,
+                        rect: model
+                            .map(|model| model.border)
+                            .unwrap_or_else(|| quad_from_client_rect(zero_client_rect())),
+                        ancestor_boxes: model
+                            .map(|model| vec![(source, model)])
+                            .unwrap_or_default(),
+                    }
+                },
+            ),
+        ),
+        LayoutQuery::EventOffset { source, point } => {
+            let rect = compute_mock_client_rect(runtime, *source);
+            LayoutQueryAnswer::EventOffset(Some(LayoutPoint::new(
+                point.x - rect.left as f32,
+                point.y - rect.top as f32,
+            )))
+        }
     }
 }
 

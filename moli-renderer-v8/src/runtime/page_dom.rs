@@ -3536,18 +3536,14 @@ impl PageVm {
         if !is_geometry_node {
             return Ok(Some(false));
         }
-        let answers = self
-            .vm_mut()
-            .observable_geometry_batch_for_document(
+        let answer = self
+            .vm()
+            .observable_geometry_query_for_document(
                 document,
-                &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::ClientRects {
-                    source: handle,
-                }]),
+                &moli_layout::LayoutQuery::ClientRects { source: handle },
             )
             .map_err(|error| anyhow::anyhow!("failed to test node geometry: {error}"))?;
-        let Some(moli_layout::LayoutQueryAnswer::ClientRects(rects)) =
-            answers.answers.into_iter().next()
-        else {
+        let moli_layout::LayoutQueryAnswer::ClientRects(rects) = answer else {
             return Err(anyhow::anyhow!(
                 "geometry provider returned a mismatched client-rects answer"
             ));

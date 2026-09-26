@@ -7,7 +7,7 @@ use moli_layout::{
 };
 
 use super::client_rect::{ClientRect, client_rect_from_quad, union_client_rect, zero_client_rect};
-use super::mock::answer_queries as answer_mock_queries;
+use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 fn query_source(
@@ -21,18 +21,33 @@ fn query_source(
     let Some(document) = runtime.layout_document_for_source(source) else {
         return Ok(None);
     };
-    let answers =
-        match observable_geometry_batch(runtime, document, &LayoutQueryBatch::new(vec![query])) {
-            Ok(answers) => answers,
-            Err(LayoutError::NoLayoutSnapshot) => return Ok(None),
-            Err(error) => return Err(error),
-        };
-    answers
-        .answers
-        .into_iter()
-        .next()
-        .map(Some)
-        .ok_or_else(|| provider_contract_error("source geometry"))
+    match observable_geometry_query(runtime, document, &query) {
+        Ok(answer) => Ok(Some(answer)),
+        Err(LayoutError::NoLayoutSnapshot) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn observable_geometry_query(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    query: &LayoutQuery<DomHandle>,
+) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
+    runtime.ensure_initial_layout()?;
+    published_geometry_query(runtime, document, query)
+}
+
+/// Style sampling never initializes layout as a side effect.
+fn published_geometry_query(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    query: &LayoutQuery<DomHandle>,
+) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
+    if runtime.layout_policy().uses_real_layout() {
+        runtime.answer_layout_query_for_document(document, query)
+    } else {
+        Ok(answer_mock_query(runtime, document, query))
+    }
 }
 
 pub(crate) fn observable_geometry_batch(
@@ -66,13 +81,8 @@ pub(crate) fn observable_document_metrics(
     runtime: &JsContextHost,
     document: DomHandle,
 ) -> Result<LayoutDocumentMetrics, LayoutError> {
-    let answers = observable_geometry_batch(
-        runtime,
-        document,
-        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentMetrics]),
-    )?;
-    match answers.answers.into_iter().next() {
-        Some(LayoutQueryAnswer::DocumentMetrics(metrics)) => Ok(metrics),
+    match observable_geometry_query(runtime, document, &LayoutQuery::DocumentMetrics)? {
+        LayoutQueryAnswer::DocumentMetrics(metrics) => Ok(metrics),
         _ => Err(provider_contract_error("document metrics")),
     }
 }
@@ -231,17 +241,17 @@ pub(crate) fn observable_used_grid_tracks(
     let Some(document) = runtime.layout_document_for_source(source) else {
         return Ok(None);
     };
-    let answers = match published_geometry_batch(
+    let answer = match published_geometry_query(
         runtime,
         document,
-        &LayoutQueryBatch::new(vec![LayoutQuery::UsedGridTracks { source }]),
+        &LayoutQuery::UsedGridTracks { source },
     ) {
-        Ok(answers) => answers,
+        Ok(answer) => answer,
         Err(LayoutError::NoLayoutSnapshot) => return Ok(None),
         Err(error) => return Err(error),
     };
-    match answers.answers.into_iter().next() {
-        Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
+    match answer {
+        LayoutQueryAnswer::UsedGridTracks(tracks) => Ok(tracks),
         _ => Err(provider_contract_error("used Grid tracks")),
     }
 }

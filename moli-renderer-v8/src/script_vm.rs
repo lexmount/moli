@@ -2793,6 +2793,15 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn observable_geometry_query_for_document(
+        &self,
+        document: DomHandle,
+        query: &moli_layout::LayoutQuery<DomHandle>,
+    ) -> Result<moli_layout::LayoutQueryAnswer<DomHandle>, moli_layout::LayoutError> {
+        let host = self._context_host.borrow();
+        crate::native_bridge::element::observable_geometry_query(&host, document, query)
+    }
+
     pub(crate) fn observable_geometry_batch_for_document(
         &mut self,
         document: DomHandle,
@@ -4553,15 +4562,11 @@ impl ScriptVm {
         else {
             return Ok(None);
         };
-        let answers = self.observable_geometry_batch_for_document(
+        let answer = self.observable_geometry_query_for_document(
             document,
-            &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::ClientRects {
-                source: handle,
-            }]),
+            &moli_layout::LayoutQuery::ClientRects { source: handle },
         )?;
-        let Some(moli_layout::LayoutQueryAnswer::ClientRects(mut quads)) =
-            answers.answers.into_iter().next()
-        else {
+        let moli_layout::LayoutQueryAnswer::ClientRects(mut quads) = answer else {
             return Err(moli_layout::LayoutError::source_contract(
                 "renderer client rect",
                 "provider returned a mismatched client-rects answer",
@@ -4619,15 +4624,11 @@ impl ScriptVm {
                 )
             };
             let (frame, parent_document, child_viewport) = frame_context;
-            let answers = self.observable_geometry_batch_for_document(
+            let answer = self.observable_geometry_query_for_document(
                 parent_document,
-                &moli_layout::LayoutQueryBatch::new(vec![moli_layout::LayoutQuery::BoxModel {
-                    source: frame,
-                }]),
+                &moli_layout::LayoutQuery::BoxModel { source: frame },
             )?;
-            let Some(moli_layout::LayoutQueryAnswer::BoxModel(Some(frame_model))) =
-                answers.answers.into_iter().next()
-            else {
+            let moli_layout::LayoutQueryAnswer::BoxModel(Some(frame_model)) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(
                     "frame geometry composition",
                     "frame owner has no content-box geometry",
