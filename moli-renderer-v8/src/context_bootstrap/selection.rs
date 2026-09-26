@@ -17,7 +17,7 @@ pub(super) use values::{
     selection_composed_end_node, selection_composed_end_offset, selection_composed_start_node,
     selection_composed_start_offset, selection_direction, selection_focus_node,
     selection_focus_offset, selection_has_range, selection_is_collapsed_internal,
-    selection_owner_document, selection_range, selection_range_update_state,
-    selection_set_collapsed, selection_store, selection_store_with_composed_boundaries,
-    selection_sync_associated_range,
+    selection_owner_document, selection_range, selection_range_belongs_to_document,
+    selection_range_update_state, selection_set_collapsed, selection_spans_dom_roots,
+    selection_store, selection_store_with_composed_boundaries, selection_sync_associated_range,
 };
