@@ -116,6 +116,6 @@ pub(crate) fn deliver_realtime_intersection_observer(
     let Some(delivery) = delivery else {
         return false;
     };
-    invoke_intersection_deliveries(scope, host_ptr, target, vec![delivery]);
+    invoke_intersection_delivery(scope, host_ptr, delivery);
     true
 }
