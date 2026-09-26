@@ -43,6 +43,7 @@ pub(crate) fn notify_dom_mutation(
     if !style_effects.is_empty() {
         host.note_style_mutation_effects(&style_effects);
     }
+    host.queue_focused_document_fixup(scope);
     let style_invalidation_us = started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();

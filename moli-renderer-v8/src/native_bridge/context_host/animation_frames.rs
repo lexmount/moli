@@ -1,5 +1,6 @@
 //! Document-owned animation callbacks. A timer only wakes the rendering
-//! source; one rendering task snapshots and invokes a Document's callback map.
+//! source; one rendering task snapshots and invokes a Document's callback map,
+//! then applies focus fixup after callback cleanup.
 
 use super::{
     JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken, WindowDocumentTaskTarget,
@@ -30,6 +31,7 @@ struct AnimationFrameProvider {
     owner: WindowExecutionContextOwner,
     next_handle: u32,
     wake_pending: bool,
+    focus_fixup_target: Option<WindowDocumentTaskTarget>,
     handles: Vec<u32>,
     callbacks: HashMap<u32, WindowWebIdlCallbackFunction>,
 }
@@ -65,12 +67,76 @@ impl AnimationFrameState {
             .find(|provider| provider.owner == owner)
     }
 
+    fn ensure_provider(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+        dispatch_scope: OwnerDispatchScope,
+    ) -> &mut AnimationFrameProvider {
+        if !self
+            .providers
+            .iter()
+            .any(|provider| provider.owner == owner)
+        {
+            self.providers.push(AnimationFrameProvider {
+                dispatch_scope,
+                owner,
+                next_handle: 0,
+                wake_pending: false,
+                focus_fixup_target: None,
+                handles: Vec::new(),
+                callbacks: HashMap::new(),
+            });
+        }
+        self.provider_mut(owner).expect("provider was inserted")
+    }
+
     fn discard(&mut self, owner: WindowExecutionContextOwner) {
         self.providers.retain(|provider| provider.owner != owner);
     }
 }
 
 impl JsContextHost {
+    /// DOM changes and focus styling can make the focused element unavailable.
+    /// Revalidate it at the end of a rendering update, using the same native
+    /// wake and exact Document owner as animation callbacks. No author timer
+    /// or animation-frame function participates in this internal scheduling.
+    pub(crate) fn queue_focused_document_fixup(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        let Some(active) = self.active_element_handle() else {
+            return;
+        };
+        let Some(document) = self.dom_host().owner_document_handle(active) else {
+            return;
+        };
+        let Some(endpoint) = self.window_endpoint_for_document(document) else {
+            return;
+        };
+        let dispatch_scope = endpoint.dispatch_scope();
+        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
+            return;
+        };
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+        else {
+            return;
+        };
+        let provider = self.animation_frames.ensure_provider(owner, dispatch_scope);
+        provider.focus_fixup_target = Some(target);
+        if provider.wake_pending {
+            return;
+        }
+        let Some(binding) =
+            self.clone_window_execution_context_binding(scope, owner, dispatch_scope)
+        else {
+            self.animation_frames.discard(owner);
+            return;
+        };
+        self.animation_frames
+            .provider_mut(owner)
+            .expect("provider was inserted")
+            .wake_pending = true;
+        self.queue_window_animation_frame_wake(scope, binding);
+    }
+
     pub(crate) fn request_window_animation_frame<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -87,22 +153,9 @@ impl JsContextHost {
         }
         // document.open() preserves this callback map and its handle counter.
         // Actual Window retirement removes both through the owner registry.
-        if self.animation_frames.provider_mut(owner).is_none() {
-            self.animation_frames
-                .providers
-                .push(AnimationFrameProvider {
-                    dispatch_scope: binding.dispatch_scope(),
-                    owner,
-                    next_handle: 0,
-                    wake_pending: false,
-                    handles: Vec::new(),
-                    callbacks: HashMap::new(),
-                });
-        }
         let provider = self
             .animation_frames
-            .provider_mut(owner)
-            .expect("provider was inserted");
+            .ensure_provider(owner, binding.dispatch_scope());
         let handle = loop {
             provider.next_handle = provider.next_handle.wrapping_add(1);
             if provider.next_handle != 0 && !provider.callbacks.contains_key(&provider.next_handle)
@@ -150,11 +203,6 @@ impl JsContextHost {
         let Some(provider) = self.animation_frames.provider_mut(owner) else {
             return;
         };
-        if provider.callbacks.is_empty() {
-            provider.wake_pending = false;
-            provider.handles.clear();
-            return;
-        }
         let dispatch_scope = provider.dispatch_scope;
         if !self.window_execution_context_owner_is_current(owner, dispatch_scope) {
             self.animation_frames.discard(owner);
@@ -166,6 +214,20 @@ impl JsContextHost {
             self.animation_frames.discard(owner);
             return;
         };
+        let provider = self
+            .animation_frames
+            .provider_mut(owner)
+            .expect("provider is current");
+        if provider.focus_fixup_target != Some(target) {
+            // Unlike the Window's callback map, an old Document's pending
+            // focus check must not survive document.open().
+            provider.focus_fixup_target = None;
+        }
+        if provider.callbacks.is_empty() && provider.focus_fixup_target.is_none() {
+            provider.wake_pending = false;
+            provider.handles.clear();
+            return;
+        }
         if !self.queue_rendering_update(
             target,
             RendererPageRenderingUpdateTaskKind::AnimationFrameCallbacks,
@@ -258,6 +320,27 @@ impl JsContextHost {
                 tracing::warn!("animation frame callback exceeded its execution deadline");
             }
             invoked = true;
+        }
+        // A callback can replace its Document or move focus elsewhere. The
+        // rendering entry must never clear focus in a replacement Document.
+        if self.window_document_owner_is_current_for_dispatch_scope(target.owner(), dispatch_scope)
+            && self
+                .animation_frames
+                .provider_mut(owner)
+                .is_some_and(|provider| {
+                    if provider.focus_fixup_target == Some(target) {
+                        provider.focus_fixup_target = None;
+                        true
+                    } else {
+                        false
+                    }
+                })
+        {
+            invoked |= super::super::element::apply_document_focus_fixup(
+                scope,
+                host_ptr,
+                resolved.document_handle,
+            );
         }
         dispatch_scope.restore(scope, previous_scope);
         invoked

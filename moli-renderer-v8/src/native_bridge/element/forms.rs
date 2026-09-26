@@ -32,7 +32,7 @@ use super::{
     element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
     parse_non_negative_dimension, property_usv_string_value, reflected_element_attribute_handle,
     resolve_url_like_attribute, set_attribute_property_on_object_or_detached,
-    set_reflected_attribute, set_reflected_boolean_attribute, update_focus,
+    set_reflected_attribute, set_reflected_boolean_attribute,
 };
 use std::str::FromStr;
 

@@ -2,6 +2,160 @@ use super::{ChildFrameSemanticTurnKind, new_storage_page_task_executor_test_vm};
 use crate::network::ResourceRequestClient;
 
 #[tokio::test(flavor = "current_thread")]
+async fn focus_fixup_bounds_runaway_blur_handlers_and_their_microtasks() {
+    use crate::v8_execution_watchdog::{V8ExecutionWatchdog, V8ExecutionWatchdogKind};
+
+    let _budget = V8ExecutionWatchdog::override_timeout_for_test(
+        V8ExecutionWatchdogKind::FocusFixup,
+        std::time::Duration::from_millis(50),
+    );
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for runaway in [
+        "while (true) {}",
+        "queueMicrotask(() => { while (true) {} });",
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://focus-fixup-watchdog.test/");
+        vm.eval(&format!(
+            r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || root.appendChild(document.createElement('body'));
+const button = body.appendChild(document.createElement('button'));
+globalThis.__blurCount = 0;
+button.addEventListener('blur', () => {{
+  __blurCount++;
+  {runaway}
+}});
+button.focus();
+button.hidden = true;
+"#
+        ))
+        .expect("queue native focus fixup without an author timer or frame callback");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("runaway focus event work must return control to the Page executor");
+        assert_eq!(
+            vm.eval("[__blurCount, document.activeElement === document.body, 6 * 7].join('|')")
+                .expect("the isolate must recover after focus fixup termination"),
+            "1|true|42",
+            "{runaway}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focus_fixup_revalidates_the_document_after_animation_callbacks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm("https://focus-fixup-rendering.test/");
+    let count = vm
+        .eval(include_str!("../../../tests/fixtures/focus-fixup.js"))
+        .expect("focus fixup scenarios")
+        .parse::<usize>()
+        .unwrap();
+    for index in 0..count {
+        let name = vm
+            .eval(&format!("__focusFixup.setup({index})"))
+            .expect("set up focus loss without invoking author timer getters");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("native rendering opportunities should settle focus fixup");
+        let result = vm.eval("JSON.stringify(__focusFixup.snapshot())").unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        for phase in ["sync", "microtask"] {
+            assert_eq!(result[phase], result["expectedBefore"], "{name}: {result}");
+        }
+        assert_eq!(result["frame"], result["expectedFrame"], "{name}: {result}");
+        assert_eq!(result["final"], result["expected"], "{name}: {result}");
+        assert_eq!(result["timerGets"], 0, "{name}: {result}");
+        let events = result["events"].as_array().unwrap();
+        if result["expected"] == "focus" {
+            assert!(events.is_empty(), "{name}: {result}");
+        } else {
+            assert_eq!(
+                events.first().map(|e| &e["type"]),
+                Some(&serde_json::json!("blur")),
+                "{name}: {result}"
+            );
+            assert!(
+                events.iter().all(|e| e["trusted"] == true),
+                "{name}: {result}"
+            );
+            if result["expected"] == "BODY" {
+                assert_eq!(events.len(), 2, "{name}: {result}");
+                assert!(
+                    events.iter().all(|e| e["nullRelatedTarget"] == true),
+                    "{name}: {result}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focus_fixup_keeps_document_replacement_and_child_retirement_boundaries() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm("https://focus-fixup-owner.test/");
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || root.appendChild(document.createElement('body'));
+body.innerHTML = '<button id="old">old</button>';
+globalThis.__focusFixupLifecycle = [];
+const old = document.getElementById('old');
+old.focus();
+old.disabled = true;
+requestAnimationFrame(() => {
+  __focusFixupLifecycle.push('old-frame:' + document.activeElement.id);
+  document.open();
+  document.write('<!doctype html><button id="replacement">replacement</button>');
+  document.close();
+  const replacement = document.getElementById('replacement');
+  replacement.focus();
+  replacement.addEventListener('blur', () => __focusFixupLifecycle.push('replacement-blur'));
+  replacement.disabled = true;
+  requestAnimationFrame(() => {
+    __focusFixupLifecycle.push('replacement-frame:' + document.activeElement.id);
+    requestAnimationFrame(() => __focusFixupLifecycle.push(document.activeElement.tagName));
+  });
+});
+"#,
+    )
+    .expect("queue fixup across document.open in an animation callback");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("replacement Document should receive its own rendering update");
+    assert_eq!(
+        vm.eval("__focusFixupLifecycle.join('|')").unwrap(),
+        "old-frame:old|replacement-frame:replacement|replacement-blur|BODY"
+    );
+
+    vm.eval(
+        r#"
+document.body.innerHTML = '<iframe id="retired"></iframe><button id="parent-focus">parent</button>';
+const retired = document.getElementById('retired');
+const child = retired.contentWindow;
+child.document.body.innerHTML = '<button id="child-focus">child</button>';
+const childFocus = child.document.getElementById('child-focus');
+childFocus.focus();
+childFocus.disabled = true;
+childFocus.addEventListener('blur', () => __focusFixupLifecycle.push('child-blur'));
+child.requestAnimationFrame(() => __focusFixupLifecycle.push('retired-child-frame'));
+retired.remove();
+document.getElementById('parent-focus').focus();
+__focusFixupLifecycle.length = 0;
+"#,
+    )
+    .expect("retire a child with focus fixup and callbacks pending");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("retired child work should be discarded");
+    assert_eq!(vm.eval("__focusFixupLifecycle.join('|')").unwrap(), "");
+    assert_eq!(
+        vm.eval("document.activeElement.id").unwrap(),
+        "parent-focus"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn window_scroll_coalesces_into_one_rendering_update_without_a_timer() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://scroll-rendering-update.test/");
