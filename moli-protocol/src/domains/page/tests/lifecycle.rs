@@ -2016,23 +2016,17 @@ async fn runtime_document_write_preserves_multiple_classic_and_module_script_ord
 async fn add_script_run_immediately_creates_top_level_world_even_when_child_world_name_matches() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(
-            // Keep the child on its initial empty document. A `srcdoc`
-            // navigation may commit after the preload is registered, in
-            // which case the new-document script correctly runs in that
-            // future child document and no longer isolates runImmediately's
-            // top-level-world behavior.
-            "data:text/html,<body>parent-frame<iframe></iframe></body>",
-        )
-        .await
-        .expect("page should load");
-    let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>parent-frame<iframe srcdoc=\"<body>child-frame</body>\"></iframe></body>",
+        Some("SID-1"),
+    )
+    .await;
+    let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 4121).await;
+    // Finish the child document before registering a preload. Otherwise its
+    // later initialization can legitimately run that new-document script,
+    // independently of runImmediately's top-level execution below.
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
     ctx.process_async(json!({
         "id": 4120,
         "method": "Runtime.enable",
@@ -2042,7 +2036,6 @@ async fn add_script_run_immediately_creates_top_level_world_even_when_child_worl
     ctx.expect_result(4120, json!({}), Some("SID-1"));
     ctx.sent.clear();
 
-    let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 4121).await;
     ctx.process_async(json!({
         "id": 4122,
         "method": "Page.createIsolatedWorld",
