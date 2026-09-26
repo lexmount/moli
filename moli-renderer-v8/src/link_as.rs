@@ -53,23 +53,7 @@ impl LinkAsDestination {
         match self {
             Self::Script => moli_web_mime::is_javascript_mime_essence(&essence),
             Self::Image => moli_image::supports_image_mime_essence(&essence),
-            // The font pipeline consumes SFNT (including collections), WOFF
-            // and WOFF2. Include their legacy font MIME types, but not EOT or
-            // arbitrary font/* subtypes merely because they are font MIME types.
-            Self::Font => matches!(
-                essence.as_str(),
-                "font/ttf"
-                    | "font/otf"
-                    | "font/sfnt"
-                    | "font/collection"
-                    | "font/woff"
-                    | "font/woff2"
-                    | "application/font-ttf"
-                    | "application/font-otf"
-                    | "application/font-sfnt"
-                    | "application/font-woff"
-                    | "application/vnd.ms-opentype"
-            ),
+            Self::Font => moli_web_mime::is_supported_font_mime_essence(&essence),
             Self::Style => essence == "text/css",
             Self::Track => essence == "text/vtt",
             _ => false,
