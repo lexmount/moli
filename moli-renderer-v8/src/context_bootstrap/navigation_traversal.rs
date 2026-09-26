@@ -538,6 +538,17 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     {
         return;
     }
+    let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);
+    if let Some(source_handle) =
+        super::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)
+        && super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
+            scope,
+            source_handle,
+            top_owner,
+        )
+    {
+        return;
+    }
     unsafe { &mut *host_ptr }.record_pending_top_level_history_traversal(delta);
 }
 
