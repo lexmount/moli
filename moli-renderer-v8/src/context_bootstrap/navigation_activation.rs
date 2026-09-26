@@ -494,13 +494,13 @@ mod tests {
                     .unwrap()
                     .strict_equals(from.into())
             );
-            resolve_navigation_transition_committed(scope, navigation, from.into());
+            resolve_navigation_transition_committed(scope, navigation);
             let committed = transition
                 .get(scope, v8str(scope, "committed").into())
                 .unwrap();
             let committed = v8::Local::<v8::Promise>::try_from(committed).unwrap();
             assert_eq!(committed.state(), v8::PromiseState::Fulfilled);
-            assert!(committed.result(scope).strict_equals(from.into()));
+            assert!(committed.result(scope).is_undefined());
         }
     }
 }
