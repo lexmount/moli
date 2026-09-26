@@ -161,6 +161,25 @@ pub(crate) fn current_performance_time_origin(scope: &mut v8::PinScope<'_, '_>) 
         .unwrap_or(0.0)
 }
 
+fn resource_timing_content_type(headers: &[(String, Vec<u8>)]) -> String {
+    let Some(essence) = moli_web_mime::extract_response_mime_essence(headers) else {
+        return String::new();
+    };
+    if moli_web_mime::is_javascript_mime_essence(&essence) {
+        "text/javascript".to_owned()
+    } else if matches!(essence.as_str(), "application/json" | "text/json")
+        || essence.ends_with("+json")
+    {
+        "application/json".to_owned()
+    } else if essence != "image/svg+xml"
+        && (matches!(essence.as_str(), "application/xml" | "text/xml") || essence.ends_with("+xml"))
+    {
+        "application/xml".to_owned()
+    } else {
+        essence
+    }
+}
+
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,
@@ -278,9 +297,7 @@ impl ResourcePerformanceEntry {
             moli_fetch::ResponseCacheState::Local => 0.0,
             moli_fetch::ResponseCacheState::Validated => 300.0,
         };
-        let content_type = moli_web_mime::response_content_type(response_headers)
-            .and_then(|value| moli_web_mime::mime_essence(&value))
-            .unwrap_or_default();
+        let content_type = resource_timing_content_type(response_headers);
         Self {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
@@ -458,6 +475,30 @@ pub(in crate::context_bootstrap) fn set_performance_slot_value<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_content_type_minimizes_known_mime_families() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], ""),
+            (
+                &["text/plain", "application/problem+json"],
+                "application/json",
+            ),
+            (
+                &["application/x-javascript; charset=utf-8"],
+                "text/javascript",
+            ),
+            (&["application/rss+xml"], "application/xml"),
+            (&["image/svg+xml"], "image/svg+xml"),
+        ];
+        for &(values, expected) in cases {
+            let headers = values
+                .iter()
+                .map(|value| ("Content-Type".into(), value.as_bytes().to_vec()))
+                .collect::<Vec<_>>();
+            assert_eq!(resource_timing_content_type(&headers), expected);
+        }
+    }
 
     #[test]
     fn failed_network_result_keeps_a_zero_sized_resource_timing_record() {
