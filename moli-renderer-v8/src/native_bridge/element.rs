@@ -221,8 +221,8 @@ pub(crate) use events::{
 };
 use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
-    contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
-    perform_access_key_default_action_for_dispatched_event,
+    contenteditable_editing_host, contenteditable_editing_host_in_dom, focus_element,
+    focus_live_element_for_inspector, perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_document_navigation_focus,

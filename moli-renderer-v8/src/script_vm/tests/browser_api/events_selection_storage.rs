@@ -6,6 +6,18 @@ use tokio::{
 };
 
 #[test]
+fn selection_shadow_direction_and_composed_boundaries_follow_native_mutations() {
+    let mut vm = new_storage_test_vm("https://selection-shadow-state.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/selection-shadow-state.js"
+        ))
+        .expect("shadow selections should retain their composed state"),
+        ""
+    );
+}
+
+#[test]
 fn selection_endpoints_follow_associated_live_range_mutations() {
     let mut vm = new_storage_test_vm("https://selection-live-mutations.test/");
     assert_eq!(
