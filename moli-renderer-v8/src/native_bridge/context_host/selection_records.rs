@@ -526,6 +526,16 @@ impl JsContextHost {
     }
 
     pub(crate) fn clear_selection_record(&mut self, handle: SelectionRecordHandle) {
+        if self.selection_record_registry.has_range(handle)
+            && let Some(document) = self.selection_record_registry.owner_document(handle)
+            && let Some(control) = self.active_element_handle()
+            && self.dom_host().owner_document_handle(control) == Some(document)
+            && crate::native_bridge::element::is_text_control(self, control)
+        {
+            // A focused text control exposes the document selection, including
+            // its empty position. An unfocused control retains its cached range.
+            let _ = self.set_selection_range(control, 0, 0);
+        }
         self.selection_record_registry.clear_record(handle);
     }
 
