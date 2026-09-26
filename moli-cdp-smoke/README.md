@@ -249,6 +249,22 @@ Covered well:
   asynchronous request cancellation, and suppression of asynchronous events and
   timers while a synchronous request owns the main thread.
 - The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). Its Moli-only TreeScope fixture also captures 104 open/closed Shadow Roots, nested roots, and 24 roots in an iframe twice, requiring stable pixels and completion within the protocol timeout. The group covers Moli's generation-gated 1 FPS JPEG screencast as well: initial-frame delivery, clean-state frame suppression without ACK backpressure, 400x300 scaling, metadata/session routing, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the TreeScope, fixed-1-FPS, and default-Mock branches are Moli-only.
+- The default `layout-policy` group locks Moli's first-demand screen-layout
+  lifecycle through raw CDP. Geometry reads and coordinate input initialize a
+  cold Document once, then reuse its snapshot after DOM/CSS/viewport changes.
+  Screenshots and actual screencast frames publish fresh screen layout; PDF
+  uses temporary print layout without publishing. Plain DOM/Runtime reads,
+  computed style (including used size and Grid), stylesheet reads/writes,
+  snapshots, and emulation changes neither initialize nor refresh it. The
+  matrix also checks live viewport/scroll versus frozen content size, missing
+  boxes, invalid zero clips, focus/touch branches that need no layout, and
+  four Document replacement paths. Each case uses a new target and mutates a
+  known box **before** its assertion reads geometry, proving whether the
+  command under test published layout without accidentally warming the page.
+  `Performance.getMetrics.LayoutCount` is not used as a layout oracle.
+  DOMSnapshot placeholder bounds are not asserted as a stable contract.
+  This group tests Moli's policy and explicitly skips other browsers; it does
+  not claim Chromium freezes layout after mutations.
 - The default `playwright-compat` group takes viewport, clipped, full-page,
   and full-page clipped screenshots through `page.screenshot()` on fresh pages,
   without a geometry probe or raw CDP capture first. DOM geometry reads initialize
@@ -439,6 +455,9 @@ Runner layout:
 - `groups/navigation_outcomes.py`: direct Page.navigate download/no-document/error outcomes and matching Network evidence.
 - `groups/dom_parser_mutations.py`: cross-engine raw-CDP parser-tail mutation publication and commit/DCL DOM binding barriers.
 - `groups/layout_screenshot.py`: raw current-viewport PNG, DevTools parameter compatibility, paint/layout mutation freshness, open/closed Shadow Root and iframe TreeScope stability, generation-gated 1 FPS JPEG screencast/ACK behavior, and Moli default-Mock restart boundary.
+- `groups/layout_policy.py`: cold initialization versus warm snapshot reuse,
+  non-publishing reads/writes and print, screen publication, validation, and
+  Document replacement through raw CDP.
 - `groups/action_window.py`: raw wheel admission/deadline batching, screenshot
   flush/reset, derived-effect coalescing, and exact-Document retirement.
 - `groups/pdf.py`: raw `Page.printToPDF` base64 and `ReturnAsStream` transport, `IO.read`, pagination, page ranges, orientation, PDF structure, and Chromium-shaped validation errors.
@@ -528,6 +547,7 @@ Run a focused subset while developing a CDP area:
 uv run moli-cdp-smoke --group protocol --group network
 uv run moli-cdp-smoke --group multi-client
 uv run moli-cdp-smoke --group layout-screenshot
+uv run moli-cdp-smoke --group layout-policy
 uv run moli-cdp-smoke --group action-window
 uv run moli-cdp-smoke --group pdf
 uv run moli-cdp-smoke --group agent-episode

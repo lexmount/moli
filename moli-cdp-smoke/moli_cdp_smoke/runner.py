@@ -39,6 +39,7 @@ from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
 from .groups.history_worlds import run_history_worlds_group
 from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
+from .groups.layout_policy import run_layout_policy_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.locale_timezone_inputs import run_locale_timezone_inputs_group
 from .groups.process_environment import run_process_environment_group
@@ -169,6 +170,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "Raw DOM.getNodeForLocation capability boundary for Moli and Chromium.",
         "raw",
         run_dom_hit_test_group,
+    ),
+    SmokeGroup(
+        "layout-policy",
+        "Moli first-demand layout, warm snapshot reuse, non-publishing reads/writes, screen outputs, print isolation, and Document replacement.",
+        "raw",
+        run_layout_policy_group,
     ),
     SmokeGroup(
         "layout-screenshot",
