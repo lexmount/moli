@@ -2483,167 +2483,7 @@ JSON.stringify(window.parserSelectionStates)
             );
         }));
 }
-#[test]
-fn parser_textarea_child_list_mutations_reset_selection_like_js() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime should build");
 
-    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let mut page_vm = new_phase_one_page_vm_for_test();
-            create_connected_html_body_for_test(&mut page_vm);
-
-            page_vm
-                .evaluate_expression(
-                    r#"
-window.parserTextareaSelectionStates = {};
-function textareaState(textarea) {
-  return {
-    value: textarea.value,
-    text: textarea.textContent,
-    start: textarea.selectionStart,
-    end: textarea.selectionEnd
-  };
-}
-function makeTextarea(id, text, start, end) {
-  const textarea = document.createElement('textarea');
-  textarea.id = id;
-  textarea.textContent = text;
-  document.body.appendChild(textarea);
-  textarea.setSelectionRange(start, end);
-  return textarea;
-}
-
-const jsAppend = makeTextarea('js-textarea-append', 'abc', 2, 3);
-const parserAppend = makeTextarea('parser-textarea-append', 'abc', 2, 3);
-jsAppend.appendChild(document.createTextNode('d'));
-window.parserTextareaSelectionStates.jsAppend = textareaState(jsAppend);
-
-const jsBefore = makeTextarea('js-textarea-before', 'bc', 1, 2);
-const parserBefore = makeTextarea('parser-textarea-before', 'bc', 1, 2);
-jsBefore.insertBefore(document.createTextNode('a'), jsBefore.firstChild);
-window.parserTextareaSelectionStates.jsInsertBefore = textareaState(jsBefore);
-
-const jsRemove = makeTextarea('js-textarea-remove', 'abc', 2, 3);
-const parserRemove = makeTextarea('parser-textarea-remove', 'abc', 2, 3);
-jsRemove.removeChild(jsRemove.firstChild);
-window.parserTextareaSelectionStates.jsRemove = textareaState(jsRemove);
-"#,
-                )
-                .expect("textarea selection setup should evaluate");
-
-            let (parser_append, parser_before, parser_remove) = {
-                let runtime = &page_vm.vm().document_runtime;
-                (
-                    runtime
-                        .get_element_by_id("parser-textarea-append")
-                        .expect("parser append textarea should exist"),
-                    runtime
-                        .get_element_by_id("parser-textarea-before")
-                        .expect("parser insertBefore textarea should exist"),
-                    runtime
-                        .get_element_by_id("parser-textarea-remove")
-                        .expect("parser remove textarea should exist"),
-                )
-            };
-            let (parser_before_reference, parser_remove_child) = {
-                let dom_host = page_vm.vm().document_runtime.dom_host();
-                (
-                    dom_host
-                        .child_handles(parser_before)
-                        .next()
-                        .expect("parser insertBefore textarea should have a text child"),
-                    dom_host
-                        .child_handles(parser_remove)
-                        .next()
-                        .expect("parser remove textarea should have a text child"),
-                )
-            };
-
-            let (parser_append_text, parser_before_text) = {
-                let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
-                (
-                    dom_host.create_text_node("d"),
-                    dom_host.create_text_node("a"),
-                )
-            };
-
-            let append_reaction_roots = apply_parser_dom_mutation_for_test(
-                &mut page_vm,
-                ParserDomMutation::AppendChild {
-                    parent: parser_append,
-                    child: parser_append_text,
-                },
-                "parser textarea append should apply",
-            );
-            assert!(
-                append_reaction_roots.is_empty(),
-                "plain textarea text append should not queue custom element reactions"
-            );
-            let before_reaction_roots = apply_parser_dom_mutation_for_test(
-                &mut page_vm,
-                ParserDomMutation::InsertBefore {
-                    parent: parser_before,
-                    child: parser_before_text,
-                    reference_child: Some(parser_before_reference),
-                },
-                "parser textarea insertBefore should apply",
-            );
-            assert!(
-                before_reaction_roots.is_empty(),
-                "plain textarea text insertBefore should not queue custom element reactions"
-            );
-            let remove_reaction_roots = apply_parser_dom_mutation_for_test(
-                &mut page_vm,
-                ParserDomMutation::RemoveChild {
-                    parent: parser_remove,
-                    child: parser_remove_child,
-                },
-                "parser textarea remove should apply",
-            );
-            if !remove_reaction_roots.is_empty() {
-                page_vm
-                    .vm_mut()
-                    .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(remove_reaction_roots)
-                    .expect("parser textarea remove followups should dispatch");
-            }
-
-            let result = page_vm
-                .evaluate_expression(
-                    r#"
-window.parserTextareaSelectionStates.parserAppend =
-  textareaState(document.getElementById('parser-textarea-append'));
-window.parserTextareaSelectionStates.parserInsertBefore =
-  textareaState(document.getElementById('parser-textarea-before'));
-window.parserTextareaSelectionStates.parserRemove =
-  textareaState(document.getElementById('parser-textarea-remove'));
-JSON.stringify({
-  jsAppend: window.parserTextareaSelectionStates.jsAppend,
-  parserAppend: window.parserTextareaSelectionStates.parserAppend,
-  appendSame: JSON.stringify(window.parserTextareaSelectionStates.jsAppend) ===
-    JSON.stringify(window.parserTextareaSelectionStates.parserAppend),
-  jsInsertBefore: window.parserTextareaSelectionStates.jsInsertBefore,
-  parserInsertBefore: window.parserTextareaSelectionStates.parserInsertBefore,
-  insertBeforeSame: JSON.stringify(window.parserTextareaSelectionStates.jsInsertBefore) ===
-    JSON.stringify(window.parserTextareaSelectionStates.parserInsertBefore),
-  jsRemove: window.parserTextareaSelectionStates.jsRemove,
-  parserRemove: window.parserTextareaSelectionStates.parserRemove,
-  removeSame: JSON.stringify(window.parserTextareaSelectionStates.jsRemove) ===
-    JSON.stringify(window.parserTextareaSelectionStates.parserRemove)
-})
-"#,
-                )
-                .expect("textarea selection result should evaluate");
-            assert_eq!(
-                result.get("value").and_then(serde_json::Value::as_str),
-                Some(
-                    r#"{"jsAppend":{"value":"abcd","text":"abcd","start":0,"end":0},"parserAppend":{"value":"abcd","text":"abcd","start":0,"end":0},"appendSame":true,"jsInsertBefore":{"value":"abc","text":"abc","start":0,"end":0},"parserInsertBefore":{"value":"abc","text":"abc","start":0,"end":0},"insertBeforeSame":true,"jsRemove":{"value":"","text":"","start":0,"end":0},"parserRemove":{"value":"","text":"","start":0,"end":0},"removeSame":true}"#
-                ),
-                "parser textarea append/insertBefore/remove should reset non-dirty selection like JS child-list mutations"
-            );
-        }));
-}
 #[test]
 fn parser_inserted_nonce_attribute_is_hidden_like_js_insertion() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -3019,4 +2859,166 @@ JSON.stringify({
                 "parser DocumentFragment insertion should hide nonce-bearing subtree content attributes like JS insertion"
             );
         }));
+}
+
+#[test]
+fn parser_textarea_child_list_mutations_adjust_selection_like_js() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime should build");
+
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+        let mut page_vm = new_phase_one_page_vm_for_test();
+        create_connected_html_body_for_test(&mut page_vm);
+
+        page_vm
+            .evaluate_expression(
+                r#"
+window.parserTextareaSelectionStates = {};
+function textareaState(textarea) {
+  return {
+    value: textarea.value,
+    text: textarea.textContent,
+    start: textarea.selectionStart,
+    end: textarea.selectionEnd
+  };
+}
+function makeTextarea(id, text, start, end) {
+  const textarea = document.createElement('textarea');
+  textarea.id = id;
+  textarea.textContent = text;
+  document.body.appendChild(textarea);
+  textarea.setSelectionRange(start, end);
+  return textarea;
+}
+
+const jsAppend = makeTextarea('js-textarea-append', 'abc', 2, 3);
+const parserAppend = makeTextarea('parser-textarea-append', 'abc', 2, 3);
+jsAppend.appendChild(document.createTextNode('d'));
+window.parserTextareaSelectionStates.jsAppend = textareaState(jsAppend);
+
+const jsBefore = makeTextarea('js-textarea-before', 'bc', 1, 2);
+const parserBefore = makeTextarea('parser-textarea-before', 'bc', 1, 2);
+jsBefore.insertBefore(document.createTextNode('a'), jsBefore.firstChild);
+window.parserTextareaSelectionStates.jsInsertBefore = textareaState(jsBefore);
+
+const jsRemove = makeTextarea('js-textarea-remove', 'abc', 2, 3);
+const parserRemove = makeTextarea('parser-textarea-remove', 'abc', 2, 3);
+jsRemove.removeChild(jsRemove.firstChild);
+window.parserTextareaSelectionStates.jsRemove = textareaState(jsRemove);
+"#,
+            )
+            .expect("textarea selection setup should evaluate");
+
+        let (parser_append, parser_before, parser_remove) = {
+            let runtime = &page_vm.vm().document_runtime;
+            (
+                runtime
+                    .get_element_by_id("parser-textarea-append")
+                    .expect("parser append textarea should exist"),
+                runtime
+                    .get_element_by_id("parser-textarea-before")
+                    .expect("parser insertBefore textarea should exist"),
+                runtime
+                    .get_element_by_id("parser-textarea-remove")
+                    .expect("parser remove textarea should exist"),
+            )
+        };
+        let (parser_before_reference, parser_remove_child) = {
+            let dom_host = page_vm.vm().document_runtime.dom_host();
+            (
+                dom_host
+                    .child_handles(parser_before)
+                    .next()
+                    .expect("parser insertBefore textarea should have a text child"),
+                dom_host
+                    .child_handles(parser_remove)
+                    .next()
+                    .expect("parser remove textarea should have a text child"),
+            )
+        };
+
+        let (parser_append_text, parser_before_text) = {
+            let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
+            (
+                dom_host.create_text_node("d"),
+                dom_host.create_text_node("a"),
+            )
+        };
+
+        let append_reaction_roots = apply_parser_dom_mutation_for_test(
+            &mut page_vm,
+            ParserDomMutation::AppendChild {
+                parent: parser_append,
+                child: parser_append_text,
+            },
+            "parser textarea append should apply",
+        );
+        assert!(
+            append_reaction_roots.is_empty(),
+            "plain textarea text append should not queue custom element reactions"
+        );
+        let before_reaction_roots = apply_parser_dom_mutation_for_test(
+            &mut page_vm,
+            ParserDomMutation::InsertBefore {
+                parent: parser_before,
+                child: parser_before_text,
+                reference_child: Some(parser_before_reference),
+            },
+            "parser textarea insertBefore should apply",
+        );
+        assert!(
+            before_reaction_roots.is_empty(),
+            "plain textarea text insertBefore should not queue custom element reactions"
+        );
+        let remove_reaction_roots = apply_parser_dom_mutation_for_test(
+            &mut page_vm,
+            ParserDomMutation::RemoveChild {
+                parent: parser_remove,
+                child: parser_remove_child,
+            },
+            "parser textarea remove should apply",
+        );
+        if !remove_reaction_roots.is_empty() {
+            page_vm
+                .vm_mut()
+                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(remove_reaction_roots)
+                .expect("parser textarea remove followups should dispatch");
+        }
+
+        let result = page_vm
+            .evaluate_expression(
+                r#"
+window.parserTextareaSelectionStates.parserAppend =
+  textareaState(document.getElementById('parser-textarea-append'));
+window.parserTextareaSelectionStates.parserInsertBefore =
+  textareaState(document.getElementById('parser-textarea-before'));
+window.parserTextareaSelectionStates.parserRemove =
+  textareaState(document.getElementById('parser-textarea-remove'));
+JSON.stringify({
+  jsAppend: window.parserTextareaSelectionStates.jsAppend,
+  parserAppend: window.parserTextareaSelectionStates.parserAppend,
+  appendSame: JSON.stringify(window.parserTextareaSelectionStates.jsAppend) ===
+    JSON.stringify(window.parserTextareaSelectionStates.parserAppend),
+  jsInsertBefore: window.parserTextareaSelectionStates.jsInsertBefore,
+  parserInsertBefore: window.parserTextareaSelectionStates.parserInsertBefore,
+  insertBeforeSame: JSON.stringify(window.parserTextareaSelectionStates.jsInsertBefore) ===
+    JSON.stringify(window.parserTextareaSelectionStates.parserInsertBefore),
+  jsRemove: window.parserTextareaSelectionStates.jsRemove,
+  parserRemove: window.parserTextareaSelectionStates.parserRemove,
+  removeSame: JSON.stringify(window.parserTextareaSelectionStates.jsRemove) ===
+    JSON.stringify(window.parserTextareaSelectionStates.parserRemove)
+})
+"#,
+            )
+            .expect("textarea selection result should evaluate");
+        assert_eq!(
+            result.get("value").and_then(serde_json::Value::as_str),
+            Some(
+                r#"{"jsAppend":{"value":"abcd","text":"abcd","start":2,"end":3},"parserAppend":{"value":"abcd","text":"abcd","start":2,"end":3},"appendSame":true,"jsInsertBefore":{"value":"abc","text":"abc","start":1,"end":2},"parserInsertBefore":{"value":"abc","text":"abc","start":1,"end":2},"insertBeforeSame":true,"jsRemove":{"value":"","text":"","start":0,"end":0},"parserRemove":{"value":"","text":"","start":0,"end":0},"removeSame":true}"#
+            ),
+            "parser textarea append/insertBefore/remove should clamp non-dirty selection like JS child-list mutations"
+        );
+    }));
 }

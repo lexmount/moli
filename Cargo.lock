@@ -3345,6 +3345,7 @@ dependencies = [
  "html5ever 0.40.1",
  "http",
  "httpdate",
+ "icu_segmenter",
  "indexmap",
  "kurbo",
  "lopdf",
