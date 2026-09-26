@@ -73,6 +73,7 @@ accessibility/crashtests/slot-assignment-lockup.html
 accessibility/crashtests/table-ignored-child.html
 accessibility/crashtests/validation-message.html
 apng/supported-in-source-type.html
+audio-output/secure-context.html
 autoplay-policy-detection/autoplaypolicy.html
 autoplay-policy-detection/autoplaypolicy_media_element.html
 captured-mouse-events/captured-mouse-event-constructor-inherited.html
@@ -175,7 +176,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -320,6 +320,7 @@ cookies/cookie-enabled-noncookie-frame.html
 cookies/meta-blocked.html
 cookies/navigated-away.html
 cors/response-headers.htm
+credential-management/require_securecontext.html
 css/compositing/inheritance.html
 css/compositing/parsing/background-blend-mode-computed-multiple.html
 css/compositing/parsing/background-blend-mode-computed.html
@@ -3073,7 +3074,6 @@ css/mediaqueries/scripting.html
 css/mediaqueries/update-media-feature.html
 css/selectors/attribute-selectors/attribute-case/cssom.html
 css/selectors/attribute-selectors/attribute-case/semantics.html
-css/selectors/attribute-selectors/attribute-case/syntax.html
 css/selectors/attribute-selectors/style-attribute-selector.html
 css/selectors/backdrop-input-crash.html
 css/selectors/child-indexed-pseudo-class.html
@@ -3384,6 +3384,7 @@ custom-elements/upgrading/Node-cloneNode.html
 custom-elements/upgrading/upgrading-enqueue-reactions.html
 custom-elements/upgrading/upgrading-parser-created-element.html
 custom-elements/when-defined-reentry-crash.html
+digital-credentials/non-secure-contexts.http.html
 document-picture-in-picture/requires-secure-context.html
 dom/abort/abort-signal-any-crash.html
 dom/abort/abort-signal-timeout.html
@@ -3543,7 +3544,6 @@ dom/nodes/Element-insertAdjacentElement.html
 dom/nodes/Element-insertAdjacentText.html
 dom/nodes/Element-lastElementChild.html
 dom/nodes/Element-matches-namespaced-elements.html
-dom/nodes/Element-matches.html
 dom/nodes/Element-nextElementSibling.html
 dom/nodes/Element-previousElementSibling.html
 dom/nodes/Element-remove.html
@@ -3553,7 +3553,6 @@ dom/nodes/Element-setAttribute-crbug-1138487.html
 dom/nodes/Element-setAttribute.html
 dom/nodes/Element-siblingElement-null.html
 dom/nodes/Element-tagName.html
-dom/nodes/Element-webkitMatchesSelector.html
 dom/nodes/MutationObserver-attributes.html
 dom/nodes/MutationObserver-callback-arguments.html
 dom/nodes/MutationObserver-characterData.html
@@ -3597,6 +3596,7 @@ dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
 dom/nodes/NodeList-static-length-getter-tampered-1.html
+dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html
@@ -3604,7 +3604,6 @@ dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html
 dom/nodes/ParentNode-append.html
 dom/nodes/ParentNode-children.html
 dom/nodes/ParentNode-prepend.html
-dom/nodes/ParentNode-querySelector-All.html
 dom/nodes/ParentNode-querySelector-case-insensitive.html
 dom/nodes/ParentNode-querySelector-scope.html
 dom/nodes/ParentNode-querySelectorAll-removed-elements.html
@@ -3700,7 +3699,6 @@ dom/nodes/rootNode.html
 dom/nodes/svg-template-querySelector.html
 dom/ranges/Range-adopt-test.html
 dom/ranges/Range-attributes.html
-dom/ranges/Range-cloneContents.html
 dom/ranges/Range-cloneRange.html
 dom/ranges/Range-collapse.html
 dom/ranges/Range-commonAncestorContainer-2.html
@@ -3713,7 +3711,6 @@ dom/ranges/Range-constructor.html
 dom/ranges/Range-deleteContents.html
 dom/ranges/Range-detach.html
 dom/ranges/Range-extractContents-dynamic-end.html
-dom/ranges/Range-extractContents.html
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=closed
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=open
 dom/ranges/Range-intersectsNode-2.html
@@ -4770,6 +4767,7 @@ encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?3001-4000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?4001-5000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?5001-6000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?6001-7000
+encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?7001-8000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?8001-9000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ks_c_5601-1989.html?9001-10000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-form-ksc5601.html?1-1000
@@ -5216,6 +5214,7 @@ fullscreen/api/document-fullscreen-enabled-active-document.html
 fullscreen/api/historical.html
 fullscreen/crashtests/backdrop-list-item.html
 fullscreen/rendering/fullscreen-pseudo-class-support.html
+geolocation/non-secure-contexts.http.html
 gyroscope/Gyroscope_insecure_context.html
 hr-time/clamped-time-origin.html
 hr-time/navigation-start-post-before-unload.html
@@ -5274,6 +5273,7 @@ html/browsers/browsing-the-web/navigating-across-documents/javascript-url-task-q
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url-with-fragment-fire-load-event.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url-with-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url.html
+html/browsers/browsing-the-web/navigating-across-documents/navigate-to-unparseable-url.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-same-origin-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document-refresh.html
@@ -5329,6 +5329,7 @@ html/browsers/browsing-the-web/unloading-documents/unload/009.html
 html/browsers/history/joint-session-history/joint-session-history-iframe-state.html
 html/browsers/history/joint-session-history/joint-session-history-only-fully-active.html
 html/browsers/history/joint-session-history/joint-session-history-remove-iframe.html
+html/browsers/history/the-history-interface/002.html
 html/browsers/history/the-history-interface/004.html
 html/browsers/history/the-history-interface/006.html
 html/browsers/history/the-history-interface/008.html
@@ -5759,6 +5760,8 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-4.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_forward.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_itself.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
@@ -5803,6 +5806,7 @@ html/semantics/embedded-content/the-img-element/decode/image-decode.html
 html/semantics/embedded-content/the-img-element/delay-load-event-detached.html
 html/semantics/embedded-content/the-img-element/delay-load-event-until-move-to-empty-source.html
 html/semantics/embedded-content/the-img-element/delay-load-event.html
+html/semantics/embedded-content/the-img-element/disconnected-image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/document-destroyed-crash.html
 html/semantics/embedded-content/the-img-element/image-loading-eager.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-available.html
@@ -5947,6 +5951,7 @@ html/semantics/forms/the-fieldset-element/fieldset-validationmessage.html
 html/semantics/forms/the-fieldset-element/fieldset-validity.html
 html/semantics/forms/the-fieldset-element/fieldset-willvalidate.html
 html/semantics/forms/the-form-element/form-action-in-inactive-document-crash.html
+html/semantics/forms/the-form-element/form-action-reflection-with-base-url.html
 html/semantics/forms/the-form-element/form-action-reflection.html
 html/semantics/forms/the-form-element/form-action-submission-with-base-url.html
 html/semantics/forms/the-form-element/form-action-submission.html
@@ -6198,7 +6203,6 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/permission-element/geolocation-element/iframe-use-after-free-crash.html
 html/semantics/popovers/chrome-392042073-crash.html
@@ -6916,6 +6920,7 @@ html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-02.ht
 html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-03.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-encoding.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
@@ -7080,6 +7085,7 @@ js/builtins/WeakMap.prototype-properties.html
 loading/preloader-link-media.html
 loading/preloader-template.html
 magnetometer/Magnetometer_insecure_context.html
+media-capabilities/decodingInfoEncryptedMedia.http.html
 navigation-api/currententrychange-event/anchor-click.html
 navigation-api/currententrychange-event/constructor.html
 navigation-api/currententrychange-event/history-back-same-doc.html
@@ -7190,6 +7196,7 @@ navigation-api/navigate-event/navigate-window-open-self.html
 navigation-api/navigate-event/navigate-window-open.html
 navigation-api/navigate-event/navigatesuccess-cross-document.html
 navigation-api/navigate-event/navigatesuccess-same-document.html
+navigation-api/navigate-event/navigation-back-same-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
 navigation-api/navigate-event/navigation-traverseTo-same-document-preventDefault-multiple-windows.html
 navigation-api/navigate-event/navigation-traverseTo-top-cancels-cross-document-child.html
@@ -7205,6 +7212,7 @@ navigation-api/navigate-event/signal-abort-window-stop.html
 navigation-api/navigate-event/traverseTo-detach.html
 navigation-api/navigation-activation/activation-history-pushState.html
 navigation-api/navigation-activation/activation-history-replaceState.html
+navigation-api/navigation-activation/activation-initial-about-blank.html
 navigation-api/navigation-activation/activation-push-cross-origin.html
 navigation-api/navigation-activation/activation-push.html
 navigation-api/navigation-activation/activation-reload.html
@@ -7494,6 +7502,7 @@ page-visibility/test_child_document.html
 page-visibility/test_default_view.html
 page-visibility/test_read_only.html
 payment-request/PaymentRequestUpdateEvent/constructor.http.html
+payment-request/payment-request-insecure.http.html
 performance-timeline/buffered-does-not-sync-invoke.html
 performance-timeline/not-clonable.html
 performance-timeline/po-observe.html
@@ -7508,6 +7517,7 @@ pointerevents/inheritance.html
 pointerevents/parsing/touch-action-computed.html
 pointerevents/parsing/touch-action-invalid.html
 pointerevents/parsing/touch-action-valid.html
+pointerevents/pointerevent_constructor.html
 pointerevents/pointerevent_fractional_coordinates_untrusted.html
 pointerevents/pointerevent_root_computed_style.html
 pointerevents/pointerevent_tiltX_tiltY_to_azimuth_altitude.html
@@ -7531,7 +7541,6 @@ preload/supported-as-values.html?as=image&expected=1
 preload/supported-as-values.html?as=script&expected=1
 preload/supported-as-values.html?as=style&expected=1
 preload/supported-as-values.html?as=track&expected=1
-print/crashtests/reload-crash.html
 proximity/ProximitySensor_insecure_context.html
 quirks/blocks-ignore-line-height.html
 quirks/body-fill-html-quirk-intrinsic-crash.html
@@ -7551,7 +7560,6 @@ quirks/unitless-length/quirks.html
 referrer-policy/generic/subresource-test/attr-referrer-invalid-value.html
 requestidlecallback/basic.html
 requestidlecallback/callback-exception.html
-requestidlecallback/callback-idle-periods.html
 requestidlecallback/callback-iframe-different-origin.html
 requestidlecallback/callback-iframe.html
 requestidlecallback/callback-invoked.html
@@ -7598,6 +7606,7 @@ resource-timing/script-rt-entries.html
 resource-timing/shared-worker-rt-entry.html
 resource-timing/tojson.html
 screen-orientation/lock-bad-argument.html
+secure-contexts/basic-shared-worker.html
 selection/Document-open.html
 selection/addRange-00.html
 selection/addRange-04.html
@@ -7653,7 +7662,6 @@ selection/crashtests/selection-setBaseAndExtent-from-label-to-end-of-audio-and-h
 selection/crashtests/selection-setBaseAndExtent-video-in-shadow-and-another-shadowroot.html
 selection/crashtests/table.html
 selection/deleteFromDocument-HTMLDetails.html
-selection/deleteFromDocument.html
 selection/extend-00.html
 selection/extend-20.html
 selection/extend-40.html
@@ -7798,6 +7806,7 @@ shadow-dom/declarative/declarative-shadow-dom-slot-assignment-serialization.html
 shadow-dom/declarative/declarative-shadow-dom-slot-assignment.html
 shadow-dom/declarative/declarative-with-disabled-shadow.html
 shadow-dom/declarative/gethtml-ordering.html
+shadow-dom/declarative/gethtml.html
 shadow-dom/declarative/innerhtml-before-closing-tag.html
 shadow-dom/declarative/innerhtml-on-ordinary-template.html
 shadow-dom/declarative/move-template-before-closing-tag.html
@@ -8605,6 +8614,7 @@ wasm/serialization/module/window-messagechannel-success.html
 wasm/serialization/module/window-serviceworker-failure.https.html
 wasm/serialization/module/window-sharedworker-failure.html
 wasm/serialization/module/window-simple-success.html
+web-nfc/nfc_insecure_context.html
 web-share/canShare-insecure.http.html
 web-share/share-securecontext.http.html
 webauthn/securecontext.http.html
@@ -8780,6 +8790,7 @@ workers/WorkerNavigator_appName.htm
 workers/WorkerNavigator_appVersion.htm
 workers/WorkerNavigator_onLine.htm
 workers/WorkerNavigator_userAgent.htm
+workers/WorkerNavigator_userAgentData.http.html
 workers/WorkerPerformanceNow.html
 workers/Worker_ErrorEvent_bubbles_cancelable.htm
 workers/Worker_ErrorEvent_error.htm

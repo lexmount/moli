@@ -1,9 +1,6 @@
-dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/ranges/Range-insertNode.html
 dom/ranges/Range-mutations-dataChange.html
 dom/ranges/Range-surroundContents.html
-html/semantics/forms/the-form-element/form-action-reflection-with-base-url.html
-html/semantics/forms/the-input-element/input-type-change-value.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait
 infrastructure/expected-fail/user-prompt.html?type=confirm
@@ -12,7 +9,4 @@ infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
 navigation-api/navigate-event/navigate-form-onformdata-navigate-crash.html
 navigation-api/navigate-event/signal-abort-replaceState-crash.html
-service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
-shadow-dom/declarative/gethtml.html
-trusted-types/trusted-types-navigation.html?11-15
-xhr/setrequestheader-header-allowed.htm
+print/crashtests/reload-crash.html
