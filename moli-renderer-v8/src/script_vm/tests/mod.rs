@@ -2403,6 +2403,7 @@ mod lazy_storage;
 mod svg_matrix_native_receivers;
 
 mod lazy_window_surfaces;
+mod legacy_performance;
 mod location_put_forwards;
 mod midi_owner_interfaces;
 #[cfg(feature = "devtools")]

@@ -153,7 +153,6 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
                 scope, template,
             );
         }
-
         "EventCounts" => {
             moli_webapi::performance::event_counts::install(scope, template);
         }
@@ -510,7 +509,7 @@ fn update_legacy_timing<'s>(
     let time_origin =
         performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
     if let Some(timing) = performance_slot_object(scope, performance, PERFORMANCE_TIMING_SLOT) {
-        define_non_enumerable_number_property(
+        set_performance_timing_value(
             scope,
             timing,
             name,
@@ -813,4 +812,34 @@ fn ensure_pending_performance_event_counts<'s>(
         values.into(),
     );
     values
+}
+
+pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let performance = args.this();
+    let mut timing = None;
+    let mut navigation = None;
+    if is_window_performance(scope, performance) {
+        use super::lazy_subobjects::{PerformanceSubobject, ensure_performance_subobject};
+        for (subobject, output) in [
+            (PerformanceSubobject::Timing, &mut timing),
+            (PerformanceSubobject::Navigation, &mut navigation),
+        ] {
+            match ensure_performance_subobject(scope, performance, subobject) {
+                Ok(value) => *output = Some(value),
+                Err(error) => {
+                    throw_type_error(scope, &error.to_string());
+                    return;
+                }
+            }
+        }
+    }
+    // Default toJSON uses IDL attribute values. Object-valued attributes retain
+    // their native identity; JSON.stringify invokes their own toJSON later.
+    let time_origin = get_private_value(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT);
+    let output = new_performance_json_snapshot(scope, time_origin, timing, navigation);
+    rv.set(output.into());
 }
