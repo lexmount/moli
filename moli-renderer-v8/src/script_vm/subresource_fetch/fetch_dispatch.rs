@@ -691,10 +691,7 @@ impl ScriptVm {
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
                             let redirect_mode = fetch.redirect_mode();
-                            let resolver = fetch
-                                .into_resolver()
-                                .expect("detached keepalive completion is handled before V8 entry");
-                            let resolver = v8::Local::new(scope, &resolver);
+                            let body_size = observable_response.body_bytes().len();
                             let (mut head, body) = observable_response.into_body();
                             let response_request = crate::network_host::FetchResponseRequest {
                                 method: &response_request_method,
@@ -706,9 +703,20 @@ impl ScriptVm {
                                 &head,
                                 pending.credentials_mode,
                             )));
+                            let entry = fetch.timing.response(
+                                &pending.info.url, &pending.request_origin, &head,
+                                response_filter.as_ref().expect("fetch response filter"),
+                                body_size,
+                            );
+                            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
+                            let resolver = fetch
+                                .into_resolver()
+                                .expect("detached keepalive completion is handled before V8 entry");
+                            let resolver = v8::Local::new(scope, &resolver);
+
                             let body = if opaque_response_blocked {
                                 moli_fetch::ResponseBody::materialized_bytes(Vec::new())
                             } else {
@@ -902,6 +910,11 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            if !consumed_preload {
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope, fetch.timing.failure(&pending.info.url),
+                                );
+                            }
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");
