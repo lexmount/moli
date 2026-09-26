@@ -2240,6 +2240,7 @@ mod element_animation_native_receivers;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_range;
 mod blob_response_headers;
+mod body_mime;
 mod browser_api;
 mod cache_interfaces;
 
