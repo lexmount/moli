@@ -221,7 +221,7 @@ fn text_control_selection_methods_parse_webidl_arguments() {
 
     assert_eq!(
         result,
-        "0,3,none|throw:TypeError|throw:TypeError|0,3,none|0,1,backward|0,1,forward|2,2,none"
+        "0,3,forward|throw:TypeError|throw:TypeError|0,3,forward|0,1,backward|0,1,forward|2,2,forward"
     );
 }
 
@@ -360,7 +360,7 @@ fn text_control_value_setters_reset_selection_only_when_api_value_changes() {
         )
         .expect("text control value selection reset should evaluate");
 
-    assert_eq!(result, "1:3:backward|6:6:none|1:3:backward|6:6:none");
+    assert_eq!(result, "1:3:backward|6:6:forward|1:3:backward|6:6:forward");
 }
 #[test]
 fn text_control_default_value_type_and_reset_paths_clamp_selection() {
@@ -899,6 +899,126 @@ async fn text_control_selection_mutations_queue_select_event() {
     );
 }
 #[tokio::test]
+async fn unchanged_background_text_control_selections_do_not_queue_change_events() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://forms-selection-unchanged-events.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+if (!document.documentElement) document.appendChild(document.createElement('html'));
+if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+globalThis.controls = [];
+for (const tag of ['input', 'textarea']) for (const connected of [true, false]) {
+  const control = document.createElement(tag);
+  if (connected) document.body.append(control);
+  control.value = 'abcdef';
+  control.setSelectionRange(0, 0);
+  controls.push(control);
+}
+'ready'
+"#,
+    )
+    .unwrap();
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval(
+            r#"
+globalThis.changes = [];
+controls.forEach((control, index) => {
+  control.addEventListener('selectionchange', () => changes.push(index));
+  control.setSelectionRange(0, 0);
+  control.selectionDirection = 'none';
+  control.value = '';
+  control.setRangeText('foo');
+});
+JSON.stringify(controls.map(c => [c.value, c.selectionStart, c.selectionEnd, c.selectionDirection]))
+"#
+        )
+        .unwrap(),
+        r#"[["foo",0,0,"forward"],["foo",0,0,"forward"],["foo",0,0,"forward"],["foo",0,0,"forward"]]"#
+    );
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert_eq!(vm.eval("JSON.stringify(changes)").unwrap(), "[]");
+
+    vm.eval("controls[0].focus(); controls[0].setSelectionRange(3, 3)")
+        .unwrap();
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    // A focused editor's value replacement changes the live selection even
+    // when the cached caret offset remains the same.
+    vm.eval("changes.length = 0; controls[0].value = 'bar'")
+        .unwrap();
+    assert_eq!(vm.eval("JSON.stringify(changes)").unwrap(), "[]");
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert_eq!(vm.eval("JSON.stringify(changes)").unwrap(), "[0]");
+
+    vm.eval(
+        r#"
+globalThis.untouched = document.createElement('input');
+untouched.defaultValue = 'abc';
+document.body.append(untouched);
+untouched.focus();
+"ready"
+"#,
+    )
+    .unwrap();
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    // Marking the value dirty without changing its text is not a value change.
+    vm.eval("changes.length = 0; untouched.addEventListener('selectionchange', () => changes.push('untouched')); untouched.setRangeText('')").unwrap();
+    for _ in 0..32 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert_eq!(vm.eval("JSON.stringify(changes)").unwrap(), "[]");
+}
+
+#[tokio::test]
 async fn text_control_clone_resets_selection_but_still_queues_select_event() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -970,7 +1090,7 @@ async fn text_control_clone_resets_selection_but_still_queues_select_event() {
         )
         .expect("text control clone setup should evaluate");
 
-    assert_eq!(result, "foobar:0:0:0:6:none|foobar:0:0:0:6:none|0|");
+    assert_eq!(result, "foobar:0:0:0:6:forward|foobar:0:0:0:6:forward|0|");
     for _ in 0..8 {
         if vm
             .eval("globalThis.__textControlCloneSelectEvents.length")
@@ -1064,7 +1184,9 @@ async fn shadow_text_control_selectionchange_and_exec_delete_target_document() {
             "globalThis.__shadowTextControlInputEvents.join(',') + '|' + globalThis.__shadowTextControlDocumentEvents.join(',')",
         )
         .expect("shadow selectionchange event log should evaluate"),
-        "|document"
+        // value was set before insertion into the shadow tree, so its queued
+        // control event precedes the document selectionchange from focus.
+        "true|document"
     );
 
     let result = vm

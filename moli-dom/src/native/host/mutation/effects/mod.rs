@@ -7,6 +7,7 @@ mod script;
 mod slot;
 mod style;
 mod stylesheet;
+mod text_control;
 mod tree;
 
 pub use observer::{DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind};
@@ -17,6 +18,7 @@ pub use stylesheet::{
     DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions,
     DomStylesheetOwnerTreeScopes,
 };
+pub use text_control::DomTextareaValueChange;
 pub use tree::DomTreeMutationEffects;
 
 /// One synchronous DOM mutation result, partitioned by semantic followup
@@ -31,6 +33,7 @@ pub struct DomMutationEffects {
     style: DomStyleInvalidationInputs,
     stylesheet_owners: DomStylesheetOwnerTransitions,
     observer_records: DomMutationRecordBatch,
+    textarea_values: Vec<DomTextareaValueChange>,
 }
 
 /// Result of an attribute operation that shares the captured pre-mutation
@@ -97,6 +100,10 @@ impl DomMutationEffects {
 
     pub fn observer_records(&self) -> &DomMutationRecordBatch {
         &self.observer_records
+    }
+
+    pub fn textarea_values(&self) -> &[DomTextareaValueChange] {
+        &self.textarea_values
     }
 
     pub fn coalesce_child_list_replacement(
@@ -194,6 +201,7 @@ impl DomMutationEffects {
         self.style.merge(other.style);
         self.stylesheet_owners.merge(other.stylesheet_owners);
         self.observer_records.merge(other.observer_records);
+        self.textarea_values.extend(other.textarea_values);
     }
 }
 

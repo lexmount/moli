@@ -4,6 +4,9 @@ use crate::dom::native::{DomHost, NodeType};
 use crate::native_bridge::element::contenteditable_editing_host_in_dom;
 use crate::range_boundary::RangeBoundaryPoint;
 
+mod text_control;
+use text_control::SelectedTextControl;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SelectionRecordHandle(u64);
 
@@ -89,7 +92,7 @@ pub(super) struct SelectionRecordRegistry {
     records: HashMap<SelectionRecordHandle, SelectionRecord>,
     // A text control's selection survives focus moving to another document.
     // Explicit DOM Selection changes supersede it in its own document.
-    text_controls: HashMap<DomHandle, DomHandle>,
+    text_controls: HashMap<DomHandle, SelectedTextControl>,
 }
 
 struct SelectionRecord {
@@ -265,6 +268,9 @@ impl SelectionRecordRegistry {
             .and_then(|previous| dom.child_index(parent, previous))
             .and_then(|previous_index| u32::try_from(previous_index + 1).ok())
             .unwrap_or(index);
+        self.text_controls.retain(|_, selected| {
+            !shadow_including_descendant_or_self(dom, selected.control, removed_child)
+        });
         for record in self.records.values_mut() {
             // Preserve the editing-host caret projection when its host is
             // removed across a shadow boundary. Ordinary observable endpoints
@@ -506,36 +512,11 @@ impl SelectionRecord {
 }
 
 impl JsContextHost {
-    pub(crate) fn note_text_control_selection(&mut self, control: DomHandle) {
-        if let Some(document) = self.dom_host().owner_document_handle(control) {
-            self.selection_record_registry
-                .text_controls
-                .insert(document, control);
-        }
-    }
-
-    pub(crate) fn document_selected_text_control(&self, document: DomHandle) -> Option<DomHandle> {
-        self.selection_record_registry
-            .text_controls
-            .get(&document)
-            .copied()
-    }
-
     pub(crate) fn create_selection_record(&mut self) -> Option<SelectionRecordHandle> {
         self.selection_record_registry.create_record()
     }
 
     pub(crate) fn clear_selection_record(&mut self, handle: SelectionRecordHandle) {
-        if self.selection_record_registry.has_range(handle)
-            && let Some(document) = self.selection_record_registry.owner_document(handle)
-            && let Some(control) = self.active_element_handle()
-            && self.dom_host().owner_document_handle(control) == Some(document)
-            && crate::native_bridge::element::is_text_control(self, control)
-        {
-            // A focused text control exposes the document selection, including
-            // its empty position. An unfocused control retains its cached range.
-            let _ = self.set_selection_range(control, 0, 0);
-        }
         self.selection_record_registry.clear_record(handle);
     }
 
@@ -588,7 +569,32 @@ impl JsContextHost {
         &self,
         handle: SelectionRecordHandle,
     ) -> Option<&'static str> {
+        if let Some(selection) = self.selection_record_text_control(handle) {
+            return Some(if selection.start == selection.end {
+                "none"
+            } else {
+                selection.direction
+            });
+        }
         self.selection_record_registry.direction(handle)
+    }
+
+    pub(crate) fn selection_record_type(&mut self, handle: SelectionRecordHandle) -> &'static str {
+        if !self.selection_record_registry.has_range(handle) {
+            "None"
+        } else if let Some(selection) = self.selection_record_text_control(handle) {
+            if selection.start == selection.end {
+                "Caret"
+            } else {
+                "Range"
+            }
+        } else if self.selection_record_is_collapsed(handle)
+            && !self.selection_record_spans_dom_roots(handle)
+        {
+            "Caret"
+        } else {
+            "Range"
+        }
     }
 
     pub(crate) fn selection_record_boundary(

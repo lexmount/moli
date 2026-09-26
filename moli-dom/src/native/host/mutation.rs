@@ -4,6 +4,7 @@ mod attributes;
 mod effects;
 mod owner_lifecycle;
 mod state;
+mod text_control;
 mod tree;
 
 pub use effects::{
@@ -11,8 +12,8 @@ pub use effects::{
     DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind, DomScriptMutationEffects,
     DomSlotAssignmentChange, DomSlotMutationEffects, DomStyleInvalidationInputs,
     DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions,
-    DomStylesheetOwnerTreeScopes, DomTreeMutationEffects, ScriptPrepareTrigger,
-    ScriptPrepareTriggerKind,
+    DomStylesheetOwnerTreeScopes, DomTextareaValueChange, DomTreeMutationEffects,
+    ScriptPrepareTrigger, ScriptPrepareTriggerKind,
 };
 
 impl Deref for DomHost {

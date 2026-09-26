@@ -9,8 +9,8 @@ use super::selection::{
     selection_composed_start_node, selection_composed_start_offset, selection_direction,
     selection_dispatch_change, selection_focus_node, selection_focus_offset, selection_has_range,
     selection_is_collapsed_internal, selection_owner_document, selection_range,
-    selection_range_belongs_to_document, selection_set_collapsed, selection_spans_dom_roots,
-    selection_store, selection_store_with_composed_boundaries,
+    selection_range_belongs_to_document, selection_set_collapsed, selection_store,
+    selection_store_with_composed_boundaries, selection_type,
 };
 use super::selection_modify::selection_modify_target;
 use super::*;

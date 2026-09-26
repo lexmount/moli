@@ -140,100 +140,80 @@ impl DocumentRuntime {
             inserted_was_connected,
         );
         let removal_plan = self.tree_removal_plan(host_ptr, parent, old_child);
-        let (inserted, removed, prepublished_removals) = if unsafe { &*host_ptr }
-            .has_dom_debugger_dom_breakpoints()
-        {
-            // Blink's replace algorithm removes an attached non-fragment new
-            // child first, removes oldChild second, then drains a fragment (if
-            // present) before the single WillInsertDOMNode probe.
-            let reference_child = self
-                .dom_host
-                .node(old_child)
-                .and_then(Node::next_sibling)
-                .and_then(|next| {
-                    if next == new_child {
-                        self.dom_host.node(new_child).and_then(Node::next_sibling)
-                    } else {
-                        Some(next)
-                    }
-                });
-            let lifecycle_connected_before = insertion_plan
-                .insertion_roots
-                .iter()
-                .copied()
-                .filter(|root| self.is_custom_element_lifecycle_connected(*root))
-                .collect::<Vec<_>>();
-            let mut inserted = crate::dom::native::DomMutationEffects::default();
-            let mut prepublished_removals = Vec::new();
-            if fragment_children.is_none()
-                && !self.remove_tree_insertion_roots_with_dom_debugger(
-                    host_ptr,
-                    insertion_plan.insertion_roots,
-                    &mut inserted,
-                    &mut prepublished_removals,
-                )
-            {
-                return false;
-            }
-
-            prepublished_removals.extend(
-                self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, old_child),
-            );
-            let removed = self.remove_child_effects_in_structural_scope(parent, old_child);
-            if !removed.did_change() {
-                return false;
-            }
-
-            if fragment_children.is_some()
-                && !self.remove_tree_insertion_roots_with_dom_debugger(
-                    host_ptr,
-                    insertion_plan.insertion_roots,
-                    &mut inserted,
-                    &mut prepublished_removals,
-                )
-            {
-                return false;
-            }
-            if !insertion_plan.insertion_roots.is_empty() {
-                unsafe { &mut *host_ptr }.break_on_dom_debugger_will_insert_dom_node(parent);
-                for &root in insertion_plan.insertion_roots {
-                    let root_effects = self.insert_before_effects_in_structural_scope(
-                        parent,
-                        root,
-                        reference_child,
-                    );
-                    if !root_effects.did_change() {
-                        return false;
-                    }
-                    inserted.merge(root_effects);
+        // DOM replacement removes an attached new node, then oldChild, then
+        // inserts the replacement. The intermediate values are observable in
+        // text-control selections even without a DOM debugger breakpoint.
+        let reference_child = self
+            .dom_host
+            .node(old_child)
+            .and_then(Node::next_sibling)
+            .and_then(|next| {
+                if next == new_child {
+                    self.dom_host.node(new_child).and_then(Node::next_sibling)
+                } else {
+                    Some(next)
                 }
-                self.finish_split_tree_insertion_effects(
-                    parent,
-                    new_child,
-                    insertion_plan.insertion_roots,
-                    &lifecycle_connected_before,
-                    &mut inserted,
-                );
-            }
-            (inserted, removed, prepublished_removals)
-        } else {
-            let inserted =
-                self.insert_before_effects_in_structural_scope(parent, new_child, Some(old_child));
-            if !inserted.did_change() {
-                return false;
-            }
-            let removed = self.remove_child_effects_in_structural_scope(parent, old_child);
-            (inserted, removed, Vec::new())
-        };
-        if inserted.did_change() {
-            self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+            });
+        let lifecycle_connected_before = insertion_plan
+            .insertion_roots
+            .iter()
+            .copied()
+            .filter(|root| self.is_custom_element_lifecycle_connected(*root))
+            .collect::<Vec<_>>();
+        let mut before_removal = crate::dom::native::DomMutationEffects::default();
+        let mut prepublished_removals = Vec::new();
+        if fragment_children.is_none()
+            && !self.remove_tree_insertion_roots_with_dom_debugger(
+                host_ptr,
+                insertion_plan.insertion_roots,
+                &mut before_removal,
+                &mut prepublished_removals,
+            )
+        {
+            return false;
         }
-        self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &removed);
+        prepublished_removals
+            .extend(self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, old_child));
+        let removed = self.remove_child_effects_in_structural_scope(parent, old_child);
         if !removed.did_change() {
             return false;
         }
-        let mut effects = inserted;
+        let mut inserted = crate::dom::native::DomMutationEffects::default();
+        if fragment_children.is_some()
+            && !self.remove_tree_insertion_roots_with_dom_debugger(
+                host_ptr,
+                insertion_plan.insertion_roots,
+                &mut inserted,
+                &mut prepublished_removals,
+            )
+        {
+            return false;
+        }
+        if !insertion_plan.insertion_roots.is_empty() {
+            unsafe { &mut *host_ptr }.break_on_dom_debugger_will_insert_dom_node(parent);
+            for &root in insertion_plan.insertion_roots {
+                let effects =
+                    self.insert_before_effects_in_structural_scope(parent, root, reference_child);
+                if !effects.did_change() {
+                    return false;
+                }
+                inserted.merge(effects);
+            }
+        }
+        if before_removal.did_change() || inserted.did_change() {
+            self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+        }
+        self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &removed);
+        let mut effects = before_removal;
         effects.merge(removed);
+        effects.merge(inserted);
+        self.finish_split_tree_insertion_effects(
+            parent,
+            new_child,
+            insertion_plan.insertion_roots,
+            &lifecycle_connected_before,
+            &mut effects,
+        );
         if self.dom_host.mutation_records_enabled() {
             let previous_sibling = insertion_plan
                 .insertion_roots
