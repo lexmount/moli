@@ -1,6 +1,142 @@
 use super::*;
 
 #[test]
+fn form_action_scheme_selects_query_mutation_or_post_resource() {
+    for action in [
+        "http://form-action.test/target?original=1#fragment",
+        "https://form-action.test/target?original=1#fragment",
+        "ftp://form-action.test/target?original=1#fragment",
+        "data:text/plain,payload?original=1#fragment",
+        "javascript:void('original?query#fragment')",
+    ] {
+        for method in ["get", "post"] {
+            for use_submitter in [false, true] {
+                let mut vm =
+                    new_storage_page_task_executor_test_vm("https://form-action.test/source");
+                vm.eval(&format!(
+                    r#"
+                    globalThis.formDataEvents = 0;
+                    const form = document.createElement('form');
+                    form.innerHTML = '<input name="value" value="a b"><button>Submit</button>';
+                    form.onformdata = event => {{
+                        ++formDataEvents;
+                        event.formData.append('from', 'event');
+                    }};
+                    document.body.append(form);
+                    if ({use_submitter}) {{
+                        form.action = '/wrong';
+                        form.method = {method:?} === 'get' ? 'post' : 'get';
+                        const button = form.querySelector('button');
+                        button.formAction = {action:?}; button.formMethod = {method:?};
+                        form.requestSubmit(button);
+                    }} else {{
+                        form.action = {action:?}; form.method = {method:?}; form.submit();
+                    }}
+                    form.action = '/changed'; form.method = 'dialog';
+                    form.querySelector('input').value = 'changed';
+                "#
+                ))
+                .unwrap();
+                assert_eq!(vm.eval("formDataEvents").unwrap(), "1");
+                let request = vm.take_pending_location_navigation_with_seed().unwrap();
+                let mut expected_url = Url::parse(action).unwrap();
+                let mutates_query =
+                    method == "get" && matches!(expected_url.scheme(), "http" | "https" | "data");
+                let posts_body =
+                    method == "post" && matches!(expected_url.scheme(), "http" | "https");
+                if mutates_query {
+                    expected_url.set_query(Some("value=a+b&from=event"));
+                }
+                assert_eq!(
+                    request.url, expected_url,
+                    "{action}/{method}/{use_submitter}"
+                );
+                assert_eq!(
+                    request.request_method,
+                    if posts_body { "POST" } else { "GET" }
+                );
+                assert_eq!(
+                    request.request_body.as_deref(),
+                    posts_body.then_some(b"value=a+b&from=event".as_slice())
+                );
+                assert_eq!(
+                    request.request_headers,
+                    if posts_body {
+                        vec![(
+                            "Content-Type".to_owned(),
+                            "application/x-www-form-urlencoded".to_owned(),
+                        )]
+                    } else {
+                        vec![]
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn javascript_form_actions_execute_without_serializing_the_entry_list() {
+    for method in ["get", "post"] {
+        for action in [
+            "javascript:parent.formResult='no query';void 0",
+            "javascript:parent.formResult='?original#fragment';void 0",
+        ] {
+            let loader = static_http_loader([]);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://form-action.test/source",
+                &loader,
+            );
+            vm.eval(
+                r#"
+                globalThis.frame = document.createElement('iframe'); frame.name = 'target';
+                document.body.append(frame);
+            "#,
+            )
+            .unwrap();
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                .await
+                .unwrap();
+            vm.eval(&format!(
+                r#"
+                globalThis.formResult = null;
+                globalThis.formDataEvents = 0;
+                const form = document.createElement('form');
+                form.innerHTML = '<input name="value" value="ignored">';
+                form.method = {method:?}; form.action = {action:?}; form.target = 'target';
+                form.onformdata = event => {{
+                    ++formDataEvents; event.formData.append('event', 'ignored');
+                }};
+                document.body.append(form); form.submit();
+            "#
+            ))
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(formResult !== null)",
+                "true",
+                &format!("{method}: {action}"),
+            )
+            .await;
+            assert_eq!(
+                vm.eval("formResult").unwrap(),
+                if action.contains('?') {
+                    "?original#fragment"
+                } else {
+                    "no query"
+                }
+            );
+            assert_eq!(vm.eval("formDataEvents").unwrap(), "1");
+            assert_eq!(
+                vm.eval("frame.contentWindow.location.href").unwrap(),
+                "about:blank"
+            );
+        }
+    }
+}
+
+#[test]
 fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
     for (rel, expected_exposes_opener) in [
         ("", false),

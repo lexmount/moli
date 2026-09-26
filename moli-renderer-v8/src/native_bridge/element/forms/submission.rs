@@ -932,9 +932,18 @@ fn build_form_submission_request(
         submitter,
         submission_encoding,
     );
+    let mut resolved_url = Url::parse(&action).ok()?;
+    // "Get action URL" discards the entry list after constructing it. These
+    // submissions neither rewrite the query nor attach a POST resource.
+    if matches!(resolved_url.scheme(), "ftp" | "javascript")
+        || (resolved_url.scheme() == "data" && method == "post")
+    {
+        return Some(FormSubmissionMethod::Get {
+            resolved_url: resolved_url.to_string(),
+        });
+    }
     if method == "post" {
         let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding);
-        let resolved_url = Url::parse(&action).ok()?;
         return Some(FormSubmissionMethod::Post {
             resolved_url,
             body: encoded.body,
@@ -943,7 +952,6 @@ fn build_form_submission_request(
         });
     }
 
-    let mut resolved_url = Url::parse(&action).ok()?;
     resolved_url.set_query(None);
     let entries =
         normalize_form_submission_pairs(form_data_entries_to_string_pairs(scope, &entries));
