@@ -16,3 +16,5 @@ mod style_invalidation;
 mod xhr;
 
 mod response_type;
+
+mod class_name;
