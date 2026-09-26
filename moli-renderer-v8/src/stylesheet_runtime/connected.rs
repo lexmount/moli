@@ -24,11 +24,23 @@ struct ConnectedLinkReadinessFetchResponse {
 }
 
 impl ConnectedLinkReadinessFetchResponse {
-    fn new(
+    fn from_response(
         response: crate::protocol_types::NavigationResponse,
         origin_clean: bool,
         load_event_successful: bool,
+        integrity: Option<&str>,
     ) -> Self {
+        // Hash the original body, including binary responses. A matching digest
+        // must not make an opaque response eligible, including SW responses to
+        // an otherwise same-origin request.
+        // Retain the network response even on integrity failure: its downloaded
+        // bytes still contribute to the preload's Resource Timing entry.
+        let load_event_successful = load_event_successful
+            && crate::subresource_integrity::response_matches_subresource_integrity_metadata(
+                response.body_bytes(),
+                integrity,
+                origin_clean,
+            );
         Self {
             response,
             origin_clean,
@@ -2034,12 +2046,11 @@ fn preload_like_link_readiness_fetch_options(
         )
     });
     let modulepreload = link_rel_includes_token(rel, "modulepreload");
-    let request_mode = if resource_type == SubresourceResourceType::Fetch
-        && link_rel_includes_token(rel, "preload")
-        && element
-            .attribute("as")
-            .map(str::trim)
-            .is_some_and(|value| value.eq_ignore_ascii_case("fetch"))
+    // Ordinary preloads create a potential-CORS request for every destination.
+    // Its default must match a classic script/image consumer's no-CORS request.
+    let request_mode = if link_rel_includes_token(rel, "preload")
+        && !modulepreload
+        && resource_type != SubresourceResourceType::Dictionary
         && cross_origin.is_none()
     {
         moli_fetch::RequestMode::NoCors
@@ -2085,7 +2096,7 @@ async fn fetch_connected_link_readiness(
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let request_origin = moli_url::WebOrigin::from_url(&document_url);
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
-    fetch_connected_link_readiness_with_request(loader, url, options, request).await
+    fetch_connected_link_readiness_with_request(loader, url, &options, request).await
 }
 
 async fn fetch_connected_link_readiness_with_service_worker(
@@ -2098,6 +2109,10 @@ async fn fetch_connected_link_readiness_with_service_worker(
     service_worker_context: Option<ServiceWorkerConnectedLinkContext>,
 ) -> Result<ConnectedLinkReadinessFetchResponse, String> {
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
+    let integrity = options
+        .link_preload
+        .then(|| options.link_fetch_options.integrity())
+        .flatten();
     if let (Some(context), Some(destination)) = (
         service_worker_context,
         ServiceWorkerRequestDestination::for_subresource_resource_type(options.resource_type),
@@ -2116,16 +2131,19 @@ async fn fetch_connected_link_readiness_with_service_worker(
             .await
         {
             Ok(Some(response)) => {
-                let response_filter = response.response_filter;
-                let origin_clean =
-                    connected_link_origin_clean_from_service_worker_filter(response_filter);
-                let response = *response.response;
-                let load_event_successful =
-                    connected_link_load_event_successful(&response, response_filter);
-                return Ok(ConnectedLinkReadinessFetchResponse::new(
-                    response,
+                let origin_clean = response
+                    .response_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter.is_readable());
+                let load_event_successful = connected_link_load_event_successful(
+                    &response.response,
+                    response.response_filter,
+                );
+                return Ok(ConnectedLinkReadinessFetchResponse::from_response(
+                    *response.response,
                     origin_clean,
                     load_event_successful,
+                    integrity,
                 ));
             }
             Ok(None) => {}
@@ -2137,7 +2155,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
         }
     }
     let request_mode = options.request_mode;
-    fetch_connected_link_readiness_with_request(loader, url, options, request)
+    fetch_connected_link_readiness_with_request(loader, url, &options, request)
         .await
         .map(|response| {
             let load_event_successful = connected_link_load_event_successful(&response, None);
@@ -2147,7 +2165,12 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 request_mode,
             )
             .is_none_or(|filter| filter.is_readable());
-            ConnectedLinkReadinessFetchResponse::new(response, origin_clean, load_event_successful)
+            ConnectedLinkReadinessFetchResponse::from_response(
+                response,
+                origin_clean,
+                load_event_successful,
+                integrity,
+            )
         })
 }
 
@@ -2172,6 +2195,21 @@ fn connected_link_readiness_request(
         .with_credentials_mode(options.credentials_mode);
     if options.link_preload {
         request = request.with_link_preload();
+        // These destinations need browser request headers, including Origin
+        // and Fetch Metadata. Resource type alone only sets priority.
+        let metadata = match options.resource_type {
+            SubresourceResourceType::Script => Some(moli_fetch::BrowserRequestMetadata::Script),
+            SubresourceResourceType::Image => Some(moli_fetch::BrowserRequestMetadata::Image),
+            SubresourceResourceType::Font => Some(moli_fetch::BrowserRequestMetadata::Font),
+            SubresourceResourceType::TextTrack => {
+                Some(moli_fetch::BrowserRequestMetadata::TextTrack)
+            }
+            SubresourceResourceType::Fetch => Some(moli_fetch::BrowserRequestMetadata::Fetch),
+            _ => None,
+        };
+        if let Some(metadata) = metadata {
+            request = request.with_browser_request_metadata(metadata);
+        }
     }
     if options.fetch_priority_hint.is_some() {
         request = request.with_fetch_priority_hint(options.fetch_priority_hint);
@@ -2205,12 +2243,6 @@ fn connected_link_readiness_request(
     request
 }
 
-fn connected_link_origin_clean_from_service_worker_filter(
-    response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-) -> bool {
-    response_filter.is_none_or(|filter| filter.is_readable())
-}
-
 fn link_crossorigin_credentials_mode(cross_origin: Option<&str>) -> RequestCredentialsMode {
     if cross_origin
         .map(str::trim)
@@ -2233,15 +2265,30 @@ fn connected_link_load_event_successful(
 async fn fetch_connected_link_readiness_with_request(
     loader: ResourceRequestClient,
     url: Url,
-    options: ConnectedLinkReadinessFetchOptions,
+    options: &ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
+    let request_origin = request.request_origin().cloned();
     let response = if options.resource_type == SubresourceResourceType::Script {
         loader.fetch_cacheable_script_text_stream(request).await
     } else {
         loader.fetch_text_stream(request).await
     };
     response
+        .and_then(|response| {
+            if options.link_preload
+                && options.request_mode == moli_fetch::RequestMode::Cors
+                && let Some(origin) = request_origin
+            {
+                crate::network_host::validate_cors_response_chain(
+                    origin,
+                    &response.head(),
+                    options.credentials_mode,
+                )
+                .map_err(anyhow::Error::msg)?;
+            }
+            Ok(response)
+        })
         .map(crate::protocol_types::NavigationResponse::from)
         .map_err(|error| format!("failed to fetch preload-like link `{url}`: {error}"))
 }
@@ -4517,6 +4564,72 @@ mod tests {
         assert_eq!(options.request_mode, moli_fetch::RequestMode::NoCors);
         assert!(options.link_preload);
         assert!(options.script_fetch_metadata.is_none());
+    }
+
+    #[test]
+    fn ordinary_preload_request_mode_and_credentials_follow_crossorigin() {
+        let document_url = Url::parse("https://example.test/page").unwrap();
+        let request_origin = moli_url::WebOrigin::from_url(&document_url);
+        let url = Url::parse("https://cdn.test/resource").unwrap();
+        for destination in ["script", "image", "font", "track", "fetch"] {
+            for (attribute, mode, credentials) in [
+                (
+                    "",
+                    moli_fetch::RequestMode::NoCors,
+                    RequestCredentialsMode::Include,
+                ),
+                (
+                    "crossorigin",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=anonymous",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=invalid",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=use-credentials",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::Include,
+                ),
+            ] {
+                let document = HtmlParser::SCRIPTING_ENABLED.parse(
+                    document_url.clone(),
+                    format!("<!doctype html><link rel=preload as={destination} {attribute} href='{url}'>"),
+                );
+                let options =
+                    preload_like_link_readiness_fetch_options(first_link_element(&document), false);
+                let request = connected_link_readiness_request(
+                    &document_url,
+                    &request_origin,
+                    &url,
+                    &options,
+                );
+                assert_eq!(request.request_mode, mode, "{destination}, {attribute}");
+                assert_eq!(
+                    request.credentials_mode, credentials,
+                    "{destination}, {attribute}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modulepreload_without_crossorigin_keeps_cors_request_mode() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/page").unwrap(),
+            "<!doctype html><link rel=modulepreload href='/app.js'>".to_owned(),
+        );
+        let options =
+            preload_like_link_readiness_fetch_options(first_link_element(&document), false);
+        assert_eq!(options.request_mode, moli_fetch::RequestMode::Cors);
+        assert_eq!(options.credentials_mode, RequestCredentialsMode::SameOrigin);
     }
 
     #[test]
