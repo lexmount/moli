@@ -17,7 +17,7 @@ pub(crate) fn referenced<D: Dom + ?Sized>(
             .and_then(|href| href.strip_prefix('#'))
             && !fragment.is_empty()
         {
-            ids.insert(normalize(fragment));
+            ids.insert(decode_fragment(fragment));
         }
         false
     });
@@ -31,10 +31,9 @@ pub(crate) fn contains<D: Dom + ?Sized>(
     ids: &HashSet<String>,
 ) -> bool {
     walk(dom, root, limit, |node| {
-        ["id", "name"].iter().any(|name| {
-            dom.attribute(node, name)
-                .is_some_and(|id| ids.contains(&normalize(id)))
-        })
+        ["id", "name"]
+            .iter()
+            .any(|name| dom.attribute(node, name).is_some_and(|id| ids.contains(id)))
     })
 }
 
@@ -70,7 +69,7 @@ fn walk<D: Dom + ?Sized>(
     false
 }
 
-pub(crate) fn normalize(fragment: &str) -> String {
+pub(crate) fn decode_fragment(fragment: &str) -> String {
     let bytes = fragment.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut offset = 0;

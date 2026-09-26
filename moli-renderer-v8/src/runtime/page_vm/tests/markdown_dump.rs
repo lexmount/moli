@@ -34,6 +34,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div ng-cloak>Buy {{product.name}} for {{product.price | currency}}</div>
                 <div v-cloak>Vue template {{message}}</div>
                 <p>Visible value <font color="white">hidden suffix</font> 8</p>
+                <p>CSS override <font color="white" style="color:black">VISIBLE</font></p>
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
                 <p style="opacity:0;animation-name:fadeIn">Animated article text</p>
@@ -45,6 +46,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div class="invisible">Hidden ancestor <span>Inherited hidden</span><span class="restored">Restored child</span></div>
                 <button role="tab" aria-controls="panel">Specifications</button>
                 <section role="tabpanel" id="panel" class="off"><p>Panel content</p></section>
+                <section role="tabpanel" id="aria-panel" class="off" aria-hidden="true"><p>ARIA panel content</p></section>
                 <button aria-expanded="false" aria-controls="more">More</button>
                 <section id="more" class="off">Disclosure content</section>
                 <details><summary>Details</summary>Closed details content</details>
@@ -53,7 +55,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         "#).unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value 8", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value hidden suffix 8", "CSS override VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -61,7 +63,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Score 3131", "Parser trap", "Transparent parent", "Transparent child", "product.name", "Vue template", "hidden suffix"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Score 3131", "Parser trap", "Transparent parent", "Transparent child", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
         }
@@ -108,6 +110,23 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Privacy policy..."), "{output}");
             assert!(!output.contains("cookie settings"), "{output}");
         }
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <a href="#" onclick="return show(document.getElementById('history'))">+</a>
+                <section id="history" style="display:none">Expandable history</section>
+                <section id="unreferenced" style="display:none">Hidden template</section>`;
+        "##).unwrap();
+        let expanded = page.render_page_dump(options(false));
+        assert!(expanded.contains("Expandable history"), "{expanded}");
+        assert!(!expanded.contains("Hidden template"), "{expanded}");
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <img srcset="small.png 1x, large.png 2x" alt="Responsive">
+                <img data-srcset="lazy-small.png 1x, lazy-large.png 2x" alt="Lazy responsive">`;
+        "#).unwrap();
+        let responsive = page.render_page_dump(options(false));
+        assert!(responsive.contains("![Responsive](https://example.test/large.png)"), "{responsive}");
+        assert!(responsive.contains("![Lazy responsive](https://example.test/lazy-large.png)"), "{responsive}");
         page.vm_mut().eval("document.documentElement.style.display = 'none'").unwrap();
         assert!(page.render_page_dump(options(false)).is_empty());
     }).await;

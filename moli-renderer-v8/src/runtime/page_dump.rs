@@ -4,7 +4,7 @@ use crate::runtime::page_surface::{
 };
 use moli_html2md::{Dom, NodeKind};
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::page_vm::PageVm;
 
@@ -23,19 +23,6 @@ impl PageVm {
                 dom.node(*node)
                     .is_some_and(|node| node.as_element().is_some())
             });
-            let mut background_nodes = HashSet::new();
-            for node in &nodes {
-                if matches!(Dom::node_kind(dom, *node), NodeKind::Element("font"))
-                    && Dom::attribute(dom, *node, "color").is_some()
-                {
-                    let mut current = Some(*node);
-                    while let Some(id) = current {
-                        background_nodes.insert(id);
-                        current = dom.parent_node(id);
-                    }
-                }
-            }
-            let background_nodes: Vec<_> = background_nodes.into_iter().collect();
             let span_nodes: Vec<_> = nodes
                 .iter()
                 .copied()
@@ -49,11 +36,12 @@ impl PageVm {
             let background_values = self
                 .vm()
                 .computed_style_property_values_for_document_snapshot(
-                    background_nodes.iter().copied(),
+                    nodes.iter().copied(),
                     &["background-color".to_owned()],
                 );
-            let backgrounds: HashMap<_, _> = background_nodes
-                .into_iter()
+            let backgrounds: HashMap<_, _> = nodes
+                .iter()
+                .copied()
                 .zip(background_values)
                 .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
                 .collect();
@@ -82,6 +70,7 @@ impl PageVm {
                         "position".to_owned(),
                         "left".to_owned(),
                         "top".to_owned(),
+                        "color".to_owned(),
                         "animation-name".to_owned(),
                     ],
                 );
@@ -90,6 +79,7 @@ impl PageVm {
                 .zip(values)
                 .map(|(node, mut values)| {
                     let animation_name = values.pop().unwrap_or_default();
+                    let foreground = values.pop().unwrap_or_default();
                     // Preserve the visibility adapter's stable field layout.
                     let span = spans.get(&node);
                     values.push(
@@ -115,7 +105,7 @@ impl PageVm {
                             .cloned()
                             .unwrap_or_default(),
                     );
-                    values.push(String::new());
+                    values.push(foreground);
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
                     values.push(animation_name);
                     (node, values)
