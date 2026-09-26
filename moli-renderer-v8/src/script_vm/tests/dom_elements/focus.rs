@@ -1,6 +1,121 @@
 use super::*;
 
 #[test]
+fn editing_host_focus_initializes_the_first_visible_dom_caret() {
+    let mut vm = new_storage_test_vm("https://editing-focus-selection.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/editing-host-focus-selection.js"
+        ))
+        .expect("editing focus should initialize a native caret"),
+        ""
+    );
+}
+
+#[test]
+fn editing_host_focus_preserves_selection_identity_and_native_host_semantics() {
+    let mut vm = new_storage_test_vm("https://editing-focus-retention.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/editing-host-focus-retention.js"
+        ))
+        .expect("editing focus should preserve existing host selections"),
+        ""
+    );
+}
+
+#[test]
+fn editing_host_focus_selection_uses_owner_realm_and_shadow_boundaries() {
+    let mut vm = new_storage_test_vm("https://editing-focus-realms.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/editing-host-focus-realms.js"
+        ))
+        .expect("editing focus should respect realms and shadow trees"),
+        ""
+    );
+}
+
+#[test]
+fn editing_host_initial_caret_is_used_by_native_text_input() {
+    let mut vm = new_streamed_parser_test_vm(
+        "https://editing-focus-input.test/",
+        r#"<!doctype html><body><div id="editor" contenteditable><p> abc</p></div>"#,
+    );
+    vm.eval("document.getElementById('editor').focus()")
+        .expect("editor should focus");
+    assert!(
+        vm.insert_text_into_active_control("X")
+            .expect("insert text")
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([document.getElementById('editor').innerHTML, getSelection().anchorOffset])"
+        )
+        .expect("text should be inserted at initial caret"),
+        r#"["<p> Xabc</p>",2]"#
+    );
+}
+
+#[tokio::test]
+async fn editing_host_focus_selectionchange_is_queued_and_coalesced() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://editing-focus-events.test/",
+        &loader,
+    );
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = '<button id="reset"></button><div id="editor" contenteditable>abc</div><div id="other" contenteditable>def</div>';
+  globalThis.editingFocusEvents = [];
+  document.getElementById('editor').focus();
+  document.getElementById('other').focus();
+  document.getElementById('reset').focus();
+  document.getElementById('other').focus();
+  document.addEventListener('selectionchange', event => {
+    editingFocusEvents.push([event.target === document, event.bubbles, event.composed].join(':'));
+  });
+  return editingFocusEvents.length;
+})()
+"#).expect("selectionchange should not dispatch synchronously"),
+        "0"
+    );
+    for _ in 0..16 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("selection tasks should run")
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval("editingFocusEvents.join('|')").expect("event log"),
+        "true:false:false"
+    );
+    vm.eval(
+        "editingFocusEvents.length = 0; document.getElementById('reset').focus(); document.getElementById('other').focus();",
+    )
+    .expect("refocus should retain the range");
+    for _ in 0..16 {
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("refocus tasks should run")
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval("editingFocusEvents.length").expect("event log"),
+        "0"
+    );
+}
+
+#[test]
 fn text_control_focus_projects_selection_without_replacing_retained_ranges() {
     let mut vm = new_storage_test_vm("https://focus-selection.test/");
     assert_eq!(
