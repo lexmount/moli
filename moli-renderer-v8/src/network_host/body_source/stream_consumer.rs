@@ -14,7 +14,6 @@ const BODY_OWNER: &str = "__moliBodyConsumerOwner";
 const RESOLVER: &str = "__moliBodyConsumerResolver";
 const CHUNKS: &str = "__moliBodyConsumerChunks";
 const KIND: &str = "__moliBodyConsumerKind";
-const MIME: &str = "__moliBodyConsumerMime";
 const ON_CHUNK: &str = "__moliBodyConsumerOnChunk";
 const PENDING_CHUNK: &str = "__moliBodyConsumerPendingChunk";
 const STEPS: &str = "__moliBodyConsumerSteps";
@@ -37,8 +36,6 @@ struct BodyConsumerDeclaration<'scope> {
     chunks: v8::Local<'scope, v8::Array>,
     #[webapi(slot = KIND)]
     kind: &'static str,
-    #[webapi(slot = MIME)]
-    mime: String,
     #[webapi(slot = ON_CHUNK)]
     on_chunk: Option<v8::Local<'scope, v8::Function>>,
     #[webapi(slot = PENDING_CHUNK, init = "null")]
@@ -150,13 +147,13 @@ pub(super) fn consume_readable_body_stream<'s>(
         return (NetworkBodyConsumption::Rejected(error), None);
     }
     let promise = resolver.get_promise(scope);
-    let (kind, mime) = match kind {
-        NetworkBodyConsumptionKind::Text => ("text", String::new()),
-        NetworkBodyConsumptionKind::Json => ("json", String::new()),
-        NetworkBodyConsumptionKind::ArrayBuffer => ("arrayBuffer", String::new()),
-        NetworkBodyConsumptionKind::Bytes => ("bytes", String::new()),
-        NetworkBodyConsumptionKind::Blob { mime_type } => ("blob", mime_type),
-        NetworkBodyConsumptionKind::FormData { content_type } => ("formData", content_type),
+    let kind = match kind {
+        NetworkBodyConsumptionKind::Text => "text",
+        NetworkBodyConsumptionKind::Json => "json",
+        NetworkBodyConsumptionKind::ArrayBuffer => "arrayBuffer",
+        NetworkBodyConsumptionKind::Bytes => "bytes",
+        NetworkBodyConsumptionKind::Blob => "blob",
+        NetworkBodyConsumptionKind::FormData => "formData",
     };
     let chunks = v8::Array::new(scope, 0);
     set_null_prototype(scope, chunks.into());
@@ -167,7 +164,6 @@ pub(super) fn consume_readable_body_stream<'s>(
             resolver.into(),
             chunks,
             kind,
-            mime,
             chunk_callback,
         )
         .bind(scope)
@@ -301,7 +297,6 @@ fn materialize_callback<'s>(
                 blob::buffer_source_bytes_from_value(scope, chunk).expect("body chunk bytes"),
             );
         }
-        let mime = consumer.value(scope, MIME).to_rust_string_lossy(scope);
         let kind = match consumer
             .value(scope, KIND)
             .to_rust_string_lossy(scope)
@@ -311,8 +306,8 @@ fn materialize_callback<'s>(
             "json" => NetworkBodyConsumptionKind::Json,
             "arrayBuffer" => NetworkBodyConsumptionKind::ArrayBuffer,
             "bytes" => NetworkBodyConsumptionKind::Bytes,
-            "blob" => NetworkBodyConsumptionKind::Blob { mime_type: mime },
-            "formData" => NetworkBodyConsumptionKind::FormData { content_type: mime },
+            "blob" => NetworkBodyConsumptionKind::Blob,
+            "formData" => NetworkBodyConsumptionKind::FormData,
             _ => unreachable!("body materialization kind is private"),
         };
         let object = v8::Local::try_from(consumer.value(scope, BODY_OWNER))
