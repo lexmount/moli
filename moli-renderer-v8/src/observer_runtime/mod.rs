@@ -676,29 +676,28 @@ impl ObserverStore {
         deliveries
     }
 
-    fn collect_intersection_deliveries<'s>(
+    fn intersection_notification_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<_> = self.intersection_observers.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn take_intersection_delivery<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut PageScriptHost,
-    ) -> Vec<IntersectionObserverDelivery<'s>> {
-        let mut deliveries = Vec::new();
-        for state in self.intersection_observers.values_mut() {
-            if state.queued_entries.is_empty() {
-                continue;
-            }
-            let entries = mem::take(&mut state.queued_entries);
-            let Some(callback) = state.callback.prepare(scope, host_ptr) else {
-                continue;
-            };
-            let observer = v8::Local::new(scope, &state.observer);
-            deliveries.push(IntersectionObserverDelivery {
-                observer,
-                callback,
-                entries,
-                options: state.options.clone(),
-            });
+        id: u32,
+    ) -> Option<IntersectionObserverDelivery<'s>> {
+        let state = self.intersection_observers.get_mut(&id)?;
+        if state.queued_entries.is_empty() {
+            return None;
         }
-        deliveries
+        Some(IntersectionObserverDelivery {
+            observer: v8::Local::new(scope, &state.observer),
+            callback: state.callback.prepare(scope, host_ptr)?,
+            entries: mem::take(&mut state.queued_entries),
+            options: state.options.clone(),
+        })
     }
 
     fn retire_execution_context_owner(
@@ -767,32 +766,28 @@ fn invoke_mutation_deliveries<'s>(
     }
 }
 
-fn invoke_intersection_deliveries<'s>(
+fn invoke_intersection_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
-    deliveries: Vec<IntersectionObserverDelivery<'s>>,
+    delivery: IntersectionObserverDelivery<'s>,
 ) {
-    for delivery in deliveries {
-        if !delivery.callback.is_current(scope) {
-            continue;
-        }
-        let callback_context = delivery.callback.relevant_context(scope);
-        // Web IDL argument conversion uses the callback's relevant Realm,
-        // which can differ from the observer's creation Realm. Enter it before
-        // projecting native targets and binding the entry/rect/array wrappers.
-        let entries = {
-            let scope = &mut v8::ContextScope::new(scope, callback_context);
-            build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries)
-        };
-        let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
-        delivery.callback.invoke_and_report(
-            scope,
-            "intersectionobserver",
-            "IntersectionObserver callback",
-            observer_value,
-            &[entries.into(), observer_value],
-        );
+    if !delivery.callback.is_current(scope) {
+        return;
     }
+    let callback_context = delivery.callback.relevant_context(scope);
+    // Web IDL entry conversion belongs to the callback's relevant Realm.
+    let entries = {
+        let scope = &mut v8::ContextScope::new(scope, callback_context);
+        build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries)
+    };
+    let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
+    delivery.callback.invoke_and_report(
+        scope,
+        "intersectionobserver",
+        "IntersectionObserver callback",
+        observer_value,
+        &[entries.into(), observer_value],
+    );
 }
 
 impl MutationObserverState {

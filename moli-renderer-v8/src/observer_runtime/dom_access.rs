@@ -12,7 +12,7 @@ use super::{
     build_mutation_records_array,
     callback::ObserverCallback,
     intersection::{self, IntersectionCheckBatch},
-    invoke_intersection_deliveries, invoke_mutation_deliveries, node_is_intersection_root,
+    invoke_intersection_delivery, invoke_mutation_deliveries, node_is_intersection_root,
     node_is_intersection_target,
     schedule::{self, ObserverTask},
     target_is_intersection_observable,
@@ -389,13 +389,21 @@ pub(super) fn flush_intersection_observers(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
 ) {
-    let deliveries = ObserverHostAccess::new(host_ptr).store(|store| {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let ids = access.store(|store| {
         store.begin_task(ObserverTask::IntersectionDelivery);
-        store.collect_intersection_deliveries(scope, host_ptr)
+        store.intersection_notification_ids()
     });
-
-    // Blink likewise removes observers from its controller pending set before
-    // invoking `IntersectionObserver::Deliver`, so reentrant observe/disconnect
-    // updates fresh owner state instead of aliasing the delivery traversal.
-    invoke_intersection_deliveries(scope, host_ptr, deliveries);
+    // Earlier callbacks can drain a later observer's queue reentrantly.
+    // Take each queue just before its own callback.
+    for id in ids {
+        if scope.is_execution_terminating() {
+            break;
+        }
+        if let Some(delivery) =
+            access.store(|store| store.take_intersection_delivery(scope, host_ptr, id))
+        {
+            invoke_intersection_delivery(scope, host_ptr, delivery);
+        }
+    }
 }
