@@ -17,3 +17,11 @@ pub(crate) enum RendererInspectorPauseLoopPolicy {
     MainAndIo,
     IoOnly,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererInspectorPauseExitReason {
+    Resumed,
+    DocumentReplacement,
+    SessionDetached,
+    TargetClosed,
+}

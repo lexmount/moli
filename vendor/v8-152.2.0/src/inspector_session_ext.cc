@@ -7,6 +7,11 @@ using namespace support;
 
 extern "C" {
 
+void v8_inspector__V8InspectorSession__resume(
+    v8_inspector::V8InspectorSession* self, bool terminate_on_resume) {
+  self->resume(terminate_on_resume);
+}
+
 void v8_inspector__V8InspectorSession__breakProgram(
     v8_inspector::V8InspectorSession* self,
     v8_inspector::StringView reason,

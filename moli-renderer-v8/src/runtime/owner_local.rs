@@ -271,6 +271,15 @@ impl RendererPageHandle {
         self.devtools_target.pause_ref().is_pause_active()
     }
 
+    /// Captures this exact document without disturbing its execution. Only a
+    /// renderer prepare operation may activate the replacement.
+    pub fn document_replacement(
+        &self,
+        cancellation: moli_fetch::FetchCancelHandle,
+    ) -> super::RendererDocumentReplacement {
+        super::RendererDocumentReplacement::new(self.devtools_target.pause(), cancellation)
+    }
+
     /// Enqueues the DevTools IO-agent script policy without borrowing the
     /// owner-resident `PageVm` that may currently be executing JavaScript.
     #[doc(hidden)]

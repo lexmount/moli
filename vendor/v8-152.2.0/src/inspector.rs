@@ -82,6 +82,10 @@ unsafe extern "C" {
   );
 
   fn v8_inspector__V8InspectorSession__DELETE(this: *mut RawV8InspectorSession);
+  fn v8_inspector__V8InspectorSession__resume(
+    session: *mut RawV8InspectorSession,
+    terminate_on_resume: bool,
+  );
   fn v8_inspector__V8InspectorSession__dispatchProtocolMessage(
     session: *mut RawV8InspectorSession,
     message: StringView,
@@ -961,6 +965,16 @@ impl V8InspectorSession {
         self.raw.as_ptr(),
         reason,
         detail,
+      );
+    }
+  }
+
+  /// Resumes paused execution, optionally terminating it as it unwinds.
+  pub fn resume(&self, terminate_on_resume: bool) {
+    unsafe {
+      v8_inspector__V8InspectorSession__resume(
+        self.raw.as_ptr(),
+        terminate_on_resume,
       );
     }
   }

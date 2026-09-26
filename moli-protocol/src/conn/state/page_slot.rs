@@ -127,8 +127,8 @@ impl PendingNavigationRequest {
         self.cancellation_handles.clear();
     }
 
-    fn cancel(&self) {
-        for cancellation in &self.cancellation_handles {
+    fn cancel(&mut self) {
+        for cancellation in self.cancellation_handles.drain(..) {
             cancellation.cancel();
         }
     }
@@ -667,8 +667,15 @@ impl TargetPageSlot {
             request_id: NavigationRequestId::allocate(),
         };
         self.pending_renderer_page = None;
+        self.cancel_pending_document_navigation();
         self.pending_navigation_request = Some(PendingNavigationRequest::new(token.clone()));
         token
+    }
+
+    fn cancel_pending_document_navigation(&mut self) {
+        if let Some(mut request) = self.pending_navigation_request.take() {
+            request.cancel();
+        }
     }
 
     pub(crate) fn document_navigation_cancellation_handle(
@@ -853,7 +860,7 @@ impl TargetPageSlot {
             ) {
                 self.pending_renderer_page = None;
             }
-            self.pending_navigation_request = None;
+            self.cancel_pending_document_navigation();
             return true;
         }
         false
@@ -863,7 +870,7 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Unavailable,
         );
-        self.pending_navigation_request = None;
+        self.cancel_pending_document_navigation();
         self.committed_document_navigation = None;
         self.pending_renderer_page = None;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();

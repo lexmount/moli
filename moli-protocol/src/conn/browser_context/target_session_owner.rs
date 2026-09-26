@@ -181,6 +181,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
     session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+    pub(crate) document_replacement: Option<moli_core::runtime::RendererDocumentReplacement>,
 }
 
 impl TargetNavigationLoadInputs {
@@ -346,6 +347,7 @@ impl TargetNavigationLoadInputs {
                     .navigation_history_state
                     .position_after_navigation(),
             ),
+            document_replacement: None,
         }
     }
 
@@ -412,6 +414,7 @@ impl TargetNavigationLoadInputs {
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
             session_history_position: None,
+            document_replacement: None,
         }
     }
 

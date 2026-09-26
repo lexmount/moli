@@ -22,9 +22,9 @@ use moli_fetch::{
 use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererReservedServiceWorkerClient,
-    RendererServiceWorkerMainResourceFetch, RendererWebStorageHandles, SharedStorageBucketStore,
-    WeakIndexedDbManager,
+    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentReplacement,
+    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
+    RendererWebStorageHandles, SharedStorageBucketStore, WeakIndexedDbManager,
     network::{
         BrowserResourceRuntime, BrowserResourceRuntimeOwner, PageNetworkPolicy,
         navigation::{DocumentFetchContextSeed, NavigationResourceLoader},
@@ -1710,6 +1710,7 @@ impl NavigationEngine {
         let prepared = self
             .prepare_streaming_raw_page_from_external_body_async(
                 page_reservation,
+                None,
                 cookie_store,
                 web_storage,
                 indexed_db_manager,
@@ -1750,6 +1751,7 @@ impl NavigationEngine {
     async fn prepare_streaming_raw_page_from_external_body_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        replacement: Option<RendererDocumentReplacement>,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1793,6 +1795,7 @@ impl NavigationEngine {
             .js_runtime
             .prepare_streaming_raw_document_from_external_body(
                 page_reservation,
+                replacement,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -1961,6 +1964,7 @@ impl NavigationEngine {
     pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        replacement: Option<RendererDocumentReplacement>,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1993,6 +1997,7 @@ impl NavigationEngine {
             storage.into_parts();
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
+            replacement,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -2099,6 +2104,7 @@ impl NavigationEngine {
     async fn prepare_document_page_from_response_options_best_effort_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        replacement: Option<RendererDocumentReplacement>,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -2110,6 +2116,7 @@ impl NavigationEngine {
             ExternalRawDocumentBodyStream::from_bytes(options.response_body.into_bytes());
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
+            replacement,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -2156,6 +2163,7 @@ impl NavigationEngine {
         let prepared = self
             .prepare_document_page_from_response_options_best_effort_async(
                 page_reservation,
+                None,
                 cookie_store,
                 web_storage,
                 indexed_db_manager,
@@ -2172,6 +2180,7 @@ impl NavigationEngine {
     pub async fn prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        replacement: Option<RendererDocumentReplacement>,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -2201,6 +2210,7 @@ impl NavigationEngine {
             storage.into_parts();
         self.prepare_document_page_from_response_options_best_effort_async(
             page_reservation,
+            replacement,
             cookie_store,
             web_storage,
             indexed_db_manager,

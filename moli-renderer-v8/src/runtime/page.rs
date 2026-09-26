@@ -472,6 +472,7 @@ impl JsRuntime {
         let prepared = self
             .prepare_streaming_raw_document_from_external_body(
                 self.reserve_page_for_creation(),
+                None,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -503,6 +504,7 @@ impl JsRuntime {
     pub async fn prepare_streaming_raw_document_from_external_body(
         &self,
         page_reservation: RendererPageReservationToken,
+        replacement: Option<super::RendererDocumentReplacement>,
         requested_url: Url,
         final_url: Url,
         navigation_initiator_url: Option<Url>,
@@ -547,6 +549,26 @@ impl JsRuntime {
         request.navigation_reply_policy = navigation_reply_policy;
         request.reserved_service_worker_client = reserved_service_worker_client;
         request.lifecycle_decider = lifecycle_decider;
+        // This is the provisional-load boundary. Wake the old document before
+        // dispatching owner work: queuing the wake itself would deadlock behind
+        // a paused script. Downloads and intercepted responses never get here.
+        let replacement = replacement
+            .map(super::RendererDocumentReplacement::begin)
+            .transpose()
+            .inspect_err(|_| {
+                self.inner
+                    .renderer_owner
+                    .release_page_output_reservation(page_reservation);
+            })?;
+        request.document_replacement = replacement.clone();
+        // Own cancellation before awaiting the prepare reply, so abandoning
+        // the future also retires a queued or already stored preparation.
+        let preparation = RendererDocumentPreparation {
+            runtime: self.clone(),
+            token: page_reservation,
+            cancel_on_drop: true,
+            _document_replacement: replacement,
+        };
         let reply = self
             .inner
             .renderer_owner
@@ -558,11 +580,10 @@ impl JsRuntime {
         match reply {
             RendererOwnerReply::PreparedRendererDocumentStored {
                 renderer_devtools_agent_token,
-            } => Ok(PreparedRendererDocument::new(
-                self.clone(),
-                page_reservation,
+            } => Ok(PreparedRendererDocument {
+                preparation,
                 renderer_devtools_agent_token,
-            )),
+            }),
             _ => Err(anyhow!(
                 "renderer owner returned non-prepare reply for prepared document request"
             )),
@@ -608,28 +629,21 @@ impl Drop for JsRuntimeOwner {
 /// Dropping this handle schedules cancellation. Only a permit issued for this
 /// exact handle can consume the owner-local residence and start bootstrap.
 pub struct PreparedRendererDocument {
+    preparation: RendererDocumentPreparation,
+    renderer_devtools_agent_token: super::RendererDevToolsAgentToken,
+}
+
+struct RendererDocumentPreparation {
     runtime: JsRuntime,
     token: RendererPageReservationToken,
-    renderer_devtools_agent_token: super::RendererDevToolsAgentToken,
     cancel_on_drop: bool,
+    _document_replacement:
+        Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,
 }
 
 impl PreparedRendererDocument {
-    fn new(
-        runtime: JsRuntime,
-        token: RendererPageReservationToken,
-        renderer_devtools_agent_token: super::RendererDevToolsAgentToken,
-    ) -> Self {
-        Self {
-            runtime,
-            token,
-            renderer_devtools_agent_token,
-            cancel_on_drop: true,
-        }
-    }
-
     pub fn token(&self) -> RendererPageReservationToken {
-        self.token
+        self.preparation.token
     }
 
     pub fn renderer_devtools_agent_token(&self) -> super::RendererDevToolsAgentToken {
@@ -637,7 +651,7 @@ impl PreparedRendererDocument {
     }
 
     pub fn issue_commit_permit(&self) -> RendererDocumentCommitPermit {
-        RendererDocumentCommitPermit::new(self.token)
+        RendererDocumentCommitPermit::new(self.token())
     }
 
     /// Replaces the live target configuration consumed when the first
@@ -647,12 +661,13 @@ impl PreparedRendererDocument {
         configuration: super::RendererPreparedDocumentCommitConfiguration,
     ) -> Result<()> {
         let reply = self
+            .preparation
             .runtime
             .inner
             .renderer_owner
             .dispatch_command(
                 RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
-                    token: self.token,
+                    token: self.token(),
                     configuration,
                 },
             )
@@ -676,17 +691,19 @@ impl PreparedRendererDocument {
         Option<RendererPendingDownloadActivation>,
     )> {
         anyhow::ensure!(
-            permit.prepared_document() == self.token,
+            permit.prepared_document() == self.token(),
             "renderer document commit permit does not belong to this prepared document"
         );
-        self.cancel_on_drop = false;
         let reply = self
+            .preparation
             .runtime
             .inner
             .renderer_owner
             .dispatch_command(RendererOwnerCommand::CommitPreparedRendererDocument { permit })
             .await?;
-        self.runtime
+        self.preparation.cancel_on_drop = false;
+        self.preparation
+            .runtime
             .inner
             .renderer_owner
             .materialize_page_created_reply_parts(reply)
@@ -694,16 +711,17 @@ impl PreparedRendererDocument {
 
     pub async fn cancel(mut self) -> Result<()> {
         let reply = self
+            .preparation
             .runtime
             .inner
             .renderer_owner
             .dispatch_command(RendererOwnerCommand::CancelPreparedRendererDocument {
-                token: self.token,
+                token: self.token(),
             })
             .await?;
         match reply {
             RendererOwnerReply::PreparedRendererDocumentCanceled => {
-                self.cancel_on_drop = false;
+                self.preparation.cancel_on_drop = false;
                 Ok(())
             }
             _ => Err(anyhow!(
@@ -713,7 +731,7 @@ impl PreparedRendererDocument {
     }
 }
 
-impl Drop for PreparedRendererDocument {
+impl Drop for RendererDocumentPreparation {
     fn drop(&mut self) {
         if !self.cancel_on_drop {
             return;

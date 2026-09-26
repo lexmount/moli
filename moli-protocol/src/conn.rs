@@ -537,8 +537,8 @@ pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PausedResponsePreparedDocument,
-    PendingInitialDocumentPageBuild, ResponseCommitReady,
+    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
+    ResponseCommitReady,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -2830,12 +2830,7 @@ impl CdpConnection {
                 stage = "materialized_completion_drain_start",
             );
         }
-        let is_current = completion.is_current_for_connection(self);
         let (token, state, navigation) = completion.into_parts();
-        if !is_current {
-            crate::domains::page::push_superseded_navigation_result(out, &state);
-            return;
-        }
         crate::domains::page::complete_materialized_navigation_into_buffer_async(
             self,
             out,

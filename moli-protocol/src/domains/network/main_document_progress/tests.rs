@@ -18,6 +18,26 @@ use super::gate::{
 };
 use super::*;
 
+#[test]
+fn aborted_navigation_preserves_the_document_without_hiding_other_failures() {
+    for error_text in ["Aborted", "net::ERR_ABORTED"] {
+        assert_eq!(
+            FailedNavigationDocumentPolicy::for_navigation_error(error_text),
+            FailedNavigationDocumentPolicy::PreserveCommittedDocument,
+        );
+    }
+    for error_text in [
+        "Failed",
+        "net::ERR_CONNECTION_RESET",
+        "net::ERR_BLOCKED_BY_CLIENT",
+    ] {
+        assert_eq!(
+            FailedNavigationDocumentPolicy::for_navigation_error(error_text),
+            FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+        );
+    }
+}
+
 fn completed_events() -> CompletedMainDocumentNetworkEvents {
     CompletedMainDocumentNetworkEvents::new(
         "GET".to_owned(),

@@ -40,8 +40,8 @@ pub use fetch_deadline::{FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase
 pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
-    RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
-    RendererPageReservationToken, RendererReservedServiceWorkerClient,
+    RendererDocumentReplacement, RendererLifecycleDecider, RendererLifecycleDecision,
+    RendererLifecycleSnapshot, RendererPageReservationToken, RendererReservedServiceWorkerClient,
     RendererServiceWorkerMainResourceFetch, RendererSharedWorkerRuntimeDiagnostics,
 };
 pub use navigation_engine::{

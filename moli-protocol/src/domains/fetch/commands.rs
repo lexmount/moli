@@ -1199,6 +1199,7 @@ pub(super) async fn complete_fulfill_request_command_async(
             let navigation_state = pending.navigation;
             let navigation = conn
                 .build_navigation_from_buffered_body_source_for_navigation_async(
+                    token.as_ref(),
                     &navigation_state,
                     navigation_state.requested_url.clone(),
                     response_code,
@@ -1872,39 +1873,29 @@ fn continue_streaming_document_response_in_background(
         response,
         network_observation_journal,
         body_progress_source,
-        prepared_document,
     } = pending;
-    let cancellation = response.cancellation_handle();
-    if response_code.is_none()
-        && response_headers.is_empty()
-        && let Some(prepared_document) = prepared_document
-    {
-        conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
-        tokio::task::spawn_local(async move {
-            let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
-                sender.clone(),
-                document_navigation_token.clone(),
-                navigation.clone(),
-            );
-            let navigation_result =
-                prepared_document.resume_streaming(response, Some(body_completion_sink));
-            let _ = sender.send(page::BackgroundNavigationCompletion::new(
-                document_navigation_token,
-                navigation,
-                Ok(navigation_result),
-            ));
-        });
-        return;
-    }
-    let job = conn.background_streaming_response_navigation_load_job_for_navigation(
+    let Some(job) = conn.background_streaming_response_navigation_load_job_for_navigation(
+        &document_navigation_token,
         &navigation,
         response,
         network_observation_journal,
         response_code,
         response_headers,
         body_progress_source,
-    );
-    conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
+    ) else {
+        // An already-armed current request keeps its original completion.
+        if !conn.accepts_pending_document_navigation_for_owner(
+            &navigation.owner,
+            &document_navigation_token,
+        ) {
+            let _ = sender.send(page::BackgroundNavigationCompletion::new(
+                document_navigation_token,
+                navigation,
+                Err(anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)),
+            ));
+        }
+        return;
+    };
     tokio::task::spawn_local(async move {
         let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
             sender.clone(),

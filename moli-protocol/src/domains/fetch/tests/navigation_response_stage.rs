@@ -72,16 +72,15 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         .as_str()
         .expect("response-stage request id")
         .to_owned();
-    let prepared_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
-        })
-        .expect("final response head should reserve a renderer agent before continueResponse");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&response_request_id)
+    );
     assert!(
         ctx.conn
             .browser_context
@@ -106,19 +105,6 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         Some("SID-1"),
     );
 
-    {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .expect("loaded page");
-        assert_eq!(
-            page.renderer_devtools_agent_token(),
-            prepared_agent,
-            "continueResponse must commit the exact agent reserved at the response head"
-        );
-    }
     assert!(
         loaded_page_html_for_test(&mut ctx)
             .await
@@ -165,11 +151,7 @@ async fn assert_empty_http_error_response_stage(ctx: &mut TestContext, url: &str
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-            })
+            .and_then(|bc| bc.loaded_page())
             .is_none(),
         "an empty HTTP error must be classified from its body after continueResponse"
     );
@@ -857,7 +839,16 @@ async fn fulfill_request_commit_uses_configuration_added_while_paused_before_aut
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn interleaved_response_heads_only_commit_the_current_prepared_document() {
+async fn interleaved_response_heads_only_commit_the_current_response() {
+    assert_interleaved_response_heads(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interleaved_response_heads_preserve_the_current_debugger_pause() {
+    assert_interleaved_response_heads(true).await;
+}
+
+async fn assert_interleaved_response_heads(pause_old_document: bool) {
     async fn first() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -892,6 +883,21 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .enable_primary_network_events();
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
+    if pause_old_document {
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>old document</title>",
+            Some("SID-1"),
+        )
+        .await;
+        ctx.process_async(json!({
+            "id": 360,
+            "method": "Debugger.enable",
+            "sessionId": "SID-1"
+        }))
+        .await;
+        ctx.sent.clear();
+    }
+
     ctx.process_async(json!({
         "id": 364,
         "method": "Fetch.enable",
@@ -907,6 +913,23 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
     .await;
     ctx.expect_result(364, json!({}), Some("SID-1"));
 
+    if pause_old_document {
+        ctx.process_async(json!({
+            "id": 361,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": "setTimeout(() => { debugger; globalThis.resumedNormally = true; }, 0)"
+            }
+        }))
+        .await;
+        ctx.wait_for_scheduler_message("old document debugger pause", |message| {
+            message["method"] == "Debugger.paused"
+        })
+        .await;
+        ctx.sent.clear();
+    }
+
     ctx.process_async(json!({
         "id": 365,
         "method": "Page.navigate",
@@ -919,16 +942,15 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_str()
         .expect("first response-stage request id")
         .to_owned();
-    let first_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&first_request_id)
-        })
-        .expect("first response head should reserve a renderer agent");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&first_request_id)
+    );
 
     ctx.process_async(json!({
         "id": 366,
@@ -942,17 +964,15 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_str()
         .expect("second response-stage request id")
         .to_owned();
-    let second_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&second_request_id)
-        })
-        .expect("second response head should reserve a renderer agent");
-    assert_ne!(first_agent, second_agent);
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&second_request_id)
+    );
 
     let attachment_before_continue = ctx.conn.browser_context.as_ref().and_then(|bc| {
         bc.active_page_target()
@@ -968,11 +988,8 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
     .await;
     ctx.expect_result(367, json!({}), Some("SID-1"));
     let superseded = take_response_by_id(&mut ctx, 365);
-    assert_eq!(superseded["error"]["code"], -32000);
-    assert_eq!(
-        superseded["error"]["message"],
-        "renderer channel navigation was superseded by a newer navigation"
-    );
+    assert!(superseded.get("error").is_none());
+    assert_eq!(superseded["result"]["errorText"], "net::ERR_ABORTED");
     assert_eq!(
         ctx.conn.browser_context.as_ref().and_then(|bc| bc
             .active_page_target()
@@ -981,6 +998,55 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         attachment_before_continue,
         "a superseded response head must not switch the renderer channel"
     );
+
+    if pause_old_document {
+        assert!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .loaded_page()
+                .unwrap()
+                .runtime_inspector_pause_active(),
+            "continuing stale A must not terminate the old document while B is intercepted"
+        );
+        ctx.process_async(json!({
+            "id": 368,
+            "method": "Fetch.failRequest",
+            "sessionId": "SID-1",
+            "params": { "requestId": second_request_id, "errorReason": "Aborted" }
+        }))
+        .await;
+        ctx.expect_result(368, json!({}), Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 369,
+            "method": "Debugger.resume",
+            "sessionId": "SID-1"
+        }))
+        .await;
+        ctx.expect_result(369, json!({}), Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 370,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": "document.title + ':' + globalThis.resumedNormally",
+                "returnByValue": true
+            }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 370)["result"]["result"]["value"],
+            "old document:true"
+        );
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Page.frameNavigated")
+        );
+        server.abort();
+        return;
+    }
 
     ctx.process_async(json!({
         "id": 368,
@@ -1003,8 +1069,6 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_ref()
         .and_then(|bc| bc.loaded_page())
         .expect("current navigation should commit a page");
-    assert_eq!(page.renderer_devtools_agent_token(), second_agent);
-    assert_ne!(page.renderer_devtools_agent_token(), first_agent);
     let html = page
         .serialize_html_async()
         .await
@@ -1802,16 +1866,12 @@ async fn fail_request_at_response_stage_aborts_navigation() {
             .current_renderer_attachment()
     });
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
-            })
-            .is_some(),
-        "response head should own a prepared candidate before cancellation"
+        ctx.conn.browser_context.as_ref().is_some_and(|bc| {
+            bc.active_page_target()
+                .fetch_owner
+                .pending_fetch_response_transfer_is_pending_for_test(&response_request_id)
+        }),
+        "response head should retain its pending transfer before cancellation"
     );
 
     ctx.process_async(json!({
@@ -1834,14 +1894,14 @@ async fn fail_request_at_response_stage_aborts_navigation() {
             .runtime_slot
             .current_renderer_attachment(),
         attachment_before_cancel,
-        "canceling a response-stage candidate must not switch the renderer channel"
+        "canceling a response-stage transfer must not switch the renderer channel"
     );
 
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once() {
+async fn fulfill_request_at_response_stage_replaces_the_network_response_once() {
     async fn handler() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1891,16 +1951,15 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .as_str()
         .expect("response-stage request id")
         .to_owned();
-    let network_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-        })
-        .expect("network response head should reserve a renderer agent");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&request_id)
+    );
 
     ctx.process_async(json!({
         "id": 371,
@@ -1927,11 +1986,6 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .as_ref()
         .and_then(|bc| bc.loaded_page())
         .expect("synthetic response should commit a page");
-    assert_ne!(
-        page.renderer_devtools_agent_token(),
-        network_agent,
-        "fulfillRequest must discard the prepared network response candidate"
-    );
     let html = page
         .serialize_html_async()
         .await

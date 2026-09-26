@@ -6,6 +6,16 @@ use super::{
 };
 
 impl Page {
+    /// Captures this document for a later renderer prepare operation. The
+    /// navigation's cancellation handle prevents abandoned work from starting
+    /// replacement; capturing this input does not resume a paused document.
+    pub fn document_replacement(
+        &self,
+        cancellation: moli_fetch::FetchCancelHandle,
+    ) -> crate::runtime::RendererDocumentReplacement {
+        self.handle.document_replacement(cancellation)
+    }
+
     pub fn start_set_document_content(
         &self,
         frame_id: String,

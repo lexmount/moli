@@ -171,55 +171,60 @@ impl RendererInspectorSessionExecutorLocal {
             return;
         };
         let mut prefer_main = true;
-        while let Some(command) = self.target.pause_ref().wait_for_pause_work(|| {
-            // These are actual posted owner tasks, not an environment-version
-            // check. Service them in both pause modes, before a following
-            // Inspector observation; they never execute page JavaScript.
-            if let Some(invalidation) = self.target.io_ref().claim_environment_invalidation() {
-                return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
-                    invalidation,
-                ));
-            }
-            let command = match pause_loop_policy {
-                crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
-                    .target
-                    .io_ref()
-                    .claim_for_pause()
-                    .map(RendererInspectorNestedCommand::Io),
-                crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
-                    if prefer_main =>
-                {
-                    self.target
-                        .main_ref()
-                        .claim_for_pause()
-                        .map(RendererInspectorNestedCommand::Main)
-                        .or_else(|| {
-                            self.target
-                                .io_ref()
-                                .claim_for_pause()
-                                .map(RendererInspectorNestedCommand::Io)
-                        })
+        let exit_reason = loop {
+            let work = self.target.pause_ref().wait_for_pause_work(|| {
+                // These are actual posted owner tasks, not an environment-version
+                // check. Service them in both pause modes, before a following
+                // Inspector observation; they never execute page JavaScript.
+                if let Some(invalidation) = self.target.io_ref().claim_environment_invalidation() {
+                    return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
+                        invalidation,
+                    ));
                 }
-                crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo => self
-                    .target
-                    .io_ref()
-                    .claim_for_pause()
-                    .map(RendererInspectorNestedCommand::Io)
-                    .or_else(|| {
+                let command = match pause_loop_policy {
+                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
+                        .target
+                        .io_ref()
+                        .claim_for_pause()
+                        .map(RendererInspectorNestedCommand::Io),
+                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                        if prefer_main =>
+                    {
                         self.target
                             .main_ref()
                             .claim_for_pause()
                             .map(RendererInspectorNestedCommand::Main)
-                    }),
+                            .or_else(|| {
+                                self.target
+                                    .io_ref()
+                                    .claim_for_pause()
+                                    .map(RendererInspectorNestedCommand::Io)
+                            })
+                    }
+                    crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo => self
+                        .target
+                        .io_ref()
+                        .claim_for_pause()
+                        .map(RendererInspectorNestedCommand::Io)
+                        .or_else(|| {
+                            self.target
+                                .main_ref()
+                                .claim_for_pause()
+                                .map(RendererInspectorNestedCommand::Main)
+                        }),
+                };
+                if command.is_some()
+                    && pause_loop_policy
+                        == crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                {
+                    prefer_main = !prefer_main;
+                }
+                command
+            });
+            let command = match work {
+                Ok(command) => command,
+                Err(reason) => break reason,
             };
-            if command.is_some()
-                && pause_loop_policy
-                    == crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
-            {
-                prefer_main = !prefer_main;
-            }
-            command
-        }) {
             match command {
                 RendererInspectorNestedCommand::EnvironmentInvalidation(invalidation) => {
                     let isolate = unsafe { &mut *self.isolate.get() };
@@ -232,6 +237,25 @@ impl RendererInspectorSessionExecutorLocal {
                 RendererInspectorNestedCommand::Io(command) => {
                     self.dispatch_io_command(context_group_id, command);
                 }
+            }
+        };
+        if exit_reason
+            == crate::devtools::pause::RendererInspectorPauseExitReason::DocumentReplacement
+        {
+            // Like Chromium's UnpauseAndTerminate, unwind the paused old
+            // document before preparing its replacement on the owner thread.
+            // Later pauses observe the same renderer preparation scope until
+            // it commits or is discarded. No debugger setting leaks
+            // into the replacement document's Inspector restore snapshots.
+            let sessions: Vec<_> = self
+                .sessions
+                .borrow()
+                .iter()
+                .filter(|((group, _), _)| *group == context_group_id)
+                .filter_map(|(_, route)| route.session.upgrade())
+                .collect();
+            for session in sessions {
+                session.resume(true);
             }
         }
         self.target.pause_ref().leave_pause();

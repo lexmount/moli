@@ -403,10 +403,6 @@ impl MaterializedNavigationCompletion {
         }
     }
 
-    pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
-        conn.accepts_pending_document_navigation_for_owner(&self.state.owner, &self.token)
-    }
-
     pub(crate) fn requested_url(&self) -> &str {
         self.state.requested_url.as_str()
     }
@@ -3219,6 +3215,13 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
+    if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+        push_superseded_navigation_result(out, &state);
+        // A stale response cannot commit or alter the current navigation, but
+        // its exact renderer-channel suspension still needs to be retired.
+        finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
+        return;
+    }
     complete_materialized_navigation_into_buffer_inner_async(
         conn,
         out,
@@ -3239,7 +3242,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let navigation_owner = state.owner.clone();
-    let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
     let navigation_loader_id = state.loader_id.clone();
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
@@ -3354,11 +3356,25 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             .emit_navigation_error_into_buffer(out, &error_text);
         }
     }
+    finish_renderer_navigation_into_buffer_async(conn, out, &navigation_owner, &token).await;
+    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
+        &navigation_owner,
+        &navigation_loader_id,
+    );
+}
+
+async fn finish_renderer_navigation_into_buffer_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    owner: &CommandOwnerScope,
+    token: &DocumentNavigationToken,
+) {
+    let navigation_session_id = owner.session_id().map(str::to_owned);
     let primary_protocol_session_id = conn
-        .runtime_session_owner_primary_session_id_for_owner(&navigation_owner)
+        .runtime_session_owner_primary_session_id_for_owner(owner)
         .or_else(|| navigation_session_id.clone());
     let (routed_renderer_output, renderer_call_replacements) = conn
-        .finish_renderer_document_navigation_for_owner(&navigation_owner, &token)
+        .finish_renderer_document_navigation_for_owner(owner, token)
         .map(|finish| (finish.released_output, finish.renderer_call_replacements))
         .unwrap_or_default();
     if !routed_renderer_output.is_empty() {
@@ -3390,10 +3406,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             ),
         }
     }
-    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-        &navigation_owner,
-        &navigation_loader_id,
-    );
 }
 
 fn push_navigation_commit_error(

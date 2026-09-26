@@ -246,7 +246,7 @@ pub use runtime::{
     RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
     RendererDocumentNodeReference, RendererDocumentNodeTextResolution, RendererDocumentOptions,
     RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
-    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
+    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDocumentReplacement,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentTerminationReason,
     RendererDocumentTitleChanged, RendererDocumentToken, RendererDomAttributeMutation,

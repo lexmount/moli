@@ -2166,17 +2166,6 @@ impl TargetFetchOwner {
     }
 
     #[cfg(test)]
-    pub(crate) fn pending_fetch_response_prepared_renderer_agent_for_test(
-        &self,
-        request_id: &str,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        self.pending
-            .pending_fetch_response_transfers
-            .get(request_id)
-            .and_then(PausedDocumentTransfer::prepared_renderer_agent_token)
-    }
-
-    #[cfg(test)]
     pub(crate) fn active_fetch_response_body_stream_request_id_for_test(
         &self,
         handle: &str,
