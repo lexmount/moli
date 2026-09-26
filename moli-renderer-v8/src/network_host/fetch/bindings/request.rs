@@ -11,6 +11,13 @@ pub(super) enum FetchPrepareError {
     PolicyContextUnavailable,
     ReportContextUnavailable,
     Url(ResolveContextUrlError),
+    WebIdl(crate::webidl::WebIdlError),
+}
+
+impl From<crate::webidl::WebIdlError> for FetchPrepareError {
+    fn from(error: crate::webidl::WebIdlError) -> Self {
+        Self::WebIdl(error)
+    }
 }
 
 impl From<ResolveContextUrlError> for FetchPrepareError {
@@ -38,6 +45,7 @@ impl fmt::Display for FetchPrepareError {
                 f.write_str("fetch: document report context is unavailable")
             }
             Self::Url(error) => error.fmt(f),
+            Self::WebIdl(error) => error.fmt(f),
         }
     }
 }
@@ -46,6 +54,7 @@ impl std::error::Error for FetchPrepareError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Url(error) => Some(error),
+            Self::WebIdl(error) => Some(error),
             _ => None,
         }
     }
@@ -125,6 +134,11 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let request_headers =
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
+    validate_request_url_credentials(&resolved_url)?;
+    let referrer = parsed
+        .init_validation
+        .validate(scope, parsed.request_mode.as_ref(), &parsed.cache)?
+        .unwrap_or(parsed.referrer);
 
     Ok(PreparedWindowFetchRequest {
         frame_id,
@@ -147,7 +161,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         redirect_mode: parsed.redirect_mode,
         priority: parsed.priority,
         cache: parsed.cache,
-        referrer: parsed.referrer,
+        referrer,
         referrer_policy: parsed.referrer_policy,
         integrity: parsed.integrity,
         keepalive: parsed.keepalive,

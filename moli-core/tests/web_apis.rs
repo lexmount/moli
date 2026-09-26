@@ -15,6 +15,8 @@ use moli_core::{
 use moli_fetch::FetchConfig;
 use support::FixtureServer;
 use tokio::time::Duration;
+#[path = "web_apis/request_init.rs"]
+mod request_init;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
