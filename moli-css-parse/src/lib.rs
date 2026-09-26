@@ -20,7 +20,7 @@ pub use color::{
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
     CssFontFace, font_load_query_contains_css_wide_keyword, font_load_query_family,
-    normalize_font_face_src, parse_font_faces,
+    font_load_query_is_valid, normalize_font_face_src, parse_font_faces,
 };
 pub use math::{
     ContainerQueryLengthContext, CssNumericContext, CssNumericKind, CssNumericValue, UnitlessAngle,

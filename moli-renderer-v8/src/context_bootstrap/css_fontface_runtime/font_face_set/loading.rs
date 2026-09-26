@@ -28,7 +28,16 @@ pub(in crate::context_bootstrap) fn font_face_set_check_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FontFaceSetCheckArgs>(scope, &args) else {
         return;
     };
-    let _ = (&parsed.font, &parsed.text);
+    let _ = &parsed.text;
+    if !font_load_query_is_valid(&parsed.font) {
+        let error = new_dom_exception_value(
+            scope,
+            "The provided font shorthand is invalid.",
+            "SyntaxError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
     rv.set(v8::Boolean::new(scope, true).into());
 }
 
@@ -43,7 +52,7 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
         return;
     };
     let _ = &parsed.text;
-    if font_load_query_contains_css_wide_keyword(&parsed.font) {
+    if !font_load_query_is_valid(&parsed.font) {
         rv.set(
             make_rejected_dom_exception_promise(
                 scope,

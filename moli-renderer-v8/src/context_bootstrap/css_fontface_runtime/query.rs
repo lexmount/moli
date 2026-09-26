@@ -2,8 +2,8 @@ use super::storage::font_face_set_faces_array;
 use super::*;
 use crate::util::serialize_v8_iter_array;
 
-pub(super) fn font_load_query_contains_css_wide_keyword(query: &str) -> bool {
-    moli_css_parse::font_load_query_contains_css_wide_keyword(query)
+pub(super) fn font_load_query_is_valid(query: &str) -> bool {
+    moli_css_parse::font_load_query_is_valid(query)
 }
 
 fn font_face_matches_query(

@@ -1,3 +1,6 @@
+#[path = "web_apis/font_queries.rs"]
+mod font_queries;
+
 #[path = "web_apis/indexed_db_transaction.rs"]
 mod indexed_db_transaction;
 
