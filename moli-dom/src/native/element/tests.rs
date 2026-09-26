@@ -417,3 +417,19 @@ fn parser_created_link_processing_state_is_consumed_at_children_finish() {
     assert!(!parser_created.link_created_by_parser());
     assert!(!parser_created.finish_parsing_link_children());
 }
+
+#[test]
+fn email_multiple_attribute_resanitizes_dirty_value() {
+    let mut input = Element::new_html("input");
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "email".to_owned()));
+    assert!(input.set_input_value("  first@example.com  , second@example.test  "));
+    assert_eq!(
+        input.input_value(),
+        "first@example.com  , second@example.test"
+    );
+    assert!(input.input_value_dirty());
+
+    assert!(input.set_attribute("multiple".to_owned(), String::new(), None, String::new()));
+    assert_eq!(input.input_value(), "first@example.com,second@example.test");
+    assert!(input.input_value_dirty());
+}
