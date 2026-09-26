@@ -79,9 +79,7 @@ pub(in crate::context_bootstrap) fn performance_mark_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = require_performance_receiver(scope, args.this()) else {
-        return;
-    };
+    let performance = args.this();
     let Some(parsed) = webidl::parse_args::<PerformanceMarkArgs>(scope, &args) else {
         return;
     };
@@ -201,25 +199,12 @@ fn prepare_performance_mark<'s>(
     clone_user_timing_detail(scope, options.detail).map(|detail| (start_time, detail))
 }
 
-fn require_performance_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if performance_slot_array(scope, receiver, PERFORMANCE_ENTRIES_SLOT).is_none() {
-        webidl::throw_type_error(scope, "Illegal invocation");
-        return None;
-    }
-    Some(receiver)
-}
-
 pub(in crate::context_bootstrap) fn performance_clear_marks_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = require_performance_receiver(scope, args.this()) else {
-        return;
-    };
+    let performance = args.this();
     let Some(parsed) = webidl::parse_args::<PerformanceClearMarksArgs>(scope, &args) else {
         return;
     };
@@ -262,9 +247,7 @@ pub(in crate::context_bootstrap) fn performance_measure_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = require_performance_receiver(scope, args.this()) else {
-        return;
-    };
+    let performance = args.this();
     let Some(parsed) = webidl::parse_args::<PerformanceMeasureArgs>(scope, &args) else {
         return;
     };
@@ -313,9 +296,7 @@ pub(in crate::context_bootstrap) fn performance_clear_measures_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = require_performance_receiver(scope, args.this()) else {
-        return;
-    };
+    let performance = args.this();
     let Some(parsed) = webidl::parse_args::<PerformanceClearMeasuresArgs>(scope, &args) else {
         return;
     };

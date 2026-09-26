@@ -81,6 +81,9 @@ async fn worker_teardown_releases_context_owned_v8_finalizers_before_isolate_dro
                     new Blob([`payload-${index}`], { type: "text/plain" })
                 );
             }
+            performance.setResourceTimingBufferSize(0);
+            performance.setResourceTimingBufferSize(2);
+            performance.clearResourceTimings();
             postMessage(globalThis.__finalizerBlobs.length);
             "#
             .into(),

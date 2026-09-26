@@ -1,4 +1,3 @@
-use super::PERFORMANCE_TIME_ORIGIN_SLOT;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_type_error,
@@ -55,10 +54,6 @@ pub(super) fn performance_memory_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if get_private_value(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let sizes = heap_sample(scope);
     let Some(context) = args.this().get_creation_context(scope) else {
         return;

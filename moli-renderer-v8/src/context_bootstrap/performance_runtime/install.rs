@@ -160,7 +160,7 @@ struct EventCountsObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
 struct PerformancePrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_now_callback)]
     now: (),
@@ -191,7 +191,7 @@ struct PerformancePrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
 struct PerformancePrototypeCommonAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -202,7 +202,7 @@ struct PerformancePrototypeCommonAccessorsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "Performance", enumerable)]
+#[webapi(fragment, prototype = "Performance", enumerable, receiver = web_api_interfaces::Performance::is_instance)]
 struct PerformancePrototypeWindowAccessorsDeclaration {
     #[webapi(accessor_property, getter = super::memory::performance_memory_getter)]
     memory: (),
@@ -1306,10 +1306,6 @@ fn performance_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if performance_slot_number(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if let Some(subobject) = super::lazy_subobjects::PerformanceSubobject::from_slot(slot) {
         match super::lazy_subobjects::ensure_performance_subobject(scope, args.this(), subobject) {
             Ok(value) => rv.set(value),

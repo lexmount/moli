@@ -1652,6 +1652,7 @@ async fn worker_main(
         .map(|client| client.client_id);
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry::default(),
+        resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
         parent_tx: parent_tx.clone(),
         worker_wake_tx,
         termination_requested: Arc::clone(&termination_requested),
