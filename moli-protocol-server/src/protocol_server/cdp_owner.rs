@@ -14,7 +14,7 @@ use crate::{
     cdp_frontend_router::CdpFrontendRouter,
     cdp_scheduler::{
         CdpCookieSnapshot, CdpOwnerActorLifecycle, CdpScheduler, CdpTargetHostIntegration,
-        spawn_cdp_scheduler_actor,
+        CookiePersistence, spawn_cdp_scheduler_actor,
     },
 };
 
@@ -135,6 +135,7 @@ impl SharedCdpOwnerRegistry {
         let owner_finished_rx = spawn_owner_task(
             receivers,
             initial_storage_partition,
+            self.inner.config.storage_partition.clone(),
             self.inner.config.navigation_runtime_config.clone(),
             self.inner.config.screencast_interval_ms,
             Some(CdpTargetHostIntegration::new(
@@ -203,6 +204,7 @@ impl Drop for CdpOwnerRegistryInner {
 fn spawn_owner_task(
     receivers: CdpFrontendReceivers,
     initial_storage_partition: CdpInitialStoragePartition,
+    storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
     screencast_interval_ms: u32,
     target_host_integration: Option<CdpTargetHostIntegration>,
@@ -210,13 +212,14 @@ fn spawn_owner_task(
     checkpoint_tx: mpsc::UnboundedSender<CdpCookieSnapshot>,
 ) -> oneshot::Receiver<()> {
     spawn_protocol_local_task("cdp-owner", move || async move {
-        let (scheduler, scheduler_receivers) =
+        let (mut scheduler, scheduler_receivers) =
             CdpScheduler::new_with_deferred_default_target_runtime_and_screencast_interval(
                 initial_storage_partition,
                 navigation_runtime_config,
                 target_host_integration,
                 screencast_interval_ms,
             );
+        scheduler.set_cookie_persistence(CookiePersistence::new(storage_partition));
         let actor = spawn_cdp_scheduler_actor(
             scheduler,
             scheduler_receivers,

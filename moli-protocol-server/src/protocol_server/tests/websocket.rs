@@ -402,6 +402,158 @@ async fn websocket_cdp_localstorage_profile_persists_across_server_restart() {
 }
 
 #[tokio::test]
+async fn websocket_cdp_cookies_persist_across_browser_close_restart() {
+    let profile = TempDir::new("cookie-browser-close-profile");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
+    let page_url = format!("http://{fixture_addr}/page");
+
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to profiled cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
+
+    let set_cookie = send_cdp_command(
+        &mut socket,
+        10,
+        "Network.setCookie",
+        Some(&session_id),
+        json!({ "name": "c1", "value": "v1", "url": page_url }),
+    )
+    .await;
+    assert!(
+        set_cookie
+            .iter()
+            .any(|message| message["id"] == json!(10_u64) && message.get("result").is_some()),
+        "Network.setCookie should succeed: {set_cookie:?}"
+    );
+    let write = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session_id,
+        11,
+        "document.cookie = 'c2=v2; path=/'; document.cookie",
+    )
+    .await;
+    assert!(write.contains("c2=v2"), "document.cookie write: {write}");
+
+    send_cdp_command_without_wait(&mut socket, 42, "Browser.close", None, json!({})).await;
+    timeout(Duration::from_secs(10), cdp_server)
+        .await
+        .expect("profiled server should exit after Browser.close")
+        .expect("profiled server task should return cleanly");
+    wait_for_profile_lock_release(&paths).await;
+
+    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
+        cookies
+            .iter()
+            .any(|cookie| cookie.name == "c1" && cookie.value == "v1")
+            && cookies
+                .iter()
+                .any(|cookie| cookie.name == "c2" && cookie.value == "v2")
+    })
+    .await;
+    assert!(
+        persisted
+            .iter()
+            .any(|cookie| cookie.name == "c1" && cookie.value == "v1")
+            && persisted
+                .iter()
+                .any(|cookie| cookie.name == "c2" && cookie.value == "v2"),
+        "both CDP and document.cookie cookies should survive Browser.close: {persisted:?}"
+    );
+
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("reconnect to profiled cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
+    let read = cdp_runtime_evaluate_string(&mut socket, &session_id, 6, "document.cookie").await;
+    assert!(
+        read.contains("c1=v1") && read.contains("c2=v2"),
+        "reopened profile should restore both cookies: {read}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(cdp_server).await;
+    wait_for_profile_lock_release(&paths).await;
+    fixture_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_cdp_cookie_writes_persist_without_detach() {
+    let profile = TempDir::new("cookie-write-through-profile");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
+    let page_url = format!("http://{fixture_addr}/page");
+
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to profiled cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
+
+    let set_cookie = send_cdp_command(
+        &mut socket,
+        10,
+        "Network.setCookie",
+        Some(&session_id),
+        json!({ "name": "c1", "value": "v1", "url": page_url }),
+    )
+    .await;
+    assert!(
+        set_cookie
+            .iter()
+            .any(|message| message["id"] == json!(10_u64) && message.get("result").is_some()),
+        "Network.setCookie should succeed: {set_cookie:?}"
+    );
+
+    let write = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session_id,
+        11,
+        "document.cookie = 'c2=v2; path=/'; document.cookie",
+    )
+    .await;
+    assert!(write.contains("c2=v2"), "document.cookie write: {write}");
+
+    // Prove write-through: the profile file must update while the session is
+    // still attached, with no detach, target close, or server shutdown.
+    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
+        cookies
+            .iter()
+            .any(|cookie| cookie.name == "c1" && cookie.value == "v1")
+            && cookies
+                .iter()
+                .any(|cookie| cookie.name == "c2" && cookie.value == "v2")
+    })
+    .await;
+    assert!(
+        persisted
+            .iter()
+            .any(|cookie| cookie.name == "c1" && cookie.value == "v1"),
+        "CDP-injected cookie should be written through to the profile: {persisted:?}"
+    );
+    assert!(
+        persisted
+            .iter()
+            .any(|cookie| cookie.name == "c2" && cookie.value == "v2"),
+        "document.cookie write should be written through to the profile: {persisted:?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(cdp_server).await;
+    wait_for_profile_lock_release(&paths).await;
+    fixture_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_restart() {
     let profile = TempDir::new("imported-cookie-profile");
     let paths = BrowserProfilePaths::new(&profile.path);

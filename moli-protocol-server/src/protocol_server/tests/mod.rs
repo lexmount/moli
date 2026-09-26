@@ -339,6 +339,34 @@ async fn spawn_test_protocol_server() -> (std::net::SocketAddr, tokio::task::Joi
     .await
 }
 
+<<<<<<< Updated upstream
+=======
+/// Serves a test protocol server exactly like `ProtocolServer::serve()`:
+/// `axum::serve(...).with_graceful_shutdown(coordinator)` followed by
+/// `cdp_owner_registry.shutdown()`. Tests therefore exercise the real
+/// browser-level `Browser.close` drain path instead of a parallel harness.
+fn spawn_serving_protocol_server(
+    listener: TcpListener,
+    state: AppState,
+) -> tokio::task::JoinHandle<()> {
+    let cdp_owner_registry = state.cdp_owner_registry.clone();
+    let shutdown_coordinator = state.shutdown_coordinator.clone();
+    let storage_partition = state.storage_partition.clone();
+    let app = build_router(state);
+    tokio::spawn(async move {
+        let graceful_shutdown = async move {
+            shutdown_coordinator.wait().await;
+        };
+        axum::serve(listener, app)
+            .with_graceful_shutdown(graceful_shutdown)
+            .await
+            .expect("test protocol server should serve");
+        cdp_owner_registry.shutdown().await;
+        super::flush_storage_partition(&storage_partition).await;
+    })
+}
+
+>>>>>>> Stashed changes
 async fn spawn_test_protocol_server_with_owner_registry() -> (
     std::net::SocketAddr,
     tokio::task::JoinHandle<()>,

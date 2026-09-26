@@ -14,7 +14,7 @@ fn moli_cli_path() -> PathBuf {
 }
 
 #[test]
-fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
+fn cli_serve_drains_gracefully_when_sigterm_is_delivered() {
     let mut child = Command::new(moli_cli_path())
         .args([
             "serve",
@@ -65,7 +65,9 @@ fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
     thread::spawn(move || {
         let _ = status_sender.send(child.wait());
     });
-    let status = match status_receiver.recv_timeout(Duration::from_secs(2)) {
+    // SIGTERM now triggers a graceful drain. Allow ample time for the bounded
+    // shutdown budget before giving up.
+    let status = match status_receiver.recv_timeout(Duration::from_secs(30)) {
         Ok(status) => status.expect("moli serve wait should succeed"),
         Err(error) => {
             // SAFETY: child_pid still identifies the timed-out server. SIGKILL
@@ -80,5 +82,9 @@ fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
     stderr_reader
         .join()
         .expect("stderr reader should finish after server exit");
-    assert_eq!(status.code(), Some(128 + libc::SIGTERM));
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "moli serve should drain and exit cleanly after SIGTERM"
+    );
 }
