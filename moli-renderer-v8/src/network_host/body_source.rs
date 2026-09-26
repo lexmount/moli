@@ -1,6 +1,7 @@
 mod stream_consumer;
 
 use self::stream_consumer::consume_readable_body_stream;
+use super::headers::headers_entries;
 use super::*;
 use crate::context_bootstrap::{
     close_stream, enqueue_byte_chunk, error_stream, readable_stream_has_pipe_owner,
@@ -242,8 +243,12 @@ enum PendingBodyMaterializationKind {
     Json,
     ArrayBuffer(v8::Global<v8::Context>),
     Bytes(v8::Global<v8::Context>),
-    Blob { mime_type: String },
-    FormData { content_type: String },
+    Blob {
+        headers: Option<v8::Global<v8::Object>>,
+    },
+    FormData {
+        headers: Option<v8::Global<v8::Object>>,
+    },
 }
 
 pub(crate) struct PendingBodyMaterialization {
@@ -285,8 +290,8 @@ pub(in crate::network_host) enum NetworkBodyConsumptionKind {
     Json,
     ArrayBuffer,
     Bytes,
-    Blob { mime_type: String },
-    FormData { content_type: String },
+    Blob,
+    FormData,
 }
 
 impl PendingBodyMaterializationKind {
@@ -312,9 +317,19 @@ impl PendingBodyMaterializationKind {
                     Self::Bytes(realm)
                 }
             }
-            NetworkBodyConsumptionKind::Blob { mime_type } => Self::Blob { mime_type },
-            NetworkBodyConsumptionKind::FormData { content_type } => {
-                Self::FormData { content_type }
+            NetworkBodyConsumptionKind::Blob | NetworkBodyConsumptionKind::FormData => {
+                // Retain the native header list, not a MIME string snapshot.
+                // Fetch gets the MIME type when converting the consumed bytes.
+                // Keeping only Headers also avoids retaining the body's source
+                // through a pending materialization owned by that source.
+                let headers = response_slot_object(scope, object, RESPONSE_HEADERS_SLOT)
+                    .or_else(|| request_slot_object(scope, object, REQUEST_HEADERS_SLOT))
+                    .map(|headers| v8::Global::new(scope, headers));
+                if matches!(kind, NetworkBodyConsumptionKind::Blob) {
+                    Self::Blob { headers }
+                } else {
+                    Self::FormData { headers }
+                }
             }
         }
     }
@@ -324,11 +339,11 @@ impl PendingBodyMaterializationKind {
             Self::Json => Self::Json,
             Self::ArrayBuffer(realm) => Self::ArrayBuffer(realm.clone()),
             Self::Bytes(realm) => Self::Bytes(realm.clone()),
-            Self::Blob { mime_type } => Self::Blob {
-                mime_type: mime_type.clone(),
+            Self::Blob { headers } => Self::Blob {
+                headers: headers.clone(),
             },
-            Self::FormData { content_type } => Self::FormData {
-                content_type: content_type.clone(),
+            Self::FormData { headers } => Self::FormData {
+                headers: headers.clone(),
             },
         }
     }
@@ -1820,12 +1835,14 @@ fn body_materialization_value<'s>(
         PendingBodyMaterializationKind::Bytes(realm) => {
             binary_body_materialization_value(scope, bytes, realm, true)
         }
-        PendingBodyMaterializationKind::Blob { mime_type } => {
+        PendingBodyMaterializationKind::Blob { headers } => {
+            let mime_type = body_mime_type(scope, headers);
             blob::build_blob_object(scope, bytes.to_vec(), mime_type)
                 .map(Into::into)
                 .ok_or_else(|| v8::undefined(scope).into())
         }
-        PendingBodyMaterializationKind::FormData { content_type } => {
+        PendingBodyMaterializationKind::FormData { headers } => {
+            let content_type = body_mime_type(scope, headers);
             let multipart_boundary = multipart_form_data_boundary(&content_type);
             if let Some(boundary) = multipart_boundary.as_deref() {
                 crate::context_bootstrap::form_data_object_from_multipart_bytes(
@@ -1852,6 +1869,25 @@ fn body_materialization_value<'s>(
             }
         }
     }
+}
+
+fn body_mime_type(
+    scope: &mut v8::PinScope<'_, '_>,
+    headers: Option<v8::Global<v8::Object>>,
+) -> String {
+    let Some(headers) = headers else {
+        return String::new();
+    };
+    let headers = v8::Local::new(scope, headers);
+    let entries = headers_entries(scope, headers);
+    let headers =
+        moli_fetch::headers_from_byte_strings(&entries).expect("Headers contain ByteStrings");
+    // Preserve MIME parameter values (including charset and boundary case).
+    // Blob constructor normalization and Resource Timing minimization are
+    // different algorithms from Fetch's get-the-MIME-type operation.
+    moli_web_mime::extract_response_mime_type(&headers)
+        .map(|mime| mime.to_string())
+        .unwrap_or_default()
 }
 
 fn binary_body_materialization_value<'s>(
