@@ -431,9 +431,6 @@ impl DocumentRuntime {
                 insertion_plan.insertion_roots,
             );
         }
-        if is_atomic_move && let Some(active) = self.active_element_handle() {
-            crate::native_bridge::element::schedule_focus_blur_if_needed(scope, host_ptr, active);
-        }
         self.preserve_selectedness_for_insertion_plan(scope, host_ptr, &insertion_plan);
         record_dom_binding_timing(
             if self.dom_host.is_html_element_named(child, "script") {
