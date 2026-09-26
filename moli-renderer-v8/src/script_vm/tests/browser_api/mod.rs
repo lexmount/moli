@@ -54,3 +54,5 @@ mod web_audio;
 mod webrtc;
 
 mod worker_listener_invocation;
+
+mod document_domain_lifetime;

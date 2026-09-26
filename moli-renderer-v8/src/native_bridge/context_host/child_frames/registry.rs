@@ -425,13 +425,11 @@ impl JsContextHost {
                             .as_ref()
                             .map(|entry| entry.classic_script_document_state.clone())
                             .unwrap_or_default(),
-                        document_domain_override: if attribute_bootstrap_changed {
-                            None
-                        } else {
-                            existing
-                                .as_ref()
-                                .and_then(|entry| entry.document_domain_override())
-                        },
+                        // Attribute changes can schedule navigation, but the active
+                        // Document keeps its mutable origin until replacement commits.
+                        document_domain_override: existing
+                            .as_ref()
+                            .and_then(|entry| entry.document_domain_override()),
                         credentialless,
                         service_worker_client_id: existing
                             .as_ref()
