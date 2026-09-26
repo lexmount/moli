@@ -1,11 +1,11 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
-use crate::native_bridge::document::XHTML_NS;
 use crate::util::v8_string;
 use crate::webidl;
 
 use super::super::{
     JsContextHost,
+    document::{MATHML_NS, SVG_NS, XHTML_NS},
     node::{
         node_is_element, node_runtime_and_handle_from_object_or_detached,
         throw_incompatible_getter_receiver, throw_incompatible_setter_receiver,
@@ -13,6 +13,7 @@ use super::super::{
     throw_dom_exception,
 };
 
+use super::details_dialog::main_summary_child;
 use super::reflection::{
     DomStringReflection, ElementReflectionInterface, NullToEmptyDomStringReflection,
     UnsignedLongReflection, UsvStringReflection, remove_reflected_attribute,
@@ -2479,11 +2480,21 @@ fn default_tab_index_for(runtime: &JsContextHost, handle: DomHandle) -> i32 {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
-    if element.namespace() != "http://www.w3.org/1999/xhtml" {
-        return -1;
-    }
-    match element.local_name() {
-        "a" | "button" | "input" | "select" | "textarea" => 0,
+    match (element.namespace(), element.local_name()) {
+        (
+            XHTML_NS,
+            "a" | "area" | "button" | "frame" | "iframe" | "input" | "object" | "select"
+            | "textarea",
+        )
+        | (SVG_NS | MATHML_NS, "a") => 0,
+        (XHTML_NS, "summary")
+            if runtime
+                .dom_host()
+                .parent_node(handle)
+                .is_some_and(|parent| main_summary_child(runtime, parent) == Some(handle)) =>
+        {
+            0
+        }
         _ => -1,
     }
 }

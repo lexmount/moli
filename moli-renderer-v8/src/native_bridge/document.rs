@@ -297,6 +297,7 @@ pub(in crate::native_bridge::document) use structure::set_document_body_for_nati
 
 pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
+pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
