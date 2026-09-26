@@ -1,7 +1,7 @@
 use super::*;
 
-fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
-    let mut vm = new_storage_test_vm(url);
+async fn observer_callback_test_vm(url: &str) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let mut vm = new_storage_page_task_executor_test_vm(url);
     vm.eval(
         r#"
 (() => {
@@ -16,13 +16,17 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 "#,
     )
     .expect("observer callback child-realm setup should evaluate");
-    materialize_single_child_default_realm_for_test(&mut vm, "observer callback child-realm setup");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("materialize observer callback child realm");
     vm
 }
 
-#[test]
-fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
+    let mut vm =
+        observer_callback_test_vm("https://observer-callback-function-semantics.test/").await;
 
     let queued = vm
         .eval(
@@ -90,6 +94,10 @@ fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_sema
         .expect("observer callback-function semantics should queue");
     assert_eq!(queued, "queued");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval(
             r#"
@@ -108,9 +116,9 @@ JSON.stringify({
     );
 }
 
-#[test]
-fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
+    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/").await;
 
     vm.eval(
         r#"
@@ -155,6 +163,10 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     )
     .expect("observer exception projection should queue");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval(
             "JSON.stringify(globalThis.__observerCallbackErrors.sort((a, b) => a.message.localeCompare(b.message)))",
@@ -166,9 +178,9 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     );
 }
 
-#[test]
-fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-retirement.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
+    let mut vm = observer_callback_test_vm("https://observer-callback-retirement.test/").await;
 
     let queued = vm
         .eval(
@@ -238,6 +250,10 @@ fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
         .expect("observer retirement should queue");
     assert_eq!(queued, "true");
 
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver rendering observers");
     let result = vm
         .eval("JSON.stringify(globalThis.__retiredObserverCallbacks)")
         .expect("retired observer callbacks should remain suppressed");
@@ -260,6 +276,10 @@ fn js_owned_observer_callback_cycles_remain_v8_collectable() {
   for (let index = 0; index < 128; index++) {
     let resizeObserver;
     resizeObserver = new ResizeObserver(() => resizeObserver.disconnect());
+    const target = document.createElement('div');
+    resizeObserver.observe(target);
+    if (index % 2) resizeObserver.unobserve(target);
+    else resizeObserver.disconnect();
 
     let performanceObserver;
     performanceObserver = new PerformanceObserver(

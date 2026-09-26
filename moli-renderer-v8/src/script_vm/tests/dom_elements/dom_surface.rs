@@ -422,9 +422,10 @@ fn wheel_default_action_scrolls_unless_canceled() {
     );
 }
 
-#[test]
-fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
-    let mut vm = new_storage_test_vm("https://scroll-intersection-observer.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_checks_after_scroll_wait_for_rendering_and_reuse_published_geometry() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://scroll-intersection-observer.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
         inner_width: 800,
         inner_height: 600,
@@ -451,7 +452,8 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         "#,
     )
     .expect("intersection scroll fixture should initialize");
-    publish_layout_for_test(&mut vm);
+    vm.publish_layout_for_test()
+        .expect("publish observer fixture");
 
     vm.eval(
         r#"
@@ -467,6 +469,10 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         "#,
     )
     .expect("intersection observer should register");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(window.__intersectionStates)")
             .expect("initial intersection state should flush"),
@@ -498,14 +504,15 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         vm.paint_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0), reason)
             .expect("fresh paint publishes the scrolled geometry")
             .expect("document layout");
-        vm.eval("void 0")
-            .expect("complete the turn and deliver queued observers");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("render and deliver observers");
         assert_eq!(
             vm.eval("JSON.stringify(window.__intersectionStates)")
                 .expect("publication should queue observer delivery without another mutation"),
             expected
         );
-        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
         previous = expected;
     }
 }

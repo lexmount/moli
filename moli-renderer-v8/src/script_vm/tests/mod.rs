@@ -15993,6 +15993,7 @@ mod observer_callbacks;
 mod popup_root_window;
 mod post_parse;
 mod queue_microtask;
+mod rendering_observers;
 mod rendering_update;
 mod retained_child_window;
 mod script_terminal_completion;

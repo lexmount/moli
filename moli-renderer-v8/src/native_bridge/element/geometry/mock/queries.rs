@@ -204,6 +204,12 @@ fn mock_element_metrics(
         .unwrap_or(LayoutPoint::ZERO);
     let quad = quad_from_client_rect(rect);
     Some(LayoutElementMetrics {
+        resize_observer_box: Some(moli_layout::LayoutResizeObserverBox {
+            content_rect: moli_layout::LayoutRect::new(0.0, 0.0, size.width, size.height),
+            border_size: size,
+            horizontal: true,
+            effective_zoom: 1.0,
+        }),
         offset_parent: compute_mock_offset_parent(runtime, source),
         offset_position: LayoutPoint::new(rect.left as f32, rect.top as f32),
         border_origin_in_viewport_ignoring_css_transforms: LayoutPoint::new(

@@ -1471,6 +1471,13 @@ async fn secondary_webapis_cover_file_file_list_and_resize_observer_basics() -> 
     page.finish_capture_screenshot(captured)?;
     page.evaluate_runtime_expression_async("runGeometryProbe()")
         .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "document.body.getAttribute('data-resize-target') === 'true'",
+            Duration::from_secs(2),
+        )
+        .await?;
 
     assert!(
         page.serialize_html_async()
@@ -6091,7 +6098,7 @@ async fn intersection_observer_threshold_crossings_report_exit_and_reentry() -> 
     browser
         .wait_for_script_truthy(
             &mut page,
-            "globalThis.intersectionThresholdCount === 3 && globalThis.intersectionThresholdBurstCount === 2",
+            "globalThis.intersectionThresholdCount === 3 && globalThis.intersectionThresholdBurstCount === 0",
             Duration::from_secs(2),
         )
         .await?;
@@ -6106,11 +6113,15 @@ async fn intersection_observer_threshold_crossings_report_exit_and_reentry() -> 
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionThresholdBurstCount"),
-        Some(&JsValueSnapshot::Number(2.0))
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionThresholdBurstCapture"),
-        Some(&JsValueSnapshot::String("false:false|true:true".to_owned()))
+        Some(&JsValueSnapshot::String(String::new()))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "intersectionThresholdBurstCallbackCount"),
+        Some(&JsValueSnapshot::Number(1.0))
     );
 
     server.shutdown().await;

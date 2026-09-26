@@ -238,11 +238,8 @@ fn live_range_offsets_shift_by_inserted_count_for_document_fragment_insert() {
 
 /// Bootstraps `<html><body>` on the VM and then runs the caller-provided
 /// JS expression, returning whatever it evaluates to. Used by the
-/// IntersectionObserver tests that need to interleave observer setup,
-/// DOM mutation, and post-microtask state reads across multiple
-/// `vm.eval` calls (each `eval` drains microtasks at the end, so
-/// splitting steps across calls is how we let the IO delivery callback
-/// actually fire between mutations).
+/// Synchronous setup and state reads. Rendering-dependent tests explicitly
+/// use `eval_with_rendering` to complete production Page tasks.
 fn eval_with_body(vm: &mut ScriptVm, expr: &str) -> String {
     let script = format!(
         r#"
@@ -260,26 +257,43 @@ fn eval_with_body(vm: &mut ScriptVm, expr: &str) -> String {
     vm.eval(&script).expect("expression should evaluate")
 }
 
-#[test]
-fn intersection_observer_callback_fires_after_dom_mutation_without_mutation_observer() {
+fn new_observer_regression_vm() -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let loader =
+        crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    crate::runtime::PageVmTaskExecutorTestHarness::new(
+        url::Url::parse("https://dom-heavy-regression.test/").unwrap(),
+        &loader,
+    )
+}
+
+/// Complete a rendering opportunity and its subsequent observer delivery task
+/// using the same dispatcher as production, between geometry-test phases.
+async fn eval_with_rendering(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    expr: &str,
+) -> String {
+    let result = eval_with_body(vm, expr);
+    let loader =
+        crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("render observer scene");
+    result
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_observer_callback_fires_after_dom_mutation_without_mutation_observer() {
     // Regression for the queue_intersection_checks → records.is_empty()
     // implicit invariant break: with only an IntersectionObserver registered
     // (no MutationObserver), the mutation_records_enabled flag suppresses
     // record allocation, which used to mask the "DOM mutated" signal that
     // queue_mutation_records relied on to schedule intersection checks.
     //
-    // The test runs in three phases so we can drain microtasks between
-    // observer setup, DOM mutation, and the assertion read:
-    //   1. Register the IntersectionObserver; the initial-intersection
-    //      microtask fires at eval-end and bumps the counter to 1.
-    //   2. Detach/reattach the target. Intersection checks must run
-    //      synchronously inside the mutation pipeline, queue entries, and
-    //      schedule a delivery microtask that drains at eval-end.
-    //   3. Read the counter. Pre-fix the counter stays at 1 because step 2
-    //      never queued any mutation-driven entries; post-fix the counter
-    //      is strictly greater than 1.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    // Rendering samples the final state of each script, then a separate Page
+    // task delivers changes. Cover both a transient detach/reattach and the
+    // same mutations separated by actual rendering opportunities.
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoCallbacks = 0;
@@ -293,24 +307,32 @@ fn intersection_observer_callback_fires_after_dom_mutation_without_mutation_obse
             window.__startPreparedObserver = () => window.__lmIoObserver.observe(window.__lmIoTarget);
             return 'observed';
         })()"#,
-    );
+    ).await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
-    let after_initial = eval_with_body(&mut vm, "String(window.__lmIoCallbacks)");
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
+    let after_initial = eval_with_rendering(&mut vm, "String(window.__lmIoCallbacks)").await;
     assert_eq!(
         after_initial, "1",
         "initial-intersection delivery should bring callback count to 1",
     );
-    eval_with_body(
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoTarget.remove();
             document.body.appendChild(window.__lmIoTarget);
             return 'mutated';
         })()"#,
+    )
+    .await;
+    assert_eq!(
+        eval_with_rendering(&mut vm, "String(window.__lmIoCallbacks)").await,
+        "1",
+        "detach/reattach within one script does not change the rendered intersection"
     );
-    let after_mutation = eval_with_body(&mut vm, "String(window.__lmIoCallbacks)");
+    eval_with_rendering(&mut vm, "window.__lmIoTarget.remove()").await;
+    eval_with_rendering(&mut vm, "document.body.appendChild(window.__lmIoTarget)").await;
+    let after_mutation = eval_with_rendering(&mut vm, "String(window.__lmIoCallbacks)").await;
     let after_mutation: i64 = after_mutation
         .parse()
         .expect("callback counter must parse as an integer");
@@ -321,10 +343,10 @@ fn intersection_observer_callback_fires_after_dom_mutation_without_mutation_obse
     );
 }
 
-#[test]
-fn intersection_observer_callback_can_replace_its_observation_reentrantly() {
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_observer_callback_can_replace_its_observation_reentrantly() {
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoReentrantLog = [];
@@ -349,13 +371,15 @@ fn intersection_observer_callback_can_replace_its_observation_reentrantly() {
             observer.observe(first);
             return 'observed';
         })()"#,
-    );
+    )
+    .await;
 
     assert_eq!(
-        eval_with_body(
+        eval_with_rendering(
             &mut vm,
             "JSON.stringify([window.__lmIoReentrantLog, window.__lmIoTakeRecordsDuringCallback])",
-        ),
+        )
+        .await,
         r#"[["first","second"],0]"#,
         "delivery must release observer owner state before callback reentrant disconnect/observe",
     );
@@ -436,14 +460,14 @@ fn mutation_observer_callback_can_replace_registration_and_mutate_reentrantly() 
     );
 }
 
-#[test]
-fn rootless_intersection_observer_keeps_plain_deep_spa_targets_viewport_visible() {
+#[tokio::test(flavor = "current_thread")]
+async fn rootless_intersection_observer_keeps_plain_deep_spa_targets_viewport_visible() {
     // Real block layout gives empty wrappers zero height, so a deep plain SPA
     // sentinel can remain in the first viewport and trigger the same lazy-chunk
     // callback as Chromium. The explicit Mock provider retains its older
     // bounded compatibility heuristic separately.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoEntries = [];
@@ -462,19 +486,21 @@ fn rootless_intersection_observer_keeps_plain_deep_spa_targets_viewport_visible(
             window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
-    );
+    )
+    .await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
 
-    let result = eval_with_body(
+    let result = eval_with_rendering(
         &mut vm,
         r#"JSON.stringify(window.__lmIoEntries.map((entry) => ({
             isIntersecting: entry.isIntersecting,
             ratio: entry.ratio,
             top: entry.top
         })))"#,
-    );
+    )
+    .await;
     let entries: serde_json::Value =
         serde_json::from_str(&result).expect("IO entries should be JSON");
     let first = entries
@@ -489,13 +515,13 @@ fn rootless_intersection_observer_keeps_plain_deep_spa_targets_viewport_visible(
     );
 }
 
-#[test]
-fn rootless_intersection_observer_does_not_promote_display_none_targets() {
+#[tokio::test(flavor = "current_thread")]
+async fn rootless_intersection_observer_does_not_promote_display_none_targets() {
     // Class names have no layout meaning on their own. The stylesheet result,
     // not a site-specific `hidden` token heuristic, must remove the target's
     // box from IntersectionObserver geometry.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoEntries = [];
@@ -519,9 +545,10 @@ fn rootless_intersection_observer_does_not_promote_display_none_targets() {
             observer.observe(target);
             return 'observed';
         })()"#,
-    );
+    )
+    .await;
 
-    let result = eval_with_body(&mut vm, "JSON.stringify(window.__lmIoEntries)");
+    let result = eval_with_rendering(&mut vm, "JSON.stringify(window.__lmIoEntries)").await;
     let entries: serde_json::Value =
         serde_json::from_str(&result).expect("IO entries should be JSON");
     let first = entries
@@ -536,14 +563,14 @@ fn rootless_intersection_observer_does_not_promote_display_none_targets() {
     assert_eq!(first["left"], 0.0);
 }
 
-#[test]
-fn rootless_intersection_observer_keeps_inline_sized_deep_targets_outside_viewport() {
+#[tokio::test(flavor = "current_thread")]
+async fn rootless_intersection_observer_keeps_inline_sized_deep_targets_outside_viewport() {
     // Chromium GUI keeps a sentinel below the viewport after preceding siblings
     // with real authored height. The rootless IO correction should only erase
     // mock height from empty wrapper trees; inline geometry hints still
     // contribute to flow distance.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoEntries = [];
@@ -564,12 +591,13 @@ fn rootless_intersection_observer_keeps_inline_sized_deep_targets_outside_viewpo
             window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
-    );
+    )
+    .await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
 
-    let result = eval_with_body(&mut vm, "JSON.stringify(window.__lmIoEntries)");
+    let result = eval_with_rendering(&mut vm, "JSON.stringify(window.__lmIoEntries)").await;
     let entries: serde_json::Value =
         serde_json::from_str(&result).expect("IO entries should be JSON");
     let first = entries
@@ -584,14 +612,14 @@ fn rootless_intersection_observer_keeps_inline_sized_deep_targets_outside_viewpo
     );
 }
 
-#[test]
-fn rootless_intersection_observer_counts_text_content_flow_units() {
+#[tokio::test(flavor = "current_thread")]
+async fn rootless_intersection_observer_counts_text_content_flow_units() {
     // Flight result cards and similar list rows often get most of their real
     // height from text/content rather than inline styles. Rootless IO should
     // not collapse those content-bearing rows as if they were empty wrappers,
     // otherwise infinite-list sentinels become visible too early.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoEntries = [];
@@ -612,12 +640,13 @@ fn rootless_intersection_observer_counts_text_content_flow_units() {
             window.__startPreparedObserver = () => observer.observe(target);
             return 'observed';
         })()"#,
-    );
+    )
+    .await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
 
-    let result = eval_with_body(&mut vm, "JSON.stringify(window.__lmIoEntries)");
+    let result = eval_with_rendering(&mut vm, "JSON.stringify(window.__lmIoEntries)").await;
     let entries: serde_json::Value =
         serde_json::from_str(&result).expect("IO entries should be JSON");
     let first = entries
@@ -632,15 +661,15 @@ fn rootless_intersection_observer_counts_text_content_flow_units() {
     );
 }
 
-#[test]
-fn intersection_observer_and_mutation_observer_coexist_during_dom_mutations() {
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_observer_and_mutation_observer_coexist_during_dom_mutations() {
     // Regression guard for the fix to queue_mutation_records: the IO
     // scheduling must run whether or not records actually got pushed, but
     // MutationObserver delivery must continue to work when records *are*
     // present. Register both, mutate the DOM, and verify both pipelines
     // fire.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoTarget = document.createElement('div');
@@ -657,23 +686,33 @@ fn intersection_observer_and_mutation_observer_coexist_during_dom_mutations() {
             window.__lmMoObserver.observe(document.body, { childList: true, subtree: true });
             return 'observed';
         })()"#,
-    );
+    ).await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
-    eval_with_body(&mut vm, "String(window.__lmIoCount)");
-    eval_with_body(
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
+    eval_with_rendering(&mut vm, "String(window.__lmIoCount)").await;
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoTarget.remove();
             document.body.appendChild(window.__lmIoTarget);
             return 'mutated';
         })()"#,
+    )
+    .await;
+    assert_eq!(
+        eval_with_rendering(&mut vm, "String(window.__lmIoCount)").await,
+        "1",
+        "detach/reattach within one script does not change the rendered intersection"
     );
-    let io_count: i64 = eval_with_body(&mut vm, "String(window.__lmIoCount)")
+    eval_with_rendering(&mut vm, "window.__lmIoTarget.remove()").await;
+    eval_with_rendering(&mut vm, "document.body.appendChild(window.__lmIoTarget)").await;
+    let io_count: i64 = eval_with_rendering(&mut vm, "String(window.__lmIoCount)")
+        .await
         .parse()
         .expect("IO callback counter must parse");
-    let mo_count: i64 = eval_with_body(&mut vm, "String(window.__lmMoCount)")
+    let mo_count: i64 = eval_with_rendering(&mut vm, "String(window.__lmMoCount)")
+        .await
         .parse()
         .expect("MO records counter must parse");
     assert!(
@@ -688,8 +727,8 @@ fn intersection_observer_and_mutation_observer_coexist_during_dom_mutations() {
     );
 }
 
-#[test]
-fn mutation_observer_disconnect_does_not_starve_intersection_observer() {
+#[tokio::test(flavor = "current_thread")]
+async fn mutation_observer_disconnect_does_not_starve_intersection_observer() {
     // The mutation_records_enabled flag flips off when the last
     // MutationObserver disconnects. If queue_intersection_checks were
     // gated on the flag (or on records being non-empty), an IO registered
@@ -697,8 +736,8 @@ fn mutation_observer_disconnect_does_not_starve_intersection_observer() {
     // receiving mutation-driven entries. This test pins the lifecycle:
     // attach MO → disconnect MO → register IO → mutate → IO must still
     // see deliveries.
-    let mut vm = new_dom_regression_vm();
-    eval_with_body(
+    let mut vm = new_observer_regression_vm();
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             const transient = new MutationObserver(() => {});
@@ -713,20 +752,29 @@ fn mutation_observer_disconnect_does_not_starve_intersection_observer() {
             window.__startPreparedObserver = () => window.__lmIoObserver.observe(window.__lmIoTarget);
             return 'observed';
         })()"#,
-    );
+    ).await;
     vm.publish_layout_for_test()
         .expect("publish observer fixture");
-    eval_with_body(&mut vm, "window.__startPreparedObserver()");
-    eval_with_body(&mut vm, "String(window.__lmIoCount)");
-    eval_with_body(
+    eval_with_rendering(&mut vm, "window.__startPreparedObserver()").await;
+    eval_with_rendering(&mut vm, "String(window.__lmIoCount)").await;
+    eval_with_rendering(
         &mut vm,
         r#"(() => {
             window.__lmIoTarget.remove();
             document.body.appendChild(window.__lmIoTarget);
             return 'mutated';
         })()"#,
+    )
+    .await;
+    assert_eq!(
+        eval_with_rendering(&mut vm, "String(window.__lmIoCount)").await,
+        "1",
+        "detach/reattach within one script does not change the rendered intersection"
     );
-    let count: i64 = eval_with_body(&mut vm, "String(window.__lmIoCount)")
+    eval_with_rendering(&mut vm, "window.__lmIoTarget.remove()").await;
+    eval_with_rendering(&mut vm, "document.body.appendChild(window.__lmIoTarget)").await;
+    let count: i64 = eval_with_rendering(&mut vm, "String(window.__lmIoCount)")
+        .await
         .parse()
         .expect("IO callback counter must parse");
     assert!(

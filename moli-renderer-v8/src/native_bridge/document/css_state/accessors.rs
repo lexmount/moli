@@ -185,6 +185,7 @@ fn set_document_adopted_style_sheets_for_receiver<'s>(
         .set_document_adopted_style_sheet_installations(handle, installations);
     sync_css_style_sheet_document_adopted_owner_tracking(scope, next_array.into(), handle);
     super::sync_document_fonts_for_handle(scope, unsafe { &*runtime_ptr }, handle);
+    crate::observer_runtime::queue_style_rendering_update(scope, runtime_ptr);
 }
 
 pub(in crate::native_bridge) fn normalize_adopted_style_sheets_assignment<'s>(
@@ -489,6 +490,7 @@ pub(in crate::native_bridge) fn sync_adopted_style_sheets_array_owner<'s>(
         }
         None => {}
     }
+    crate::observer_runtime::queue_style_rendering_update(scope, host_ptr);
 }
 
 fn adopted_style_sheets_array_is_current_owner<'s>(

@@ -1,6 +1,7 @@
 //! Document-owned animation callbacks. A timer only wakes the rendering
 //! source; one rendering task snapshots and invokes a Document's callback map,
-//! then applies focus fixup after callback cleanup.
+//! followed by layout/observer processing and focus fixup at the ScriptVm
+//! rendering boundary. Geometry readers never perform that layout work.
 
 use super::{
     JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken, WindowDocumentTaskTarget,
@@ -32,6 +33,7 @@ struct AnimationFrameProvider {
     next_handle: u32,
     wake_pending: bool,
     focus_fixup_target: Option<WindowDocumentTaskTarget>,
+    observer_target: Option<WindowDocumentTaskTarget>,
     handles: Vec<u32>,
     callbacks: HashMap<u32, WindowWebIdlCallbackFunction>,
 }
@@ -83,6 +85,7 @@ impl AnimationFrameState {
                 next_handle: 0,
                 wake_pending: false,
                 focus_fixup_target: None,
+                observer_target: None,
                 handles: Vec::new(),
                 callbacks: HashMap::new(),
             });
@@ -96,6 +99,29 @@ impl AnimationFrameState {
 }
 
 impl JsContextHost {
+    /// A rendering body can yield to author code several times. Revalidate
+    /// its immutable Document target before resolving each later phase; the
+    /// initial Page authorization alone cannot survive document.open().
+    pub(crate) fn resolve_current_rendering_update_context<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: WindowDocumentTaskTarget,
+    ) -> Option<(
+        crate::document_runtime::DomHandle,
+        v8::Local<'s, v8::Context>,
+    )> {
+        if scope.is_execution_terminating()
+            || !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            )
+        {
+            return None;
+        }
+        let resolved = self.resolve_authorized_window_document_task_context(scope, target)?;
+        Some((resolved.document_handle, resolved.context))
+    }
+
     /// DOM changes and focus styling can make the focused element unavailable.
     /// Revalidate it at the end of a rendering update, using the same native
     /// wake and exact Document owner as animation callbacks. No author timer
@@ -121,7 +147,39 @@ impl JsContextHost {
         };
         let provider = self.animation_frames.ensure_provider(owner, dispatch_scope);
         provider.focus_fixup_target = Some(target);
-        if provider.wake_pending {
+        self.ensure_document_rendering_wake(scope, owner, dispatch_scope);
+    }
+
+    pub(crate) fn queue_document_observer_update(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        dispatch_scope: OwnerDispatchScope,
+    ) {
+        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
+            return;
+        };
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+        else {
+            return;
+        };
+        self.animation_frames
+            .ensure_provider(owner, dispatch_scope)
+            .observer_target = Some(target);
+        self.ensure_document_rendering_wake(scope, owner, dispatch_scope);
+    }
+
+    fn ensure_document_rendering_wake(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: WindowExecutionContextOwner,
+        dispatch_scope: OwnerDispatchScope,
+    ) {
+        if self
+            .animation_frames
+            .ensure_provider(owner, dispatch_scope)
+            .wake_pending
+        {
             return;
         }
         let Some(binding) =
@@ -223,7 +281,13 @@ impl JsContextHost {
             // focus check must not survive document.open().
             provider.focus_fixup_target = None;
         }
-        if provider.callbacks.is_empty() && provider.focus_fixup_target.is_none() {
+        if provider.observer_target != Some(target) {
+            provider.observer_target = None;
+        }
+        if provider.callbacks.is_empty()
+            && provider.focus_fixup_target.is_none()
+            && provider.observer_target.is_none()
+        {
             provider.wake_pending = false;
             provider.handles.clear();
             return;
@@ -270,6 +334,7 @@ impl JsContextHost {
             .provider_mut(owner)
             .map(|provider| {
                 provider.wake_pending = false;
+                provider.observer_target = None;
                 std::mem::take(&mut provider.handles)
             })
             .unwrap_or_default();
@@ -321,6 +386,26 @@ impl JsContextHost {
             }
             invoked = true;
         }
+        dispatch_scope.restore(scope, previous_scope);
+        invoked
+    }
+
+    pub(crate) fn finish_document_animation_frame(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        target: WindowDocumentTaskTarget,
+        owner: WindowExecutionContextOwner,
+    ) -> bool {
+        let Some((document, context)) =
+            self.resolve_current_rendering_update_context(scope, target)
+        else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let dispatch_scope = target.dispatch_scope();
+        let previous_scope = dispatch_scope.enter(scope);
+        let mut invoked = false;
         // A callback can replace its Document or move focus elsewhere. The
         // rendering entry must never clear focus in a replacement Document.
         if self.window_document_owner_is_current_for_dispatch_scope(target.owner(), dispatch_scope)
@@ -336,11 +421,7 @@ impl JsContextHost {
                     }
                 })
         {
-            invoked |= super::super::element::apply_document_focus_fixup(
-                scope,
-                host_ptr,
-                resolved.document_handle,
-            );
+            invoked |= super::super::element::apply_document_focus_fixup(scope, host_ptr, document);
         }
         dispatch_scope.restore(scope, previous_scope);
         invoked

@@ -10,11 +10,13 @@ pub(crate) use callback::ObserverCallbackId;
 pub(crate) use dom_access::callback_binding_count_for_test;
 pub(crate) use dom_access::{
     ObserverCallbackResidence, ObserverStoreAccessToken, activate_performance_observer_callback,
-    active_performance_observer_callbacks, callback_is_current,
-    coalesce_child_list_replacement_records, deactivate_performance_observer_callback,
-    flush_slotchange_microtask, prepare_callback, queue_intersection_checks,
-    queue_mutation_records, register_callback, retire_context_token,
-    retire_execution_context_owner,
+    activate_resize_observer_callback, active_performance_observer_callbacks,
+    active_resize_observer_callbacks, callback_is_current, coalesce_child_list_replacement_records,
+    deactivate_performance_observer_callback, deactivate_resize_observer_callback,
+    deliver_document_intersections, document_has_rendering_observers, flush_slotchange_microtask,
+    prepare_callback, queue_intersection_checks, queue_mutation_records,
+    queue_resize_observer_rendering_updates, queue_style_rendering_update, register_callback,
+    retire_context_token, retire_execution_context_owner, update_document_intersections,
 };
 
 use crate::web_api_interfaces;
@@ -168,8 +170,6 @@ pub(super) struct ObserverStore {
     mutation_delivery_scheduled: bool,
     next_intersection_observer_id: u32,
     intersection_observers: HashMap<u32, IntersectionObserverState>,
-    intersection_check_scheduled: bool,
-    intersection_delivery_scheduled: bool,
     // Geometry facts are derived from the current DOM and shared by every
     // observation in one mutation generation. `queue_mutation_records` owns
     // invalidation, matching the observer controller's update lifecycle.
@@ -331,7 +331,6 @@ struct ObserverMutationPlan {
 #[derive(Clone, Copy)]
 enum IntersectionMutationPlan {
     None,
-    CheckNow,
     ScheduleCheck,
 }
 
@@ -574,18 +573,10 @@ impl ObserverStore {
         // are suppressed when no MutationObserver is registered, that proxy is
         // wrong: an IO-only page would never see threshold deliveries.
         //
-        // Most mutations only need one browser-style async intersection update
-        // before the JS turn ends. Keep synchronous checks for mutations that
-        // connect/disconnect an observed target subtree so remove/reinsert pairs
-        // still report exit/reentry transitions within the same turn, but avoid
-        // re-reading every observed target for each unrelated attribute/text
-        // mutation.
-        let intersection = if !self.intersection_observers.is_empty() {
-            if self.intersection_mutation_needs_sync(dom_host, effects) {
-                IntersectionMutationPlan::CheckNow
-            } else {
-                IntersectionMutationPlan::ScheduleCheck
-            }
+        // Sample once after rendering. Transient remove/reinsert operations
+        // within one script must not manufacture exit/reentry notifications.
+        let intersection = if !self.intersection_observers.is_empty() && effects.did_change() {
+            IntersectionMutationPlan::ScheduleCheck
         } else {
             IntersectionMutationPlan::None
         };
@@ -593,40 +584,6 @@ impl ObserverStore {
             queue_mutation_delivery: queued_any,
             intersection,
         }
-    }
-
-    fn intersection_mutation_needs_sync(
-        &self,
-        dom_host: &DomHost,
-        effects: &DomMutationEffects,
-    ) -> bool {
-        if self.intersection_observers.is_empty() {
-            return false;
-        }
-        effects
-            .tree()
-            .disconnected_roots()
-            .iter()
-            .any(|removed_root| {
-                self.intersection_observers.values().any(|state| {
-                    state
-                        .observed_targets
-                        .iter()
-                        .any(|target| is_ancestor_or_self(dom_host, *removed_root, *target))
-                })
-            })
-            || effects
-                .tree()
-                .connected_roots()
-                .iter()
-                .any(|connected_root| {
-                    self.intersection_observers.values().any(|state| {
-                        state
-                            .observed_targets
-                            .iter()
-                            .any(|target| is_ancestor_or_self(dom_host, *connected_root, *target))
-                    })
-                })
     }
 
     pub(super) fn coalesce_child_list_replacement_records(
@@ -779,9 +736,19 @@ impl ObserverStore {
     fn collect_intersection_deliveries<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
+        owner: crate::native_bridge::WindowExecutionContextOwner,
     ) -> Vec<IntersectionObserverDelivery<'s>> {
         let mut deliveries = Vec::new();
-        for state in self.intersection_observers.values_mut() {
+        let mut states: Vec<_> = self.intersection_observers.iter_mut().collect();
+        states.sort_unstable_by_key(|(id, _)| **id);
+        for (_, state) in states {
+            if state
+                .callback
+                .observer_identity()
+                .is_none_or(|identity| identity.owner() != owner)
+            {
+                continue;
+            }
             if state.queued_entries.is_empty() {
                 continue;
             }
@@ -881,35 +848,46 @@ fn invoke_mutation_deliveries<'s>(
 fn invoke_intersection_deliveries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
+    target: crate::native_bridge::WindowDocumentTaskTarget,
     deliveries: Vec<IntersectionObserverDelivery<'s>>,
 ) {
     for delivery in deliveries {
+        if scope.is_execution_terminating()
+            || !(unsafe { &*host_ptr }).window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            )
+        {
+            break;
+        }
         if !delivery.callback.is_current(unsafe { &*host_ptr }) {
             continue;
         }
         let entries =
             build_intersection_entries_array(scope, host_ptr, &delivery.options, &delivery.entries);
         let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
-        match delivery.callback.invoke(
+        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+        let outcome = delivery.callback.invoke(
             scope,
             host_ptr,
             "IntersectionObserver callback",
             observer_value,
             &[entries.into(), observer_value],
-        ) {
-            WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    "intersectionobserver",
-                    delivery.callback.relevant_identity(),
-                    None,
-                    &report,
-                );
-            }
-            WindowWebIdlCallbackFunctionOutcome::Returned
-            | WindowWebIdlCallbackFunctionOutcome::Retired => {}
+        );
+        if !scope.is_execution_terminating()
+            && let WindowWebIdlCallbackFunctionOutcome::Threw(report) = outcome
+        {
+            report_event_callback_exception(
+                scope,
+                host_ptr,
+                "intersectionobserver",
+                delivery.callback.relevant_identity(),
+                None,
+                &report,
+            );
         }
+        drop(execution_scope);
+        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
 }
 

@@ -677,6 +677,7 @@ fn set_shadow_root_adopted_style_sheets_for_receiver<'s>(
     unsafe { &mut *runtime_ptr }
         .set_shadow_root_adopted_style_sheet_installations(handle, installations);
     sync_css_style_sheet_shadow_root_adopted_owner_tracking(scope, next_array.into(), handle);
+    crate::observer_runtime::queue_style_rendering_update(scope, runtime_ptr);
 }
 
 fn shadow_root_adopted_style_base_url(

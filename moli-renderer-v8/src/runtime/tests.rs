@@ -12354,10 +12354,16 @@ addEventListener("wheel", event => {
     let (observer_installed, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
             expression: r#"
+const initialIntersection = Promise.withResolvers();
+const changedIntersection = Promise.withResolvers();
+globalThis.__lmActionWindowInitialIntersection = initialIntersection.promise;
+globalThis.__lmActionWindowChangedIntersection = changedIntersection.promise;
 globalThis.__lmActionWindowObserver = new IntersectionObserver(entries => {
   const entry = entries.find(candidate => candidate.target.id === "target");
   if (!entry) return;
   __lmActionWindowIoLog.push(entry.isIntersecting);
+  initialIntersection.resolve();
+  if (entry.isIntersecting) changedIntersection.resolve();
 });
 __lmActionWindowObserver.observe(document.getElementById("target"));
 addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once: true });
@@ -12374,8 +12380,8 @@ addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once:
     );
     let (initial_intersection, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: "JSON.stringify(__lmActionWindowIoLog)".to_owned(),
-            await_promise: false,
+            expression: "__lmActionWindowInitialIntersection.then(() => JSON.stringify(__lmActionWindowIoLog))".to_owned(),
+            await_promise: true,
         })
         .await
         .expect("initial intersection state should be observable");
@@ -12407,20 +12413,20 @@ addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once:
 
     let (state, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: r#"JSON.stringify({
+            expression: r#"__lmActionWindowChangedIntersection.then(() => JSON.stringify({
   scrollY,
   wheelLog: __lmActionWindowWheelLog,
   ioLog: __lmActionWindowIoLog
-})"#
-            .to_owned(),
-            await_promise: false,
+}))"#
+                .to_owned(),
+            await_promise: true,
         })
         .await
         .expect("applied action-window state should remain observable");
     assert_eq!(
         renderer_json_value(state),
         Some(serde_json::json!(
-            r#"{"scrollY":100,"wheelLog":["event:100","microtask:100","event:-100","microtask:-100","event:100","microtask:100"],"ioLog":[false]}"#
+            r#"{"scrollY":100,"wheelLog":["event:100","microtask:100","event:-100","microtask:-100","event:100","microtask:100"],"ioLog":[false,true]}"#
         ))
     );
 

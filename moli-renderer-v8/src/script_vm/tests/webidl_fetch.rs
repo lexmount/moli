@@ -7137,9 +7137,9 @@ yield; // Publish this scene before reading its geometry.
     );
 }
 
-#[test]
-fn resize_observer_callback_runs_after_microtask_checkpoint() {
-    let mut vm = new_storage_test_vm("https://resize-observer-delivery.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn resize_observer_callback_runs_during_rendering_after_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://resize-observer-delivery.test/");
 
     let result = vm
         .eval(
@@ -7162,6 +7162,15 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
         .expect("ResizeObserver delivery setup should evaluate");
 
     assert_eq!(result, "scheduled");
+    assert_eq!(
+        vm.eval("__resizeObserverLog.length").unwrap(),
+        "0",
+        "a microtask checkpoint must not deliver resize observations"
+    );
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("rendering update");
     let delivered = vm
         .eval("globalThis.__resizeObserverLog.join('|')")
         .expect("ResizeObserver delivery log should evaluate");

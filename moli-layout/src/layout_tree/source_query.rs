@@ -181,6 +181,30 @@ where
             ))
         };
         Some(LayoutElementMetrics {
+            resize_observer_box: self.boxes.get(box_id.index())?.css_sizing.map(|sizing| {
+                let size = unzoom.size(LayoutSize::new(
+                    geometry.content_box.width,
+                    geometry.content_box.height,
+                ));
+                let offset = unzoom.point(LayoutPoint::new(
+                    geometry.content_box.x - geometry.padding_box.x,
+                    geometry.content_box.y - geometry.padding_box.y,
+                ));
+                super::query::LayoutResizeObserverBox {
+                    content_rect: super::model::LayoutRect::new(
+                        offset.x,
+                        offset.y,
+                        size.width,
+                        size.height,
+                    ),
+                    border_size: unzoom.size(LayoutSize::new(
+                        geometry.border_box.width,
+                        geometry.border_box.height,
+                    )),
+                    horizontal: sizing.horizontal,
+                    effective_zoom: geometry.effective_zoom,
+                }
+            }),
             offset_parent,
             offset_position: unzoom.point(LayoutPoint::new(
                 layout_origin.x - offset_parent_origin.x,
