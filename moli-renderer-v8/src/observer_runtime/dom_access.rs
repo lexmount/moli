@@ -13,7 +13,7 @@ use super::{
     callback::{
         ObserverCallback, ObserverCallbackBinding, ObserverCallbackId, PreparedObserverCallback,
     },
-    intersection, invoke_intersection_deliveries, invoke_mutation_deliveries,
+    intersection, invoke_intersection_delivery, invoke_mutation_deliveries,
     node_is_intersection_root, node_is_intersection_target,
     schedule::{self, ObserverTask},
     target_is_intersection_observable,
@@ -605,7 +605,25 @@ pub(crate) fn deliver_document_intersections(
     owner: WindowExecutionContextOwner,
     target: crate::native_bridge::WindowDocumentTaskTarget,
 ) {
-    let deliveries = ObserverHostAccess::new(host_ptr)
-        .store(|store| store.collect_intersection_deliveries(scope, owner));
-    invoke_intersection_deliveries(scope, host_ptr, target, deliveries);
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let observers = access.store(|store| store.intersection_notification_observers(owner));
+    for id in observers {
+        if scope.is_execution_terminating()
+            || !access.read(|host| {
+                host.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                )
+            })
+        {
+            break;
+        }
+        // Snapshot the notification list, but drain each queue immediately
+        // before its callback. Earlier callbacks and their microtasks can
+        // takeRecords(), cancel targets, or retire an observer's realm.
+        let delivery = access.store(|store| store.take_intersection_delivery(scope, id));
+        if let Some(delivery) = delivery {
+            invoke_intersection_delivery(scope, host_ptr, delivery);
+        }
+    }
 }
