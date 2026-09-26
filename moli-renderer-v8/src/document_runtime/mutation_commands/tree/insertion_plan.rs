@@ -121,18 +121,24 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         options: TreeInsertionPlanOptions,
     ) -> TreeInsertionPlan<'a> {
-        let live_range_plan = if unsafe { &mut *host_ptr }.live_ranges_is_empty() {
-            None
-        } else {
-            match options.live_range_mode {
-                TreeInsertionLiveRangeMode::Insert { reference_child } => {
-                    Some(self.live_range_pre_insert_plan(parent, insertion_roots, reference_child))
-                }
-                TreeInsertionLiveRangeMode::Replace { old_child } => {
-                    self.live_range_replace_plan(parent, insertion_roots, old_child)
-                }
-            }
+        let replaced_child = match options.live_range_mode {
+            TreeInsertionLiveRangeMode::Insert { .. } => None,
+            TreeInsertionLiveRangeMode::Replace { old_child } => Some(old_child),
         };
+        let removed_roots = insertion_roots.iter().copied().chain(replaced_child);
+        let live_range_plan =
+            if !unsafe { &mut *host_ptr }.needs_live_tree_boundary_updates(removed_roots) {
+                None
+            } else {
+                match options.live_range_mode {
+                    TreeInsertionLiveRangeMode::Insert { reference_child } => Some(
+                        self.live_range_pre_insert_plan(parent, insertion_roots, reference_child),
+                    ),
+                    TreeInsertionLiveRangeMode::Replace { old_child } => {
+                        self.live_range_replace_plan(parent, insertion_roots, old_child)
+                    }
+                }
+            };
         let reference_child = options.live_range_mode.reference_child();
         let node_iterator_plan = if unsafe { &*host_ptr }.node_iterators_is_empty() {
             Vec::new()

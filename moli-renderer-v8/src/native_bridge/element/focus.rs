@@ -23,6 +23,8 @@ use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::runtime::RendererDomFocusOutcome;
 use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 
+mod navigation;
+
 struct SequentialFocusEntry {
     tab_index: i32,
     order: usize,
@@ -1201,14 +1203,16 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
     }
     let runtime = unsafe { &*runtime_ptr };
     let active = runtime.active_element_handle();
-    let starting_point =
-        active.or_else(|| runtime.sequential_focus_starting_point(runtime.document_handle()));
+    let starting_point = active
+        .map(crate::native_bridge::SequentialFocusStartingPoint::Element)
+        .or_else(|| runtime.sequential_focus_starting_point(runtime.document_handle()));
     let order = sequential_focus_order(runtime, active);
     if order.is_empty() {
         return;
     }
     let reverse = event_boolean_property(scope, event, "shiftKey");
     let next_handle = starting_point
+        .and_then(|point| point.element())
         .and_then(|active| order.iter().position(|candidate| *candidate == active))
         .map(|index| {
             let next_index = if reverse {
@@ -1220,7 +1224,13 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
         })
         .or_else(|| {
             starting_point
+                .and_then(|point| point.element())
                 .and_then(|active| negative_shadow_scope_tab_target(runtime, active, reverse))
+        })
+        .or_else(|| {
+            starting_point.and_then(|point| {
+                navigation::sequential_target_in_dom_order(runtime, point, &order, reverse)
+            })
         })
         .unwrap_or_else(|| order[if reverse { order.len() - 1 } else { 0 }]);
     update_focus(scope, runtime_ptr, Some(next_handle));
