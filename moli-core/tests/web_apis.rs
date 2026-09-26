@@ -5834,7 +5834,8 @@ async fn rootless_intersection_observer_uses_deep_mock_flow() -> Result<()> {
 }
 
 #[tokio::test]
-async fn intersection_observer_root_scopes_delivery_to_descendants_only() -> Result<()> {
+async fn intersection_observer_root_reports_non_descendant_targets_as_non_intersecting()
+-> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
@@ -5844,18 +5845,20 @@ async fn intersection_observer_root_scopes_delivery_to_descendants_only() -> Res
     browser
         .wait_for_script_truthy(
             &mut page,
-            "globalThis.intersectionObserverRootScopedIds === 'inside'",
+            "globalThis.intersectionObserverRootScopedEntries === 'outside:false,inside:true'",
             Duration::from_secs(2),
         )
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "intersectionObserverRootScopedIds"),
-        Some(&JsValueSnapshot::String("inside".to_owned()))
+        diagnostic_global(&page, "intersectionObserverRootScopedEntries"),
+        Some(&JsValueSnapshot::String(
+            "outside:false,inside:true".to_owned()
+        ))
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverRootScopedCount"),
-        Some(&JsValueSnapshot::Number(1.0))
+        Some(&JsValueSnapshot::Number(2.0))
     );
 
     server.shutdown().await;

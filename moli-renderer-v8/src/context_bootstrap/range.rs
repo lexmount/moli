@@ -7,7 +7,7 @@ mod object;
 mod static_storage;
 mod validation;
 
-pub(super) use arguments::{callback_arg_node_object, webidl_node_arg};
+pub(super) use arguments::webidl_node_arg;
 pub(super) use exceptions::throw_named_dom_exception;
 pub(super) use object::{
     RANGE_WRAPPER_INTERNAL_FIELD_COUNT, current_document_object, initialize_range_object,

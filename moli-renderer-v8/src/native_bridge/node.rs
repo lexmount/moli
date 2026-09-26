@@ -1300,6 +1300,23 @@ pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     Ok((runtime_ptr, handle))
 }
 
+/// Resolve a DOM interface argument using native identity, without consulting
+/// author properties. Only registered native proxies can expose a backing node.
+pub(crate) fn branded_node_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    interface: moli_webapi_declare::WebApiInterfaceDescriptor,
+) -> Option<DomHandle> {
+    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    if !interface.is_instance(scope, object) {
+        return None;
+    }
+    let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+    node_runtime_and_handle_from_object_or_detached(scope, target)
+        .ok()
+        .map(|(_, handle)| handle)
+}
+
 pub(crate) fn current_or_live_delegate_node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,

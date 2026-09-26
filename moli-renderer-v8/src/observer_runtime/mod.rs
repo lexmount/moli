@@ -1187,12 +1187,16 @@ pub(super) fn intersection_observer_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn intersection_observer_observe_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn intersection_observer_observe_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(target) = callback_value_dom_handle(scope, args.get(0)) else {
+    let Some(target) = crate::native_bridge::branded_node_handle(
+        scope,
+        args.get(0),
+        web_api_interfaces::Element::DESCRIPTOR,
+    ) else {
         throw_type_error(
             scope,
             "Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.",
@@ -1213,12 +1217,16 @@ pub(super) fn intersection_observer_observe_callback(
     rv.set_undefined();
 }
 
-pub(super) fn intersection_observer_unobserve_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn intersection_observer_unobserve_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(target) = callback_value_dom_handle(scope, args.get(0)) else {
+    let Some(target) = crate::native_bridge::branded_node_handle(
+        scope,
+        args.get(0),
+        web_api_interfaces::Element::DESCRIPTOR,
+    ) else {
         throw_type_error(
             scope,
             "Failed to execute 'unobserve' on 'IntersectionObserver': parameter 1 is not of type 'Element'.",
@@ -1656,7 +1664,12 @@ fn intersection_observer_root_member<'s>(
     else {
         return Ok(None);
     };
-    let root = callback_value_dom_handle(scope, value).ok_or_else(|| {
+    let root = crate::native_bridge::branded_node_handle(
+        scope,
+        value,
+        web_api_interfaces::Node::DESCRIPTOR,
+    )
+    .ok_or_else(|| {
         webidl::WebIdlError::custom_message(
             "Failed to construct 'IntersectionObserver': root is not a Node.",
         )
@@ -2025,6 +2038,21 @@ fn node_is_intersection_root(dom_host: &DomHost, node: NativeNodeId) -> bool {
 
 fn node_is_intersection_target(dom_host: &DomHost, node: NativeNodeId) -> bool {
     dom_host.node(node).is_some_and(|node| node.is_element())
+}
+
+fn intersection_has_rendering_document(
+    runtime: &JsContextHost,
+    target: NativeNodeId,
+    options: &IntersectionObserverOptions,
+) -> bool {
+    // An explicit root belongs to its own Document even when the target is
+    // windowless or in another Document. For implicit roots, keep the target's
+    // browsing context semantics (IntersectionObserver issue #456).
+    runtime
+        .dom_host()
+        .owner_document_handle(options.root.unwrap_or(target))
+        .and_then(|document| runtime.window_endpoint_for_document(document))
+        .is_some()
 }
 
 fn target_is_intersection_observable(

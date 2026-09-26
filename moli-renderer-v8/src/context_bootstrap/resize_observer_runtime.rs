@@ -315,13 +315,15 @@ fn resize_observer_element_arg<'s>(
     index: i32,
     message: &'static str,
 ) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let object = callback_arg_node_object(scope, args, index)
-        .ok_or_else(|| webidl::WebIdlError::custom_message(message))?;
-    if object_number_property(scope, object, "nodeType") == Some(1.0) {
-        Ok(object)
-    } else {
-        Err(webidl::WebIdlError::custom_message(message))
-    }
+    crate::native_bridge::branded_node_handle(
+        scope,
+        args.get(index),
+        web_api_interfaces::Element::DESCRIPTOR,
+    )
+    .ok_or_else(|| webidl::WebIdlError::custom_message(message))?;
+    // Entries retain the supplied platform object, including native proxies.
+    Ok(v8::Local::<v8::Object>::try_from(args.get(index))
+        .expect("branded Element argument must be an object"))
 }
 
 fn resize_observer_options_arg<'s>(
@@ -386,7 +388,11 @@ fn sample_resize_observations<'s>(
         let Some(target) = observed_record_target(scope, record) else {
             continue;
         };
-        let handle = crate::native_bridge::callback_value_dom_handle(scope, target);
+        let handle = crate::native_bridge::branded_node_handle(
+            scope,
+            target,
+            web_api_interfaces::Element::DESCRIPTOR,
+        );
         pending.push(PendingEntry {
             record: v8::Local::<v8::Object>::try_from(record).ok(),
             target,

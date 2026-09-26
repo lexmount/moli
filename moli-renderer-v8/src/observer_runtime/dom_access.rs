@@ -16,7 +16,6 @@ use super::{
     intersection, invoke_intersection_delivery, invoke_mutation_deliveries,
     node_is_intersection_root, node_is_intersection_target,
     schedule::{self, ObserverTask},
-    target_is_intersection_observable,
 };
 
 /// V8-traced values for one callback plus the exact identity binding that
@@ -476,7 +475,7 @@ pub(super) fn observe_intersection_target(
     }
     let options = access.store(|store| store.intersection_observe_target(scope, observer, target));
     let should_check = options.as_ref().is_some_and(|options| {
-        access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
+        access.read(|host| super::intersection_has_rendering_document(host, target, options))
     });
     if should_check {
         queue_intersection_checks(scope, host_ptr);
