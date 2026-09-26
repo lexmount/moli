@@ -2353,6 +2353,7 @@ mod geometry_point_transform;
 mod headers_list;
 mod history_document_identity;
 mod history_referrer;
+mod history_replace_forward;
 mod http_fixture;
 mod iframe_load_delivery;
 

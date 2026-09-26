@@ -285,48 +285,6 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
-    pub(crate) fn invalidate_published_frame_viewports(
-        &self,
-        frames: impl IntoIterator<Item = DomHandle>,
-    ) {
-        // Realtime source invalidation already makes the screen layout stale.
-        // Preserve the last used viewport for a connected, hidden child until
-        // its next layout publishes a replacement.
-        if self.layout_policy().is_realtime() {
-            return;
-        }
-        let frames = frames.into_iter().collect::<Vec<_>>();
-        if frames.is_empty() {
-            return;
-        }
-        let documents = frames
-            .iter()
-            .filter_map(|frame| {
-                let document = self.dom_host().owner_document_handle(*frame)?;
-                self.top_level_document_for_document(document)
-            })
-            .collect::<std::collections::HashSet<_>>();
-        let changed = {
-            let mut state = self.document_layout_state.borrow_mut();
-            let changed =
-                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
-            if documents.contains(&self.document_handle()) {
-                state.clear_latest_layout();
-            }
-            changed
-        };
-        for document in documents {
-            if let Some(cache) = self.lightweight_popup_layout_cache(document) {
-                cache.borrow_mut().clear();
-            }
-        }
-        if changed {
-            self.style_viewport_generation
-                .set(self.style_viewport_generation.get().saturating_add(1));
-        }
-    }
-
-    #[cfg(debug_assertions)]
     pub(crate) fn style_viewport_generation(&self) -> u64 {
         self.style_viewport_generation.get()
     }

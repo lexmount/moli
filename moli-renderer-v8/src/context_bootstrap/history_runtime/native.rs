@@ -165,7 +165,7 @@ pub(in crate::context_bootstrap) fn find_entry_wrapper<'s>(
     };
     for candidate in candidates {
         if let Some(wrapper) = candidate.to_local(scope)
-            && wrapper.get_creation_context(scope) == Some(context)
+            && super::super::world_wrappers::belongs_to_world(scope, wrapper, context)
         {
             return Some(wrapper);
         }

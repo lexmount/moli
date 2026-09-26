@@ -48,6 +48,7 @@ globalThis.navigationDocumentOpenProbe = async function(kind) {
       state: loadedNav.currentEntry.getState().value
     };
     const key = loadedNav.currentEntry.key;
+    const id = loadedNav.currentEntry.id;
     child.document.open();
     child.document.write('<p>loaded stream</p>');
     child.document.close();
@@ -55,6 +56,7 @@ globalThis.navigationDocumentOpenProbe = async function(kind) {
     const loadedOpen = {
       sameNavigation: child.navigation === loadedNav,
       sameEntryKey: loadedNav.currentEntry.key === key,
+      newPublicId: loadedNav.currentEntry.id !== id && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(loadedNav.currentEntry.id),
       state: loadedNav.currentEntry.getState().value
     };
     return {snapshots, navigated, loadedOpen};
