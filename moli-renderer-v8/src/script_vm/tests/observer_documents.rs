@@ -151,7 +151,7 @@ observer.observe(popupTarget);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn popup_iframe_invalidation_preserves_the_opener_layout() {
+async fn popup_iframe_resize_preserves_the_opener_layout() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm("https://popup-frame-layout.test/");
     vm.eval(
@@ -162,6 +162,8 @@ mainTarget.style.cssText = 'width:80px;height:20px';
 globalThis.popupTarget = popup.document.body.appendChild(popup.document.createElement('div'));
 popupTarget.style.cssText = 'width:40px;height:20px';
 globalThis.frame = popup.document.body.appendChild(popup.document.createElement('iframe'));
+frame.style.border = '0';
+frame.setAttribute('width', '300');
 frame.contentWindow.document.body.innerHTML = '<div style="width:20px;height:10px">child</div>';
 globalThis.observer = new ResizeObserver(() => {});
 observer.observe(mainTarget);
@@ -173,7 +175,15 @@ observer.observe(popupTarget);
         .await
         .unwrap();
     assert_eq!(vm.eval("mainTarget.getBoundingClientRect().width + ':' + popupTarget.getBoundingClientRect().width").unwrap(), "80:40");
+    assert_eq!(
+        vm.eval("frame.getBoundingClientRect().width").unwrap(),
+        "300"
+    );
     vm.eval("frame.setAttribute('width', '200');").unwrap();
+    assert_eq!(
+        vm.eval("frame.getBoundingClientRect().width").unwrap(),
+        "300"
+    );
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
         let global = scope.get_current_context().global(scope);
         let key = v8::String::new(scope, "popupTarget").unwrap();
@@ -188,8 +198,8 @@ observer.observe(popupTarget);
         let document = host.dom_host().owner_document_handle(handle).unwrap();
         assert!(
             host.with_latest_layout_tree_for_document(document, |_| ())
-                .is_none(),
-            "changing iframe width must invalidate its popup snapshot"
+                .is_some(),
+            "changing iframe width must retain the published popup snapshot until rendering"
         );
         assert!(
             host.with_latest_layout_tree_for_document(host.document_handle(), |_| ())
@@ -203,6 +213,10 @@ observer.observe(popupTarget);
         .await
         .unwrap();
     assert_eq!(vm.eval("mainTarget.getBoundingClientRect().width + ':' + popupTarget.getBoundingClientRect().width").unwrap(), "80:40");
+    assert_eq!(
+        vm.eval("frame.getBoundingClientRect().width").unwrap(),
+        "200"
+    );
     vm.eval("frame.remove();").unwrap();
     vm.with_default_context_scope_and_checkpoint_for_test(|_scope, host_ptr| {
         let host = unsafe { &*host_ptr };

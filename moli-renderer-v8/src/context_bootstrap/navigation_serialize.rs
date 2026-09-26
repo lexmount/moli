@@ -1,6 +1,7 @@
 use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
-    history_index, navigation_current_entry, navigation_entry_referrer_policy_value,
+    history_index, navigation_current_entry, navigation_entry_document_id,
+    navigation_entry_referrer_policy_value,
 };
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,

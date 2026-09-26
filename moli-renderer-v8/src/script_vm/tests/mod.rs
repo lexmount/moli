@@ -2292,6 +2292,7 @@ mod geometry_point_conversion_order;
 mod headers_list;
 mod history_document_identity;
 mod history_referrer;
+mod history_replace_forward;
 mod http_fixture;
 mod iframe_load_delivery;
 
@@ -2409,7 +2410,6 @@ mod idb_object_store_native_receivers;
 
 mod webidl_receivers;
 mod webidl_trusted_types;
-mod history_replace_forward;
 mod websocket;
 
 
