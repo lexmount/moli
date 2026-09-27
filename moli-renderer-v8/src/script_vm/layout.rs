@@ -220,7 +220,7 @@ impl ScriptVm {
         )
     }
 
-    fn with_fresh_document_layout_pass<T>(
+    pub(super) fn with_fresh_document_layout_pass<T>(
         &mut self,
         document: DomHandle,
         request: moli_layout::LayoutPassRequest,
