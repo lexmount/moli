@@ -1,7 +1,7 @@
 use encoding_rs::{CoderResult, Decoder, Encoding};
 use moli_charset_parser::{HtmlMetaCharsetParser, HtmlMetaCharsetScanResult};
 
-use crate::{encoding_for_label, encoding_from_response_headers};
+use crate::encoding_for_label;
 
 const DEFAULT_HTML_DOCUMENT_ENCODING: &str = "windows-1252";
 const UTF16LE_XML_PREFIX: &[u8; 6] = b"<\0?\0x\0";
@@ -134,7 +134,11 @@ impl HtmlDocumentStreamingDecoder {
         declaration_policy: DocumentDeclarationPolicy,
     ) -> Self {
         Self {
-            transport_encoding: encoding_from_response_headers(headers),
+            // Select the charset from the same extracted MIME record used to
+            // classify the document, including charset inheritance/reset
+            // across repeated Content-Type values.
+            transport_encoding: moli_web_mime::extract_response_mime_type(headers)
+                .and_then(|mime| mime.parameter("charset").and_then(encoding_for_label)),
             fallback_encoding: fallback_encoding
                 .and_then(encoding_for_label)
                 .unwrap_or(encoding_rs::WINDOWS_1252),
