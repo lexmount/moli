@@ -326,7 +326,6 @@ pub(crate) fn queue_related_popup_navigation<'s>(
     navigate_top_level_cross_document_location(
         scope,
         window,
-        None,
         current_url.as_str(),
         target,
         kind,
@@ -1023,7 +1022,6 @@ fn navigate_location_object_with_options<'s>(
     navigate_top_level_cross_document_location(
         scope,
         owner,
-        Some(location),
         &current_href,
         resolved,
         kind,
@@ -1044,7 +1042,6 @@ struct LocationNavigateEvent<'s> {
 fn navigate_top_level_cross_document_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-    location: Option<v8::Local<'s, v8::Object>>,
     current_href: &str,
     resolved: url::Url,
     kind: LocationNavigationKind,
@@ -1135,16 +1132,16 @@ fn navigate_top_level_cross_document_location<'s>(
         return;
     }
 
-    if !browser_owned_hyperlink
-        && let Some(location) = location
-        && resolved.scheme() != "javascript"
-    {
-        sync_location_object(scope, location, resolved.as_str());
-    }
-
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
+    if resolved.scheme() != "javascript"
+        && !unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
+    {
+        return;
+    }
+    // Cross-document requests leave the source Location and history intact
+    // until a response commits. This also preserves them for 204s and downloads.
     let entry_seed = if browser_owned_hyperlink {
         None
     } else {

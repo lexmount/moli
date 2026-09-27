@@ -1,5 +1,7 @@
 use super::*;
 
+mod main_beforeunload;
+
 #[test]
 fn link_navigation_replaces_the_initial_top_level_document() {
     let mut vm = new_parsed_test_vm(

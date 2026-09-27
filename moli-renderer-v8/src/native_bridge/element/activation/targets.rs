@@ -50,6 +50,7 @@ fn navigate_target_window_location(
 }
 
 pub(super) fn queue_top_level_location_navigation(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     resolved_url: &str,
     history: NavigationHistoryMutation,
@@ -60,6 +61,9 @@ pub(super) fn queue_top_level_location_navigation(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let about_document_state = runtime.capture_about_document_state(source, &url, None);
+    if url.scheme() != "javascript" && !runtime.dispatch_main_document_tree_beforeunload(scope) {
+        return false;
+    }
     runtime.record_pending_location_navigation(url, None, about_document_state);
     runtime.set_pending_location_navigation_history(history);
     true
