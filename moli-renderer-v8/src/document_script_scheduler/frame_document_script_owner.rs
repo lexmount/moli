@@ -225,6 +225,7 @@ mod tests {
             source_result: Ok("globalThis.__dynamic = true;".to_owned()),
             script_url: script_url.clone(),
             script_base_url: script_url.clone(),
+            script_fetch_metadata: Default::default(),
         };
         let job = FrameScriptJob {
             frame_id: FrameId("dynamic-frame".to_owned()),
@@ -235,8 +236,7 @@ mod tests {
             source: FrameScriptSource::SourceText("globalThis.__dynamic = true;".to_owned()),
             script_url: script_url.clone(),
             base_url: script_url,
-            script_nonce: None,
-            script_integrity: None,
+            script_fetch_metadata: None,
             credentials_mode: RequestCredentialsMode::SameOrigin,
             referrer_policy: None,
         };

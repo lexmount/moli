@@ -18,8 +18,8 @@ use crate::{
     page_task_queue::RendererPageTimerSelection,
     script_provenance::CompiledStringProvenance,
     util::{
-        context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_nonce,
-        get_private_value, script_nonce_from_host_defined_options,
+        context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_fetch_metadata,
+        get_private_value, script_fetch_metadata_from_host_defined_options,
     },
 };
 use moli_time::{
@@ -46,7 +46,20 @@ struct ScheduledTimerSource {
     source: String,
     provenance: CompiledStringProvenance,
     // A snapshot of the initiating script, not the eventual timer caller/realm.
-    script_nonce: Option<String>,
+    script_fetch_metadata: crate::module_runtime::ModuleFetchMetadata,
+}
+
+fn timer_source_fetch_metadata(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> crate::module_runtime::ModuleFetchMetadata {
+    let mut metadata = scope
+        .get_current_host_defined_options()
+        .and_then(|options| script_fetch_metadata_from_host_defined_options(scope, options))
+        .unwrap_or_default();
+    // HTML timer initialization inherits the initiating script's credentials
+    // and nonce, but the compiled timer source is never parser-inserted.
+    metadata.parser_inserted = false;
+    metadata
 }
 
 struct ScheduledTimerFunction {
@@ -64,7 +77,7 @@ enum ScheduledTimerCallback {
     FontLoading(ScheduledTimerFunction),
     Networking(ScheduledTimerFunction),
     WindowWebIdl(ScheduledWindowWebIdlCallback),
-    Source(ScheduledTimerSource),
+    Source(Box<ScheduledTimerSource>),
     AnimationFrameWake {
         context: v8::Global<v8::Context>,
         owner: WindowExecutionContextOwner,
@@ -524,9 +537,7 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
-        let script_nonce = scope
-            .get_current_host_defined_options()
-            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
+        let script_fetch_metadata = timer_source_fetch_metadata(scope);
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -547,14 +558,14 @@ impl HostTimeoutScheduler {
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
-                    callback: ScheduledTimerCallback::Source(ScheduledTimerSource {
+                    callback: ScheduledTimerCallback::Source(Box::new(ScheduledTimerSource {
                         context: v8::Global::new(scope, context),
                         realm_token,
                         use_target_context,
                         source,
                         provenance,
-                        script_nonce,
-                    }),
+                        script_fetch_metadata,
+                    })),
                     owner,
                     is_interval: false,
                     extra_args,
@@ -576,9 +587,7 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
-        let script_nonce = scope
-            .get_current_host_defined_options()
-            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
+        let script_fetch_metadata = timer_source_fetch_metadata(scope);
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -599,14 +608,14 @@ impl HostTimeoutScheduler {
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
-                    callback: ScheduledTimerCallback::Source(ScheduledTimerSource {
+                    callback: ScheduledTimerCallback::Source(Box::new(ScheduledTimerSource {
                         context: v8::Global::new(scope, context),
                         realm_token,
                         use_target_context,
                         source,
                         provenance,
-                        script_nonce,
-                    }),
+                        script_fetch_metadata,
+                    })),
                     owner,
                     is_interval: true,
                     extra_args,
@@ -1400,12 +1409,12 @@ fn run_window_timer_source(
             exception: None,
         }));
     };
-    let origin = create_script_origin_with_base_url_and_nonce(
+    let origin = create_script_origin_with_base_url_and_fetch_metadata(
         &mut scope,
         source.provenance.source_url().as_str(),
         0,
         Some(source.provenance.module_base_url()),
-        source.script_nonce.as_deref(),
+        &source.script_fetch_metadata,
     );
     let Some(script) = v8::Script::compile(&scope, source_value, Some(&origin)) else {
         let exception = scope.exception();

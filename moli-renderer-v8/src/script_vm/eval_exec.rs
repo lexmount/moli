@@ -17,7 +17,7 @@ use crate::network::ResourceRequestClient;
 use crate::script_provenance::CompiledStringProvenance;
 use crate::style_engine::StyleInvalidationTurnExitBoundary;
 use crate::util::{
-    context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_nonce,
+    context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_fetch_metadata,
     script_base_url_continuation_data, v8_string,
 };
 use crate::v8_execution_watchdog::{
@@ -71,7 +71,7 @@ struct MainFrameScriptJob<'a> {
     source: &'a str,
     provenance: Option<CompiledStringProvenance>,
     line_offset: i32,
-    script_nonce: Option<&'a str>,
+    script_fetch_metadata: Option<&'a crate::planning::ScriptFetchMetadata>,
     drain_microtasks: bool,
 }
 
@@ -164,7 +164,7 @@ pub(crate) fn execute_source_text_on_current_stack(
     script_url: Option<&Url>,
     script_base_url: Option<&Url>,
     line_offset: i32,
-    script_nonce: Option<&str>,
+    script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
     drain_microtasks: bool,
 ) -> Result<()> {
     let provenance = script_url.cloned().map(|source_url| {
@@ -178,7 +178,7 @@ pub(crate) fn execute_source_text_on_current_stack(
         source,
         provenance.as_ref(),
         line_offset,
-        script_nonce,
+        script_fetch_metadata,
         drain_microtasks,
         UncaughtScriptReportTarget::CurrentWindow,
         SourceTextScriptCompletionMode::Ignore,
@@ -193,7 +193,7 @@ fn execute_source_text_on_current_stack_with_completion(
     source: &str,
     provenance: Option<&CompiledStringProvenance>,
     line_offset: i32,
-    script_nonce: Option<&str>,
+    script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
     drain_microtasks: bool,
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
@@ -204,7 +204,7 @@ fn execute_source_text_on_current_stack_with_completion(
         source,
         provenance,
         line_offset,
-        script_nonce,
+        script_fetch_metadata,
         report_target,
         completion_mode,
     );
@@ -232,7 +232,7 @@ fn run_source_text_on_current_stack_with_completion(
     source: &str,
     provenance: Option<&CompiledStringProvenance>,
     line_offset: i32,
-    script_nonce: Option<&str>,
+    script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
 ) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
@@ -245,13 +245,18 @@ fn run_source_text_on_current_stack_with_completion(
     }
     let source =
         v8_string(&scope, source).ok_or_else(|| anyhow!("failed to allocate v8 source string"))?;
+    let import_metadata = script_fetch_metadata
+        .map(
+            crate::module_runtime::ModuleFetchMetadata::from_dynamic_import_referrer_fetch_metadata,
+        )
+        .unwrap_or_default();
     let origin = provenance.map(|provenance| {
-        create_script_origin_with_base_url_and_nonce(
+        create_script_origin_with_base_url_and_fetch_metadata(
             &mut scope,
             provenance.source_url().as_str(),
             line_offset,
             Some(provenance.module_base_url()),
-            script_nonce,
+            &import_metadata,
         )
     });
     let script = v8::Script::compile(&scope, source, origin.as_ref()).ok_or_else(|| {
@@ -373,14 +378,14 @@ impl ScriptVm {
         source: &str,
         script_url: Option<&Url>,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         drain_microtasks: bool,
     ) -> PendingScriptTurn<Result<()>> {
         let job = MainFrameScriptJob {
             source,
             provenance: script_url.cloned().map(CompiledStringProvenance::at_url),
             line_offset,
-            script_nonce,
+            script_fetch_metadata,
             drain_microtasks,
         };
         self.execute_main_frame_script_job_without_turn_drain(job)
@@ -403,7 +408,7 @@ impl ScriptVm {
             job.source,
             job.provenance,
             job.line_offset,
-            job.script_nonce,
+            job.script_fetch_metadata,
             job.drain_microtasks,
             UncaughtScriptReportTarget::LogOnly,
         )
@@ -414,14 +419,14 @@ impl ScriptVm {
         source: &str,
         provenance: &CompiledStringProvenance,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         drain_microtasks: bool,
     ) -> std::result::Result<(), RawScriptExecutionError> {
         self.execute_main_frame_script_job_without_turn_drain(MainFrameScriptJob {
             source,
             provenance: Some(provenance.clone()),
             line_offset,
-            script_nonce,
+            script_fetch_metadata,
             drain_microtasks,
         })
         .into_inner_for_enclosing_script_turn()
@@ -463,7 +468,7 @@ impl ScriptVm {
         source: &str,
         provenance: Option<CompiledStringProvenance>,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         drain_microtasks: bool,
         report_target: UncaughtScriptReportTarget,
     ) -> PendingScriptTurn<RawScriptExecutionResult<()>> {
@@ -472,7 +477,7 @@ impl ScriptVm {
             source,
             provenance,
             line_offset,
-            script_nonce,
+            script_fetch_metadata,
             drain_microtasks,
             report_target,
             SourceTextScriptCompletionMode::Ignore,
@@ -487,7 +492,7 @@ impl ScriptVm {
         script_url: Option<&Url>,
         script_base_url: Option<&Url>,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         drain_microtasks: bool,
         sync_child_records: bool,
         completion_mode: SourceTextScriptCompletionMode,
@@ -504,7 +509,7 @@ impl ScriptVm {
                 source,
                 provenance,
                 line_offset,
-                script_nonce,
+                script_fetch_metadata,
                 drain_microtasks,
                 UncaughtScriptReportTarget::CurrentWindow,
                 completion_mode,
@@ -533,7 +538,7 @@ impl ScriptVm {
         script_url: Option<&Url>,
         script_base_url: Option<&Url>,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         completion_mode: SourceTextScriptCompletionMode,
         clean_up_classic_script: bool,
     ) -> Result<SourceTextScriptCompletion> {
@@ -548,7 +553,7 @@ impl ScriptVm {
             source,
             provenance,
             line_offset,
-            script_nonce,
+            script_fetch_metadata,
             clean_up_classic_script,
             UncaughtScriptReportTarget::CurrentWindow,
             completion_mode,
@@ -563,13 +568,13 @@ impl ScriptVm {
         source: &str,
         provenance: Option<CompiledStringProvenance>,
         line_offset: i32,
-        script_nonce: Option<&str>,
+        script_fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
         drain_microtasks: bool,
         report_target: UncaughtScriptReportTarget,
         completion_mode: SourceTextScriptCompletionMode,
     ) -> PendingScriptTurn<RawScriptExecutionResult<SourceTextScriptCompletion>> {
         let source = source.to_owned();
-        let script_nonce = script_nonce.map(str::to_owned);
+        let script_fetch_metadata = script_fetch_metadata.cloned();
         PendingScriptTurn::new(
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut::<
@@ -584,7 +589,7 @@ impl ScriptVm {
                         &source,
                         provenance.as_ref(),
                         line_offset,
-                        script_nonce.as_deref(),
+                        script_fetch_metadata.as_ref(),
                         drain_microtasks,
                         report_target,
                         completion_mode,

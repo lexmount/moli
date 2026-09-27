@@ -1465,8 +1465,7 @@ pub(crate) struct FrameScriptJob {
     pub(crate) source: FrameScriptSource,
     pub(crate) script_url: Url,
     pub(crate) base_url: Url,
-    pub(crate) script_nonce: Option<String>,
-    pub(crate) script_integrity: Option<String>,
+    pub(crate) script_fetch_metadata: Option<crate::planning::ScriptFetchMetadata>,
     #[cfg(test)]
     pub(crate) credentials_mode: RequestCredentialsMode,
     pub(crate) referrer_policy: Option<String>,
