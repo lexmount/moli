@@ -480,6 +480,99 @@ fn plain_text_document_ignores_literal_encoding_declarations() {
 }
 
 #[test]
+fn document_charset_uses_extracted_mime_across_fields_and_streaming_splits() {
+    let cases: &[(&[&str], &Encoding, &str)] = &[
+        (
+            &["text/plain;charset=gbk", "text/html"],
+            encoding_rs::UTF_8,
+            "雪",
+        ),
+        (
+            &["text/html;charset=gbk", "text/html"],
+            encoding_rs::GBK,
+            "家居",
+        ),
+        (
+            &["text/html;charset=gbk", "text/html;charset=windows-1254"],
+            encoding_rs::WINDOWS_1254,
+            "Ğ",
+        ),
+        (
+            &[
+                "text/html;charset=gbk",
+                "text/html;charset=utf-8",
+                "text/html",
+            ],
+            encoding_rs::GBK,
+            "家居",
+        ),
+        (
+            &["text/html;charset=gbk", "text/plain", "text/html"],
+            encoding_rs::UTF_8,
+            "雪",
+        ),
+        (
+            &[
+                "text/html;charset=gbk",
+                "invalid",
+                "*/*;charset=utf-8",
+                "",
+                "text/html",
+            ],
+            encoding_rs::GBK,
+            "家居",
+        ),
+        (
+            &["text/html;charset=gbk", "text/html;charset=unknown"],
+            encoding_rs::UTF_8,
+            "雪",
+        ),
+        (
+            &["text/html;charset=gbk", "text/html;charset=\"\""],
+            encoding_rs::UTF_8,
+            "雪",
+        ),
+        (
+            &["text/html;charset=gbk", r#"text/html;x=",text/plain"#],
+            encoding_rs::GBK,
+            "家居",
+        ),
+        (
+            &[r#"text/html;x=""#, "text/plain;charset=gbk"],
+            encoding_rs::UTF_8,
+            "雪",
+        ),
+    ];
+    for (values, expected_encoding, text) in cases {
+        let source = format!("<b>{text}</b>");
+        let (bytes, _, errors) = expected_encoding.encode(&source);
+        assert!(!errors);
+        for fields in [values.to_vec(), vec![&values.join(",")]] {
+            let headers: Vec<_> = fields
+                .iter()
+                .map(|value| ("cOnTeNt-TyPe".to_owned(), value.as_bytes().to_vec()))
+                .collect();
+            assert_eq!(
+                decode_html_document_with_fallback(&bytes, &headers, Some("UTF-8")),
+                (source.clone(), expected_encoding.name()),
+                "{fields:?}"
+            );
+            for split in 0..=bytes.len() {
+                let mut decoder =
+                    HtmlDocumentStreamingDecoder::new_with_fallback(&headers, Some("UTF-8"));
+                let mut decoded = decoder.push(&bytes[..split]).concat();
+                decoded.push_str(&decoder.push(&bytes[split..]).concat());
+                if let Some(tail) = decoder.finish() {
+                    decoded.push_str(&tail);
+                }
+                assert_eq!(decoded, source, "{fields:?}, split={split}");
+                assert_eq!(decoder.document_encoding_name(), expected_encoding.name());
+            }
+        }
+    }
+}
+
+#[test]
 fn content_type_charset_is_selected() {
     let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
