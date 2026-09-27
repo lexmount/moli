@@ -237,6 +237,7 @@ enum PendingPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::PendingBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::PendingSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::PendingChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -304,6 +305,7 @@ enum CompletedPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::CompletedBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::CompletedSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::CompletedChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -345,6 +347,7 @@ impl CompletedPageCommandKind {
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
+            | Self::BeforeUnloadNavigation(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::StopLoading
             | Self::Crash
@@ -456,6 +459,9 @@ impl PendingPageCommandDispatch {
             },
             PendingPageCommandKind::Navigate(pending) => {
                 CompletedPageCommandKind::Navigate(Box::new(pending.wait().await))
+            }
+            PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                CompletedPageCommandKind::BeforeUnloadNavigation(Box::new(pending.wait().await))
             }
             PendingPageCommandKind::TraverseSameDocumentHistory(pending) => {
                 CompletedPageCommandKind::TraverseSameDocumentHistory(Box::new(
@@ -1727,7 +1733,7 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
         _ => (
             Err(DevToolsError::new(
                 DevToolsErrorKind::Unsupported,
-                "UnsupportedDevToolsCommand",
+                "UnsupportedAutomationCommand",
             )),
             Vec::new(),
             None,
@@ -1933,7 +1939,7 @@ fn start_devtools_page_command(
         }
         _ => PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
-            "UnsupportedDevToolsCommand",
+            "UnsupportedAutomationCommand",
         )),
     }
 }
@@ -2393,6 +2399,14 @@ pub(crate) async fn complete_pending_page_command(
         }
         CompletedPageCommandKind::Navigate(completed) => {
             return navigation::complete_pending_navigate_load_command(
+                conn,
+                *completed,
+                command_context,
+            )
+            .await;
+        }
+        CompletedPageCommandKind::BeforeUnloadNavigation(completed) => {
+            return navigation::complete_pending_beforeunload_navigation_command(
                 conn,
                 *completed,
                 command_context,

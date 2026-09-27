@@ -518,6 +518,12 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn check_main_document_beforeunload(&mut self) -> anyhow::Result<bool> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            Ok(unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope))
+        })
+    }
+
     pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {
         self.with_default_context_scope(|scope, host_ptr| {
             JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
