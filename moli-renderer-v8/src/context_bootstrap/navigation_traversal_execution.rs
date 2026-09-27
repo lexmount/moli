@@ -2,8 +2,7 @@ use super::history_runtime::results::reject_pending_navigation_results;
 use super::history_runtime::{history_traversal_target_window, route_history_traversal_task};
 use super::navigation_entry::history_entries;
 use super::navigation_events::{
-    NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
-    dispatch_navigation_traverse_event_with_outcome,
+    NavigationDispatchOutcome, dispatch_navigation_traverse_event_with_outcome,
 };
 use super::navigation_result::{
     cancel_active_cross_document_navigation, navigation_dom_exception, navigation_pending_result,
@@ -291,8 +290,9 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
         dispatch_scope
     {
         host.dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
-    } else {
-        dispatch_beforeunload_for_runtime_owner(scope, owner);
+    } else if !host.dispatch_main_document_tree_beforeunload(scope) {
+        reject_cross_document_traversal(scope, &traversal);
+        return false;
     }
     if !is_current(scope, host) {
         reject_cross_document_traversal(scope, &traversal);

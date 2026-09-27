@@ -3,7 +3,6 @@ use super::location_runtime::location_href_slot;
 use super::navigation_entry::{
     history_index, navigation_current_entry, navigation_current_entry_index,
 };
-use super::navigation_events::dispatch_beforeunload_for_runtime_owner;
 use super::navigation_result::{
     navigation_cross_document_pending_result, navigation_pending_result,
 };
@@ -70,10 +69,28 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
             mutation,
         );
         super::session_history::capture_for_navigation(scope, owner, &mut entry_seed);
-        dispatch_beforeunload_for_runtime_owner(scope, owner);
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return v8::undefined(scope).into();
         };
+        if !unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope) {
+            let error = super::navigation_result::navigation_dom_exception(
+                scope,
+                "Navigation was canceled",
+                "AbortError",
+            );
+            if let Some((navigation, signal)) = navigation_signal {
+                if let Some(signal) = signal {
+                    crate::native_bridge::abort::abort_signal(scope, signal, error);
+                }
+                super::navigation_lifecycle::finish_navigation_error_events(
+                    scope,
+                    navigation,
+                    error,
+                    current_href.as_deref().unwrap_or("about:blank"),
+                );
+            }
+            return super::navigation_result::navigation_rejected_value_result(scope, error).into();
+        }
         unsafe { &mut *host_ptr }.record_pending_location_navigation(
             next_url.clone(),
             Some(entry_seed),
