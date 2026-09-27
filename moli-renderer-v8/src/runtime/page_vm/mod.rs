@@ -247,8 +247,8 @@ pub(crate) use page_resource_completion::{
     AuthorizedCurrentMainParserModuleGraphFetchCompletion,
     AuthorizedCurrentMainRuntimeModuleGraphFetchCompletion,
     AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
-    CurrentChildDocumentLoadApplication,
+    AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModuleGraphFetchCompletion,
+    AuthorizedLiveMainModulepreloadFetchCompletion, CurrentChildDocumentLoadApplication,
 };
 pub(crate) use page_script_preparation_error::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use page_service_worker_client_message::AuthorizedCurrentPageServiceWorkerClientMessage;

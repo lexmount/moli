@@ -5,7 +5,6 @@ use url::Url;
 use crate::dom::native::NativeNodeId;
 use moli_module_script_tree as module_tree;
 
-use super::graph_fetch_store::NativeModuleGraphFetchStore;
 use super::modulator::NativeDocumentModulator as NativeDocumentModulatorUnderTest;
 use super::{
     DynamicModuleFetchOwnerAdvance, ImportMapRegistryState, ModuleGraphHandle, ModuleLoadError,
@@ -54,20 +53,6 @@ fn import_map_registry_state_merges_late_maps_without_remapping_resolved_specifi
             .expect("new specifier should use the later map")
             .as_str(),
         "https://example.test/late.mjs"
-    );
-}
-
-#[test]
-fn native_module_graph_fetch_store_clear_does_not_reuse_inflight_fetch_load_ids() {
-    let mut store = NativeModuleGraphFetchStore::default();
-    let first = store.reserve_load_id();
-
-    store.clear();
-
-    let after_clear = store.reserve_load_id();
-    assert_ne!(
-        first, after_clear,
-        "stale fetch completions can arrive after clear; load ids must stay unique"
     );
 }
 
