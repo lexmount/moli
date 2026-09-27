@@ -1014,8 +1014,6 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("redirected response should materialize");
 }
 
-
-
 #[test]
 fn materialize_response_object_rejects_locked_response_body() {
     let mut vm = new_storage_test_vm("https://response-materialize-locked.test/");
