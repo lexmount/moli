@@ -925,6 +925,7 @@ mod tests {
     fn prepared_script() -> PreparedScript {
         let url = Url::parse("https://main-runtime.test/async.js").expect("script URL");
         PreparedScript {
+            document_referrer_policy: None,
             position: 1,
             node_id: crate::dom::NodeId::new(1),
             kind: ScriptKind::Classic,

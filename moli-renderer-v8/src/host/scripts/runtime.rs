@@ -36,6 +36,11 @@ pub(crate) struct RuntimeScriptStartPlan {
 }
 
 impl RuntimeScriptStartPlan {
+    pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
+        self.prepared.preparation.document_referrer_policy = policy;
+        self
+    }
+
     pub(crate) fn requires_runtime_admission(&self) -> bool {
         matches!(
             self.prepared.decision,

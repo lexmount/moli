@@ -117,6 +117,7 @@ pub(crate) struct PreparedConnectedStyleLoad {
     csp_blocked: bool,
     remember_before_initial_scan: bool,
     event_plan: ConnectedStyleLoadEventPlan,
+    document_referrer_policy: Option<String>,
 }
 
 #[derive(Debug)]
@@ -181,6 +182,7 @@ impl PreparedConnectedStyleLoad {
             csp_blocked,
             remember_before_initial_scan,
             event_plan,
+            document_referrer_policy: None,
         }
     }
 
@@ -299,6 +301,7 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         link: DomHandle,
         check: DocumentContentSecurityPolicyCheck,
+        document_referrer_policy: String,
     ) {
         // Ineligible preload hints never enter Fetch, so they must not emit
         // CSP violations or link errors either.
@@ -306,7 +309,9 @@ impl DocumentRuntime {
             return;
         }
         self.apply_preload_link_csp_check(scope, host_ptr, link, check);
-        for prepared in self.prepare_connected_style_load_handles(&[link], true) {
+        for mut prepared in self.prepare_connected_style_load_handles(&[link], true) {
+            // Realm materialization can finish after subsequent parser tokens.
+            prepared.document_referrer_policy = Some(document_referrer_policy.clone());
             let Some(admission) = unsafe { &mut *host_ptr }
                 .commit_connected_style_load_event_plan(prepared.event_plan())
             else {
@@ -555,7 +560,13 @@ impl DocumentRuntime {
             return ConnectedStyleLoadPrimeResult::default();
         }
         let inline_source = inline_source.or_else(|| self.inline_style_source_for_test(handle));
-        self.enqueue_connected_style_load(handle, inline_source, host_ptr, Some(event_admission))
+        self.enqueue_connected_style_load(
+            handle,
+            inline_source,
+            host_ptr,
+            Some(event_admission),
+            prepared.document_referrer_policy,
+        )
     }
 
     #[cfg(test)]
@@ -789,14 +800,26 @@ impl DocumentRuntime {
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
         host_ptr: *mut JsContextHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
+        document_referrer_policy: Option<String>,
     ) -> ConnectedStyleLoadPrimeResult {
         if self.current_document_resource_loader().is_some()
             && !self.parser_created_style_import_waits_for_blocking_discovery(handle)
         {
-            self.prime_connected_style_load_handle(handle, inline_source, host_ptr, event_admission)
+            self.prime_connected_style_load_handle(
+                handle,
+                inline_source,
+                host_ptr,
+                event_admission,
+                document_referrer_policy,
+            )
         } else {
             self.stylesheet_lifecycle.pending_connected_loads.push_back(
-                QueuedConnectedStyleLoad::new(handle, inline_source, event_admission),
+                QueuedConnectedStyleLoad::new(
+                    handle,
+                    inline_source,
+                    event_admission,
+                    document_referrer_policy,
+                ),
             );
             ConnectedStyleLoadPrimeResult::default()
         }
@@ -854,6 +877,7 @@ impl DocumentRuntime {
                 queued.inline_source().cloned(),
                 host_ptr,
                 queued.event_admission(),
+                queued.document_referrer_policy().map(str::to_owned),
             ));
         }
         result
@@ -889,6 +913,7 @@ impl DocumentRuntime {
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
         host_ptr: *mut JsContextHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
+        document_referrer_policy: Option<String>,
     ) -> ConnectedStyleLoadPrimeResult {
         let mut result = ConnectedStyleLoadPrimeResult::default();
         if !self.dom_host.is_connected(handle) {
@@ -1169,7 +1194,7 @@ impl DocumentRuntime {
                 self.invalidate_stylesheet_owner_operations(handle);
                 return result;
             }
-            let fetch_options = element
+            let mut fetch_options = element
                 .map(|element| {
                     preload_like_link_readiness_fetch_options(
                         element,
@@ -1182,12 +1207,25 @@ impl DocumentRuntime {
                         resource_type,
                     ),
                     script_fetch_metadata: None,
+                    document_referrer_policy: None,
                     request_mode: moli_fetch::RequestMode::Cors,
                     credentials_mode: RequestCredentialsMode::Include,
                     fetch_priority_hint: None,
                     link_preload: false,
                     link_fetch_options: StylesheetFetchOptions::default(),
                 });
+            if fetch_options.script_fetch_metadata.is_some() {
+                fetch_options.document_referrer_policy = document_referrer_policy.or_else(|| {
+                    if host_ptr.is_null() {
+                        return self.current_document_referrer_policy();
+                    }
+                    let document = self.dom_host.owner_document_handle(handle)?;
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        unsafe { &*host_ptr },
+                        document,
+                    )
+                });
+            }
             let parameters = ConnectedLoadParameters::PreloadLikeLink {
                 url: url.clone(),
                 options: Arc::new(fetch_options.clone()),
@@ -2080,6 +2118,7 @@ impl DocumentRuntime {
                 handle,
                 None,
                 load_event_binding.map(ConnectedStyleLoadEventAdmission::LoadDelaying),
+                None,
             ));
     }
 }
@@ -2395,6 +2434,7 @@ fn preload_like_link_readiness_fetch_options(
         resource_type,
         request_resource_type,
         script_fetch_metadata,
+        document_referrer_policy: None,
         request_mode,
         credentials_mode,
         fetch_priority_hint,
@@ -2536,7 +2576,7 @@ fn connected_link_readiness_request(
         request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
             cross_origin: metadata.cross_origin.clone(),
             referrer_policy: metadata.referrer_policy.clone(),
-            document_referrer_policy: None,
+            document_referrer_policy: options.document_referrer_policy.clone(),
             charset: metadata.charset.clone(),
             integrity: metadata.integrity.clone(),
             nonce: metadata.nonce.clone(),
@@ -4050,7 +4090,7 @@ mod tests {
         let loader = ResourceRequestClient::new(&FetchConfig::default())?;
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None);
+        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None, None);
         let first = runtime
             .active_stylesheet_link_client_for_test(link)
             .expect("first style preload client");
@@ -4061,7 +4101,7 @@ mod tests {
                 .dom_host
                 .set_attribute(link, "crossorigin", "use-credentials")
         );
-        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None);
+        runtime.prime_connected_style_load_handle(link, None, std::ptr::null_mut(), None, None);
         let second = runtime
             .active_stylesheet_link_client_for_test(link)
             .expect("reprocessed style preload client");
@@ -5360,6 +5400,7 @@ mod tests {
             document_url,
             script_url,
             ConnectedLinkReadinessFetchOptions {
+                document_referrer_policy: None,
                 resource_type: SubresourceResourceType::Script,
                 request_resource_type: Some(RequestResourceType::Script),
                 script_fetch_metadata: Some(metadata),

@@ -653,6 +653,7 @@ async fn child_module_producer_boundaries_require_exact_task_owner() {
     );
 
     let pending_script = crate::planning::PreparedScript {
+        document_referrer_policy: None,
         position: 1,
         node_id: crate::dom::NodeId::new(1),
         kind: crate::types::ScriptKind::Module,
@@ -829,6 +830,7 @@ globalThis.__childParserModuleEvalValue = 144;"#
         .restore_document_modulator(task_owner, owner_realm_id, document_modulator);
     vm.push_child_module_terminal_batch_to_frame_lane(tasks);
     let script = crate::planning::PreparedScript {
+        document_referrer_policy: None,
         position: 1,
         node_id: crate::dom::NodeId::new(1),
         kind: crate::types::ScriptKind::Module,
@@ -1272,6 +1274,7 @@ parent.__childParserModuleTlaEvents.push("module-after");"#
         .restore_document_modulator(task_owner, owner_realm_id, document_modulator);
     vm.push_child_module_terminal_batch_to_frame_lane(tasks);
     let script = crate::planning::PreparedScript {
+        document_referrer_policy: None,
         position: 1,
         node_id: crate::dom::NodeId::new(1),
         kind: crate::types::ScriptKind::Module,
@@ -1451,6 +1454,7 @@ async fn child_parser_module_graph_failure_dispatches_error_from_scheduler_lane(
         Url::parse("https://child-parser-module-failure.test/module.js").expect("module url"),
     );
     let script = crate::planning::PreparedScript {
+        document_referrer_policy: None,
         position: 1,
         node_id: crate::dom::NodeId::new(1),
         kind: crate::types::ScriptKind::Module,

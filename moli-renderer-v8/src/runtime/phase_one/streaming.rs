@@ -1100,6 +1100,7 @@ mod tests {
     fn prepared_external_classic_for_streaming_test(url: &str) -> PreparedScript {
         let url = Url::parse(url).expect("test script url");
         PreparedScript {
+            document_referrer_policy: None,
             position: 0,
             node_id: NodeId::new(1),
             kind: crate::types::ScriptKind::Classic,

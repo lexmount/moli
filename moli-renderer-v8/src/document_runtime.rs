@@ -1363,6 +1363,7 @@ mod tests {
         ConnectedLoadParameters::PreloadLikeLink {
             url,
             options: Arc::new(ConnectedLinkReadinessFetchOptions {
+                document_referrer_policy: None,
                 resource_type: SubresourceResourceType::Stylesheet,
                 request_resource_type: Some(moli_fetch::RequestResourceType::CssStyleSheet),
                 script_fetch_metadata: None,
@@ -3658,6 +3659,7 @@ mod tests {
         let script_work = PageOwnedDocumentScriptWork::script(
             DocumentScriptExecutionLane::ClassicDefer,
             crate::planning::PreparedScript {
+                document_referrer_policy: None,
                 position: 0,
                 node_id: crate::dom::NodeId::new(script.index()),
                 kind: crate::types::ScriptKind::Classic,

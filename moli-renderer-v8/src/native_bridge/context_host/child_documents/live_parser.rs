@@ -215,7 +215,6 @@ impl JsContextHost {
             // resources discovered by the outer step before parking it too.
             let discovery_signals = parser.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
-                scope,
                 child_handle,
                 document_handle,
                 discovery_signals,
@@ -584,7 +583,6 @@ impl JsContextHost {
             parser.finish(&mut owner)
         };
         self.queue_live_child_parser_discovery_signals(
-            scope,
             child_handle,
             document_handle,
             finish_signals.discovery_signals,
@@ -628,7 +626,6 @@ impl JsContextHost {
 
     fn queue_live_child_parser_discovery_signals(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
         child_handle: DomHandle,
         document_handle: DomHandle,
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
@@ -636,7 +633,6 @@ impl JsContextHost {
         let async_prefetch_count = discovery_signals.async_prefetch_scripts.len();
         let preload_link_count = discovery_signals.preload_link_candidates.len();
         let blocking_stylesheet_count = discovery_signals.blocking_stylesheet_inputs.len();
-        let preload_link_candidates = discovery_signals.preload_link_candidates;
         let blocking_stylesheet_inputs = discovery_signals.blocking_stylesheet_inputs;
         if async_prefetch_count != 0 || preload_link_count != 0 || blocking_stylesheet_count != 0 {
             tracing::debug!(
@@ -666,12 +662,6 @@ impl JsContextHost {
                 );
             }
         }
-        self.queue_child_parser_discovered_preloads(
-            scope,
-            child_handle,
-            document_handle,
-            &preload_link_candidates,
-        );
     }
 
     pub(in crate::native_bridge::context_host) fn queue_child_parser_discovered_modulepreload_links(
@@ -901,7 +891,6 @@ impl JsContextHost {
                 return false;
             }
             self.queue_live_child_parser_discovery_signals(
-                scope,
                 child_handle,
                 document_handle,
                 insertion.take_discovery_signals(),
