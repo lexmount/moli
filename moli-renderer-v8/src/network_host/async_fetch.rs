@@ -263,21 +263,8 @@ impl ManualCorsRedirectState {
                 self.request.set_auth(None);
             }
         }
-        self.request.update_referrer_for_redirect(&head.final_url);
-        if let Some(policy) =
-            crate::referrer_policy::response_referrer_policy_from_headers(&head.headers)
-        {
-            let mut metadata = self
-                .request
-                .subresource_request_metadata()
-                .cloned()
-                .unwrap_or_default();
-            metadata.referrer_policy = Some(policy);
-            self.request = self
-                .request
-                .clone()
-                .with_subresource_request_metadata(metadata);
-        }
+        self.request
+            .update_referrer_for_redirect(&head.final_url, &head.headers);
         let redirect_status = head.status;
         self.request.cookie_context = moli_cookie_jar::advance_cookie_request_context(
             self.request.cookie_context.clone(),
