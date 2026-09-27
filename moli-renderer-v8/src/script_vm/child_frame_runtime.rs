@@ -510,6 +510,13 @@ impl ScriptVm {
             .take_pending_location_navigation_of_kind(kind)
     }
 
+    pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
+            Ok(())
+        })
+    }
+
     pub(crate) fn take_pending_document_location_navigation(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {

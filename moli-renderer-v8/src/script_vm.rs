@@ -59,21 +59,26 @@ pub(crate) type ScriptVmBootstrapError = Box<(anyhow::Error, DomHost)>;
 /// committed typestate before consuming this token.
 pub(crate) struct MainWindowProxyNavigationCommit {
     context: v8::Global<v8::Context>,
+    context_host: Rc<RefCell<JsContextHost>>,
     renderer_document_isolate: RendererDocumentIsolateHandle,
     page_id: u64,
 }
 
 impl MainWindowProxyNavigationCommit {
-    pub(crate) fn detach(self) {
+    pub(crate) fn unload_and_detach(self) {
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let context = v8::Local::new(scope, &self.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // Preserve the outgoing global's cached Document while the
-                // WindowProxy still forwards private properties to it.
-                crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
+                {
+                    let scope = &mut v8::ContextScope::new(scope, context);
+                    // Unload sees the attached WindowProxy, and its outgoing
+                    // Document remains associated after execution retirement.
+                    let host_ptr = (*self.context_host).as_ptr();
+                    JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
+                    crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
+                }
                 context.detach_global();
             });
         tracing::debug!(
@@ -2852,6 +2857,7 @@ impl ScriptVm {
             })?;
         Ok(MainWindowProxyNavigationCommit {
             context,
+            context_host: self._context_host.clone(),
             renderer_document_isolate: self.renderer_document_isolate.clone(),
             page_id,
         })

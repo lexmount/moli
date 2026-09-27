@@ -159,13 +159,16 @@ pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
     project_main_document_commit_async,
 };
-pub use navigation::BackgroundNavigationCompletion;
 #[cfg(test)]
 pub(crate) use navigation::emit_prepared_child_frame_tree_background_events;
 pub(crate) use navigation::navigation_cookie_access_report;
+pub use navigation::{BackgroundNavigationCompletion, PendingNavigationUnload};
 pub(crate) use navigation::{
-    MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
-    emit_prepared_child_frame_activity, push_superseded_navigation_result,
+    MaterializedNavigationCompletion,
+    complete_materialized_navigation_after_unload_into_buffer_async,
+    complete_materialized_navigation_into_buffer_async, emit_prepared_child_frame_activity,
+    push_superseded_navigation_result,
+    finish_renderer_navigation_into_buffer_async,
 };
 use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,

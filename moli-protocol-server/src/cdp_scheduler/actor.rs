@@ -277,6 +277,26 @@ async fn run_cdp_scheduler_actor(
         let page_screencast_deadline = scheduler.next_page_screencast_deadline();
         tokio::select! {
             biased;
+            maybe_completion = scheduler.recv_navigation_unload_completion() => {
+                let Some(completion) = maybe_completion else {
+                    break;
+                };
+                if !handle_scheduler_input(
+                    &frontend_router,
+                    &mut scheduler,
+                    &mut scheduler_input_rx,
+                    &mut pending_runtime_deferred_replies,
+                    &deferred_runtime_response_tx,
+                    &mut adapter_scheduler,
+                    &pending_command_completion_tx,
+                    &mut in_flight_commands,
+                    &mut blocked_commands,
+                    &mut next_in_flight_command_token,
+                    SchedulerInput::BackgroundNavigationCompletion(completion),
+                ).await {
+                    break;
+                }
+            }
             maybe_completion = pending_command_completion_rx.recv(), if !in_flight_commands.is_empty() => {
                 let Some(completion) = maybe_completion else {
                     break;
@@ -634,17 +654,46 @@ async fn flush_background_completion_input(
     adapter_scheduler: &mut ProtocolAdapterScheduler,
     input: SchedulerInput,
 ) -> bool {
-    let (prefix_output, mut completion_output, renderer_output_predecessor) = match input {
-        SchedulerInput::BackgroundNavigationCompletion(completion) => {
-            materialize_background_navigation_completion_output(
-                scheduler,
-                completion,
-                &mut scheduler_input_rx.background_event_rx,
-            )
-            .await
-        }
+    let completion = match input {
+        SchedulerInput::BackgroundNavigationCompletion(completion) => completion,
         _ => unreachable!("only background completion inputs are routed here"),
     };
+    // The unload command belongs to the old Page. Project and deliver its
+    // concrete output before materialization retires that Page's attachment.
+    if let Some(predecessor) = completion.unload_output_predecessor() {
+        if !flush_renderer_publication_predecessor(
+            frontend_router,
+            scheduler,
+            scheduler_input_rx,
+            pending_runtime_deferred_replies,
+            adapter_scheduler,
+            Some(&predecessor),
+        )
+        .await
+        {
+            return false;
+        }
+        let output = scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
+            .await;
+        if !flush_protocol_output_with_runtime_deferred_reply_routing(
+            frontend_router,
+            scheduler,
+            pending_runtime_deferred_replies,
+            output,
+        )
+        .await
+        {
+            return false;
+        }
+    }
+    let (prefix_output, mut completion_output, renderer_output_predecessor) =
+        materialize_background_navigation_completion_output(
+            scheduler,
+            completion,
+            &mut scheduler_input_rx.background_event_rx,
+        )
+        .await;
     // The prefix contains facts that predate the renderer Page commit,
     // including frameStartedNavigating and an early Page.navigate response.
     // Flush it before waiting on the independent renderer transport. Otherwise

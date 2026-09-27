@@ -510,14 +510,15 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
 
 #[tokio::test]
 async fn automation_command_executes_page_navigation_and_reload() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
+    let (create_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -536,18 +537,19 @@ async fn automation_command_executes_page_navigation_and_reload() {
     let url = "data:text/html,bidi-nav".to_owned();
     let target_id = create_result.target_id.clone();
 
-    let (navigate_result, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let navigate_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                url: url.clone(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            url: url.clone(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_complete_parts();
+        ))
+        .await;
     let AutomationResult::Navigate(navigate_result) =
         navigate_result.expect("navigate should succeed")
     else {
@@ -555,18 +557,19 @@ async fn automation_command_executes_page_navigation_and_reload() {
     };
     assert_eq!(navigate_result.url, url);
 
-    let (reload_result, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::Reload(DevToolsReloadCommand {
-            context: AutomationContext {
-                target_id: Some(target_id),
-                ..context
+    let reload_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Reload(
+            DevToolsReloadCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id),
+                    ..context
+                },
+                ignore_cache: false,
+                script_to_evaluate_on_load: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            ignore_cache: false,
-            script_to_evaluate_on_load: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_complete_parts();
+        ))
+        .await;
     let AutomationResult::Navigate(reload_result) = reload_result.expect("reload should succeed")
     else {
         panic!("expected reload navigation result");
@@ -667,20 +670,16 @@ async fn automation_command_executes_child_frame_navigation_without_cdp_response
 
     let parent_url =
         "data:text/html,<iframe srcdoc='<p id=\"child\">initial</p>'></iframe>".to_owned();
-    let parent_outcome = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: target_context.clone(),
-            url: parent_url,
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
+    let parent_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: target_context.clone(),
+                url: parent_url,
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
+            },
+        ))
         .await;
-    let (parent_result, _, _, parent_predecessor) = parent_outcome.into_complete_parts();
-    if let Some(predecessor) = parent_predecessor {
-        ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
-            .await;
-    }
     parent_result.expect("parent navigation should succeed");
 
     let (frame_tree_result, _) = ctx
@@ -946,14 +945,15 @@ async fn automation_command_executes_context_viewport_override() {
 
 #[tokio::test]
 async fn automation_command_executes_navigation_history_and_traverse() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
+    let (create_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -978,19 +978,21 @@ async fn automation_command_executes_navigation_history_and_traverse() {
     let second_url = "data:text/html,<title>B</title>classic-b".to_owned();
 
     for url in [&first_url, &second_url] {
-        let (navigate_result, _, _, _) = conn
-            .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-                context: target_context.clone(),
-                url: (*url).clone(),
-                referrer: None,
-                wait: DevToolsNavigationWait::Load,
-            }))
-            .await
-            .into_complete_parts();
+        let navigate_result = ctx
+            .execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::Navigate(DevToolsNavigateCommand {
+                    context: target_context.clone(),
+                    url: (*url).clone(),
+                    referrer: None,
+                    wait: DevToolsNavigationWait::Load,
+                }),
+            )
+            .await;
         navigate_result.expect("navigate should succeed");
     }
 
-    let (history_result, _) = conn
+    let (history_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetNavigationHistory(
             DevToolsGetNavigationHistoryCommand {
                 context: target_context.clone(),
@@ -1007,19 +1009,18 @@ async fn automation_command_executes_navigation_history_and_traverse() {
     assert_eq!(history.entries[history.current_index].url, second_url);
     let previous = history.entries[history.current_index - 1].clone();
 
-    let (traverse_result, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::TraverseHistory(
-            DevToolsTraverseHistoryCommand {
+    let traverse_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::TraverseHistory(DevToolsTraverseHistoryCommand {
                 context: target_context.clone(),
                 destination: DevToolsHistoryTraversalDestination::Entry {
                     entry_id: previous.id,
                     url: previous.url.clone(),
                 },
                 wait: DevToolsNavigationWait::Load,
-            },
-        ))
-        .await
-        .into_complete_parts();
+            }),
+        )
+        .await;
     assert!(matches!(
         traverse_result.expect("traverse should succeed"),
         AutomationResult::TraverseHistory(DevToolsTraverseHistoryResult {
@@ -1027,7 +1028,8 @@ async fn automation_command_executes_navigation_history_and_traverse() {
         })
     ));
 
-    let (history_result, _) = conn
+    let (history_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetNavigationHistory(
             DevToolsGetNavigationHistoryCommand {
                 context: target_context.clone(),
@@ -1042,16 +1044,15 @@ async fn automation_command_executes_navigation_history_and_traverse() {
     };
     assert_eq!(history.entries[history.current_index].id, previous.id);
 
-    let (delta_result, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::TraverseHistory(
-            DevToolsTraverseHistoryCommand {
+    let delta_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::TraverseHistory(DevToolsTraverseHistoryCommand {
                 context: target_context.clone(),
                 destination: DevToolsHistoryTraversalDestination::Delta(1),
                 wait: DevToolsNavigationWait::Load,
-            },
-        ))
-        .await
-        .into_complete_parts();
+            }),
+        )
+        .await;
     assert!(matches!(
         delta_result.expect("delta traverse should succeed"),
         AutomationResult::TraverseHistory(DevToolsTraverseHistoryResult {
@@ -1059,7 +1060,8 @@ async fn automation_command_executes_navigation_history_and_traverse() {
         })
     ));
 
-    let (history_result, _) = conn
+    let (history_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetNavigationHistory(
             DevToolsGetNavigationHistoryCommand {
                 context: target_context.clone(),
@@ -1074,7 +1076,8 @@ async fn automation_command_executes_navigation_history_and_traverse() {
     };
     assert_eq!(history.entries[history.current_index].url, second_url);
 
-    let (out_of_range_result, _) = conn
+    let (out_of_range_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::TraverseHistory(
             DevToolsTraverseHistoryCommand {
                 context: target_context,

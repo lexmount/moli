@@ -54,6 +54,7 @@ struct RecordedDocumentStartScript {
 }
 
 enum PendingCreateIsolatedWorldPhase {
+    NavigationCommit(tokio::sync::oneshot::Receiver<()>),
     InitialDocumentNavigation(Box<super::navigation::PendingNavigateLoadCommand>),
     InitialDocumentNavigationContinue(
         Box<super::navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
@@ -62,6 +63,7 @@ enum PendingCreateIsolatedWorldPhase {
 }
 
 enum CompletedCreateIsolatedWorldPhase {
+    NavigationCommit,
     InitialDocumentNavigation(Box<super::navigation::CompletedNavigateLoadCommand>),
     InitialDocumentNavigationContinue(
         Box<super::navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
@@ -87,6 +89,12 @@ enum CreateIsolatedWorldPhase {
 impl PendingCreateIsolatedWorldCommand {
     pub(super) async fn wait(self) -> CompletedCreateIsolatedWorldCommand {
         let completed = match self.pending {
+            PendingCreateIsolatedWorldPhase::NavigationCommit(barrier) => {
+                // Cancellation/supersession also ends this phase. Re-resolve
+                // the current frame and renderer before creating the world.
+                let _ = barrier.await;
+                CompletedCreateIsolatedWorldPhase::NavigationCommit
+            }
             PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending) => {
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(Box::new(
                     pending.wait().await,
@@ -1533,14 +1541,21 @@ pub(super) async fn complete_pending_create_isolated_world_command(
 ) -> PageCommandTaskStep {
     match completed.task.phase.clone() {
         CreateIsolatedWorldPhase::InitialDocumentNavigation => {
+            let mut commit_wait = None;
             let navigation_step = match completed.completed {
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(completed) => {
-                    super::navigation::complete_pending_navigate_load_command(
+                    let (sender, receiver) = tokio::sync::oneshot::channel();
+                    commit_wait = Some(receiver);
+                    super::navigation::complete_pending_navigate_load_command_with_commit_barrier(
                         conn,
                         *completed,
                         command_context,
+                        Some(sender),
                     )
                     .await
+                }
+                CompletedCreateIsolatedWorldPhase::NavigationCommit => {
+                    PageCommandTaskStep::Complete(CommandOutputPlan::default())
                 }
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(completed) => {
                     super::navigation::complete_pending_continue_navigation_without_request_pause_command(
@@ -1560,6 +1575,14 @@ pub(super) async fn complete_pending_create_isolated_world_command(
                 append_page_command_step_output(&mut completed.task.prefix_output, navigation_step)
             {
                 return PageCommandTaskStep::Complete(plan);
+            }
+            if let Some(barrier) = commit_wait {
+                return pending_create_isolated_world_command_for_session(
+                    command_id,
+                    owner.clone(),
+                    completed.task,
+                    PendingCreateIsolatedWorldPhase::NavigationCommit(barrier),
+                );
             }
             start_create_isolated_world_frame_or_world_phase(
                 conn,
@@ -1596,6 +1619,7 @@ pub(super) async fn complete_pending_create_isolated_world_command(
                     }
                 }
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(_)
+                | CompletedCreateIsolatedWorldPhase::NavigationCommit
                 | CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(_) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,

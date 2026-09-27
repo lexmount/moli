@@ -1672,6 +1672,14 @@ impl CdpConnection {
         &self,
         context: &crate::automation::AutomationContext,
     ) -> bool {
+        self.background_navigation_target_id_for_devtools_context(context)
+            .is_some_and(|target_id| self.has_inflight_background_navigation_for_target(&target_id))
+    }
+
+    pub fn background_navigation_target_id_for_devtools_context(
+        &self,
+        context: &crate::automation::AutomationContext,
+    ) -> Option<String> {
         context
             .target_id
             .as_ref()
@@ -1685,7 +1693,6 @@ impl CdpConnection {
                         .map(crate::automation::DevToolsSessionId::as_str),
                 )
             })
-            .is_some_and(|target_id| self.has_inflight_background_navigation_for_target(&target_id))
     }
 
     pub fn has_pending_document_navigation_for_session_owner(
@@ -2533,6 +2540,15 @@ impl CdpConnection {
         command_context: &mut CommandDispatchContext,
     ) -> Vec<BackgroundProtocolEvent> {
         let completion = match completion {
+            crate::domains::page::BackgroundNavigationCompletion::AfterUnload(completion) => {
+                let completion = completion.finish(self);
+                return self
+                    .drain_materialized_navigation_completion_background_events(
+                        completion,
+                        command_context,
+                    )
+                    .await;
+            }
             crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
                 if !self.settle_background_navigation_completion(completion.navigation_token()) {
                     tracing::debug!(
@@ -2820,7 +2836,7 @@ impl CdpConnection {
     pub(crate) async fn drain_materialized_navigation_completion_into_buffer(
         &mut self,
         out: &mut CommandOutputBuffer,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
+        mut completion: crate::domains::page::MaterializedNavigationCompletion,
         command_context: &mut CommandDispatchContext,
     ) {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
@@ -2831,16 +2847,45 @@ impl CdpConnection {
                 stage = "materialized_completion_drain_start",
             );
         }
-        let (token, state, navigation) = completion.into_parts();
-        crate::domains::page::complete_materialized_navigation_into_buffer_async(
-            self,
-            out,
-            token.clone(),
-            state,
-            navigation,
-            command_context,
-        )
-        .await;
+        let is_current = completion.is_current_for_connection(self);
+        let commit_barrier = completion.take_commit_barrier();
+        let (token, state, navigation, already_unloaded) = completion.into_parts();
+        if !is_current {
+            crate::domains::page::push_superseded_navigation_result(out, &state);
+            crate::domains::page::finish_renderer_navigation_into_buffer_async(
+                self,
+                out,
+                &state.owner,
+                &token,
+            )
+            .await;
+            return;
+        }
+        if already_unloaded {
+            crate::domains::page::complete_materialized_navigation_after_unload_into_buffer_async(
+                self,
+                out,
+                token,
+                state,
+                navigation,
+                command_context,
+            )
+            .await;
+            if let Some(barrier) = commit_barrier {
+                let _ = barrier.send(());
+            }
+        } else {
+            crate::domains::page::complete_materialized_navigation_into_buffer_async(
+                self,
+                out,
+                token.clone(),
+                state,
+                navigation,
+                command_context,
+                commit_barrier,
+            )
+            .await;
+        }
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",

@@ -912,7 +912,9 @@ impl TestContext {
                     );
                     return false;
                 }
-                CdpCommandTaskStep::Pending(pending) => {
+                CdpCommandTaskStep::Pending(mut pending) => {
+                    let events = pending.take_scheduler_events();
+                    Box::pin(self.route_test_scheduler_causal_batch(Vec::new(), events)).await;
                     // Keep the test scheduler's pending-command boundary shaped
                     // like production. Some domain completions carry a complete
                     // renderer Page build, so composing both futures inline can
@@ -1212,6 +1214,10 @@ impl TestContext {
         completion: crate::domains::page::BackgroundNavigationCompletion,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
+        if let Some(predecessor) = completion.unload_output_predecessor() {
+            Box::pin(self.route_renderer_output_predecessor_before_command_response(predecessor))
+                .await;
+        }
         // Match the production actor's three-part boundary:
         //
         //   already-produced navigation output
@@ -1539,14 +1545,17 @@ impl TestContext {
         scheduler_events: Vec<CdpSchedulerEvent>,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        let mut queue = VecDeque::new();
-        enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
-        while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
-            self.pending_protocol_scheduler_work
-                .push_back(protocol_work);
-            let scheduler_events = self.conn.take_scheduler_events();
-            if !scheduler_events.is_empty() {
-                work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+        for event in scheduler_events {
+            match event {
+                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                    self.pending_protocol_scheduler_work.push_back(work);
+                }
+                CdpSchedulerEvent::NavigationUnloadRequested { pending } => {
+                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
+                        pending.wait().await,
+                    ));
+                }
+                CdpSchedulerEvent::PageScreencastStarted { .. } => {}
             }
         }
     }
@@ -1977,6 +1986,9 @@ fn enqueue_scheduler_events_like_scheduler(
 ) {
     for event in events {
         match event {
+            CdpSchedulerEvent::NavigationUnloadRequested { .. } => {
+                panic!("navigation unload requires TestContext's concrete renderer transport");
+            }
             CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                 queue.push_back(TestDeferredSchedulerWork(work));
             }

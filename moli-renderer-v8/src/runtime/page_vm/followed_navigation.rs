@@ -1479,7 +1479,7 @@ impl PageVm {
         runtime_hooks.web_mcp_navigation = web_mcp_invocation;
         if runtime_hooks.has_renderer_page_script_environment() {
             self.prepare_main_window_proxy_navigation(self.page_id)?
-                .detach();
+                .unload_and_detach();
             self.record_main_navigation_commit();
             self.retire_committed_main_script_vm();
         } else {

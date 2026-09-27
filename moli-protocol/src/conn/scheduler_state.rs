@@ -9,6 +9,9 @@ const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
+    NavigationUnloadRequested {
+        pending: Box<crate::domains::page::PendingNavigationUnload>,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
