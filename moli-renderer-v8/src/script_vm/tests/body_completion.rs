@@ -43,6 +43,32 @@ async fn body_completion_queues_native_network_success_and_errors() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn body_completion_tasks_reach_popups_opened_by_child_windows() {
+    let server = super::fetch_resource_timing::timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader(&format!("{}/", server.origin), &loader);
+    let fixture = include_str!("../../../tests/fixtures/body-completion-popups.js")
+        .trim()
+        .trim_end_matches(';');
+    vm.eval(&format!(
+        "globalThis.bodyPopupResult = null; ({fixture}).then(value => bodyPopupResult = value, error => bodyPopupResult = JSON.stringify({{error:String(error)}}));"
+    )).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(bodyPopupResult !== null)",
+        "true",
+        "popup Body completion task probe",
+    )
+    .await;
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("bodyPopupResult").unwrap()).unwrap();
+    assert_eq!(result["total"], 12, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn body_completion_tasks_follow_receiver_realm_lifetime() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm =

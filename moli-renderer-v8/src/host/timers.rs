@@ -653,14 +653,29 @@ impl HostTimeoutScheduler {
         let Some(callback) = scheduled_timer_function(scope, callback, receiver) else {
             return 0;
         };
-        let Some(owner) = scheduled_timer_owner_for_target(
-            scope,
-            HostTimerOwner::Window,
-            Some(receiver),
-            context,
-        ) else {
+        let Some(identity) = callback.relevant_identity else {
             return 0;
         };
+        if !context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+            unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
+        }) {
+            return 0;
+        }
+        // Internal browser callbacks are created in their task destination.
+        // Capture that exact identity instead of authorizing the shared V8
+        // global as a public Window receiver: a popup can alias a child realm
+        // while owning a different Window and task lifetime.
+        let binding = WindowExecutionContextBinding::new(
+            identity.owner(),
+            identity.dispatch_scope(),
+            identity.realm_token(),
+            callback.relevant_context.clone(),
+        );
+        let owner = ScheduledTimerOwner::Window(ScheduledWindowTimerTarget::new(
+            identity.owner(),
+            identity.dispatch_scope(),
+            Some(binding),
+        ));
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
