@@ -162,7 +162,7 @@ impl JsContextHost {
     }
 
     fn main_document_domain_host(&self) -> Option<String> {
-        Url::parse(&self.main_document_security_origin())
+        Url::parse(&self.main_document_origin())
             .ok()
             .and_then(|origin| url_host_domain(&origin))
     }

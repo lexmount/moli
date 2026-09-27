@@ -297,13 +297,7 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
             .is_some_and(|origin| origin == "null");
     }
     if runtime_window_is_global(scope, owner) {
-        // A response sandbox can make an HTTP(S) Document opaque without
-        // changing its URL. Use the active Document's policy, not just the URL.
-        return host
-            .document_policy_container()
-            .sandbox
-            .forces_opaque_origin
-            || top_level_navigation_document_has_opaque_origin(host.document_url());
+        return host.main_document_origin() == "null";
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return false;
@@ -340,14 +334,6 @@ pub(crate) fn replace_navigation_unload_event_active<'s>(
         v8::Boolean::new(scope, active).into(),
     );
     previous
-}
-
-pub(super) fn url_is_about_blank_document(url: &url::Url) -> bool {
-    moli_url::is_about_blank(url)
-}
-
-fn top_level_navigation_document_has_opaque_origin(url: &url::Url) -> bool {
-    !url_is_about_blank_document(url) && url.origin().ascii_serialization() == "null"
 }
 
 pub(super) fn navigation_document_base_url<'s>(

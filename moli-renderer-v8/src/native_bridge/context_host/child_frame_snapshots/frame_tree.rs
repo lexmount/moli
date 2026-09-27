@@ -25,10 +25,7 @@ impl JsContextHost {
         self.child_browsing_context_snapshot_markup(handle)
             .map(|snapshot| {
                 let parent_scope = self
-                    .child_browsing_context_web_storage_scope(
-                        handle,
-                        &moli_url::origin_ascii_serialization(self.document_url()),
-                    )
+                    .child_browsing_context_web_storage_scope(handle, &self.main_document_origin())
                     .unwrap_or_else(|| self.top_web_storage_scope());
                 self.detached_child_browsing_context_frame_tree_snapshot(
                     "",
@@ -66,10 +63,7 @@ impl JsContextHost {
         self.child_browsing_context_snapshot_markup(handle)
             .map(|snapshot| {
                 let parent_scope = self
-                    .child_browsing_context_web_storage_scope(
-                        handle,
-                        &moli_url::origin_ascii_serialization(self.document_url()),
-                    )
+                    .child_browsing_context_web_storage_scope(handle, &self.main_document_origin())
                     .unwrap_or_else(|| self.top_web_storage_scope());
                 self.detached_child_browsing_context_frame_tree_snapshot(
                     "",

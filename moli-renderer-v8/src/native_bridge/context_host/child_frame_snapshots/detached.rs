@@ -43,10 +43,7 @@ impl JsContextHost {
             };
             let scripting_enabled = self.child_browsing_context_scripting_enabled(handle);
             let parent_scope = self
-                .child_browsing_context_web_storage_scope(
-                    handle,
-                    &moli_url::origin_ascii_serialization(self.document_url()),
-                )
+                .child_browsing_context_web_storage_scope(handle, &self.main_document_origin())
                 .unwrap_or_else(|| self.top_web_storage_scope());
             snapshots.push(DetachedChildBrowsingContextDocumentSnapshot {
                 parent_frame_id: parent_frame_id.clone(),

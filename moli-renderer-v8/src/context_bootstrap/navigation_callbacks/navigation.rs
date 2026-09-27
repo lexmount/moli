@@ -231,6 +231,13 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         return;
     };
     let current_url = url::Url::parse(&current_href).ok();
+    let about_document_state = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        unsafe { &*host_ptr }.capture_about_document_state(
+            crate::native_bridge::OwnerDispatchScope::Top,
+            &next_url,
+            None,
+        )
+    });
     let can_update_current_entry = navigation_can_update_current_entry(scope, args.this());
     // History behavior chooses which entry changes, not whether the navigation
     // replaces the Document. Even an empty fragment is a fragment navigation.
@@ -656,6 +663,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             &next_url,
             navigate_history_kind,
             Some((navigation, outcome.signal)),
+            about_document_state,
         ));
         return;
     }
@@ -666,6 +674,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         &next_url,
         navigate_history_kind,
         None,
+        about_document_state,
     ));
 }
 

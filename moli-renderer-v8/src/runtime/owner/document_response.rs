@@ -79,11 +79,16 @@ impl RendererCreateStreamingRawPageRequest {
             network_offline,
             &blocked_url_patterns,
         );
-        let document_policy_container = DocumentPolicyContainer::from_navigation_response_headers(
-            &response_headers,
-            &final_url,
-        )
-        .with_content_security_policy_bypass(document_settings.bypass_content_security_policy);
+        let about_document_state = navigation_history
+            .as_ref()
+            .and_then(|request| request.about_document_state(&final_url));
+        let document_policy_container = about_document_state
+            .as_ref()
+            .map(|state| state.policy_container().clone())
+            .unwrap_or_else(|| DocumentPolicyContainer::from_navigation_response_headers(
+                &response_headers, &final_url,
+            ))
+            .with_content_security_policy_bypass(document_settings.bypass_content_security_policy);
         let document_default_language =
             crate::document_language::document_default_language_from_headers(&response_headers);
         let document_last_modified =
@@ -98,6 +103,7 @@ impl RendererCreateStreamingRawPageRequest {
             extra_http_headers,
             navigator_identity,
             document_policy_container,
+            about_document_state,
             document_default_language,
             document_last_modified,
             document_settings,

@@ -117,8 +117,8 @@ pub(super) fn publish_top_level_navigation_history<'s>(
         current_index,
         &mut entries,
     );
-    host.top_level_navigation_history()
-        .publish(NavigationHistoryEntrySeed {
+    host.top_level_navigation_history().publish(
+        NavigationHistoryEntrySeed {
             session_history: moli_page_types::SessionHistorySeed {
                 traversable: Some(Box::new(
                     unsafe { &mut *host_ptr }
@@ -133,7 +133,9 @@ pub(super) fn publish_top_level_navigation_history<'s>(
             // Activation belongs to the navigation operation, not the source
             // history. Reading public activation properties could invoke JS here.
             activation: None,
-        });
+        },
+        host.current_about_document_state(),
+    );
 }
 
 fn context_host_ptr_for_navigation_seed_owner(
@@ -327,7 +329,7 @@ pub(crate) fn current_document_referrer_policy<'s>(
         .or_else(|| current_entry_referrer_policy(scope, owner))
 }
 
-pub(super) fn document_referrer_policy_for_native_document(
+pub(crate) fn document_referrer_policy_for_native_document(
     runtime: &crate::native_bridge::JsContextHost,
     document_handle: DomHandle,
 ) -> Option<String> {

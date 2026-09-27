@@ -1781,11 +1781,7 @@ fn window_message_endpoint_origin(
     endpoint: PendingWindowMessageEndpoint,
 ) -> Option<String> {
     match endpoint {
-        PendingWindowMessageEndpoint::TopWindow => Some(
-            host.current_main_document_resource_loader()
-                .map(|loader| loader.fetch_context().origin().to_owned())
-                .unwrap_or_else(|| moli_url::origin_ascii_serialization(host.document_url())),
-        ),
+        PendingWindowMessageEndpoint::TopWindow => Some(host.main_document_origin()),
         PendingWindowMessageEndpoint::ChildWindow(handle) => {
             host.child_browsing_context_target_origin(handle)
         }

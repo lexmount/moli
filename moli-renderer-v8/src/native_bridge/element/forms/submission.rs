@@ -960,6 +960,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                     request.request_headers,
                     history.entry_seed,
                     moli_fetch::BrowserNavigationRequestKind::Navigate,
+                    None,
                 );
                 crate::context_bootstrap::web_mcp::bind_root_navigation(runtime, navigation.form);
                 true

@@ -416,3 +416,4 @@ mod resources;
 mod runtime;
 mod same_document_history;
 mod scripts;
+mod top_level_about_blank;

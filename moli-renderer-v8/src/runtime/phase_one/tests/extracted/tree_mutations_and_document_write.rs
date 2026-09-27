@@ -1153,6 +1153,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                 },
                 wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            about_document_state: None,
             navigation_history_source: None,
         reserved_service_worker_client_id: None,
             },
