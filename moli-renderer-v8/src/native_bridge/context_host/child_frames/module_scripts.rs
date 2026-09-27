@@ -889,8 +889,16 @@ impl JsContextHost {
         ) {
             return;
         }
+        let policy = self
+            .child_browsing_context_document_handle(target.child_handle())
+            .and_then(|document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+            });
         let request =
-            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key());
+            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key())
+                .with_document_referrer_policy(policy);
         let completion_tx = self.resource_completion_tx.clone();
         debug_assert_eq!(target.child_handle(), fetch_start.child_handle);
         let script_handle = fetch_start.script_handle;
