@@ -564,7 +564,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             .note_defined_autonomous_custom_elements(names);
     }
 
-    pub(super) fn finish_parser_blocking_pause(&mut self) {
+    pub(super) fn finish_parser_blocking_pause(
+        &mut self,
+        document_referrer_policy: impl Fn() -> Option<String>,
+    ) {
         while let Some(html) = self.parser_session.take_next_insertion_preload_input() {
             self.buffered_document_preloads
                 .append_to_insertion_scan_with_service_worker_context(
@@ -572,6 +575,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     &html,
                     self.loader,
                     self.service_worker_preload_context,
+                    document_referrer_policy(),
                 );
         }
         self.buffered_document_preloads
@@ -751,7 +755,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     Some(OwnerStepProgress::Continue)
                 }
                 MainParserBlockingExecutionOutcome::BlockedOnDocumentWriteExternalLoad => {
-                    self.finish_parser_blocking_pause();
+                    self.finish_parser_blocking_pause(|| {
+                        page_vm
+                            .vm()
+                            .document_runtime
+                            .current_document_referrer_policy()
+                    });
                     *pending_parsing_blocking_wait = if page_vm.has_page_resource_completion_route()
                     {
                         PendingParsingBlockingWait::PageNetworkingDocumentWriteExternalScript
@@ -767,7 +776,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 }
             };
             if let Some(progress) = progress {
-                self.finish_parser_blocking_pause();
+                self.finish_parser_blocking_pause(|| {
+                    page_vm
+                        .vm()
+                        .document_runtime
+                        .current_document_referrer_policy()
+                });
                 return Ok(progress);
             }
             return Ok(suspend_parser_for_stylesheet_page_task(
@@ -978,7 +992,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         );
         page_vm.report.runs.extend(run);
         if parser_blocking {
-            self.finish_parser_blocking_pause();
+            self.finish_parser_blocking_pause(|| {
+                page_vm
+                    .vm()
+                    .document_runtime
+                    .current_document_referrer_policy()
+            });
         }
         true
     }
@@ -1041,7 +1060,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                             .document_runtime
                             .dom_host_mut()
                             .set_script_already_started(handle, true);
-                        self.finish_parser_blocking_pause();
+                        self.finish_parser_blocking_pause(|| {
+                            page_vm
+                                .vm()
+                                .document_runtime
+                                .current_document_referrer_policy()
+                        });
                         return Ok(ScriptHandoffOutcome::NoNavigation);
                     }
                 };
@@ -1123,7 +1147,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     ScriptHandoffOutcome::BlockedOnStylesheet(_)
                         | ScriptHandoffOutcome::BlockedOnExternalSource(_)
                 ) {
-                    self.finish_parser_blocking_pause();
+                    self.finish_parser_blocking_pause(|| {
+                        page_vm
+                            .vm()
+                            .document_runtime
+                            .current_document_referrer_policy()
+                    });
                 }
                 Ok(outcome)
             }

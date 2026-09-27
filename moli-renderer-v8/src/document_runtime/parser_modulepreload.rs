@@ -105,6 +105,7 @@ impl DocumentRuntime {
                 request_url.clone(),
                 &document_url,
                 self.resolve_module_integrity(&request_url),
+                self.current_document_referrer_policy(),
             ) else {
                 continue;
             };
