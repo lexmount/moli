@@ -257,6 +257,42 @@ impl ConnectedStyleOwnerKind {
 }
 
 impl DocumentRuntime {
+    pub(crate) fn start_connected_modulepreloads_in_current_scope(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        result: &mut ConnectedStyleLoadPrimeResult,
+    ) {
+        let starts = std::mem::take(&mut result.modulepreload_starts);
+        if starts.is_empty() {
+            return;
+        }
+        let host = unsafe { &*host_ptr };
+        let Some(owner) = host.current_main_document_task_owner() else {
+            return;
+        };
+        let scheduler = host.resource_scheduler();
+        for start in starts {
+            let (request, client) = start.into_parts();
+            match self
+                .start_main_document_modulepreload_link_fetch(owner, &scheduler, request, client)
+            {
+                Ok(outcome) => {
+                    let (_, violations, warning) = outcome.into_parts();
+                    for violation in violations {
+                        self.queue_content_security_policy_violation_event_best_effort(
+                            scope, host_ptr, &violation,
+                        );
+                    }
+                    if let Some(warning) = warning {
+                        result.push_runtime_warning(warning);
+                    }
+                }
+                Err(error) => result.push_runtime_warning(error.message()),
+            }
+        }
+    }
+
     pub(crate) fn prime_parser_preload_link(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -989,6 +1025,10 @@ impl DocumentRuntime {
                     event_admission,
                     "script execution disabled",
                 );
+                return result;
+            }
+            if is_modulepreload && self.queue_connected_child_modulepreload(handle, &url, host_ptr)
+            {
                 return result;
             }
             if let Some((key, preload)) = self.connected_modulepreload_request(handle, &url) {
@@ -1878,6 +1918,60 @@ impl DocumentRuntime {
             ReadyConnectedStyleLoadOperation::NativeModulepreload(_)
         ));
         self.push_ready_connected_style_load(ready);
+    }
+
+    /// Child links use the child's modulator and exact Document/realm task
+    /// route. They must never reserve an entry in the main Document's map.
+    fn queue_connected_child_modulepreload(
+        &self,
+        handle: DomHandle,
+        url: &url::Url,
+        host_ptr: *mut JsContextHost,
+    ) -> bool {
+        let Some(document) = self.dom_host.owner_document_handle(handle) else {
+            return false;
+        };
+        if document == self.dom_host.document_handle() || host_ptr.is_null() {
+            return false;
+        }
+        let host = unsafe { &mut *host_ptr };
+        let Some(child) = host.child_browsing_context_host_for_document_handle(document) else {
+            return false;
+        };
+        if !host.child_browsing_context_scripting_enabled(child)
+            || connected_modulepreload_has_non_matching_media(&self.dom_host, handle)
+        {
+            return true;
+        }
+        if connected_modulepreload_invalid_as(&self.dom_host, handle).is_some() {
+            let _ = host.queue_child_modulepreload_link_error_for_current_document(child, handle);
+            return true;
+        }
+        let Some(initiator) = host.child_browsing_context_request_initiator_url(child) else {
+            return true;
+        };
+        let integrity = host
+            .current_child_document_module_fetch_target(child)
+            .and_then(|target| {
+                host.resolve_frame_document_module_integrity(
+                    target.task_owner().document_owner(),
+                    target.realm_id(),
+                    url,
+                )
+            });
+        let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) else {
+            return true;
+        };
+        if let Some(candidate) =
+            modulepreload_fetch_candidate(element, url.clone(), &initiator, integrity)
+        {
+            let _ = host.queue_child_modulepreload_fetch_for_current_document(
+                child,
+                handle,
+                candidate.request,
+            );
+        }
+        true
     }
 
     fn connected_modulepreload_request(
