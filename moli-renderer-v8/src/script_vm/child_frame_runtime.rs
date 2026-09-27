@@ -528,12 +528,9 @@ impl ScriptVm {
     pub(crate) fn take_pending_document_location_navigation(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {
-        let source_url = self.document_runtime.document_url().clone();
-        let pending = self.take_pending_location_navigation_of_kind(
+        self.take_pending_location_navigation_of_kind(
             crate::native_bridge::PendingLocationNavigationKind::Document,
-        )?;
-        self.restore_top_level_location_runtime_state(&source_url);
-        Some(pending)
+        )
     }
 
     /// Moves one browser-owned location request into the active concrete
