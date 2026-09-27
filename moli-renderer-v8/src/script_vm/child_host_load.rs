@@ -21,7 +21,7 @@ impl<'vm> ChildHostLoadOwner<'vm> {
         Self { vm }
     }
 
-    pub(super) fn resync_child_browsing_contexts(&mut self) {
+    pub(crate) fn resync_child_browsing_contexts(&mut self) {
         let context_host = self.vm._context_host.clone();
         let Ok(ready_work) = self.vm.with_default_context_scope(move |scope, _host_ptr| {
             let ready_work = context_host
