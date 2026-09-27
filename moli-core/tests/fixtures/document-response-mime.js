@@ -1,21 +1,23 @@
 (async () => {
+  // A missing/invalid charset inherits from an iframe's UTF-8 container;
+  // a top-level popup uses the browser default instead.
   const cases = [
-    [['', 'text/plain'], 'text/plain', 'UTF-8', 'hi'],
-    [['text/plain', ''], 'text/plain', 'UTF-8', 'hi'],
-    [['text/html', 'text/plain'], 'text/plain', 'UTF-8', 'hi'],
-    [['text/plain;charset=gbk', 'text/html'], 'text/html', 'UTF-8', 'hi'],
+    [['', 'text/plain'], 'text/plain', null, 'hi'],
+    [['text/plain', ''], 'text/plain', null, 'hi'],
+    [['text/html', 'text/plain'], 'text/plain', null, 'hi'],
+    [['text/plain;charset=gbk', 'text/html'], 'text/html', null, 'hi'],
     [['text/plain;charset=gbk', 'text/html;charset=windows-1254'], 'text/html', 'windows-1254', 'Ğ'],
     [['text/plain;charset=gbk', 'text/plain'], 'text/plain', 'GBK', '家居'],
     [['text/html;charset=gbk', 'text/html;charset=utf-8', 'text/html'], 'text/html', 'GBK', '家居'],
-    [['text/html;charset=gbk', 'text/plain', 'text/html'], 'text/html', 'UTF-8', 'hi'],
-    [['text/plain', '*/*;charset=gbk'], 'text/plain', 'UTF-8', 'hi'],
-    [['text/html', '*/*'], 'text/html', 'UTF-8', 'hi'],
-    [['text/html;x="', 'text/plain'], 'text/html', 'UTF-8', 'hi'],
+    [['text/html;charset=gbk', 'text/plain', 'text/html'], 'text/html', null, 'hi'],
+    [['text/plain', '*/*;charset=gbk'], 'text/plain', null, 'hi'],
+    [['text/html', '*/*'], 'text/html', null, 'hi'],
+    [['text/html;x="', 'text/plain'], 'text/html', null, 'hi'],
     [['text/html;"', '\\"', 'text/plain', '";charset=GBK'], 'text/html', 'GBK', '家居'],
-    [['text/html;"', '"', 'text/plain'], 'text/plain', 'UTF-8', 'hi'],
-    [['application/octet-stream', 'text/html', 'invalid'], 'text/html', 'UTF-8', 'hi'],
-    [['text/html;charset=gbk', 'text/html;charset=unknown'], 'text/html', 'UTF-8', 'hi'],
-    [['text/html;charset=gbk', 'text/html;charset=""'], 'text/html', 'UTF-8', 'hi'],
+    [['text/html;"', '"', 'text/plain'], 'text/plain', null, 'hi'],
+    [['application/octet-stream', 'text/html', 'invalid'], 'text/html', null, 'hi'],
+    [['text/html;charset=gbk', 'text/html;charset=unknown'], 'text/html', null, 'hi'],
+    [['text/html;charset=gbk', 'text/html;charset=""'], 'text/html', null, 'hi'],
   ];
   const errors = [];
   let checked = 0;
@@ -24,7 +26,7 @@
       for (const fields of [values, [values.join(',')]]) {
         const url = new URL('/mime', location.href);
         for (const field of fields) url.searchParams.append('value', field);
-        url.searchParams.set('encoding', charset.toLowerCase());
+        url.searchParams.set('encoding', (charset || 'UTF-8').toLowerCase());
         let frame, popup;
         try {
           const doc = await new Promise((resolve, reject) => {
@@ -45,7 +47,7 @@
           });
           const observed = [doc.contentType, doc.characterSet.toUpperCase(),
             doc.body.firstChild.localName, doc.body.textContent];
-          const expected = [type, charset.toUpperCase(), type === 'text/plain' ? 'pre' : 'b',
+          const expected = [type, (charset || (kind === 'iframe' ? 'UTF-8' : 'windows-1252')).toUpperCase(), type === 'text/plain' ? 'pre' : 'b',
             type === 'text/plain' ? `<b>${text}</b>\n` : `${text}\n`];
           if (JSON.stringify(observed) !== JSON.stringify(expected)) {
             errors.push({kind, fields, observed, expected});
