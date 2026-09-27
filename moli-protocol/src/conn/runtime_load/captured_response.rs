@@ -55,6 +55,13 @@ impl PreparedCapturedNavigationResponse {
     }
 
     pub(crate) async fn run(mut self) -> Result<NavigationLoadOutcome> {
+        if response_status_has_no_content(self.head.status) {
+            return Ok(no_content_navigation_from_response(
+                self.head,
+                self.network_observation_journal,
+                &self.body_progress_source,
+            ));
+        }
         if super::super::downloads::response_headers_indicate_download(&self.head.headers) {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
             let body = self
@@ -68,13 +75,6 @@ impl PreparedCapturedNavigationResponse {
                     self.network_observation_journal,
                     &self.body_progress_source,
                 ),
-            ));
-        }
-        if response_status_has_no_content(self.head.status) {
-            return Ok(no_content_navigation_from_response(
-                self.head,
-                self.network_observation_journal,
-                &self.body_progress_source,
             ));
         }
         if let Some(client) = self.reserved_service_worker_client.take() {
@@ -239,6 +239,7 @@ impl CdpConnection {
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         };
         Ok(self.prepare_captured_navigation_response_with_load_inputs(
             &navigation.owner,

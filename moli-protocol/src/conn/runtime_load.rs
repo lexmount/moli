@@ -1198,8 +1198,8 @@ impl BackgroundNavigationLoadJob {
             let defer_early_result_for_http_error_body =
                 response_status_may_use_http_error_page(response.status);
             if !super::downloads::response_headers_indicate_download(&response.headers)
-                && !defer_early_result_for_http_error_body
                 && !response_status_has_no_content(response.status)
+                && !defer_early_result_for_http_error_body
                 && let Some(early_result) = early_result.take()
             {
                 early_result_sent = early_result.emit();
@@ -1528,6 +1528,20 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     } else {
         response.cookie_set_reports.clone()
     };
+    if response_status_has_no_content(response_status) {
+        // Ignore the response before preparing a renderer or consuming its body.
+        // In particular, Fetch.continueResponse can turn an open 200 stream into
+        // a 204/205; dropping that stream cancels it without waiting for EOF.
+        let mut head = response.head();
+        head.status = response_status;
+        head.headers = response_headers;
+        head.cookie_set_reports = response_cookie_reports;
+        return Ok(no_content_navigation_from_response(
+            head,
+            network_observation_journal,
+            &body_progress_source,
+        ));
+    }
     let initial_request_cookie_report = response.request_cookie_report.clone();
     let response_from_cache = response.from_cache;
     let negotiated_http_version = response.negotiated_http_version;
@@ -1585,14 +1599,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             stage = "response_metadata_ready",
             elapsed_ms = timing_started.elapsed().as_millis(),
         );
-    }
-    if response_status_has_no_content(response_status) {
-        return Ok(NavigationLoadOutcome::NoContent(Box::new(
-            NoContentNavigation {
-                final_url,
-                network_events: body_progress_source.completed_body_network_events(network_events),
-            },
-        )));
     }
     let body_network_progress_state =
         body_progress_source.body_network_progress_for_completed_events(network_events);
