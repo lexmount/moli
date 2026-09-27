@@ -56,6 +56,10 @@ pub(super) struct ChildBrowsingContextEntry {
     // Rejected attributes remain reflected without replacing an admitted
     // navigation. Wrapper refreshes must not retry them after an ancestor moves.
     ignored_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
+    // Fragment attributes update the live Document through Location's shared
+    // navigation machinery. Keep them separate from an admitted document load,
+    // which can still complete after the fragment change.
+    same_document_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
     pending_attribute_bootstrap_commit: bool,
     pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
     pending_live_navigation_initiator_url: Option<Url>,

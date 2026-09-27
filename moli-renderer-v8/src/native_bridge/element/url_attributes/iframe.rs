@@ -19,7 +19,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     set_reflected_attribute(scope, runtime_ptr, handle, "src", value);
     let runtime = unsafe { &mut *runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "iframe")
-        || runtime.child_frame_src_attribute_navigation_is_ignored(handle)
+        || runtime.child_frame_src_attribute_navigation_is_handled(handle)
     {
         return;
     }

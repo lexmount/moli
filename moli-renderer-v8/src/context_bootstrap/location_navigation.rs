@@ -138,7 +138,7 @@ pub(crate) fn navigate_location_object<'s>(
     );
 }
 
-pub(crate) fn navigate_location_object_for_form_fragment<'s>(
+pub(crate) fn navigate_location_object_for_element_fragment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
     href: &str,

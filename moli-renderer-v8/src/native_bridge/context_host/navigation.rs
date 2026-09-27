@@ -140,6 +140,19 @@ impl JsContextHost {
             .is_some_and(|(source, target)| source.has_same_origin(&target))
     }
 
+    pub(in crate::native_bridge) fn child_frame_attribute_navigation_is_same_document(
+        &self,
+        handle: DomHandle,
+        destination: &Url,
+    ) -> bool {
+        destination.fragment().is_some()
+            && self
+                .child_browsing_context_current_url(handle)
+                .is_some_and(|current| {
+                    current[..url::Position::AfterQuery] == destination[..url::Position::AfterQuery]
+                })
+    }
+
     pub(in crate::native_bridge) fn child_frame_attribute_navigation_replaces_current_entry(
         &self,
         handle: DomHandle,
