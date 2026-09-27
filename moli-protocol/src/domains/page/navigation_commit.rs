@@ -19,6 +19,7 @@ use moli_core::page::{
 #[derive(Default)]
 struct LoadedPageCommitOutcome {
     preload_channel_execution_context_ids: Vec<i64>,
+    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
 }
 
 pub(super) async fn commit_loaded_navigation_async(
@@ -39,7 +40,7 @@ pub(super) async fn commit_loaded_navigation_async(
         response_from_cache,
         main_document_body,
         initial_runtime_realms,
-        renderer_output_predecessor,
+        mut renderer_output_predecessor,
         main_document_commit,
         progress_gate,
         network_error_page,
@@ -105,7 +106,11 @@ pub(super) async fn commit_loaded_navigation_async(
 
     let LoadedPageCommitOutcome {
         preload_channel_execution_context_ids: _,
+        renderer_output_predecessor: restore_predecessor,
     } = commit;
+    if let Some(predecessor) = restore_predecessor {
+        predecessor.merge_into_same_stream_tail(&mut renderer_output_predecessor);
+    }
     let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
         .bind_renderer_document_lifecycle_for_owner(
             &navigation_activity.state().owner,
@@ -307,9 +312,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     };
     match runtime_output_predecessor {
         Ok(runtime_output_predecessor) => {
-            if let Some(predecessor) = runtime_output_predecessor {
-                command_context.set_renderer_output_predecessor(predecessor);
-            }
+            outcome.renderer_output_predecessor = runtime_output_predecessor;
             let preload_channel_execution_context_ids = initial_runtime_realms
                 .iter()
                 .filter_map(runtime_realm_execution_context_id)

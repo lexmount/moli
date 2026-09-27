@@ -174,10 +174,24 @@ async fn assert_document_retained(
         page.evaluate("typeof unexpectedResponseScript").await,
         "undefined"
     );
+    assert_eq!(page.evaluate("noDocumentLifecycleEvents").await, json!([]));
 }
 
 async fn assert_next_navigation(page: &mut SameDocumentPage) {
     let next_url = format!("{}?next", page.base_url);
+    page.evaluate(
+        r#"(() => {
+        const events = [];
+        for (const type of ['pagehide', 'unload']) {
+            addEventListener(type, () => {
+                events.push(type);
+                sessionStorage.setItem('navigationUnloadEvents', JSON.stringify(events));
+                console.log('retained-document-' + type);
+            });
+        }
+    })()"#,
+    )
+    .await;
     page.ctx.sent.clear();
     let next = page
         .command("Page.navigate", json!({"url": next_url}))
@@ -188,6 +202,44 @@ async fn assert_next_navigation(page: &mut SameDocumentPage) {
     assert_eq!(
         page.evaluate("typeof noDocumentSnapshot").await,
         "undefined"
+    );
+    assert_eq!(
+        page.evaluate("JSON.parse(sessionStorage.getItem('navigationUnloadEvents'))")
+            .await,
+        json!(["pagehide", "unload"])
+    );
+    let unload_messages = page
+        .ctx
+        .sent
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| {
+            (event["method"] == "Runtime.consoleAPICalled")
+                .then(|| event["params"]["args"][0]["value"].as_str())
+                .flatten()
+                .filter(|value| value.starts_with("retained-document-"))
+                .map(|value| (index, value))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unload_messages
+            .iter()
+            .map(|(_, value)| *value)
+            .collect::<Vec<_>>(),
+        ["retained-document-pagehide", "retained-document-unload"]
+    );
+    let replacement = page
+        .ctx
+        .sent
+        .iter()
+        .position(|event| event["method"] == "Page.frameNavigated")
+        .expect("replacement document should commit");
+    assert!(
+        unload_messages
+            .iter()
+            .all(|(index, _)| *index < replacement),
+        "{:?}",
+        page.ctx.sent
     );
 }
 
@@ -356,17 +408,17 @@ async fn no_document_navigation_handles_fetch_interception() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_document_navigation_preserves_protocol_result_semantics() {
-    use crate::devtools_runtime::{
-        DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsNavigateCommand,
-        DevToolsNavigationWait, DevToolsProtocol, DevToolsSessionId, DevToolsTargetId,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, AutomationResult, DevToolsNavigateCommand,
+        DevToolsNavigationWait, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
     };
     tokio::task::LocalSet::new()
         .run_until(async {
             for status in [204, 205] {
                 for protocol in [
-                    DevToolsProtocol::Cdp,
-                    DevToolsProtocol::WebDriverClassic,
-                    DevToolsProtocol::WebDriverBidi,
+                    FrontendProtocol::Cdp,
+                    FrontendProtocol::WebDriverClassic,
+                    FrontendProtocol::WebDriverBidi,
                 ] {
                     let mut page = no_document_page(status, false).await;
                     let tree = page.command("Page.getFrameTree", json!({})).await;
@@ -375,9 +427,9 @@ async fn no_document_navigation_preserves_protocol_result_semantics() {
                         std::time::Duration::from_secs(5),
                         page.ctx
                             .conn
-                            .execute_devtools_command(DevToolsCommand::Navigate(
+                            .execute_automation_command(AutomationCommand::Navigate(
                                 DevToolsNavigateCommand {
-                                    context: DevToolsCommandContext {
+                                    context: AutomationContext {
                                         protocol,
                                         session_id: Some(DevToolsSessionId::from(SESSION)),
                                         target_id: Some(DevToolsTargetId::from(FRAME)),
@@ -393,12 +445,12 @@ async fn no_document_navigation_preserves_protocol_result_semantics() {
                     .expect("ignored response must settle the protocol navigation");
                     let (result, _, _, renderer_predecessor) = outcome.into_complete_parts();
                     assert!(renderer_predecessor.is_none());
-                    let DevToolsCommandResult::Navigate(result) = result.unwrap() else {
+                    let AutomationResult::Navigate(result) = result.unwrap() else {
                         panic!("expected navigation result");
                     };
                     assert_eq!(
                         result.error_text.as_deref(),
-                        (protocol == DevToolsProtocol::Cdp).then_some("net::ERR_ABORTED")
+                        (protocol == FrontendProtocol::Cdp).then_some("net::ERR_ABORTED")
                     );
                     assert_eq!(page.command("Page.getFrameTree", json!({})).await, tree);
                     assert_eq!(

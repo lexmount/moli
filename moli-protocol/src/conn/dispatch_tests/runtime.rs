@@ -759,14 +759,15 @@ async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback
 
 #[tokio::test]
 async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_message_sidecar() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
+    let (create_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -786,18 +787,19 @@ async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_mess
         target_id: Some(create_result.target_id.clone()),
         ..context
     };
-    conn.execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-        context: target_context.clone(),
-        url: "data:text/html,bidi-script-channel".to_owned(),
-        referrer: None,
-        wait: DevToolsNavigationWait::Load,
-    }))
+    ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+        DevToolsNavigateCommand {
+            context: target_context.clone(),
+            url: "data:text/html,bidi-script-channel".to_owned(),
+            referrer: None,
+            wait: DevToolsNavigationWait::Load,
+        },
+    ))
     .await
-    .into_complete_parts()
-    .0
     .expect("navigate should succeed before script message channel call");
 
-    let call = conn
+    let call = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CallFunction(
             DevToolsCallFunctionCommand {
                 context: target_context.clone(),

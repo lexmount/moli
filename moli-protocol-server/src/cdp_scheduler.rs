@@ -1,3 +1,4 @@
+use futures_util::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, atomic::AtomicU64},
@@ -110,6 +111,9 @@ pub(crate) enum CommandStartAction {
 
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
+    navigation_unloads:
+        FuturesUnordered<LocalBoxFuture<'static, (String, BackgroundNavigationCompletion)>>,
+    pending_navigation_unloads: HashMap<String, usize>,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
     runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     queues: SchedulerQueues,
@@ -701,6 +705,8 @@ impl CdpScheduler {
     fn new_with_screencast_interval(conn: CdpConnection, page_screencast_interval_ms: u32) -> Self {
         Self {
             conn,
+            navigation_unloads: FuturesUnordered::new(),
+            pending_navigation_unloads: HashMap::new(),
             pending_navigation_background_events: VecDeque::new(),
             runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             queues: SchedulerQueues::default(),
@@ -952,7 +958,7 @@ impl CdpScheduler {
 
     async fn execute_automation_command_with_protocol_messages_inner(
         &mut self,
-        receivers: Option<&mut CdpSchedulerEventReceivers>,
+        mut receivers: Option<&mut CdpSchedulerEventReceivers>,
         command: AutomationCommand,
         drain_load_completion: bool,
         background_command_id: Option<u64>,
@@ -971,7 +977,7 @@ impl CdpScheduler {
         self.apply_scheduler_events(scheduler_events);
         let mut protocol_output = ProtocolOutputSequence::empty();
         if let Some(predecessor) = renderer_output_predecessor {
-            if let Some(receivers) = receivers {
+            if let Some(receivers) = receivers.as_deref_mut() {
                 match self
                     .project_renderer_output_predecessor_before_devtools_result(
                         receivers,
@@ -1003,6 +1009,32 @@ impl CdpScheduler {
         }
         protocol_output
             .append(self.route_background_events_around_inflight_navigation(protocol_events));
+        if navigation_wait.is_some() {
+            while self.has_pending_navigation_unload_for_context(&navigation_context) {
+                let Some(receivers) = receivers.as_deref_mut() else {
+                    result = Err(DevToolsError::new(
+                        moli_protocol::automation::DevToolsErrorKind::Internal,
+                        "Navigation unload requires a renderer ingress receiver",
+                    ));
+                    break;
+                };
+                let Some(input) = self.recv_interleaved_input(receivers).await else {
+                    break;
+                };
+                match self
+                    .complete_interleaved_scheduler_input(receivers, input)
+                    .await
+                {
+                    Ok(output) => protocol_output.append(output),
+                    Err(failure) => {
+                        let (output, error) = failure.into_parts();
+                        protocol_output.append(output);
+                        result = Err(error);
+                        break;
+                    }
+                }
+            }
+        }
         if drain_load_completion
             && result.is_ok()
             && matches!(navigation_wait, Some(DevToolsNavigationWait::Load))
@@ -1428,8 +1460,9 @@ impl CdpScheduler {
         while self
             .conn
             .has_inflight_background_navigation_for_devtools_context(context)
+            || self.has_pending_navigation_unload_for_context(context)
         {
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1458,7 +1491,7 @@ impl CdpScheduler {
             .devtools_document_lifecycle_wait_state(context, key)
             == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
         {
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1670,7 +1703,8 @@ impl CdpScheduler {
                         DevToolsError::new(DevToolsErrorKind::Timeout, "navigation wait timed out"),
                     ));
                 };
-                match tokio::time::timeout(remaining, receivers.recv_interleaved_input()).await {
+                match tokio::time::timeout(remaining, self.recv_interleaved_input(receivers)).await
+                {
                     Ok(progress) => progress,
                     Err(_) => {
                         return Err(RendererOutputTransportFailure::without_output(
@@ -1682,7 +1716,7 @@ impl CdpScheduler {
                     }
                 }
             }
-            None => receivers.recv_interleaved_input().await,
+            None => self.recv_interleaved_input(receivers).await,
         };
         let input = input.ok_or_else(|| {
             RendererOutputTransportFailure::without_output(DevToolsError::new(
@@ -1703,6 +1737,7 @@ impl CdpScheduler {
             if self
                 .conn
                 .has_inflight_background_navigation_for_devtools_context(context)
+                || self.has_pending_navigation_unload_for_context(context)
                 || !self.front_protocol_residence_is_main_document_load_action_for_context(context)
             {
                 return out;
@@ -1762,7 +1797,7 @@ impl CdpScheduler {
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1937,10 +1972,9 @@ impl CdpScheduler {
         if target_ids.is_empty() {
             return self.has_inflight_background_navigation();
         }
-        target_ids.iter().any(|target_id| {
-            self.conn
-                .has_inflight_background_navigation_for_target(target_id)
-        })
+        target_ids
+            .iter()
+            .any(|target_id| self.has_inflight_background_navigation_for_target(target_id))
     }
 
     /// Share this decision between readiness probing and snapshot draining.
@@ -2019,6 +2053,57 @@ impl CdpScheduler {
         }
     }
 
+    async fn recv_navigation_unload_completion(
+        &mut self,
+    ) -> Option<BackgroundNavigationCompletion> {
+        if self.navigation_unloads.is_empty() {
+            return std::future::pending().await;
+        }
+        let (target_id, completion) = self.navigation_unloads.next().await?;
+        let pending = self
+            .pending_navigation_unloads
+            .get_mut(&target_id)
+            .expect("unload completion must have a pending owner");
+        *pending -= 1;
+        if *pending == 0 {
+            self.pending_navigation_unloads.remove(&target_id);
+        }
+        Some(completion)
+    }
+
+    pub(crate) async fn recv_background_navigation_completion(
+        &mut self,
+        receiver: &mut mpsc::UnboundedReceiver<BackgroundNavigationCompletion>,
+    ) -> Option<BackgroundNavigationCompletion> {
+        tokio::select! {
+            biased;
+            completion = self.recv_navigation_unload_completion() => completion,
+            completion = receiver.recv() => completion,
+        }
+    }
+
+    pub(crate) fn try_recv_background_navigation_completion(
+        &mut self,
+        receiver: &mut mpsc::UnboundedReceiver<BackgroundNavigationCompletion>,
+    ) -> Option<BackgroundNavigationCompletion> {
+        self.recv_background_navigation_completion(receiver)
+            .now_or_never()
+            .flatten()
+    }
+
+    pub(crate) async fn recv_interleaved_input(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+    ) -> Option<CdpSchedulerInterleavedInput> {
+        tokio::select! {
+            biased;
+            completion = self.recv_navigation_unload_completion() => {
+                completion.map(CdpSchedulerInterleavedInput::BackgroundNavigationCompletion)
+            }
+            input = receivers.recv_interleaved_input() => input,
+        }
+    }
+
     fn front_protocol_residence_is_main_document_load_action_for_context(
         &self,
         context: &moli_protocol::automation::AutomationContext,
@@ -2045,7 +2130,24 @@ impl CdpScheduler {
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.conn.has_inflight_background_navigation()
+        !self.pending_navigation_unloads.is_empty()
+            || self.conn.has_inflight_background_navigation()
+    }
+
+    fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
+        self.pending_navigation_unloads.contains_key(target_id)
+            || self
+                .conn
+                .has_inflight_background_navigation_for_target(target_id)
+    }
+
+    fn has_pending_navigation_unload_for_context(
+        &self,
+        context: &moli_protocol::automation::AutomationContext,
+    ) -> bool {
+        self.conn
+            .background_navigation_target_id_for_devtools_context(context)
+            .is_some_and(|target_id| self.pending_navigation_unloads.contains_key(&target_id))
     }
 
     pub(crate) fn command_waits_for_navigation_flush(&self, command: &ParsedCdpCommand) -> bool {
@@ -2069,10 +2171,7 @@ impl CdpScheduler {
         let has_inflight_navigation = should_wait
             && navigation_target_id.as_deref().map_or_else(
                 || self.has_inflight_background_navigation(),
-                |target_id| {
-                    self.conn
-                        .has_inflight_background_navigation_for_target(target_id)
-                },
+                |target_id| self.has_inflight_background_navigation_for_target(target_id),
             );
         if moli_trace::cdp_runtime_trace_enabled()
             && let Some((method, resource_type, request_id, url)) = event.trace_network_summary()
@@ -2141,10 +2240,7 @@ impl CdpScheduler {
             }
             let remains_gated = pending.target_id.as_deref().map_or_else(
                 || self.has_inflight_background_navigation(),
-                |target_id| {
-                    self.conn
-                        .has_inflight_background_navigation_for_target(target_id)
-                },
+                |target_id| self.has_inflight_background_navigation_for_target(target_id),
             );
             if remains_gated {
                 retained.push_back(pending);
@@ -2183,6 +2279,17 @@ impl CdpScheduler {
                 );
             }
             match event {
+                CdpSchedulerEvent::NavigationUnloadRequested { pending } => {
+                    let target_id = pending.target_id().to_owned();
+                    *self
+                        .pending_navigation_unloads
+                        .entry(target_id.clone())
+                        .or_default() += 1;
+                    self.navigation_unloads.push(Box::pin(async move {
+                        let completion = pending.wait().await;
+                        (target_id, completion)
+                    }));
+                }
                 CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                     if moli_trace::cdp_nav_timing_enabled() {
                         tracing::info!(
@@ -2827,12 +2934,24 @@ impl CdpScheduler {
         completion: BackgroundNavigationCompletion,
         receivers: &mut CdpSchedulerEventReceivers,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        let mut unload_output = ProtocolOutputSequence::empty();
+        if let Some(predecessor) = completion.unload_output_predecessor() {
+            unload_output.append(
+                self.project_renderer_output_predecessor_before_devtools_result(
+                    receivers,
+                    &predecessor,
+                )
+                .await?,
+            );
+        }
         let (mut output, completion_output, renderer_output_boundary) = self
             .materialize_background_navigation_completion_with_progress_barrier(
                 completion,
                 &mut receivers.background_event_rx,
             )
             .await;
+        unload_output.append(output);
+        output = unload_output;
         let Some(predecessor) = renderer_output_boundary else {
             output.append(completion_output);
             return Ok(output);

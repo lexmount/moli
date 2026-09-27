@@ -395,6 +395,7 @@ pub(super) async fn complete_tokened_materialized_navigation_into_buffer_async(
         navigation_state,
         navigation,
         &mut command_context,
+        None,
     ))
     .await;
     if let Some(predecessor) = command_context.take_renderer_output_predecessor() {

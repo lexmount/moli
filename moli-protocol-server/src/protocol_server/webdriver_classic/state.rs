@@ -1214,22 +1214,24 @@ async fn execute_classic_automation_command_with_pending_navigation_retry(
             .complete_ready_protocol_residences_for_external_load_wait()
             .await;
         if progress.is_empty() {
-            let input = match tokio::time::timeout(remaining, receivers.recv_interleaved_input())
-                .await
-            {
-                Ok(Some(input)) => input,
-                Ok(None) => {
-                    execution.execution.result = Err(DevToolsError::new(
-                        DevToolsErrorKind::NoSuchSession,
-                        "Classic session runtime stopped while waiting for navigation",
-                    ));
-                    return execution;
-                }
-                Err(_) => {
-                    execution.execution.result = Err(classic_pending_navigation_timeout_error());
-                    return execution;
-                }
-            };
+            let input =
+                match tokio::time::timeout(remaining, scheduler.recv_interleaved_input(receivers))
+                    .await
+                {
+                    Ok(Some(input)) => input,
+                    Ok(None) => {
+                        execution.execution.result = Err(DevToolsError::new(
+                            DevToolsErrorKind::NoSuchSession,
+                            "Classic session runtime stopped while waiting for navigation",
+                        ));
+                        return execution;
+                    }
+                    Err(_) => {
+                        execution.execution.result =
+                            Err(classic_pending_navigation_timeout_error());
+                        return execution;
+                    }
+                };
             // Once selected, finish the move-owned input outside the timeout
             // race. In particular, an admitted renderer publication must not
             // disappear merely because the navigation deadline expires while
@@ -1344,7 +1346,7 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
-                    completion = receivers.background_navigation_completion_rx.recv() => {
+                    completion = scheduler.recv_background_navigation_completion(&mut receivers.background_navigation_completion_rx) => {
                         let Some(completion) = completion else {
                             break;
                         };
@@ -1479,7 +1481,7 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
-                completion = receivers.background_navigation_completion_rx.recv() => {
+                completion = scheduler.recv_background_navigation_completion(&mut receivers.background_navigation_completion_rx) => {
                     let Some(completion) = completion else {
                         break;
                     };

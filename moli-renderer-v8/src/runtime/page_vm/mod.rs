@@ -2240,6 +2240,10 @@ impl PageVm {
                 "main navigation attempted to commit an already retired PageVm"
             ));
         };
+        if let Err(error) = vm.unload_main_document_for_navigation_commit() {
+            self.vm = Some(vm);
+            return Err(error);
+        }
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
         match vm.detach_main_window_proxy_for_navigation_commit(self.page_id.as_u64()) {

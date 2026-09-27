@@ -387,6 +387,8 @@ pub(crate) struct MaterializedNavigationCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
+    unloaded_source: Option<crate::conn::TargetPageResidenceIdentity>,
+    commit_barrier: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl MaterializedNavigationCompletion {
@@ -399,7 +401,17 @@ impl MaterializedNavigationCompletion {
             token,
             state,
             navigation,
+            unloaded_source: None,
+            commit_barrier: None,
         }
+    }
+
+    pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
+        conn.accepts_pending_document_navigation_for_owner(&self.state.owner, &self.token)
+            && self
+                .unloaded_source
+                .as_ref()
+                .is_none_or(|source| conn.target_page_residence_identity_is_current(source))
     }
 
     pub(crate) fn requested_url(&self) -> &str {
@@ -414,14 +426,92 @@ impl MaterializedNavigationCompletion {
         self.state.owner.session_id()
     }
 
+    pub(crate) fn take_commit_barrier(&mut self) -> Option<tokio::sync::oneshot::Sender<()>> {
+        self.commit_barrier.take()
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
         DocumentNavigationToken,
         NavigationDispatchState,
         network::MaterializedNavigationLoadOutcome,
+        bool,
     ) {
-        (self.token, self.state, self.navigation)
+        (
+            self.token,
+            self.state,
+            self.navigation,
+            self.unloaded_source.is_some(),
+        )
+    }
+}
+
+/// A replacement response owns this unload command until its old Page's
+/// concrete output can be projected before committing the new renderer.
+pub struct PendingNavigationUnload {
+    navigation: MaterializedNavigationCompletion,
+    pending: PendingPageCommand,
+}
+
+impl std::fmt::Debug for PendingNavigationUnload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingNavigationUnload")
+            .field("token", &self.navigation.token)
+            .field("source", &self.navigation.unloaded_source)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingNavigationUnload {
+    pub fn target_id(&self) -> &str {
+        &self.navigation.token.target_id
+    }
+
+    pub async fn wait(self) -> BackgroundNavigationCompletion {
+        BackgroundNavigationCompletion::AfterUnload(Box::new(NavigationAfterUnload {
+            navigation: self.navigation,
+            completed: self.pending.wait().await,
+        }))
+    }
+}
+
+pub struct NavigationAfterUnload {
+    navigation: MaterializedNavigationCompletion,
+    completed: anyhow::Result<CompletedPageCommand>,
+}
+
+impl NavigationAfterUnload {
+    pub(crate) fn finish(self, conn: &mut CdpConnection) -> MaterializedNavigationCompletion {
+        let mut navigation = self.navigation;
+        match self.completed {
+            Ok(completed) => {
+                let source = navigation.unloaded_source.as_ref().expect("unload source");
+                let output = conn.settle_page_command_turn_for_owner(
+                    navigation.state.owner.session_id(),
+                    source,
+                    completed,
+                );
+                let (mut completion, predecessor) = output.into_completion_and_predecessor();
+                assert!(
+                    predecessor.as_ref().is_none_or(|fence| {
+                        conn.renderer_output_cursor_is_projected(fence.cursor())
+                    }),
+                    "unload output must cross ingress before the old Page is replaced"
+                );
+                if let Some(continuation) = completion.take_post_response_continuation() {
+                    continuation.release();
+                }
+            }
+            Err(error) => {
+                navigation.navigation = network::materialize_navigation_load_result(
+                    conn,
+                    &navigation.state,
+                    Err(error),
+                );
+            }
+        }
+        navigation
     }
 }
 
@@ -505,6 +595,7 @@ impl BackgroundMainDocumentBodyCompletion {
 
 pub enum BackgroundNavigationCompletion {
     Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
+    AfterUnload(Box<NavigationAfterUnload>),
     MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
 }
 
@@ -512,6 +603,7 @@ impl BackgroundNavigationCompletion {
     pub fn requested_url(&self) -> &str {
         match self {
             Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
+            Self::AfterUnload(completion) => completion.navigation.requested_url(),
             Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
         }
     }
@@ -519,7 +611,19 @@ impl BackgroundNavigationCompletion {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Lifecycle(_) => "lifecycle",
+            Self::AfterUnload(_) => "after_unload",
             Self::MainDocumentBody(_) => "main_document_body",
+        }
+    }
+
+    pub fn unload_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        match self {
+            Self::AfterUnload(completion) => completion
+                .completed
+                .as_ref()
+                .ok()
+                .and_then(CompletedPageCommand::renderer_output_predecessor),
+            _ => None,
         }
     }
 }
@@ -829,7 +933,7 @@ fn start_devtools_page_command(
         }
         _ => PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
-            "UnsupportedDevToolsCommand",
+            "UnsupportedAutomationCommand",
         )),
     }
 }
@@ -1140,8 +1244,10 @@ fn start_protocol_neutral_navigation_command(
             )
         }
         _ => {
-            let error =
-                DevToolsError::new(DevToolsErrorKind::Unsupported, "UnsupportedDevToolsCommand");
+            let error = DevToolsError::new(
+                DevToolsErrorKind::Unsupported,
+                "UnsupportedAutomationCommand",
+            );
             return (
                 PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
                     error.clone(),
@@ -3122,6 +3228,21 @@ pub(super) async fn complete_pending_navigate_load_command(
     completed: CompletedNavigateLoadCommand,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
+    complete_pending_navigate_load_command_with_commit_barrier(
+        conn,
+        completed,
+        command_context,
+        None,
+    )
+    .await
+}
+
+pub(super) async fn complete_pending_navigate_load_command_with_commit_barrier(
+    conn: &mut CdpConnection,
+    completed: CompletedNavigateLoadCommand,
+    command_context: &mut crate::conn::CommandDispatchContext,
+    commit_barrier: Option<tokio::sync::oneshot::Sender<()>>,
+) -> PageCommandTaskStep {
     let CompletedNavigateLoadCommand {
         prefix_events,
         token,
@@ -3129,7 +3250,8 @@ pub(super) async fn complete_pending_navigate_load_command(
         navigation,
     } = completed;
     let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
-    let completion = MaterializedNavigationCompletion::new(token, state, navigation);
+    let mut completion = MaterializedNavigationCompletion::new(token, state, navigation);
+    completion.commit_barrier = commit_barrier;
     let mut output = CommandOutputBuffer::default();
     output.extend_background_events_after_messages(prefix_events);
     conn.drain_materialized_navigation_completion_into_buffer(
@@ -3304,6 +3426,7 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
+    commit_barrier: Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
         push_superseded_navigation_result(out, &state);
@@ -3312,7 +3435,49 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
         finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
         return;
     }
-    complete_materialized_navigation_into_buffer_inner_async(
+    if matches!(
+        navigation,
+        network::MaterializedNavigationLoadOutcome::ResponseCommitReady(_)
+            | network::MaterializedNavigationLoadOutcome::Loaded(_)
+    ) && let Some(source) = conn.target_page_residence_identity_for_owner(&state.owner)
+        && let Some(page) = conn
+            .runtime_session_owner_slot_mut_for_owner(&state.owner)
+            .ok()
+            .and_then(|slot| slot.loaded_page_mut())
+    {
+        match page.start_unload_main_document_for_navigation_commit() {
+            Ok(pending) => {
+                let mut navigation =
+                    MaterializedNavigationCompletion::new(token, state, navigation);
+                navigation.unloaded_source = Some(source);
+                navigation.commit_barrier = commit_barrier;
+                conn.push_scheduler_event(
+                    crate::conn::CdpSchedulerEvent::NavigationUnloadRequested {
+                        pending: Box::new(PendingNavigationUnload {
+                            navigation,
+                            pending,
+                        }),
+                    },
+                );
+                return;
+            }
+            Err(error) => {
+                let navigation =
+                    network::materialize_navigation_load_result(conn, &state, Err(error));
+                complete_materialized_navigation_after_unload_into_buffer_async(
+                    conn,
+                    out,
+                    token,
+                    state,
+                    navigation,
+                    command_context,
+                )
+                .await;
+                return;
+            }
+        }
+    }
+    complete_materialized_navigation_after_unload_into_buffer_async(
         conn,
         out,
         token,
@@ -3321,9 +3486,12 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
         command_context,
     )
     .await;
+    if let Some(barrier) = commit_barrier {
+        let _ = barrier.send(());
+    }
 }
 
-async fn complete_materialized_navigation_into_buffer_inner_async(
+pub(crate) async fn complete_materialized_navigation_after_unload_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     token: DocumentNavigationToken,
@@ -3439,7 +3607,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             if state.navigate_id.is_some() {
                 let protocol = state.result_projection.protocol();
                 let mut result = state.result_projection.into_payload();
-                if protocol == DevToolsProtocol::Cdp
+                if protocol == FrontendProtocol::Cdp
                     && let Some(payload) = result.as_object_mut()
                     && payload.contains_key("frameId")
                 {
@@ -3480,7 +3648,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     );
 }
 
-async fn finish_renderer_navigation_into_buffer_async(
+pub(crate) async fn finish_renderer_navigation_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     owner: &CommandOwnerScope,

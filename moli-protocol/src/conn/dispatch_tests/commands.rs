@@ -416,14 +416,15 @@ async fn automation_command_applies_window_state_to_document_surface() {
 
 #[tokio::test]
 async fn automation_command_executes_dom_outer_html_for_document_source() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
+    let (create_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -441,19 +442,22 @@ async fn automation_command_executes_dom_outer_html_for_document_source() {
     };
     let target_id = create_result.target_id.clone();
     let url = "data:text/html,<title>DOMSource</title><main>source-owner</main>".to_owned();
-    let _ = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let _ = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                url,
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            url,
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
+        ))
         .await;
 
-    let (source_result, _) = conn
+    let (source_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: AutomationContext {

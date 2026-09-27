@@ -2011,6 +2011,27 @@ impl FrameOwnerStore {
             })
     }
 
+    pub(crate) fn begin_current_main_document_unload(&mut self) -> Option<FrameDocumentTaskOwner> {
+        let owner = self.current_main_document_task_owner()?;
+        self.documents
+            .get_mut(&owner.document_id)?
+            .lifecycle_progress
+            .begin_unload_dispatch()
+            .then_some(owner)
+    }
+
+    pub(crate) fn finish_current_main_document_unload(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        if !self.main_document_task_owner_is_current(owner) {
+            return false;
+        }
+        self.documents
+            .get_mut(&owner.document_id)
+            .is_some_and(|document| document.lifecycle_progress.finish_unload_dispatch())
+    }
+
     pub(crate) fn begin_current_child_document_unload(
         &mut self,
         child_handle: DomHandle,
@@ -2020,7 +2041,7 @@ impl FrameOwnerStore {
             .documents
             .get_mut(&owner.document_id)?
             .lifecycle_progress
-            .begin_child_unload_dispatch();
+            .begin_unload_dispatch();
         began.then(|| super::FrameDocumentUnloadLifecycleAction::new(child_handle, owner))
     }
 
@@ -2034,7 +2055,7 @@ impl FrameOwnerStore {
         self.documents
             .get_mut(&action.owner().document_id)
             .filter(|document| document.local_window_id == action.owner().local_window_id)
-            .is_some_and(|document| document.lifecycle_progress.finish_child_unload_dispatch())
+            .is_some_and(|document| document.lifecycle_progress.finish_unload_dispatch())
     }
 
     pub(crate) fn begin_current_child_document_load_delivery(
