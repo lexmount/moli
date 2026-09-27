@@ -25,6 +25,9 @@ mod child_module_records;
 #[path = "dynamic_import_credentials.rs"]
 mod dynamic_import_credentials;
 
+#[path = "dynamic_import_referrer.rs"]
+mod dynamic_import_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -38,6 +41,7 @@ struct IntegrityRequest {
     path: String,
     origin: Option<String>,
     cookie: Option<String>,
+    referer: Option<String>,
     sec_fetch_dest: Option<String>,
     sec_fetch_mode: Option<String>,
     sec_fetch_site: Option<String>,
@@ -93,6 +97,7 @@ impl IntegrityServers {
                                     let incoming = IntegrityRequest {
                                         method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
                                         path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
+                                        referer: header("Referer"),
                                         sec_fetch_dest: header("Sec-Fetch-Dest"),
                                         sec_fetch_mode: header("Sec-Fetch-Mode"),
                                         sec_fetch_site: header("Sec-Fetch-Site"),
@@ -168,6 +173,7 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/import-credentials.js" => (
             "200 OK",
             format!("{javascript}Cache-Control: no-store\r\n"),
