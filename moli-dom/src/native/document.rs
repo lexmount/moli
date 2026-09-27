@@ -5,6 +5,7 @@ use url::Url;
 use super::{NativeDom, NativeNodeId};
 
 mod base_url;
+mod referrer_policy;
 
 pub use base_url::DocumentBaseUrlPolicyCheck;
 use base_url::DocumentBaseUrlState;
@@ -67,6 +68,9 @@ pub struct Document {
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
     base_url_state: DocumentBaseUrlState,
+    // Meta delivery updates policy in time order; removing the element does
+    // not undo the policy it delivered to this Document.
+    meta_referrer_policy: Option<&'static str>,
 }
 
 impl Document {
@@ -95,6 +99,7 @@ impl Document {
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
+            meta_referrer_policy: None,
         }
     }
 
@@ -115,6 +120,7 @@ impl Document {
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
+            meta_referrer_policy: None,
         }
     }
 
@@ -161,8 +167,13 @@ impl Document {
     pub(super) fn clone_for_new_document(&self) -> Self {
         Self {
             active_parser_was_aborted: false,
+            meta_referrer_policy: None,
             ..self.clone()
         }
+    }
+
+    pub fn meta_referrer_policy(&self) -> Option<&str> {
+        self.meta_referrer_policy
     }
 
     pub fn visibility_hidden(&self) -> bool {
