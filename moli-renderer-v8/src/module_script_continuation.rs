@@ -1082,6 +1082,7 @@ mod tests {
 
     fn prepared_module_script(node: u32) -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position: node as usize,
             node_id: NodeId::new(node as usize),
             kind: ScriptKind::Module,

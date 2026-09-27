@@ -48,6 +48,11 @@ impl JsContextHost {
             kind,
             mode,
         )?;
+        script.document_referrer_policy =
+            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                self,
+                owner_document_handle,
+            );
         // Classic and module scripts with async=false share insertion order.
         // Node allocation order does not determine execution order.
         script.position = self

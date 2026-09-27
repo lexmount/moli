@@ -37,6 +37,9 @@ mod module_document_referrer;
 #[path = "modulepreload_document_referrer.rs"]
 mod modulepreload_document_referrer;
 
+#[path = "classic_document_referrer.rs"]
+mod classic_document_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -184,6 +187,9 @@ fn fixture_response(
     match path {
         "/delivered-document-referrer.html" | "/delivered-meta-policy.html" | "/delivered-meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
+        }
+        "/classic-policy.html" | "/classic-policy.js" => {
+            classic_document_referrer::fixture_response(path, query, origin, cross)
         }
         "/preload-policy.html" | "/preload-policy.js" => {
             modulepreload_document_referrer::fixture_response(path, query, origin, cross)

@@ -245,10 +245,12 @@ impl DocumentRuntime {
         &mut self,
         node_id: DomHandle,
     ) -> Option<ParserScriptRead> {
-        <DomHost as ParserPlanningReadView>::parser_script_read(
+        let mut script = <DomHost as ParserPlanningReadView>::parser_script_read(
             self.dom_host_mut_for_active_parser_step(),
             node_id,
-        )
+        )?;
+        script.document_referrer_policy = self.current_document_referrer_policy();
+        Some(script)
     }
 
     pub(crate) fn parser_runtime_dom_stylesheet_element(

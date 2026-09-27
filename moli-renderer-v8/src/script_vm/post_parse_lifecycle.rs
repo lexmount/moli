@@ -2196,6 +2196,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(super) fn test_pending_runtime_source_load_script(&self) -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position: 0,
             node_id: NodeId::new(1),
             kind: ScriptKind::Classic,
@@ -2246,6 +2247,7 @@ impl ScriptVm {
         self.document_runtime
             .bind_runtime_owned_script_handle_for_node(node_id, &host_script_handle);
         let script = PreparedScript {
+            document_referrer_policy: None,
             position: node_id.index(),
             node_id,
             kind: ScriptKind::Classic,

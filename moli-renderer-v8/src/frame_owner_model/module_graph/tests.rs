@@ -144,6 +144,7 @@ fn dynamic_tree_fetch_request(
 
 fn parser_root_script(handle: usize, url: &Url) -> PreparedScript {
     PreparedScript {
+        document_referrer_policy: None,
         position: handle,
         node_id: NodeId::new(handle),
         kind: ScriptKind::Module,

@@ -720,6 +720,7 @@ fn prepared_external_module_for_page_vm_test_with_node(
     url: Url,
 ) -> PreparedScript {
     PreparedScript {
+        document_referrer_policy: None,
         position: node as usize,
         node_id: NodeId::new(node as usize),
         kind: ScriptKind::Module,
@@ -949,6 +950,7 @@ fn prepared_inline_module_for_page_vm_test(
     source: &str,
 ) -> PreparedScript {
     PreparedScript {
+        document_referrer_policy: None,
         position: node as usize,
         node_id: NodeId::new(node as usize),
         kind: ScriptKind::Module,
@@ -969,6 +971,7 @@ fn prepared_loaded_classic_for_page_vm_test(
     source: &str,
 ) -> PreparedScript {
     PreparedScript {
+        document_referrer_policy: None,
         position: node as usize,
         node_id: NodeId::new(node as usize),
         kind: ScriptKind::Classic,
@@ -1021,6 +1024,7 @@ fn append_parser_owned_external_classic_defer_for_page_vm_test(
         .document_runtime
         .bind_parser_owned_script_handle_for_node(script_node);
     PreparedScript {
+        document_referrer_policy: None,
         position,
         node_id: NodeId::new(script_node.index()),
         kind: ScriptKind::Classic,

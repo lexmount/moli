@@ -940,6 +940,7 @@ mod tests {
     fn parser_module_script(url: &str, node_id: usize, position: usize) -> PreparedScript {
         let script_url = url::Url::parse(url).expect("module script url");
         PreparedScript {
+            document_referrer_policy: None,
             position,
             node_id: NodeId::new(node_id),
             kind: ScriptKind::Module,
