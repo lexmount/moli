@@ -207,10 +207,11 @@ pub(crate) use location_navigation::{
     navigate_borrowed_location, navigate_child_meta_refresh, navigate_location_object_for_hyperlink,
     navigate_location_object_with_child_navigate_event,
     history_entry_seed_for_cross_document_location,
+
     navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
-    navigate_location_object_for_form_fragment,
+    navigate_location_object_for_element_fragment,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
