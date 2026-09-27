@@ -3974,10 +3974,10 @@ fn anchor_click_queues_pending_top_level_location_navigation() {
 }
 
 #[test]
-fn taking_protocol_handoff_location_navigation_restores_source_location() {
+fn taking_protocol_handoff_location_navigation_preserves_source_location() {
     let mut vm = new_storage_test_vm("https://anchor-click-navigation.test/path/index.html");
 
-    let assigned_path = vm
+    let source_path = vm
         .eval(
             r#"
 (() => {
@@ -3987,7 +3987,7 @@ fn taking_protocol_handoff_location_navigation_restores_source_location() {
 "#,
         )
         .expect("location assignment should evaluate");
-    assert_eq!(assigned_path, "/download");
+    assert_eq!(source_path, "/path/index.html");
 
     let pending_url = vm
         .take_pending_document_location_navigation()
@@ -3998,10 +3998,10 @@ fn taking_protocol_handoff_location_navigation_restores_source_location() {
         "https://anchor-click-navigation.test/download"
     );
 
-    let restored_path = vm
+    let handoff_source_path = vm
         .eval("location.pathname")
-        .expect("restored location should evaluate");
-    assert_eq!(restored_path, "/path/index.html");
+        .expect("source location should remain readable after handoff");
+    assert_eq!(handoff_source_path, source_path);
 }
 
 #[test]

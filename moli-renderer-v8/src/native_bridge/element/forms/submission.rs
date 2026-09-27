@@ -953,6 +953,11 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 }
                 navigated
             } else {
+                if request.url.scheme() != "javascript"
+                    && !runtime.dispatch_main_document_tree_beforeunload(scope)
+                {
+                    return false;
+                }
                 runtime.record_pending_location_navigation_request(
                     request.url,
                     request.method,
