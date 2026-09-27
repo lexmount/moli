@@ -1,3 +1,4 @@
+mod completion;
 mod stream_consumer;
 
 use self::stream_consumer::consume_readable_body_stream;
@@ -255,6 +256,7 @@ enum PendingBodyMaterializationKind {
 pub(crate) struct PendingBodyMaterialization {
     resolver: RealmObjectHandle,
     kind: PendingBodyMaterializationKind,
+    task_destination: Option<v8::Global<v8::Context>>,
 }
 
 struct PendingBodyMaterializationBatch {
@@ -1276,7 +1278,25 @@ pub(in crate::network_host) fn consume_network_body_value_from_object<'s>(
     object: v8::Local<'s, v8::Object>,
     kind: NetworkBodyConsumptionKind,
 ) -> NetworkBodyConsumption<'s> {
-    consume_network_body_value_from_object_inner(scope, object, kind, None).0
+    consume_network_body_value_from_object_inner(scope, object, kind, None, None).0
+}
+
+pub(in crate::network_host) fn consume_fetch_body_value_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    kind: NetworkBodyConsumptionKind,
+) -> NetworkBodyConsumption<'s> {
+    // A null body converts immediately. Every non-null body uses fully-read's
+    // fetch task, even when its native byte storage is already complete.
+    let task_destination = if object_has_null_body_slot(scope, object) {
+        None
+    } else {
+        let context = object
+            .get_creation_context(scope)
+            .expect("Body receiver realm");
+        Some(v8::Global::new(scope, context))
+    };
+    consume_network_body_value_from_object_inner(scope, object, kind, None, task_destination).0
 }
 
 pub(in crate::network_host) fn consume_network_body_value_from_object_with_chunk_callback<'s>(
@@ -1285,7 +1305,7 @@ pub(in crate::network_host) fn consume_network_body_value_from_object_with_chunk
     kind: NetworkBodyConsumptionKind,
     chunk_callback: v8::Local<'s, v8::Function>,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
-    consume_network_body_value_from_object_inner(scope, object, kind, Some(chunk_callback))
+    consume_network_body_value_from_object_inner(scope, object, kind, Some(chunk_callback), None)
 }
 
 pub(in crate::network_host) fn consume_filtered_response_internal_body_value_from_object<'s>(
@@ -1294,7 +1314,10 @@ pub(in crate::network_host) fn consume_filtered_response_internal_body_value_fro
     kind: NetworkBodyConsumptionKind,
 ) -> Option<NetworkBodyConsumption<'s>> {
     let source = filtered_response_internal_body_source_from_object(scope, object)?;
-    Some(consume_network_body_value_from_source_inner(scope, object, Some(source), kind, None).0)
+    Some(
+        consume_network_body_value_from_source_inner(scope, object, Some(source), kind, None, None)
+            .0,
+    )
 }
 
 pub(in crate::network_host) fn consume_filtered_response_internal_body_value_from_object_with_chunk_callback<
@@ -1315,6 +1338,7 @@ pub(in crate::network_host) fn consume_filtered_response_internal_body_value_fro
             stream,
             kind,
             Some(chunk_callback),
+            false,
         ));
     }
     Some(consume_network_body_value_from_source_inner(
@@ -1323,6 +1347,7 @@ pub(in crate::network_host) fn consume_filtered_response_internal_body_value_fro
         Some(source),
         kind,
         Some(chunk_callback),
+        None,
     ))
 }
 
@@ -1331,6 +1356,7 @@ fn consume_network_body_value_from_object_inner<'s>(
     object: v8::Local<'s, v8::Object>,
     kind: NetworkBodyConsumptionKind,
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
+    task_destination: Option<v8::Global<v8::Context>>,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
     let explicit_source = network_body_source_from_object(scope, object);
     consume_network_body_value_from_source_inner(
@@ -1339,6 +1365,7 @@ fn consume_network_body_value_from_object_inner<'s>(
         explicit_source,
         kind,
         chunk_callback,
+        task_destination,
     )
 }
 
@@ -1348,6 +1375,7 @@ fn consume_network_body_value_from_source_inner<'s>(
     explicit_source: Option<v8::Local<'s, v8::Object>>,
     kind: NetworkBodyConsumptionKind,
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
+    task_destination: Option<v8::Global<v8::Context>>,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
     let source = explicit_source.unwrap_or(object);
     let pending_stream =
@@ -1366,7 +1394,14 @@ fn consume_network_body_value_from_source_inner<'s>(
         if let Some(chunk_callback) = chunk_callback
             && let Some(stream) = readable_body_stream_from_object(scope, object)
         {
-            return consume_readable_body_stream(scope, object, stream, kind, Some(chunk_callback));
+            return consume_readable_body_stream(
+                scope,
+                object,
+                stream,
+                kind,
+                Some(chunk_callback),
+                task_destination.is_some(),
+            );
         }
         let Some(id) = registry_body_source_id(scope, source) else {
             return (NetworkBodyConsumption::Failed, None);
@@ -1385,6 +1420,7 @@ fn consume_network_body_value_from_source_inner<'s>(
                 scope,
                 resolver,
                 materialization_kind.clone_for_ready(),
+                task_destination.clone(),
                 &mut ready,
                 &mut rejected,
             );
@@ -1395,6 +1431,7 @@ fn consume_network_body_value_from_source_inner<'s>(
                 scope,
                 resolver,
                 materialization_kind.clone_for_ready(),
+                task_destination.clone(),
                 &mut ready,
                 &mut rejected,
             );
@@ -1407,16 +1444,34 @@ fn consume_network_body_value_from_source_inner<'s>(
             match rejection {
                 PendingBodyRejection::Reason(reason) => {
                     let reason = v8::Local::new(scope, &reason);
-                    let _ = resolver.reject(scope, reason);
+                    reject_body_materialization_with_reason(
+                        scope,
+                        resolver,
+                        reason,
+                        materialization_kind,
+                        task_destination,
+                    );
                 }
                 PendingBodyRejection::Message(error_text) => {
-                    reject_body_materialization(scope, resolver, &error_text);
+                    reject_body_materialization(
+                        scope,
+                        resolver,
+                        &error_text,
+                        materialization_kind,
+                        task_destination,
+                    );
                 }
             }
             return (NetworkBodyConsumption::Pending(promise), None);
         }
         if let Some(bytes) = ready {
-            resolve_body_materialization(scope, resolver, bytes, materialization_kind);
+            resolve_body_materialization(
+                scope,
+                resolver,
+                bytes,
+                materialization_kind,
+                task_destination,
+            );
             return (NetworkBodyConsumption::Pending(promise), None);
         }
         return (NetworkBodyConsumption::Pending(promise), None);
@@ -1425,18 +1480,38 @@ fn consume_network_body_value_from_source_inner<'s>(
     if explicit_source.is_none()
         && let Some(stream) = readable_body_stream_from_object(scope, object)
     {
-        return consume_readable_body_stream(scope, object, stream, kind, chunk_callback);
+        return consume_readable_body_stream(
+            scope,
+            object,
+            stream,
+            kind,
+            chunk_callback,
+            task_destination.is_some(),
+        );
     }
 
     let bytes = match try_network_body_bytes_from_storage(scope, source, true) {
-        Ok(Some(bytes)) => bytes,
+        Ok(Some(bytes)) => Some(bytes),
         Ok(None) if explicit_source.is_none() && object_has_null_body_slot(scope, object) => {
-            Vec::new()
+            Some(Vec::new())
         }
-        Ok(None) => return (NetworkBodyConsumption::Failed, None),
-        Err(_) => return (NetworkBodyConsumption::Failed, None),
+        Ok(None) | Err(_) => None,
     };
     let kind = PendingBodyMaterializationKind::new(scope, object, kind);
+    if let Some(task_destination) = task_destination {
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return (NetworkBodyConsumption::Failed, None);
+        };
+        let promise = resolver.get_promise(scope);
+        let result = bytes.ok_or_else(|| {
+            v8::Exception::type_error(scope, v8str(scope, "Failed to materialize response body"))
+        });
+        completion::queue_body_completion(scope, resolver, result, kind, task_destination);
+        return (NetworkBodyConsumption::Pending(promise), None);
+    }
+    let Some(bytes) = bytes else {
+        return (NetworkBodyConsumption::Failed, None);
+    };
     match body_materialization_value(scope, &bytes, kind) {
         Ok(value) => (NetworkBodyConsumption::Ready(value), None),
         Err(error) => (NetworkBodyConsumption::Rejected(error), None),
@@ -1498,6 +1573,7 @@ fn inspect_pending_body_source_for_materialization<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     kind: PendingBodyMaterializationKind,
+    task_destination: Option<v8::Global<v8::Context>>,
     ready: &mut Option<Vec<u8>>,
     rejected: &mut Option<PendingBodyRejection>,
 ) {
@@ -1517,6 +1593,7 @@ fn inspect_pending_body_source_for_materialization<'s>(
             state.materializations.push(PendingBodyMaterialization {
                 resolver: RealmObjectHandle::new(scope, resolver.into()),
                 kind,
+                task_destination,
             });
         }
     } else {
@@ -1772,7 +1849,13 @@ fn resolve_pending_body_materializations(
         } else {
             bytes.clone()
         };
-        resolve_body_materialization(scope, resolver, bytes, materialization.kind);
+        resolve_body_materialization(
+            scope,
+            resolver,
+            bytes,
+            materialization.kind,
+            materialization.task_destination,
+        );
     }
 }
 
@@ -1806,7 +1889,13 @@ fn reject_pending_body_materializations_with_reason<'s>(
         };
         // The private handle is populated only from a PromiseResolver.
         let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
-        let _ = resolver.reject(scope, reason);
+        reject_body_materialization_with_reason(
+            scope,
+            resolver,
+            reason,
+            materialization.kind,
+            materialization.task_destination,
+        );
     }
 }
 
@@ -1814,11 +1903,27 @@ fn reject_body_materialization<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     error_text: &str,
+    kind: PendingBodyMaterializationKind,
+    task_destination: Option<v8::Global<v8::Context>>,
 ) {
     let error = v8_string(scope, error_text)
         .map(|message| v8::Exception::type_error(scope, message))
         .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.reject(scope, error);
+    reject_body_materialization_with_reason(scope, resolver, error, kind, task_destination);
+}
+
+fn reject_body_materialization_with_reason<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+    error: v8::Local<'s, v8::Value>,
+    kind: PendingBodyMaterializationKind,
+    task_destination: Option<v8::Global<v8::Context>>,
+) {
+    if let Some(destination) = task_destination {
+        completion::queue_body_completion(scope, resolver, Err(error), kind, destination);
+    } else {
+        let _ = resolver.reject(scope, error);
+    }
 }
 
 fn resolve_body_materialization<'s>(
@@ -1826,7 +1931,12 @@ fn resolve_body_materialization<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
     bytes: Vec<u8>,
     kind: PendingBodyMaterializationKind,
+    task_destination: Option<v8::Global<v8::Context>>,
 ) {
+    if let Some(destination) = task_destination {
+        completion::queue_body_completion(scope, resolver, Ok(bytes), kind, destination);
+        return;
+    }
     match body_materialization_value(scope, &bytes, kind) {
         Ok(value) => {
             let _ = resolver.resolve(scope, value);

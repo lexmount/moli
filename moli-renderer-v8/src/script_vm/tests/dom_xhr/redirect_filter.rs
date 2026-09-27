@@ -17,13 +17,17 @@ fn redirect_filter_probe_script(probe: &str, worker: bool) -> String {
     }
 }
 
-#[test]
-fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
+#[tokio::test(flavor = "current_thread")]
+async fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
     for status in [200, 302] {
         for redirect in ["follow", "manual"] {
             for filter in [None, Some(Opaque), Some(OpaqueRedirect)] {
-                let mut vm = new_storage_test_vm("https://redirect-filter.test/");
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                    "https://redirect-filter.test/",
+                    &loader,
+                );
                 vm.set_fetch_subresource_interception(
                     true,
                     Some(crate::types::SubresourceResourceType::Fetch),
@@ -85,6 +89,14 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                     if filtered { None } else { Some("present") },
                     if filtered { "" } else { "body" },
                 ]);
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(filteredResult !== 'pending')",
+                    "true",
+                    "redirect-filter Body conversion",
+                )
+                .await;
                 assert_eq!(
                     vm.eval("filteredResult").unwrap(),
                     expected.to_string(),

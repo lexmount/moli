@@ -22,6 +22,7 @@ const READ_AGAIN: &str = "__moliBodyConsumerReadAgain";
 const FINISHED: &str = "__moliBodyConsumerFinished";
 const SUCCEEDED: &str = "__moliBodyConsumerSucceeded";
 const REASON: &str = "__moliBodyConsumerReason";
+const FETCH_TASK: &str = "__moliBodyConsumerFetchTask";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -38,6 +39,8 @@ struct BodyConsumerDeclaration<'scope> {
     kind: &'static str,
     #[webapi(slot = ON_CHUNK)]
     on_chunk: Option<v8::Local<'scope, v8::Function>>,
+    #[webapi(slot = FETCH_TASK)]
+    fetch_task: bool,
     #[webapi(slot = PENDING_CHUNK, init = "null")]
     pending_chunk: (),
     #[webapi(slot = STEPS, init = "null")]
@@ -122,13 +125,27 @@ impl<'s> Consumer<'s> {
             set_private_value(scope, self.0, REASON, error);
             set_private_value(scope, self.0, CHUNKS, v8::null(scope).into());
         }
-        let callback = v8::Function::builder(materialize_callback)
-            .data(self.0.into())
-            .build(scope)
-            .expect("body materialization callback must allocate");
-        // Retain the existing asynchronous completion boundary while removing
-        // the observable intermediate reader promises.
-        scope.enqueue_microtask(callback);
+        if self.flag(scope, FETCH_TASK) {
+            let object = v8::Local::<v8::Object>::try_from(self.value(scope, BODY_OWNER))
+                .expect("body owner must exist");
+            let destination = object
+                .get_creation_context(scope)
+                .expect("Body receiver realm");
+            let scope = &mut v8::ContextScope::new(scope, destination);
+            let callback = v8::Function::builder(materialize_callback)
+                .data(self.0.into())
+                .build(scope)
+                .expect("body materialization callback must allocate");
+            completion::queue_fetch_task(scope, callback);
+        } else {
+            let callback = v8::Function::builder(materialize_callback)
+                .data(self.0.into())
+                .build(scope)
+                .expect("body materialization callback must allocate");
+            // Internal consumers retain their existing completion boundary;
+            // only public Body consumption targets the receiver's global.
+            scope.enqueue_microtask(callback);
+        }
     }
 }
 
@@ -138,6 +155,7 @@ pub(super) fn consume_readable_body_stream<'s>(
     stream: v8::Local<'s, v8::Object>,
     kind: NetworkBodyConsumptionKind,
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
+    fetch_task: bool,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return (NetworkBodyConsumption::Failed, None);
@@ -165,6 +183,7 @@ pub(super) fn consume_readable_body_stream<'s>(
             chunks,
             kind,
             chunk_callback,
+            fetch_task,
         )
         .bind(scope)
         .expect("body consumer declaration must bind"),
@@ -286,6 +305,10 @@ fn materialize_callback<'s>(
     // SAFETY: the private slot is initialized only from PromiseResolver::new
     // and is cleared after this single completion callback.
     let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
+    let context = resolver
+        .get_creation_context(scope)
+        .expect("Body promise realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     if consumer.flag(scope, SUCCEEDED) {
         let chunks = consumer.array(scope, CHUNKS);
         let mut bytes = Vec::new();
@@ -313,11 +336,12 @@ fn materialize_callback<'s>(
         let object = v8::Local::try_from(consumer.value(scope, BODY_OWNER))
             .expect("body materialization owner must exist");
         let kind = PendingBodyMaterializationKind::new(scope, object, kind);
-        resolve_body_materialization(scope, resolver, bytes, kind);
+        resolve_body_materialization(scope, resolver, bytes, kind, None);
     } else {
         let error = consumer.value(scope, REASON);
         let _ = resolver.reject(scope, error);
     }
+    let null = v8::null(scope).into();
     for slot in [
         BODY_OWNER,
         STREAM,
@@ -328,6 +352,6 @@ fn materialize_callback<'s>(
         STEPS,
         REASON,
     ] {
-        set_private_value(scope, consumer.0, slot, v8::null(scope).into());
+        set_private_value(scope, consumer.0, slot, null);
     }
 }

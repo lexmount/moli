@@ -25,6 +25,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) next_timer_id: u32,
     /// Browser font tasks use a separate queue and cannot be canceled by timer IDs.
     pub(in crate::worker) font_tasks: std::collections::VecDeque<super::super::timer_callback::WorkerTimerCallback>,
+    /// Networking completions are browser tasks, outside the author timer ID space.
+    pub(in crate::worker) networking_tasks: super::super::networking_tasks::WorkerNetworkingTaskQueue,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.

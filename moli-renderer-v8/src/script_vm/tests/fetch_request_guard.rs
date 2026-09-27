@@ -1,21 +1,30 @@
 use super::*;
 
-#[test]
-fn fetch_request_initializers_use_request_header_guards() {
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_request_initializers_use_request_header_guards() {
     let base = "https://fetch-guard.test";
-    let mut vm = new_storage_test_vm(&format!("{base}/page.html"));
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/page.html"), &loader);
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
     vm.eval(&format!(
         "{}\nglobalThis.guardResult = null; fetchRequestGuardProbe('{base}', false).then(value => {{ guardResult = value; }}, error => {{ guardResult = {{ error: String(error) }}; }});",
         include_str!("../../../tests/fixtures/fetch-request-guard.js"),
     )).unwrap();
     let mut requests = 0;
-    for _ in 0..40 {
-        vm.exec("0", None).unwrap();
-        if vm.eval("guardResult !== null").unwrap() == "true" {
-            break;
-        }
-        let pending = vm.take_pending_subresource_fetch_infos();
+    'requests: for _ in 0..40 {
+        let pending = loop {
+            if vm.eval("guardResult !== null").unwrap() == "true" {
+                break 'requests;
+            }
+            let pending = vm.take_pending_subresource_fetch_infos();
+            if !pending.is_empty() {
+                break pending;
+            }
+            wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
+                .await
+                .expect("header guard probe should advance to its next fetch or result");
+        };
         assert_eq!(pending.len(), 1, "request {requests}");
         let request = &pending[0];
         assert_eq!(request.url.path(), "/echo");
