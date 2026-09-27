@@ -55,7 +55,7 @@ async fn check_referrer_policy_inheritance(nested_parent: bool) -> Result<()> {
                     if (explicit !== source) throw new Error(label + ': explicit policy ' + explicit);
                 }}
             }}
-            for (const kind of ['initial']) {{
+            for (const kind of ['initial', 'about:blank', 'srcdoc', 'popup']) {{
                 policy(document, 'origin');
                 const older = spawn(window, kind);
                 // The initial empty Document inherits synchronously, before
