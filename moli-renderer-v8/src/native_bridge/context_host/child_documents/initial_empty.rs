@@ -30,30 +30,16 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> DocumentPolicyContainer {
         let mut policy_container = self
-            .child_browsing_context_parent_handle(handle)
-            .and_then(|parent| {
-                self.child_browsing_contexts
-                    .get(&parent)
-                    .map(|entry| entry.document_policy_container_snapshot())
-            })
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| self.document_policy_container_for_inheritance(owner))
             .unwrap_or_else(|| self.document_policy_container().clone());
-        if let Some(parent_document) = self
+        if let Some(permissions_policy) = self
             .dom_host()
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
+            .and_then(|document| self.document_permissions_policy_for_document_handle(document))
         {
-            policy_container
-                .content_security_policy_self_url
-                .get_or_insert_with(|| self.document_url_for_handle(parent_document));
-            if let Some(permissions_policy) =
-                self.document_permissions_policy_for_document_handle(parent_document)
-            {
-                policy_container.permissions_policy = permissions_policy;
-            }
-            // Inheritance clones the creator's policy list at navigation time.
-            // Later parent meta mutations must not alter the child's policies.
-            policy_container.inherited_meta_content_security_policies = unsafe { &*self.runtime }
-                .meta_content_security_policy_strings_for_document(parent_document);
+            policy_container.permissions_policy = permissions_policy;
         }
         policy_container.document_referrer =
             self.document_url_for_child_context(handle).to_string();
