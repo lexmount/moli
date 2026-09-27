@@ -684,6 +684,8 @@ async fn sandboxed_blob_iframe_keeps_opaque_storage_context_for_opfs_messages() 
       globalThis.__sandboxedBlobFrameProbe = JSON.stringify({
         rejectionCount,
         origin: event.data.origin,
+        locationOrigin: event.data.locationOrigin,
+        messageOrigin: event.origin,
         secure: event.data.secure,
         interfaceExposed: event.data.interfaceExposed,
         storageExposed: event.data.storageExposed,
@@ -708,7 +710,8 @@ async fn sandboxed_blob_iframe_keeps_opaque_storage_context_for_opfs_messages() 
       }
       parent.postMessage({
         kind: "messageerror",
-        origin: location.origin,
+        origin: self.origin,
+        locationOrigin: location.origin,
         secure: isSecureContext,
         interfaceExposed: "FileSystemHandle" in globalThis,
         storageExposed: "storage" in navigator,
@@ -732,7 +735,7 @@ async fn sandboxed_blob_iframe_keeps_opaque_storage_context_for_opfs_messages() 
         &mut vm,
         &loader,
         "String(globalThis.__sandboxedBlobFrameProbe)",
-        r#"{"rejectionCount":2,"origin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#,
+        r#"{"rejectionCount":2,"origin":"null","locationOrigin":"https://sandboxed-blob-frame.test","messageOrigin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#,
         "sandboxed blob iframe OPFS rejection",
     )
     .await;
