@@ -18,7 +18,27 @@ async fn serve(mut socket: tokio::net::TcpStream) -> Result<()> {
         .context("request target")?;
     let url = url::Url::parse(&format!("http://fixture{path}"))?;
     const REPORT: &str = include_str!("../fixtures/location-origin-report.js");
+    const STORAGE_REPORT: &str = include_str!("../fixtures/storage-origin-report.js");
     let (mime, body) = match url.path() {
+        "/storage-report.js" => ("text/javascript", STORAGE_REPORT.to_owned()),
+        "/storage-report" => (
+            "text/html",
+            format!(
+                r#"<!doctype html><script>
+            const inspectStorage = {STORAGE_REPORT};
+            addEventListener("load", () => {{
+                const url = new URL(location.href);
+                if (url.searchParams.has("launch")) {{
+                    url.searchParams.delete("launch");
+                    open(url.href, "_blank");
+                }} else {{
+                    (opener || parent).top.postMessage(
+                        inspectStorage(self, url.searchParams.get("token")), "*");
+                }}
+            }});
+            </script>"#
+            ),
+        ),
         "/origin-report.js" => ("text/javascript", REPORT.to_owned()),
         "/origin-report" => (
             "text/html",
@@ -41,8 +61,7 @@ async fn serve(mut socket: tokio::net::TcpStream) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn location_origin_serializes_the_url_without_changing_document_security() -> Result<()> {
+async fn run_origin_surface_fixture(fixture: &str, expected_observations: usize) -> Result<()> {
     let local = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let remote = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let origins = [
@@ -74,7 +93,7 @@ async fn location_origin_serializes_the_url_without_changing_document_security()
         let script = format!(
             "(globalThis.originTestOrigins={}, {})",
             serde_json::to_string(&origins)?,
-            include_str!("../fixtures/location-url-origin.js")
+            fixture
         );
         let result = page
             .evaluate_runtime_expression_with_await_async(&script, true)
@@ -82,11 +101,24 @@ async fn location_origin_serializes_the_url_without_changing_document_security()
         let observed: serde_json::Value =
             serde_json::from_str(result["value"].as_str().context("Location origin result")?)?;
         assert_eq!(observed["errors"], serde_json::json!([]));
-        assert_eq!(observed["observations"].as_array().unwrap().len(), 15);
+        assert_eq!(
+            observed["observations"].as_array().unwrap().len(),
+            expected_observations
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await;
     let _ = shutdown.send(());
     server.await??;
     result?
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_origin_serializes_the_url_without_changing_document_security() -> Result<()> {
+    run_origin_surface_fixture(include_str!("../fixtures/location-url-origin.js"), 15).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_storage_getters_enforce_receiver_and_document_origin_checks() -> Result<()> {
+    run_origin_surface_fixture(include_str!("../fixtures/popup-storage-origin.js"), 10).await
 }
