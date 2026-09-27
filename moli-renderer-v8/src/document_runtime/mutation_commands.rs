@@ -2170,6 +2170,7 @@ fn start_connected_child_document_script(
                     owner_document_handle,
                     node,
                     source,
+                    preparation.into_fetch_metadata(),
                 )
             {
                 // Script exceptions are reported in the child Window. They do
@@ -2232,7 +2233,7 @@ fn execute_committed_inline_classic_script(
     host_ptr: *mut JsContextHost,
     committed: crate::host::CommittedInlineClassicScript,
 ) {
-    let (node, host_script_handle, source) = committed.into_parts();
+    let (node, host_script_handle, source, fetch_metadata) = committed.into_parts();
     // An inserted script executes in its Document's main world, including
     // when a child or isolated world performed the insertion.
     let default_context = unsafe { &*host_ptr }
@@ -2244,10 +2245,8 @@ fn execute_committed_inline_classic_script(
         .dom_host
         .document_base_url_for_handle(runtime.dom_host.document_handle())
         .unwrap_or_else(|| script_url.clone());
-    let nonce =
-        crate::host::script_element_nonce_for_csp(&runtime.dom_host, node).map(str::to_owned);
     let request = crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
-        nonce: nonce.as_deref(),
+        nonce: fetch_metadata.nonce.as_deref(),
         integrity: None,
         parser_inserted: false,
     };
@@ -2266,7 +2265,7 @@ fn execute_committed_inline_classic_script(
         Some(&script_url),
         Some(&base_url),
         0,
-        nonce.as_deref(),
+        Some(&fetch_metadata),
         true,
     );
     unsafe { &mut *host_ptr }.pop_current_inline_script(node);

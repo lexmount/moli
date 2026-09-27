@@ -22,6 +22,9 @@ mod runtime_modulepreload;
 #[path = "child_module_records.rs"]
 mod child_module_records;
 
+#[path = "dynamic_import_credentials.rs"]
+mod dynamic_import_credentials;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -165,6 +168,11 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/import-credentials.js" => (
+            "200 OK",
+            format!("{javascript}Cache-Control: no-store\r\n"),
+            dynamic_import_credentials::importer_source(query),
+        ),
         "/module-records.html"
         | "/module-record.js"
         | "/module-record-tla.js"

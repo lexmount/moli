@@ -21,6 +21,7 @@ pub(crate) struct PendingChildExternalClassicDocumentScript {
     pub(crate) source_result: Result<String, String>,
     pub(crate) script_url: Url,
     pub(crate) script_base_url: Url,
+    pub(crate) script_fetch_metadata: crate::planning::ScriptFetchMetadata,
 }
 
 impl DocumentScriptReadyActionRoute<FrameDocumentOwner>

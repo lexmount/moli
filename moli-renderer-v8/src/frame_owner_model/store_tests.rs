@@ -1454,6 +1454,7 @@ fn child_document_commit_replaces_current_owner_records() {
                 Some(handle(16)),
                 url("https://cdn.child.test/stale.js"),
                 url("https://cdn.child.test/stale.js"),
+                Default::default(),
                 "globalThis.__staleExternalClassic = true;".to_owned(),
             )
             .is_none(),

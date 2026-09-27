@@ -4,12 +4,10 @@ use url::Url;
 use super::{ModuleAttributesKey, ModuleImportPhase, PendingDynamicModuleImport};
 use crate::{
     context_bootstrap::child_browsing_context_handle_for_current_realm_scope,
-    planning::ScriptFetchMetadata,
     util::{
         callback_arg_string, context_host_ptr_from_global_bridge,
         script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
-        script_nonce_from_host_defined_options, script_parser_inserted_from_host_defined_options,
-        throw_type_error, v8_string,
+        script_fetch_metadata_from_host_defined_options, throw_type_error, v8_string,
     },
 };
 
@@ -219,27 +217,14 @@ fn dynamic_import_base_url<'s>(
 fn dynamic_import_referrer_fetch_metadata(
     scope: &mut v8::PinScope<'_, '_>,
     host_defined_options: v8::Local<'_, v8::Data>,
-) -> ScriptFetchMetadata {
-    let nonce = script_nonce_from_host_defined_options(scope, host_defined_options).or_else(|| {
-        scope
-            .get_current_host_defined_options()
-            .and_then(|options| script_nonce_from_host_defined_options(scope, options))
-    });
-    let parser_inserted =
-        script_parser_inserted_from_host_defined_options(scope, host_defined_options)
-            .or_else(|| {
-                scope
-                    .get_current_host_defined_options()
-                    .and_then(|options| {
-                        script_parser_inserted_from_host_defined_options(scope, options)
-                    })
-            })
-            .unwrap_or(false);
-    ScriptFetchMetadata {
-        nonce,
-        parser_inserted,
-        ..ScriptFetchMetadata::default()
-    }
+) -> super::ModuleFetchMetadata {
+    script_fetch_metadata_from_host_defined_options(scope, host_defined_options)
+        .or_else(|| {
+            scope
+                .get_current_host_defined_options()
+                .and_then(|options| script_fetch_metadata_from_host_defined_options(scope, options))
+        })
+        .unwrap_or_default()
 }
 
 fn dynamic_import_base_url_from_compiled_string_resource(
