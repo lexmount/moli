@@ -602,6 +602,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchResult {
     Response(NavigationResponse),
+    Preloaded(std::result::Result<NavigationResponse, String>),
     Image {
         response: NavigationResponse,
         encoded: moli_parkable_image::ParkableImage,
@@ -635,6 +636,7 @@ impl AsyncSubresourceFetchResult {
 
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
+            Self::Preloaded(result) => result,
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
             Self::Failure(error) => Err(error),
         }
@@ -643,6 +645,7 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn as_ref(&self) -> std::result::Result<&NavigationResponse, &String> {
         match self {
+            Self::Preloaded(result) => result.as_ref(),
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
             Self::Failure(error) => Err(error),
         }
@@ -652,18 +655,19 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
         match self {
             Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::Failure(_) => None,
+            Self::Response(_) | Self::Failure(_) | Self::Preloaded(_) => None,
         }
     }
 
     #[cfg(test)]
     pub(super) fn is_ok(&self) -> bool {
-        !matches!(self, Self::Failure(_))
+        !matches!(self, Self::Failure(_) | Self::Preloaded(Err(_)))
     }
 
     #[cfg(test)]
     pub(super) fn err(self) -> Option<String> {
         match self {
+            Self::Preloaded(result) => result.err(),
             Self::Failure(error) => Some(error),
             Self::Response(_) | Self::Image { .. } => None,
         }
@@ -672,6 +676,7 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn expect(self, message: &str) -> NavigationResponse {
         match self {
+            Self::Preloaded(result) => result.expect(message),
             Self::Response(response) | Self::Image { response, .. } => response,
             Self::Failure(error) => panic!("{message}: {error:?}"),
         }
@@ -680,6 +685,7 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn expect_err(self, message: &str) -> String {
         match self {
+            Self::Preloaded(result) => result.expect_err(message),
             Self::Failure(error) => error,
             Self::Response(response) | Self::Image { response, .. } => {
                 panic!("{message}: {response:?}")

@@ -214,15 +214,31 @@ pub(crate) fn start_image_element_resource_fetch(
     let (request_mode, credentials_mode) = image_cross_origin_request_modes(element);
     let fetch_priority = FetchPriorityHint::from_attribute(element.attribute("fetchpriority"));
 
-    if let Some(response) = local_url_response(&request_url) {
+    let resource_loader =
+        resource_loader.ok_or_else(|| "image resource loader is unavailable".to_owned())?;
+    let loader = resource_loader.request_client().clone();
+
+    let network_partition_key = active_subresource_network_partition_key(host, owner);
+    let request_headers = merge_subresource_request_headers(host.extra_http_headers(), &[]);
+    let request = Request::new("GET", request_url.as_str(), None, request_headers.clone())
+        .map_err(|error| error.to_string())?
+        .with_initiator_url(&document_url)
+        .with_request_origin(request_origin.clone())
+        .with_resource_type(RequestResourceType::Image)
+        .with_page_network_policy()
+        .with_request_mode(request_mode)
+        .with_credentials_mode(credentials_mode)
+        .with_network_partition_key(network_partition_key.clone())
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_browser_request_metadata(BrowserRequestMetadata::Image)
+        .with_fetch_priority_hint(fetch_priority)
+        .with_subframe_context(frame_id.is_some());
+    let preload = loader.consume_preload(&request);
+    if preload.is_none()
+        && let Some(response) = local_url_response(&request_url)
+    {
         let mut response: crate::protocol_types::NavigationResponse = response.into();
-        let manager = resource_loader.as_ref().map_or_else(
-            moli_parkable_image::ParkableImageManager::default,
-            |loader| {
-                let runner = loader.task_runner();
-                loader.request_client().parkable_image_manager(&runner)
-            },
-        );
+        let manager = loader.parkable_image_manager(&resource_loader.task_runner());
         let encoded = manager.from_frozen_bytes(response.take_body_bytes());
         let descriptor = image_response_descriptor_from_parkable(&response, &encoded);
         let result = Ok(response);
@@ -241,13 +257,9 @@ pub(crate) fn start_image_element_resource_fetch(
         });
     }
 
-    let resource_loader =
-        resource_loader.ok_or_else(|| "image resource loader is unavailable".to_owned())?;
-    let loader = resource_loader.request_client().clone();
-
-    let in_document_image_priority_boost =
-        owner == OwnerDispatchScope::Top && host.claim_main_image_priority_boost(image_handle);
-    let network_partition_key = active_subresource_network_partition_key(host, owner);
+    let request = request.with_in_document_image_priority_boost(
+        owner == OwnerDispatchScope::Top && host.claim_main_image_priority_boost(image_handle),
+    );
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let request_cookie_report = observe_subresource_request_cookie_report(
         &loader,
@@ -257,7 +269,6 @@ pub(crate) fn start_image_element_resource_fetch(
         "GET",
         credentials_mode,
     );
-    let request_headers = merge_subresource_request_headers(host.extra_http_headers(), &[]);
     let info = PendingSubresourceFetchInfo {
         internal_id: 0,
         network_request_handle: None,
@@ -273,7 +284,7 @@ pub(crate) fn start_image_element_resource_fetch(
         request_cookie_report: request_cookie_report.clone(),
     };
 
-    if host.should_intercept_subresource(SubresourceResourceType::Image) {
+    if preload.is_none() && host.should_intercept_subresource(SubresourceResourceType::Image) {
         let Some(_) = host.record_intercepted_image_subresource_fetch(
             v8::Global::new(scope, scope.get_current_context()),
             image_handle,
@@ -291,26 +302,11 @@ pub(crate) fn start_image_element_resource_fetch(
         return Ok(ImageElementResourceFetchStart::Pending);
     }
 
-    let request = Request::new("GET", request_url.as_str(), None, request_headers.clone())
-        .map_err(|error| error.to_string())?
-        .with_initiator_url(&document_url)
-        .with_request_origin(request_origin.clone())
-        .with_resource_type(RequestResourceType::Image)
-        .with_page_network_policy()
-        .with_request_mode(request_mode)
-        .with_credentials_mode(credentials_mode)
-        .with_network_partition_key(network_partition_key.clone())
-        .with_redirect_mode(RequestRedirectMode::Follow)
-        .with_browser_request_metadata(BrowserRequestMetadata::Image)
-        .with_fetch_priority_hint(fetch_priority)
-        .with_in_document_image_priority_boost(in_document_image_priority_boost)
-        .with_subframe_context(frame_id.is_some());
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
     let service_worker_controller = matches!(request_url.scheme(), "http" | "https")
         .then(|| host.service_worker_controller_for_fetch(client_id, &document_url, &request_url))
         .flatten();
-    let scanned_preload = service_worker_controller
-        .is_none()
+    let scanned_preload = (preload.is_none() && service_worker_controller.is_none())
         .then(|| host.claim_scanned_image_preload_for_element(image_handle))
         .flatten();
     let cancel_handle = scanned_preload
@@ -331,6 +327,17 @@ pub(crate) fn start_image_element_resource_fetch(
     ) else {
         return Err("image lifecycle sequence changed before request binding".to_owned());
     };
+
+    if let Some(preload) = preload {
+        crate::network_host::spawn_preloaded_subresource_fetch(
+            resource_loader.task_runner(),
+            host.resource_completion_sender(),
+            preload,
+            request,
+            internal_id,
+        );
+        return Ok(ImageElementResourceFetchStart::Pending);
+    }
 
     if service_worker_controller.is_some() {
         let dispatch = ServiceWorkerFetchDispatch {

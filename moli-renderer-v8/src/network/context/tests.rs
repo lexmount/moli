@@ -105,6 +105,74 @@ async fn document_authorities_share_backend_but_not_lifecycle() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn document_preloads_survive_transport_replacement_but_not_document_retirement() {
+    use crate::network::preload::PreloadFetchTerminal;
+    use moli_fetch::{BrowserRequestMetadata, Request};
+    use std::sync::Arc;
+
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.clone(), 1, "https://example.test/a");
+    let second = first.fork_for_document(context(2, "https://example.test/b"));
+    let request = Request::new("GET", "https://example.test/resource", None, vec![])
+        .unwrap()
+        .with_browser_request_metadata(BrowserRequestMetadata::Script);
+    let mut preload_request = request.clone();
+    preload_request.priority_hints.link_preload = true;
+    let begin = || {
+        first
+            .request_client()
+            .document_preloads()
+            .unwrap()
+            .begin(&preload_request)
+            .unwrap()
+    };
+    let producer = begin();
+    assert!(second.request_client().consume_preload(&request).is_none());
+    let worker = WorkerResourceLoader::new(
+        first.request_client().clone(),
+        WorkerResourceOwner::Dedicated {
+            name: "preload isolation".into(),
+        },
+        resource_task_runner(),
+    );
+    assert!(worker.request_client().document_preloads().is_none());
+    let replacement = first.with_replacement_transport(transport.handle());
+    let consumer = replacement
+        .request_client()
+        .consume_preload(&request)
+        .unwrap();
+    producer.finish(Arc::new(PreloadFetchTerminal::NetworkError(
+        "rejected".into(),
+    )));
+    assert_eq!(
+        consumer.wait().await.consumer_response().unwrap_err(),
+        "rejected"
+    );
+
+    let pending = begin();
+    let escaped_client = first.request_client().clone();
+    first.begin_detach();
+    assert!(escaped_client.consume_preload(&request).is_none());
+    assert!(
+        replacement
+            .request_client()
+            .document_preloads()
+            .unwrap()
+            .begin(&preload_request)
+            .is_none()
+    );
+    drop(pending);
+    assert!(
+        second
+            .request_client()
+            .document_preloads()
+            .unwrap()
+            .begin(&preload_request)
+            .is_some()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inherited_child_document_loader_preserves_top_frame_site_context() {
     let transport =
         ResourceRequestClient::new(&FetchConfig::default()).expect("resource transport");

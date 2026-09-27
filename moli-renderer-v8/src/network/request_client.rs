@@ -35,6 +35,7 @@ pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    document_preloads: Option<super::preload::DocumentPreloads>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -119,6 +120,7 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            document_preloads: None,
         }
     }
 
@@ -156,7 +158,32 @@ impl ResourceRequestClient {
             self.page_network_policy.frozen_request_view(),
         );
         client.browser_site_context = self.browser_site_context.clone();
+        client.document_preloads = self.document_preloads.clone();
         client
+    }
+
+    pub(crate) fn with_document_preloads(
+        mut self,
+        preloads: super::preload::DocumentPreloads,
+    ) -> Self {
+        self.document_preloads = Some(preloads);
+        self
+    }
+
+    pub(crate) fn document_preloads(&self) -> Option<&super::preload::DocumentPreloads> {
+        self.document_preloads.as_ref()
+    }
+
+    pub(crate) fn without_document_preloads(mut self) -> Self {
+        self.document_preloads = None;
+        self
+    }
+
+    pub(crate) fn consume_preload(
+        &self,
+        request: &Request,
+    ) -> Option<super::preload::PreloadedResource> {
+        self.document_preloads.as_ref()?.consume(request)
     }
 
     pub fn shares_page_network_policy_with(&self, other: &Self) -> bool {

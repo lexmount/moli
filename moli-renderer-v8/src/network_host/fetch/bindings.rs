@@ -8,7 +8,7 @@ use self::paths::{
     spawn_network_fetch,
 };
 use self::request::prepare_window_fetch_request;
-use self::service_worker::dispatch_service_worker_fetch;
+use self::service_worker::{dispatch_preloaded_fetch, dispatch_service_worker_fetch};
 use super::input::{ParsedWindowFetchInput, parse_window_fetch_input};
 use super::promise::{make_rejected_promise, make_rejected_promise_with_value};
 use super::*;
@@ -284,6 +284,14 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     if host.is_url_blocked(&prepared.resolved_url) {
         let message = reject_blocked_fetch(host, prepared);
         rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
+    if let Some(internal_id) = dispatch_preloaded_fetch(scope, host, resolver, &prepared) {
+        if let Some(signal) = signal {
+            install_window_fetch_abort_listener(scope, signal, internal_id);
+        }
+        rv.set(promise.into());
         return;
     }
 

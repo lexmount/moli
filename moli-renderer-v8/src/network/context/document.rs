@@ -51,6 +51,7 @@ struct DocumentResourceLoaderAuthority {
     id: u64,
     lifecycle: Mutex<DocumentResourceLoaderLifecycle>,
     loads: ResourceLoadRegistry,
+    preloads: crate::network::preload::DocumentPreloads,
 }
 
 struct DocumentResourceLoaderLifecycle {
@@ -63,6 +64,7 @@ impl Drop for DocumentResourceLoaderAuthority {
         // Registry retirement is normally explicit at the owner-transition
         // boundary. This final guard covers construction failures and runtime
         // teardown paths that drop the authority before publishing it.
+        self.preloads.retire();
         self.loads.begin_detach();
     }
 }
@@ -140,8 +142,9 @@ impl DocumentResourceLoader {
             request_client = request_client.with_browser_site_context(browser_site_context);
         }
         let loads = ResourceLoadRegistry::new(task_runner);
+        let preloads = crate::network::preload::DocumentPreloads::default();
         Self {
-            request_client,
+            request_client: request_client.with_document_preloads(preloads.clone()),
             authority: Arc::new(DocumentResourceLoaderAuthority {
                 id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)
@@ -151,6 +154,7 @@ impl DocumentResourceLoader {
                     context,
                 }),
                 loads,
+                preloads,
             }),
         }
     }
@@ -214,7 +218,7 @@ impl DocumentResourceLoader {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
         Self {
-            request_client,
+            request_client: request_client.with_document_preloads(self.authority.preloads.clone()),
             authority: Arc::clone(&self.authority),
         }
     }
@@ -226,6 +230,7 @@ impl DocumentResourceLoader {
         }
         lifecycle.state = DocumentResourceLoaderState::Detaching;
         drop(lifecycle);
+        self.authority.preloads.retire();
         self.authority.loads.begin_detach();
         true
     }

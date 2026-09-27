@@ -14,6 +14,7 @@ mod devtools_resource_load;
 pub(crate) mod loads;
 pub mod navigation;
 mod policy;
+pub(crate) mod preload;
 mod request_client;
 mod task_runner;
 

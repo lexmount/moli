@@ -4,7 +4,7 @@ use crate::frame_owner_model::{DocumentLinkEventOwner, MainDocumentStyleLoadEven
 use crate::module_runtime::{NativeModulepreloadFetchStart, NativeModulepreloadLinkClient};
 use crate::style_engine::OwnerStyleSheetSource;
 use crate::stylesheet_blocking::{
-    StylesheetBlockingOperation, StylesheetFetch, StylesheetFetchOptions, StylesheetFetchTerminal,
+    StylesheetBlockingOperation, StylesheetFetch, StylesheetFetchTerminal,
 };
 use crate::types::SubresourceResourceType;
 
@@ -338,7 +338,7 @@ pub(in crate::document_runtime) struct ConnectedLinkReadinessFetchOptions {
     pub(in crate::document_runtime) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(in crate::document_runtime) fetch_priority_hint: Option<moli_fetch::FetchPriorityHint>,
     pub(in crate::document_runtime) link_preload: bool,
-    pub(in crate::document_runtime) link_fetch_options: StylesheetFetchOptions,
+    pub(in crate::document_runtime) request_metadata: moli_fetch::SubresourceRequestMetadata,
 }
 
 /// Identity of one connected style/link processing operation.

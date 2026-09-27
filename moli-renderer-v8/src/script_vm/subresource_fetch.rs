@@ -305,6 +305,7 @@ fn apply_image_subresource_terminal(
     internal_id: u64,
     request_url: &url::Url,
     terminal: ImageSubresourceTerminal<'_>,
+    record_timing: bool,
 ) {
     let (accepted, followup) = match &terminal {
         ImageSubresourceTerminal::Response { response, encoded } => {
@@ -333,7 +334,7 @@ fn apply_image_subresource_terminal(
             (followup.is_some(), followup)
         }
     };
-    if accepted {
+    if accepted && record_timing {
         crate::context_bootstrap::record_resource_performance_entry(
             scope,
             terminal.resource_performance_entry(request_url),
@@ -3581,7 +3582,9 @@ impl ScriptVm {
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let from_preload = matches!(completion_result, AsyncSubresourceFetchResult::Preloaded(_));
         let (supplied_parkable_image, result) = match completion_result {
+            AsyncSubresourceFetchResult::Preloaded(result) => (None, result),
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
@@ -3904,6 +3907,7 @@ impl ScriptVm {
                                     response: &observable_response,
                                     encoded,
                                 },
+                                !from_preload,
                             )
                         }
                         PendingSubresourceContinuation::Media {
@@ -4052,6 +4056,7 @@ impl ScriptVm {
                             pending.info.internal_id,
                             &pending.info.url,
                             ImageSubresourceTerminal::Failure,
+                            !from_preload,
                         ),
                         PendingSubresourceContinuation::Media {
                             media_handle,
@@ -4826,6 +4831,7 @@ impl ScriptVm {
                         started.internal_id,
                         &started.request_url,
                         ImageSubresourceTerminal::Failure,
+                        true,
                     ),
                     PendingSubresourceContinuation::Media {
                         media_handle,
@@ -5061,6 +5067,7 @@ impl ScriptVm {
                     // Production image transports are buffered, so a streaming head is an
                     // invalid terminal rather than a successful image response.
                     ImageSubresourceTerminal::Failure,
+                    true,
                 ),
                 PendingSubresourceContinuation::Media {
                     media_handle,

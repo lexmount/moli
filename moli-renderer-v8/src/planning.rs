@@ -297,6 +297,26 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let preload = matches!(script.source, ScriptSource::External)
+        .then(|| {
+            loader.consume_preload(&external_script_request(
+                script,
+                request_origin,
+                request_resource_type,
+            ))
+        })
+        .flatten();
+    if let Some(preload) = preload {
+        // Keep the temporary Request out of the await scope and bound the
+        // preload future, just like the streaming fetch below. These futures
+        // also sit inside the nested child-Document task state machine.
+        return Box::pin(script_source_from_preload(
+            script,
+            document_character_set,
+            preload,
+        ))
+        .await;
+    }
     match &script.source {
         ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
             PreparedScriptSourceLoadOutcome {
@@ -381,6 +401,19 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     service_worker_client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     document_url: Url,
 ) -> PreparedScriptSourceLoadOutcome {
+    let preload = loader.consume_preload(&external_script_request(
+        script,
+        request_origin,
+        request_resource_type,
+    ));
+    if let Some(preload) = preload {
+        return Box::pin(script_source_from_preload(
+            script,
+            document_character_set,
+            preload,
+        ))
+        .await;
+    }
     if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
         script,
         request_origin,
@@ -518,6 +551,28 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
         task_runner,
         owner_wake,
     )
+}
+
+async fn script_source_from_preload(
+    script: &PreparedScript,
+    document_character_set: Option<&str>,
+    preload: crate::network::preload::PreloadedResource,
+) -> PreparedScriptSourceLoadOutcome {
+    let terminal = preload.wait().await;
+    let mut outcome = match terminal.consumer_response() {
+        Ok(response) => external_script_source_load_outcome_from_response_inner(
+            script,
+            response.response.clone(),
+            document_character_set,
+            response.filter,
+            None,
+        ),
+        Err(message) => failed_external_script_source_load_outcome(message),
+    };
+    // The preload owns the physical request and its timing entry, including
+    // failures. Consuming that entry does not create another network request.
+    outcome.network_result = None;
+    outcome
 }
 
 pub(crate) fn external_script_source_load_outcome_from_response(

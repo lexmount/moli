@@ -707,6 +707,7 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchResponse {
+    pub(crate) response_status_text: Option<String>,
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 }

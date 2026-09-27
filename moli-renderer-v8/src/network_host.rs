@@ -10,6 +10,10 @@ mod fetch;
 mod fetch_surface;
 mod headers;
 mod image;
+mod preload;
+pub(crate) use preload::{
+    spawn_preloaded_subresource_fetch, try_spawn_preloaded_subresource_fetch,
+};
 mod js_values;
 mod media;
 mod preflight_events;

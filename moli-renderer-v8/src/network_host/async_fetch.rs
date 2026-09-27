@@ -492,6 +492,15 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
 ) {
+    if crate::network_host::try_spawn_preloaded_subresource_fetch(
+        task_runner.clone(),
+        completion_tx.clone(),
+        &loader,
+        &request,
+        internal_id,
+    ) {
+        return;
+    }
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
         Some(BrowserRequestMetadata::Image)

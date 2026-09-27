@@ -99,7 +99,24 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         ),
     };
 
-    if let Some(response) = local_url_response(&request_url) {
+    let loader = resource_loader.request_client().clone();
+    let network_partition_key = active_subresource_network_partition_key(host, owner);
+    let request = Request::new("GET", request_url.as_str(), None, Vec::new())
+        .map_err(|error| error.to_string())?
+        .with_initiator_url(&document_url)
+        .with_request_origin(request_origin.clone())
+        .with_resource_type(request_resource_type)
+        .with_page_network_policy()
+        .with_request_mode(request_mode)
+        .with_credentials_mode(credentials_mode)
+        .with_network_partition_key(network_partition_key.clone())
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_browser_request_metadata(metadata)
+        .with_subframe_context(frame_id.is_some());
+    let preload = loader.consume_preload(&request);
+    if preload.is_none()
+        && let Some(response) = local_url_response(&request_url)
+    {
         let mut response: crate::protocol_types::NavigationResponse = response.into();
         let encoded = (resource_kind == StylesheetLoadBlockingResourceKind::Image).then(|| {
             let manager = host
@@ -166,7 +183,6 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         return Ok(terminal);
     }
 
-    let loader = resource_loader.request_client().clone();
     if !loader.optional_resource_fetch_enabled(resource_type) {
         if let Some(identity) = css_image.as_ref() {
             let _ = host.fail_stylesheet_css_image(identity);
@@ -174,7 +190,6 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         host.settle_stylesheet_subresource_load_delay(binding);
         return Ok(synchronous_failure_terminal(is_main_web_font, web_font));
     }
-    let network_partition_key = active_subresource_network_partition_key(host, owner);
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let request_cookie_report = observe_subresource_request_cookie_report(
         &loader,
@@ -184,18 +199,6 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         "GET",
         credentials_mode,
     );
-    let request = Request::new("GET", request_url.as_str(), None, Vec::new())
-        .map_err(|error| error.to_string())?
-        .with_initiator_url(&document_url)
-        .with_request_origin(request_origin.clone())
-        .with_resource_type(request_resource_type)
-        .with_page_network_policy()
-        .with_request_mode(request_mode)
-        .with_credentials_mode(credentials_mode)
-        .with_network_partition_key(network_partition_key.clone())
-        .with_redirect_mode(RequestRedirectMode::Follow)
-        .with_browser_request_metadata(metadata)
-        .with_subframe_context(frame_id.is_some());
     let cancel_handle = FetchCancelHandle::new();
     let Some(internal_id) = host.record_async_stylesheet_subresource_fetch(
         v8::Global::new(scope, scope.get_current_context()),
@@ -225,6 +228,17 @@ pub(crate) fn start_stylesheet_subresource_fetch(
     ) else {
         return Err("stylesheet subresource owner changed before request binding".to_owned());
     };
+
+    if let Some(preload) = preload {
+        crate::network_host::spawn_preloaded_subresource_fetch(
+            resource_loader.task_runner(),
+            host.resource_completion_sender(),
+            preload,
+            request,
+            internal_id,
+        );
+        return Ok(StylesheetSubresourceFetchStart::Pending);
+    }
 
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
     if matches!(request_url.scheme(), "http" | "https")

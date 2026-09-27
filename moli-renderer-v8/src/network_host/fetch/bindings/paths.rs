@@ -201,29 +201,7 @@ pub(super) fn spawn_network_fetch(
     prepared: PreparedWindowFetchRequest,
 ) -> u64 {
     let loader = prepared.resource_loader.request_client().clone();
-    let mut request = Request::new_browser(
-        &prepared.method,
-        prepared.resolved_url.clone(),
-        prepared.body.clone(),
-        prepared.request_headers.clone(),
-        prepared.request_origin.clone(),
-    )
-    .with_initiator_url(&prepared.document_url)
-    .with_request_mode(prepared.request_mode)
-    .with_credentials_mode(prepared.credentials_mode)
-    .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_redirect_mode(prepared.redirect_mode)
-    .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
-    .with_fetch_priority_hint(prepared.priority);
-    if prepared.referrer.is_empty() {
-        request = request.without_inferred_referrer();
-    }
-    if let Some(metadata) = window_fetch_script_metadata(&prepared) {
-        request = request.with_script_fetch_metadata(metadata);
-    }
-    request = request
-        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
-        .with_subframe_context(prepared.frame_id.is_some());
+    let request = window_fetch_request(&prepared);
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -327,4 +305,32 @@ fn window_fetch_script_metadata(
 fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
     body.as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
+}
+
+pub(super) fn window_fetch_request(prepared: &PreparedWindowFetchRequest) -> Request {
+    let mut request = Request::new_browser(
+        &prepared.method,
+        prepared.resolved_url.clone(),
+        prepared.body.clone(),
+        prepared.request_headers.clone(),
+        prepared.request_origin.clone(),
+    )
+    .with_initiator_url(&prepared.document_url)
+    .with_request_mode(prepared.request_mode)
+    .with_credentials_mode(prepared.credentials_mode)
+    .with_network_partition_key(prepared.network_partition_key.clone())
+    .with_redirect_mode(prepared.redirect_mode)
+    .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
+    .with_fetch_priority_hint(prepared.priority);
+    if prepared.referrer.is_empty() {
+        request = request.without_inferred_referrer();
+    }
+    if let Some(metadata) = window_fetch_script_metadata(prepared) {
+        request = request.with_script_fetch_metadata(metadata);
+    }
+    request = request
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+        .with_subframe_context(prepared.frame_id.is_some());
+
+    request
 }

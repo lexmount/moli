@@ -10,6 +10,9 @@ use tokio::{
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
+#[path = "preload_integrity.rs"]
+mod preload;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -78,11 +81,13 @@ impl IntegrityServers {
                                     };
                                     let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
                                     requests.lock().push(incoming);
+                                    let body = body.into_bytes();
                                     let response = format!(
-                                        "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                        "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                                         body.len(),
                                     );
                                     let _ = stream.write_all(response.as_bytes()).await;
+                                    let _ = stream.write_all(&body).await;
                                 });
                             }
                             _ = connections.join_next(), if !connections.is_empty() => {}
@@ -138,6 +143,13 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/preload-image.svg" => ("200 OK", "Content-Type: image/svg+xml\r\nCache-Control: no-store\r\n".to_owned(), r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#.to_owned()),
+        "/preload-track.vtt" => ("200 OK", "Content-Type: text/vtt\r\nCache-Control: no-store\r\n".to_owned(), "WEBVTT\n\n00:00.000 --> 00:01.000\npreload\n".to_owned()),
+        "/preload-parser.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            preload::parser_markup(origin, cross),
+        ),
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"
@@ -286,9 +298,19 @@ fn fixture_response(
                 r#"
                 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
                 self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+                let preloadReplyCount = 0;
                 self.addEventListener('fetch', event => {{
                     const path = new URL(event.request.url).pathname;
-                    if (path === '/sw-opaque.js')
+                    if (path === '/sw-preload-consumer.js') {{
+                        const query = new URL(event.request.url).search;
+                        if (query.includes('custom-status')) {{
+                            event.respondWith(new Response({script}, {{statusText:'Preloaded reply ' + (++preloadReplyCount)}}));
+                            return;
+                        }}
+                        const opaque = query.includes('opaque');
+                        event.respondWith(fetch((opaque ? '{cross}' : '{origin}') + '/script.js' + query,
+                            {{mode: opaque ? 'no-cors' : 'cors'}}));
+                    }} else if (path === '/sw-opaque.js')
                         event.respondWith(fetch('{cross}/script.js', {{mode: 'no-cors'}}));
                     else if (path === '/sw-basic.js')
                         event.respondWith(fetch('{origin}/script.js'));

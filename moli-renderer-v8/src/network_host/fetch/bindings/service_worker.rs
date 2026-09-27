@@ -5,6 +5,27 @@ use crate::service_worker_runtime::{
 };
 use moli_fetch::FetchCancelHandle;
 
+pub(super) fn dispatch_preloaded_fetch(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    resolver: v8::Local<'_, v8::PromiseResolver>,
+    prepared: &PreparedWindowFetchRequest,
+) -> Option<u64> {
+    let request = super::paths::window_fetch_request(prepared);
+    let preload = prepared
+        .resource_loader
+        .request_client()
+        .consume_preload(&request)?;
+    Some(dispatch_fetch(
+        scope,
+        host,
+        resolver,
+        prepared,
+        request,
+        Some(preload),
+    ))
+}
+
 pub(super) fn dispatch_service_worker_fetch(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut JsContextHost,
@@ -20,7 +41,25 @@ pub(super) fn dispatch_service_worker_fetch(
         &prepared.document_url,
         &prepared.resolved_url,
     )?;
+    Some(dispatch_fetch(
+        scope,
+        host,
+        resolver,
+        prepared,
+        super::paths::window_fetch_request(prepared),
+        None,
+    ))
+}
 
+fn dispatch_fetch(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    resolver: v8::Local<'_, v8::PromiseResolver>,
+    prepared: &PreparedWindowFetchRequest,
+    fetch_request: moli_fetch::Request,
+    preload: Option<crate::network::preload::PreloadedResource>,
+) -> u64 {
+    let client_id = host.service_worker_client_id_for_subresource_owner(prepared.request_scope());
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -37,7 +76,8 @@ pub(super) fn dispatch_service_worker_fetch(
         resource_type: SubresourceResourceType::Fetch,
         policy_context: prepared.policy_context,
     };
-    let requires_preflight = prepared.request_mode == moli_fetch::RequestMode::Cors
+    let requires_preflight = preload.is_none()
+        && prepared.request_mode == moli_fetch::RequestMode::Cors
         && crate::network_host::cors_preflight_request_headers(
             !prepared
                 .request_origin
@@ -76,6 +116,16 @@ pub(super) fn dispatch_service_worker_fetch(
         },
         requires_preflight,
     );
+    if let Some(preload) = preload {
+        crate::network_host::spawn_preloaded_subresource_fetch(
+            prepared.resource_loader.task_runner(),
+            host.resource_completion_sender(),
+            preload,
+            fetch_request,
+            internal_id,
+        );
+        return internal_id;
+    }
     let request = host.service_worker_fetch_request(
         client_id,
         prepared.resolved_url.clone(),
@@ -108,7 +158,7 @@ pub(super) fn dispatch_service_worker_fetch(
         direct_completion_tx: None,
     };
     if host.dispatch_service_worker_fetch(dispatch) {
-        return Some(internal_id);
+        return internal_id;
     }
 
     let _ =
@@ -125,7 +175,7 @@ pub(super) fn dispatch_service_worker_fetch(
                 network_error_text: None,
                 result: Err("service worker fetch dispatch failed".to_owned()).into(),
             });
-    Some(internal_id)
+    internal_id
 }
 
 fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {

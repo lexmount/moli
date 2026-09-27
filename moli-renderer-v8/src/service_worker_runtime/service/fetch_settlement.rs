@@ -328,6 +328,7 @@ impl ServiceWorkerRuntimeService {
                             body,
                         );
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
+                        response_status_text: None,
                         response: Box::new(navigation_response),
                         response_filter,
                     })
@@ -616,6 +617,7 @@ impl ServiceWorkerRuntimeService {
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
                 ServiceWorkerDirectFetchResponse {
+                    response_status_text: Some(response.status_text),
                     response: Box::new(navigation_response),
                     response_filter,
                 },

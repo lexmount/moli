@@ -1266,7 +1266,6 @@ mod tests {
 
     use url::Url;
 
-    use crate::stylesheet_blocking::StylesheetFetchOptions;
     use crate::{
         dom::{
             NodeId,
@@ -1331,7 +1330,7 @@ mod tests {
                 credentials_mode: moli_fetch::RequestCredentialsMode::Include,
                 fetch_priority_hint: None,
                 link_preload: true,
-                link_fetch_options: StylesheetFetchOptions::default(),
+                request_metadata: moli_fetch::SubresourceRequestMetadata::default(),
             }),
         }
     }
