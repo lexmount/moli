@@ -104,6 +104,7 @@ pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
     Loaded(Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
+    NoDocument(MainDocumentProgressGate),
     Failed(MaterializedFailedDocumentProgress),
 }
 
@@ -432,11 +433,12 @@ pub(crate) fn materialize_navigation_failure_preserving_committed_document(
 }
 
 fn materialize_no_content_navigation_progress(
-    conn: &CdpConnection,
+    conn: &mut CdpConnection,
     state: &NavigationDispatchState,
     navigation: NoContentNavigation,
 ) -> MaterializedNavigationLoadOutcome {
     let error_text = moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
+    record_failed_main_document_response_body(conn, state, error_text.to_owned());
     let context = CompletedMainDocumentProgressContext::for_navigation(
         conn,
         state,
@@ -462,12 +464,7 @@ fn materialize_no_content_navigation_progress(
     // No Document commit will advance visibility for this response.
     queue.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
     let progress_gate = MainDocumentProgressGate::from_queue(queue);
-    MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-        error_text: error_text.to_owned(),
-        document_policy: FailedNavigationDocumentPolicy::PreserveCommittedDocument,
-        response_mode: FailedNavigationResponseMode::CdpErrorTextResult,
-        progress_gate,
-    })
+    MaterializedNavigationLoadOutcome::NoDocument(progress_gate)
 }
 
 fn materialize_download_navigation_progress(
@@ -899,6 +896,9 @@ impl MainDocumentBodyProgressSource {
             ))
         }
     }
+
+    /// Keep ignored responses and their terminal event on one progress gate,
+    /// including when Fetch continuation runs in the protocol command turn.
     pub(crate) fn completed_body_network_events(
         &self,
         mut events: CompletedMainDocumentNetworkEvents,

@@ -390,7 +390,7 @@ impl MainDocumentNavigationActivity {
             out,
             &mut self.progress_gate,
         );
-        page::emit_navigation_frame_stop_after_download_background_events(
+        page::emit_navigation_frame_stop_without_commit_background_events(
             output.events_after_progress(),
             session_id.as_deref(),
             &frame_id,

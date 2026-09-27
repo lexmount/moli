@@ -150,7 +150,7 @@ pub(crate) use child_frame_activity::{
 pub(crate) use lifecycle::{
     emit_bound_renderer_document_lifecycle_background_events,
     emit_navigation_frame_commit_background_events,
-    emit_navigation_frame_stop_after_download_background_events,
+    emit_navigation_frame_stop_without_commit_background_events,
     emit_navigation_frame_stopped_loading_background_events,
     emit_navigation_lifecycle_init_background_events,
     emit_navigation_network_idle_background_events,
