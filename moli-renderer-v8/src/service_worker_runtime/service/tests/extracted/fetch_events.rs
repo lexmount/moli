@@ -1146,10 +1146,8 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
     );
 
     assert!(
-        service.mark_navigation_preload_response_started(
-            event_id,
-            &test_run_owner(version_id, &run),
-        )
+        service
+            .mark_navigation_preload_response_started(event_id, &test_run_owner(version_id, &run),)
     );
     assert!(
         !navigation_preload_cancel_handle.is_cancelled(),
@@ -1692,8 +1690,7 @@ fn controlled_fetch_waits_for_activating_active_version() {
     let document_url = url("https://example.test/app/page.html");
     let request_url = url("https://example.test/app/");
     let mut completion_queue = async_subresource_completion_queue();
-    let (direct_completion_tx, mut main_resource_completion_rx) =
-        tokio::sync::oneshot::channel();
+    let (direct_completion_tx, mut main_resource_completion_rx) = tokio::sync::oneshot::channel();
     insert_registered_version(
         &service,
         registration_id,

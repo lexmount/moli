@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[tokio::test]
 async fn navigator_service_worker_register_applies_script_path_restriction() {
     let worker_body = r#"

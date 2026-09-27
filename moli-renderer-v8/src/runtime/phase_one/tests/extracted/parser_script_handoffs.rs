@@ -136,8 +136,7 @@ fn parser_step_with_inline_script_surfaces_handoff_on_live_backend() {
 fn inline_script_handoff_is_classified_as_blocking_classic_on_live_backend() {
     let final_url = Url::parse("https://example.test/").expect("test url");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-    let mut state =
-        ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
+    let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
     let driver = ParserDriver {
         loader: &loader,
         final_url: &state.final_url,
@@ -290,8 +289,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
         let _js_runtime = crate::JsRuntime::initialize();
         let final_url = Url::parse("https://example.test/").expect("test url");
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-        let mut state =
-            ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let mut driver = ParserDriver {
             loader: &loader,
             final_url: &state.final_url,
@@ -326,14 +324,18 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
 
         // In the single-DOM model, the PageVm owns the parser's DomHost.
         // Simulate bootstrap by giving the parser's DomHost to the PageVm.
-        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let parser_dom_host = driver
+            .parser_session
+            .stream_handle()
+            .borrow_mut()
+            .take_parser_stream_dom_host();
         let local_executor = JsLocalExecutor::new();
         let mut page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
             &loader,
             &PageVmEnvConfig {
-        web_storage: crate::RendererWebStorageHandles::ephemeral(),
+                web_storage: crate::RendererWebStorageHandles::ephemeral(),
                 root_frame_id: None,
                 main_document_commit: None,
                 top_level_storage_key: None,
@@ -356,17 +358,17 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
                 document_activity: Default::default(),
                 network_offline: false,
                 blocked_url_patterns: Vec::new(),
-            indexed_db_manager: None,
-        storage_bucket_store: None,
+                indexed_db_manager: None,
+                storage_bucket_store: None,
                 fetch_subresource_interception_enabled: false,
                 fetch_subresource_interception_resource_type: None,
                 layout_policy: moli_page_types::LayoutPolicy::default(),
                 wpt_extensions_enabled: false,
-            navigation_bootstrap_entry: None,
-            navigation_history_source: None,
-        reserved_service_worker_client_id: None,
+                navigation_bootstrap_entry: None,
+                navigation_history_source: None,
+                reserved_service_worker_client_id: None,
             },
-        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
             parser_dom_host,
             Instant::now(),
         )
@@ -590,14 +592,18 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
             },
         );
 
-        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let parser_dom_host = driver
+            .parser_session
+            .stream_handle()
+            .borrow_mut()
+            .take_parser_stream_dom_host();
         let local_executor = JsLocalExecutor::new();
         let mut page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
             &loader,
             &PageVmEnvConfig {
-        web_storage: crate::RendererWebStorageHandles::ephemeral(),
+                web_storage: crate::RendererWebStorageHandles::ephemeral(),
                 root_frame_id: None,
                 main_document_commit: None,
                 top_level_storage_key: None,
@@ -620,17 +626,17 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
                 document_activity: Default::default(),
                 network_offline: false,
                 blocked_url_patterns: Vec::new(),
-            indexed_db_manager: None,
-        storage_bucket_store: None,
+                indexed_db_manager: None,
+                storage_bucket_store: None,
                 fetch_subresource_interception_enabled: false,
                 fetch_subresource_interception_resource_type: None,
                 layout_policy: moli_page_types::LayoutPolicy::default(),
                 wpt_extensions_enabled: false,
-            navigation_bootstrap_entry: None,
-            navigation_history_source: None,
-        reserved_service_worker_client_id: None,
+                navigation_bootstrap_entry: None,
+                navigation_history_source: None,
+                reserved_service_worker_client_id: None,
             },
-        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
             parser_dom_host,
             Instant::now(),
         )
@@ -693,7 +699,10 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
         source_tx
             .send(Ok("globalThis.__mainDeferred = 1;".to_owned()))
             .expect("defer source receiver should remain alive");
-        if !page_vm.page_resource_completion_queue().has_ready_completion() {
+        if !page_vm
+            .page_resource_completion_queue()
+            .has_ready_completion()
+        {
             tokio::time::timeout(
                 std::time::Duration::from_secs(2),
                 page_vm.wait_for_page_resource_completion_for_test(),

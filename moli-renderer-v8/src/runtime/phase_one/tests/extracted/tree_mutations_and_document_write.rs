@@ -1364,23 +1364,21 @@ document.body.setAttribute("data-range", [
         }));
 }
 
+#[test]
+fn parser_eof_option_finish_syncs_selectedcontent_clones() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime should build");
 
-
-    #[test]
-    fn parser_eof_option_finish_syncs_selectedcontent_clones() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
-
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let mut text_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
-                r#"<select><button><selectedcontent></button><option>X"#,
-            )
-            .await;
-            let text_result = text_page_vm
-                .evaluate_expression(
-                    r#"
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+        let mut text_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+            r#"<select><button><selectedcontent></button><option>X"#,
+        )
+        .await;
+        let text_result = text_page_vm
+            .evaluate_expression(
+                r#"
 (() => {
   const selectedcontent = document.querySelector('selectedcontent');
   const source = document.querySelector('option');
@@ -1390,21 +1388,21 @@ document.body.setAttribute("data-range", [
   ].join('|');
 })()
 "#,
-                )
-                .expect("EOF-closed text option selectedcontent state should evaluate");
-            assert_eq!(
-                text_result.get("value").and_then(serde_json::Value::as_str),
-                Some("X|true"),
-                "EOF-closing an option must clone its text into selectedcontent"
-            );
-
-            let mut nested_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
-                r#"<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b"#,
             )
-            .await;
-            let nested_result = nested_page_vm
-                .evaluate_expression(
-                    r#"
+            .expect("EOF-closed text option selectedcontent state should evaluate");
+        assert_eq!(
+            text_result.get("value").and_then(serde_json::Value::as_str),
+            Some("X|true"),
+            "EOF-closing an option must clone its text into selectedcontent"
+        );
+
+        let mut nested_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+            r#"<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b"#,
+        )
+        .await;
+        let nested_result = nested_page_vm
+            .evaluate_expression(
+                r#"
 (() => {
   const selectedcontent = document.querySelector('selectedcontent');
   const source = document.querySelector('option');
@@ -1417,26 +1415,26 @@ document.body.setAttribute("data-range", [
   ].join('|');
 })()
 "#,
-                )
-                .expect("EOF-closed nested option selectedcontent state should evaluate");
-            assert_eq!(
-                nested_result
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some("xiibb|true|true|true|2"),
-                "EOF-closing an option must deep-clone its parsed children into selectedcontent"
-            );
-        }));
-    }
+            )
+            .expect("EOF-closed nested option selectedcontent state should evaluate");
+        assert_eq!(
+            nested_result
+                .get("value")
+                .and_then(serde_json::Value::as_str),
+            Some("xiibb|true|true|true|2"),
+            "EOF-closing an option must deep-clone its parsed children into selectedcontent"
+        );
+    }));
+}
 
-    #[test]
-    fn parser_option_finish_and_select_setters_sync_selectedcontent_clones() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
+#[test]
+fn parser_option_finish_and_select_setters_sync_selectedcontent_clones() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime should build");
 
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><body>
 <form id="form"><select id="select">
@@ -1477,16 +1475,16 @@ window.selectedcontentState.push(selectedcontent.textContent.trim());
                 "parser option completion and select setters must synchronously clone the selected option children"
             );
         }));
-    }
+}
 
-    #[test]
-    fn moving_selected_option_updates_previous_select_selectedcontent_in_a_microtask() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
+#[test]
+fn moving_selected_option_updates_previous_select_selectedcontent_in_a_microtask() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime should build");
 
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><body>
 <select id="source">
@@ -1518,7 +1516,7 @@ window.selectedcontentMoveState = [selectedcontent.textContent.trim()];
                 "implicit option removal must keep the old clone synchronously and update it at the next microtask checkpoint"
             );
         }));
-    }
+}
 
 #[test]
 fn parser_merged_body_attributes_register_window_handlers_once() {

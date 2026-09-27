@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn trusted_type_to_json_returns_internal_strings() {
     let mut vm = new_storage_test_vm("https://trusted-type-to-json.test/");

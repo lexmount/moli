@@ -1698,8 +1698,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
         let _js_runtime = crate::JsRuntime::initialize();
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader =
-            ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let parser_dom_host = state
             .parser_session
