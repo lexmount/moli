@@ -654,3 +654,69 @@ for (const key of ["committed", "finished"]) {
         },
     );
 }
+
+#[test]
+fn followed_navigation_preserves_the_outgoing_history_referrer_policy() {
+    run_page_vm_large_stack_async_test(
+        "followed-navigation-history-referrer-policy",
+        || async move {
+            let (base, server) = spawn_path_response_http_server(vec![(
+                "/destination",
+                "HTTP/1.1 200 OK",
+                "<!doctype html><body>destination".to_owned(),
+                Duration::ZERO,
+            )])
+            .await;
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let (page_vm, _resource_source, _owner_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader,
+                    Url::parse(&format!("{base}/source")).unwrap(),
+                );
+            let executor = page_vm.local_executor.clone();
+            executor
+                .run(async move {
+                    let mut page_vm = page_vm;
+                    let destination = format!("{base}/destination");
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+                history.pushState(null, '', '#state');
+                const m=document.createElement('meta'); m.name='referrer'; m.content='origin';
+                document.documentElement.append(m);
+                navigation.navigate({destination:?}, {{history:'push'}}); 'queued'
+            "#
+                    ))?;
+                    let outcome = page_vm
+                        .follow_pending_location_navigation_one_turn_async(
+                            &mut None,
+                            PageVmInitStage::Load,
+                        )
+                        .await?;
+                    assert!(matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                            | crate::runtime::PageVmFollowNavigationTurnOutcome::PostParseLifecycle { .. }
+                    ));
+                    assert_eq!(
+                        page_vm
+                            .vm_mut()
+                            .eval("JSON.stringify(navigation.entries().map(e=>e.url))")?,
+                        serde_json::json!([null, null, destination]).to_string(),
+                    );
+                    assert_eq!(
+                        page_vm
+                            .vm_mut()
+                            .eval("String(navigation.activation.from.url)")?,
+                        "null"
+                    );
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .expect("followed navigation should preserve policy");
+            server
+                .await
+                .expect("navigation response server should finish");
+        },
+    );
+}
