@@ -153,6 +153,7 @@ mod tests {
             source_result: Ok(String::new()),
             script_url: url::Url::parse("https://child-script-order.test/script.js").unwrap(),
             script_base_url: url::Url::parse("https://child-script-order.test/").unwrap(),
+            script_fetch_metadata: Default::default(),
         })
         .into()
     }

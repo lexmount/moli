@@ -624,8 +624,7 @@ mod tests {
             ),
             script_url: script_url.clone(),
             base_url: script_url.clone(),
-            script_nonce: None,
-            script_integrity: None,
+            script_fetch_metadata: None,
             credentials_mode: RequestCredentialsMode::SameOrigin,
             referrer_policy: None,
         };
