@@ -115,8 +115,7 @@ async fn runtime_modulepreloads_fetch_after_load_and_reuse_the_child_module_map(
     check_runtime_modulepreloads(true).await
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn module_script_consumers_share_the_main_module_map() -> Result<()> {
+async fn check_module_script_consumers(child: bool) -> Result<()> {
     let servers = IntegrityServers::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let mut page = browser
@@ -172,15 +171,28 @@ async fn module_script_consumers_share_the_main_module_map() -> Result<()> {
       check(sriExecutions === beforeClassic + 2, 'classic scripts must each evaluate');
       return true;
     })()"#;
+    let expression = if child {
+        format!(
+            r#"(async () => {{
+                const frame = document.createElement('iframe');
+                frame.src = '/page.html?child';
+                await new Promise(resolve => {{ frame.onload = resolve; document.body.append(frame); }});
+                return frame.contentWindow.eval({});
+            }})()"#,
+            serde_json::to_string(probe)?
+        )
+    } else {
+        probe.to_owned()
+    };
     let result = tokio::time::timeout(
         Duration::from_secs(15),
-        page.evaluate_runtime_expression_with_await_async(probe, true),
+        page.evaluate_runtime_expression_with_await_async(&expression, true),
     )
     .await??;
     assert_eq!(
         result["value"],
         true,
-        "{result}; requests={:?}",
+        "child={child}: {result}; requests={:?}",
         servers.requests.lock()
     );
     let requests = servers.requests.lock();
@@ -223,6 +235,16 @@ async fn module_script_consumers_share_the_main_module_map() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn module_script_consumers_share_the_main_module_map() -> Result<()> {
+    check_module_script_consumers(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn module_script_consumers_share_the_child_module_map() -> Result<()> {
+    check_module_script_consumers(true).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

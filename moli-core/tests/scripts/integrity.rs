@@ -19,6 +19,9 @@ mod text_modules;
 #[path = "runtime_modulepreload.rs"]
 mod runtime_modulepreload;
 
+#[path = "child_module_records.rs"]
+mod child_module_records;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -162,6 +165,11 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/module-records.html"
+        | "/module-record.js"
+        | "/module-record-tla.js"
+        | "/module-record-wrapper.js"
+        | "/module-record-redirect.js" => child_module_records::fixture_response(path, cross),
         "/module-response-started" | "/module-response-release" => (
             "200 OK",
             "Content-Type: text/plain\r\nCache-Control: no-store\r\n".to_owned(),
