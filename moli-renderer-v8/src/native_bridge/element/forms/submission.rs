@@ -835,7 +835,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
         && let Some(location) = window
             .and_then(|window| crate::context_bootstrap::window_location_for_holder(scope, window))
     {
-        crate::context_bootstrap::navigate_location_object_for_form_fragment(
+        crate::context_bootstrap::navigate_location_object_for_element_fragment(
             scope,
             location,
             destination_url.as_str(),

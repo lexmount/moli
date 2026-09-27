@@ -855,12 +855,18 @@ impl DocumentRuntime {
         let is_navigation_attribute =
             runtime.frame_owner_navigation_attribute_matches(handle, name);
         if is_navigation_attribute || is_srcdoc {
-            runtime.clear_ignored_child_frame_navigation_attribute(handle);
+            runtime.clear_child_frame_navigation_attribute_state(handle);
         }
         if is_srcdoc {
             runtime.clear_child_browsing_context_cached_snapshot_for_navigation(handle);
         }
         runtime.refresh_child_browsing_context_and_queue_ready_work(scope, handle);
+        if !removed
+            && is_navigation_attribute
+            && runtime.run_child_frame_attribute_fragment_navigation(scope, handle)
+        {
+            return true;
+        }
         // A srcdoc attribute change only queues a navigation. Keep the live
         // Document's History and Navigation objects intact until it commits.
         if !is_srcdoc

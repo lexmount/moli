@@ -181,7 +181,20 @@ impl JsContextHost {
                         &attribute_bootstrap,
                     ))
                 .then(|| attribute_bootstrap.clone());
-                let attribute_bootstrap = if ignored_attribute_bootstrap.is_some() {
+                let same_document_attribute_bootstrap = (!is_new
+                    && ignored_attribute_bootstrap.is_none()
+                    && self.dom_host().is_html_element_named(handle, "iframe")
+                    && (existing.as_ref().is_some_and(|entry| {
+                        entry.same_document_attribute_bootstrap.as_ref()
+                            == Some(&attribute_bootstrap)
+                    }) || Self::child_browsing_context_bootstrap_url(&attribute_bootstrap)
+                        .is_some_and(|url| {
+                            self.child_frame_attribute_navigation_is_same_document(handle, &url)
+                        })))
+                .then(|| attribute_bootstrap.clone());
+                let attribute_bootstrap = if ignored_attribute_bootstrap.is_some()
+                    || same_document_attribute_bootstrap.is_some()
+                {
                     existing
                         .as_ref()
                         .map_or(ChildBrowsingContextBootstrap::AboutBlank, |entry| {
@@ -578,6 +591,7 @@ impl JsContextHost {
                         id: id.filter(|value| !value.is_empty()),
                         attribute_bootstrap,
                         ignored_attribute_bootstrap,
+                        same_document_attribute_bootstrap,
                         pending_attribute_bootstrap_commit,
                         pending_javascript_initiator_origin,
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
