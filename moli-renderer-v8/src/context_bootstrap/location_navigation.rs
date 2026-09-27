@@ -155,6 +155,26 @@ pub(crate) fn navigate_location_object<'s>(
     );
 }
 
+/// Executes a navigation already classified as same-document by its caller.
+/// An exact URL match must still honor the requested history mutation.
+pub(crate) fn navigate_location_object_for_same_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    href: &str,
+    kind: LocationNavigationKind,
+) {
+    navigate_location_object_with_options(
+        scope,
+        location,
+        kind,
+        Some(href.to_owned()),
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..LocationNavigationOptions::default()
+        },
+    );
+}
+
 pub(crate) fn navigate_location_object_for_element_fragment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
