@@ -485,8 +485,7 @@ fn evaluate_worker_script(
     let host_defined_options = crate::util::script_host_defined_options_with_fetch_metadata(
         scope,
         base_url,
-        None,
-        false,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
         muted_errors,
         Some(request_url),
     );

@@ -84,6 +84,7 @@ impl JsContextHost {
         owner_document_handle: DomHandle,
         script_handle: DomHandle,
         source: String,
+        fetch_metadata: crate::planning::ScriptFetchMetadata,
     ) -> anyhow::Result<()> {
         let Some(child_handle) =
             self.child_browsing_context_handle_by_document_handle(scope, owner_document_handle)
@@ -115,10 +116,7 @@ impl JsContextHost {
         else {
             return Ok(());
         };
-        job.script_nonce =
-            crate::host::script_element_nonce_for_csp(self.dom_host(), script_handle)
-                .map(str::to_owned);
-        job.script_integrity = self.dom_host().get_attribute(script_handle, "integrity");
+        job.script_fetch_metadata = Some(fetch_metadata);
         // Commit before entering V8: the script can remove and reinsert itself,
         // mutate another pending script, or replace its preparation Document.
         let _ = self

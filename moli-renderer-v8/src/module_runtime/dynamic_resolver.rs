@@ -12,7 +12,6 @@ use crate::{
     native_bridge::{
         OwnerDispatchScope, WindowExecutionContextIdentity, WindowExecutionContextOwner,
     },
-    planning::ScriptFetchMetadata,
 };
 
 use super::{
@@ -33,7 +32,7 @@ pub(crate) struct PendingDynamicModuleImport {
     resolved_url: Option<Url>,
     attributes: ModuleAttributesKey,
     phase: ModuleImportPhase,
-    fetch_metadata: ScriptFetchMetadata,
+    fetch_metadata: super::ModuleFetchMetadata,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,11 +194,14 @@ impl PendingDynamicModuleImport {
             resolved_url: None,
             attributes,
             phase,
-            fetch_metadata: ScriptFetchMetadata::default(),
+            fetch_metadata: super::ModuleFetchMetadata::default(),
         }
     }
 
-    pub(crate) fn with_referrer_fetch_metadata(mut self, metadata: ScriptFetchMetadata) -> Self {
+    pub(crate) fn with_referrer_fetch_metadata(
+        mut self,
+        metadata: super::ModuleFetchMetadata,
+    ) -> Self {
         self.fetch_metadata = metadata;
         self
     }
@@ -241,7 +243,7 @@ impl PendingDynamicModuleImport {
         self.phase
     }
 
-    pub(crate) fn fetch_metadata(&self) -> &ScriptFetchMetadata {
+    pub(crate) fn fetch_metadata(&self) -> &super::ModuleFetchMetadata {
         &self.fetch_metadata
     }
 

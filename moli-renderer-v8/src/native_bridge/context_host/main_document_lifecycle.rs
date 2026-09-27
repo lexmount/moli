@@ -206,12 +206,14 @@ impl JsContextHost {
                 node,
                 host_script_handle,
                 source,
+                fetch_metadata,
             } => {
                 debug_assert!(load_delay_binding.is_none());
                 Ok(Some(CommittedInlineClassicScript::new(
                     node,
                     host_script_handle,
                     source,
+                    fetch_metadata,
                 )))
             }
             PreparedRuntimeScriptStartCommit::InlineImportMap {
