@@ -89,7 +89,6 @@ fn child_document_factories_allocate_results_in_document_realm() {
     assert_eq!(result, "");
 }
 
-
 #[test]
 fn detached_character_data_accessors_parse_webidl_arguments() {
     let mut vm = new_storage_test_vm("https://detached-character-data-webidl.test/");
@@ -544,7 +543,6 @@ fn insert_adjacent_html_enforces_sibling_context_rules() {
         r#"{"detachedErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"documentErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"preservedInnerHtmlContext":true,"counts":[1,1,1],"placement":[true,true,true,true]}"#
     );
 }
-
 
 #[test]
 fn document_fragment_and_shadow_root_get_element_by_id_match_browser_lookup_boundaries() {
