@@ -163,7 +163,7 @@ impl DocumentRuntime {
                 Some(&script.url),
                 Some(&script.base_url),
                 0,
-                script.fetch_metadata.nonce.as_deref(),
+                Some(&script.fetch_metadata),
                 true,
             )
         };

@@ -1133,7 +1133,7 @@ impl PageScriptHost {
             source,
             script_url,
             base_url,
-            script_nonce,
+            script_fetch_metadata,
             ..
         } = job;
         let result = match source {
@@ -1145,7 +1145,7 @@ impl PageScriptHost {
                     Some(&script_url),
                     Some(&base_url),
                     0,
-                    script_nonce.as_deref(),
+                    script_fetch_metadata.as_ref(),
                     true,
                 )
             }
@@ -1270,7 +1270,7 @@ impl PageScriptHost {
                 Some(&job.script_url),
                 Some(&job.base_url),
                 (*start_line).saturating_sub(1).min(i32::MAX as u64) as i32,
-                script.fetch_metadata.nonce.as_deref(),
+                Some(&script.fetch_metadata),
                 true,
             )
         };
