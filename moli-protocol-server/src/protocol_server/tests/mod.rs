@@ -1385,6 +1385,7 @@ mod cdp_dynamic_page;
 mod classic;
 mod download;
 mod misc;
+mod navigation_unload;
 mod p6_output_handoff;
 mod page_endpoint;
 mod request_guard;
