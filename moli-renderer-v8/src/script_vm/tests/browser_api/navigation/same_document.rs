@@ -1075,37 +1075,42 @@ for (const name of ['committed', 'finished'])
 }
 
 #[tokio::test]
-async fn same_url_navigation_preserves_fragment_documents_in_iframes() {
-    for (fragment, remove_fragment, same_document) in [
-        ("", false, false),
-        ("#", false, true),
-        ("#fragment", false, true),
-        ("#fragment", true, false),
-    ] {
-        for history in ["auto", "push", "replace"] {
-            let request_count = if same_document { 1 } else { 2 };
-            let server = StaticHttpServer::spawn(request_count).await;
-            let parent = server.base_url().join("parent").unwrap();
-            let loader = static_http_loader([]);
-            let mut vm =
-                new_storage_page_task_executor_test_vm_with_loader(parent.as_str(), &loader);
-            let context = format!("{fragment}/{remove_fragment}/{history}");
-            vm.eval(
-                r#"
-const frame = document.createElement('iframe');
-frame.src = '/child'; document.body.append(frame);
-const child = frame.contentWindow;
-"#,
-            )
-            .unwrap();
-            advance_page_task_executor_until_eval_equals(
-                &mut vm, &loader,
-                "(() => { try { return String(child.location.pathname === '/child' && child.document.readyState === 'complete'); } catch { return 'false'; } })()",
-                "true", &context,
-            ).await;
-            vm.exec(
-                &format!(
+async fn same_url_navigation_preserves_fragment_documents_in_iframes_and_popups() {
+    for popup in [false, true] {
+        for (fragment, remove_fragment, same_document) in [
+            ("", false, false),
+            ("#", false, true),
+            ("#fragment", false, true),
+            ("#fragment", true, false),
+        ] {
+            for history in ["auto", "push", "replace"] {
+                let request_count = if same_document { 1 } else { 2 };
+                let server = StaticHttpServer::spawn(request_count).await;
+                let parent = server.base_url().join("parent").unwrap();
+                let loader = static_http_loader([]);
+                let mut vm =
+                    new_storage_page_task_executor_test_vm_with_loader(parent.as_str(), &loader);
+                let context = format!("popup={popup}/{fragment}/{remove_fragment}/{history}");
+                vm.eval(&format!(
                     r#"
+globalThis.child = null;
+if ({popup}) {{
+  child = open('/child', 'same-url-target');
+}} else {{
+  const frame = document.createElement('iframe');
+  frame.src = '/child'; document.body.append(frame); child = frame.contentWindow;
+}}
+"#
+                ))
+                .unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm, &loader,
+                    "(() => { try { return String(child.location.pathname === '/child' && child.document.readyState === 'complete'); } catch { return 'false'; } })()",
+                    "true", &context,
+                ).await;
+                vm.exec(
+                    &format!(
+                        r#"
 child.history.replaceState(null, '', child.location.pathname + {fragment:?});
 const originalDocument = child.document;
 const beforeLength = child.history.length;
@@ -1119,66 +1124,52 @@ const result = child.navigation.navigate(destination, {{history: {history:?}}});
 for (const name of ['committed', 'finished'])
   result[name].then(() => settled.push(name), error => settled.push(error.name));
 "#
-                ),
-                None,
-            )
-            .unwrap();
-            advance_page_task_executor_until_eval_equals(
-                &mut vm, &loader,
-                if same_document {
-                    "String(settled.length === 2)"
-                } else {
-                    "(() => { try { return String(child.document !== originalDocument && child.document.readyState === 'complete'); } catch { return 'false'; } })()"
-                },
-                "true", &context,
-            ).await;
-            let result = vm
-                .eval(
-                    r#"JSON.stringify({
+                    ),
+                    None,
+                )
+                .unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm, &loader,
+                    if same_document {
+                        "String(settled.length === 2)"
+                    } else {
+                        "(() => { try { return String(child.document !== originalDocument && child.document.readyState === 'complete'); } catch { return 'false'; } })()"
+                    },
+                    "true", &context,
+                ).await;
+                let result = vm
+                    .eval(
+                        r#"JSON.stringify({
 sameDocument: originalDocument === child.document,
 historyDelta: child.history.length - beforeLength,
 entriesDelta: child.navigation.entries().length - beforeEntries,
 indexDelta: child.navigation.currentEntry.index - beforeIndex,
 events, settled})"#,
-                )
-                .unwrap();
-            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-            let pushes = history == "push" || (history == "auto" && remove_fragment);
-            assert_eq!(
-                result["sameDocument"],
-                serde_json::json!(same_document),
-                "{context}"
-            );
-            assert_eq!(
-                result["events"],
-                serde_json::json!([[
-                    if pushes { "push" } else { "replace" },
-                    same_document,
-                    false
-                ]]),
-                "{context}"
-            );
-            assert_eq!(
-                result["settled"],
-                serde_json::json!(if same_document {
-                    vec!["committed", "finished"]
-                } else {
-                    vec![]
-                }),
-                "{context}"
-            );
-            for key in ["historyDelta", "entriesDelta", "indexDelta"] {
+                    )
+                    .unwrap();
+                let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+                let pushes = history == "push" || (history == "auto" && remove_fragment);
                 assert_eq!(
-                    result[key],
-                    serde_json::json!(i32::from(pushes)),
-                    "{context}/{key}"
+                    result,
+                    serde_json::json!({
+                        "sameDocument": same_document,
+                        "historyDelta": i32::from(pushes),
+                        "entriesDelta": i32::from(pushes),
+                        "indexDelta": i32::from(pushes),
+                        "events": [[if pushes { "push" } else { "replace" }, same_document, false]],
+                        "settled": if same_document { vec!["committed", "finished"] } else { vec![] },
+                    }),
+                    "{context}"
+                );
+                if popup {
+                    vm.eval("child.close()").unwrap();
+                }
+                assert_eq!(
+                    server.finish_targets().await,
+                    vec!["/child"; request_count],
+                    "{context}"
                 );
             }
-            assert_eq!(
-                server.finish_targets().await,
-                vec!["/child"; request_count],
-                "{context}"
-            );
         }
     }
 }

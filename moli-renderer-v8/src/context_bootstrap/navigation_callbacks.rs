@@ -26,9 +26,9 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    navigation_document_base_url, navigation_document_has_opaque_origin, runtime_window_is_global,
-    runtime_window_owner, should_dispatch_hash_change, window_history_for_holder,
-    window_location_for_holder, window_navigation_for_holder,
+    navigation_document_base_url, navigation_document_has_opaque_origin, runtime_window_owner,
+    should_dispatch_hash_change, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::native_bridge::throw_dom_exception;
