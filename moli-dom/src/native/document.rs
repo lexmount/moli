@@ -89,6 +89,9 @@ struct DocumentMetadata {
 // Document identity. Only a whole-arena snapshot may copy them unchanged.
 #[derive(Debug, Clone, Default)]
 struct DocumentArenaState {
+    // Meta delivery updates policy in time order; removing the element does
+    // not undo the policy it delivered to this Document.
+    meta_referrer_policy: Option<&'static str>,
     // Sticky for this Document; aborting a parser disables document.open/write.
     active_parser_was_aborted: bool,
     is_inert_template_document: bool,
@@ -219,6 +222,10 @@ impl Document {
 
     pub fn mark_active_parser_aborted(&mut self) {
         self.arena_state.active_parser_was_aborted = true;
+    }
+
+    pub fn meta_referrer_policy(&self) -> Option<&str> {
+        self.arena_state.meta_referrer_policy
     }
 
     pub fn visibility_hidden(&self) -> bool {
