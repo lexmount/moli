@@ -40,6 +40,9 @@ mod classic_document_referrer;
 #[path = "meta_referrer_policy.rs"]
 mod meta_referrer_policy;
 
+#[path = "referrer_policy_inheritance.rs"]
+mod referrer_policy_inheritance;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
