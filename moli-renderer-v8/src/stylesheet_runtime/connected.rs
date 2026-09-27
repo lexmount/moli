@@ -2001,9 +2001,13 @@ impl DocumentRuntime {
         let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) else {
             return true;
         };
-        if let Some(candidate) =
-            modulepreload_fetch_candidate(element, url.clone(), &initiator, integrity)
-        {
+        if let Some(candidate) = modulepreload_fetch_candidate(
+            element,
+            url.clone(),
+            &initiator,
+            integrity,
+            crate::context_bootstrap::document_referrer_policy_for_native_document(host, document),
+        ) {
             let _ = host.queue_child_modulepreload_fetch_for_current_document(
                 child,
                 handle,
@@ -2032,6 +2036,7 @@ impl DocumentRuntime {
             url.clone(),
             &document_url,
             self.resolve_module_integrity(url),
+            self.current_document_referrer_policy(),
         )?;
         Some((candidate.key, candidate.request))
     }

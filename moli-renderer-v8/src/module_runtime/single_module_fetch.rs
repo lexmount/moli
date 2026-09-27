@@ -9,6 +9,8 @@ use super::{ModuleFetchMetadata, ModuleMapKey, NativeModuleGraphFetchRequest};
 pub(crate) struct NativeModuleSingleFetchRequest {
     source_url: Url,
     initiator_url: Url,
+    // Fetch-client defaults belong to this request, not the module's persistent options.
+    document_referrer_policy: Option<String>,
     module_key: ModuleMapKey,
     fetch_metadata: ModuleFetchMetadata,
     csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
@@ -24,10 +26,16 @@ impl NativeModuleSingleFetchRequest {
         Self {
             source_url,
             initiator_url,
+            document_referrer_policy: None,
             module_key,
             fetch_metadata,
             csp_context: None,
         }
+    }
+
+    pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
+        self.document_referrer_policy = policy;
+        self
     }
 
     #[cfg(test)]
@@ -80,6 +88,7 @@ impl NativeModuleSingleFetchRequest {
             self.module_key.kind(),
         )
         .with_csp_context(self.csp_context.clone())
+        .with_document_referrer_policy(self.document_referrer_policy.clone())
     }
 }
 
