@@ -523,6 +523,14 @@ impl ScriptVm {
         }
         Ok(())
     }
+    pub(crate) fn apply_live_main_module_graph_fetch_completion(
+        &mut self,
+        authorization: crate::runtime::AuthorizedLiveMainModuleGraphFetchCompletion,
+    ) -> Result<()> {
+        let (load_id, result) = authorization.into_parts();
+        self.complete_shared_module_map_fetch_result(load_id, result)
+    }
+
     #[cfg(test)]
     pub(super) fn complete_abandoned_module_script_graph_fetch(
         &mut self,
@@ -1109,6 +1117,11 @@ impl ScriptVm {
             load_ids.push(load_id);
             scheduled.push((load_id, request));
         }
+        let mut root_script = (matches!(fetch_schedule_owner, FetchScheduleOwner::Runtime { .. })
+            && scheduled
+                .iter()
+                .any(|(_, request)| request.is_top_level_tree_fetch()))
+        .then(|| continuation.script.clone());
         let continuation = continuation.with_pending_graph_fetches(job, load_ids.first().copied());
         tracing::debug!(
             url = %continuation.script.url,
@@ -1146,6 +1159,30 @@ impl ScriptVm {
                     document_owner,
                     dynamic_script_owner_id,
                 } => {
+                    if request.is_top_level_tree_fetch() {
+                        let service_worker = {
+                            let host = self._context_host.borrow();
+                            crate::dynamic_script_owner::DynamicScriptServiceWorkerContext {
+                                browser_context_runtime: host.browser_context_runtime(),
+                                client_id: host.service_worker_client_id_for_window_fetch(None),
+                                document_url: self.document_runtime.document_url().clone(),
+                            }
+                        };
+                        self.resource_scheduler()
+                            .schedule_main_runtime_module_root_fetch(
+                            document_loader.clone(),
+                            crate::page_resource_completion::MainRuntimeModuleGraphFetchTarget::new(
+                                document_owner,
+                                dynamic_script_owner_id,
+                                load_id,
+                            ),
+                            root_script
+                                .take()
+                                .expect("runtime root fetch retains its prepared script"),
+                            service_worker,
+                        );
+                        continue;
+                    }
                     self.resource_scheduler()
                         .schedule_main_runtime_module_graph_fetch(
                             document_loader.clone(),

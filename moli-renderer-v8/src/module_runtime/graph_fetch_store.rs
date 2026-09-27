@@ -25,10 +25,6 @@ impl fmt::Debug for NativeModuleGraphFetchStore {
 }
 
 impl NativeModuleGraphFetchStore {
-    pub(crate) fn clear(&mut self) {
-        self.inflight_module_script_fetches.clear();
-    }
-
     pub(crate) fn suspend_fetch(
         &mut self,
         continuation: ModuleScriptGraphFetchContinuation,
