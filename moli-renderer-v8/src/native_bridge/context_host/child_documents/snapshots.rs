@@ -26,9 +26,12 @@ impl PageScriptHost {
         handle: DomHandle,
         url: &Url,
     ) -> Option<ChildBrowsingContextSnapshot> {
-        let snapshot = self.apply_page_csp_bypass_to_child_snapshot(
-            self.materialize_local_child_snapshot_for_url(url)?,
-        );
+        let mut snapshot = self.materialize_local_child_snapshot_for_url(url, Some(handle))?;
+        if ChildBrowsingContextBootstrap::Url(url.clone()).content_security_policy_inherited() {
+            snapshot.policy_container =
+                self.initial_child_about_blank_policy_container_from_parent(handle);
+        }
+        let snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
         if moli_url::is_about_blank(&snapshot.url) {
             Some(snapshot.with_fallback_base_url(self.document_base_url_for_child_context(handle)))
         } else {
@@ -39,6 +42,7 @@ impl PageScriptHost {
     pub(crate) fn materialize_local_child_snapshot_for_url(
         &self,
         url: &Url,
+        owner: Option<DomHandle>,
     ) -> Option<ChildBrowsingContextSnapshot> {
         match url.scheme() {
             "about" if url.path() == "blank" => Some(ChildBrowsingContextSnapshot::html(
@@ -46,41 +50,44 @@ impl PageScriptHost {
                 "<!DOCTYPE html><html><head></head><body></body></html>".into(),
             )),
             "http" | "https" => None,
-            "blob" => {
-                let (body, mime_type) = crate::blob::object_url_body_and_type(url.as_str())?;
-                if !mime_type.is_empty() && !is_html_document_mime(&mime_type) {
-                    return None;
-                }
-                let character_set = self.document_character_set().to_owned();
-                Some(ChildBrowsingContextSnapshot::with_character_set(
-                    url.clone(),
-                    body,
-                    child_document_content_type_from_header_value(&mime_type)
-                        .or_else(|| Some("text/html".to_owned())),
-                    character_set,
-                ))
-            }
-            "data" => crate::network_host::local_url_response(url).map(|response| {
+            "blob" | "data" => crate::network_host::local_url_response(url).and_then(|response| {
                 let head = response.head();
                 let content_type = child_document_content_type_from_headers(&head.headers);
+                if url.scheme() == "blob"
+                    && content_type
+                        .as_deref()
+                        .is_some_and(|mime| !is_html_document_mime(mime))
+                {
+                    return None;
+                }
+                let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
+                    &head.headers,
+                    &head.final_url,
+                );
+                let encoding_context = owner
+                    .map(|handle| self.child_document_encoding_context(handle))
+                    .unwrap_or_default();
+                let fallback = encoding_context.fallback_encoding(
+                    &head.final_url,
+                    content_type.as_deref(),
+                    policy_container.sandbox.forces_opaque_origin,
+                );
                 let (body, character_set) = decode_document_response(
                     response.body_bytes(),
                     &head.headers,
                     content_type.as_deref(),
                     &head.final_url,
-                    Some(self.document_character_set()),
+                    fallback,
                 );
-                let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
-                    &head.headers,
-                    &head.final_url,
-                );
-                ChildBrowsingContextSnapshot::with_character_set(
-                    head.final_url,
-                    body,
-                    content_type,
-                    character_set,
+                Some(
+                    ChildBrowsingContextSnapshot::with_character_set(
+                        head.final_url,
+                        body,
+                        content_type,
+                        character_set,
+                    )
+                    .with_policy_container(policy_container),
                 )
-                .with_policy_container(policy_container)
             }),
             _ => None,
         }
@@ -113,11 +120,7 @@ impl PageScriptHost {
                     return Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot));
                 }
                 Some(self.apply_page_csp_bypass_to_child_snapshot(
-                    ChildBrowsingContextSnapshot::srcdoc(
-                        base_url.clone(),
-                        markup.clone(),
-                        self.document_character_set().to_owned(),
-                    ),
+                    ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone()),
                 ))
             }
             ChildBrowsingContextBootstrap::Url(url) => {
@@ -132,10 +135,6 @@ pub(in crate::native_bridge::context_host) fn child_document_content_type_from_h
     headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
     response_document_content_type(headers)
-}
-
-fn child_document_content_type_from_header_value(value: &str) -> Option<String> {
-    moli_web_mime::mime_essence(value)
 }
 
 #[cfg(test)]

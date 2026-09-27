@@ -2,6 +2,8 @@ mod renderer_owned;
 
 use super::{NavigationHistoryEntrySeed, PageScriptHost};
 use crate::content_security_policy::ContentSecurityPolicy;
+use crate::document_response_decoder::decode_document_response;
+use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
     context_bootstrap::{
@@ -48,7 +50,6 @@ use crate::{
     },
 };
 use anyhow::Result;
-use moli_encoding::decode_html_document_with_fallback;
 use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
 use moli_url::origin_ascii_serialization;
@@ -3032,7 +3033,7 @@ impl PageScriptHost {
             self.next_lightweight_popup_document_load_id.wrapping_add(1);
         let target = LightweightPopupDocumentFetchTarget::new(load_id, task);
         let local_snapshot = (request.method == "GET")
-            .then(|| self.materialize_local_child_snapshot_for_url(&target_url))
+            .then(|| self.materialize_local_child_snapshot_for_url(&target_url, None))
             .flatten();
         let (resource_loader, request_origin) = if local_snapshot.is_none() {
             let source_owner = self.current_lightweight_popup_document_owner(popup_id)?;
@@ -3098,7 +3099,6 @@ impl PageScriptHost {
         let resource_loader =
             resource_loader.expect("remote popup navigation requires its captured loader");
         let completion_tx = self.resource_completion_tx.clone();
-        let opener_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
             use anyhow::Context as _;
@@ -3135,18 +3135,13 @@ impl PageScriptHost {
                 )?;
                 let content_type =
                     super::child_documents::child_document_content_type_from_headers(&head.headers);
-                let fallback = if content_type
-                    .as_deref()
-                    .is_some_and(moli_web_mime::is_xml_document_mime)
-                {
-                    "UTF-8".to_owned()
-                } else {
-                    opener_character_set.clone()
-                };
-                let (markup, character_set) = decode_html_document_with_fallback(
+                // A top-level popup has no container Document encoding to inherit.
+                let (markup, character_set) = decode_document_response(
                     response.body_bytes(),
                     &head.headers,
-                    Some(&fallback),
+                    content_type.as_deref(),
+                    &head.final_url,
+                    None,
                 );
                 let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
                     &head.headers,
