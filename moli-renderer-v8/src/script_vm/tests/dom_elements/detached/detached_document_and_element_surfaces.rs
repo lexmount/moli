@@ -1752,8 +1752,6 @@ fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
     );
 }
 
-
-
 #[test]
 fn offline_html_documents_parse_and_serialize_noscript_with_scripting_disabled() {
     let mut vm = new_storage_test_vm("https://offline-noscript.test/");

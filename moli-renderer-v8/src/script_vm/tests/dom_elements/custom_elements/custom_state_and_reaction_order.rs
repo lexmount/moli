@@ -1153,8 +1153,6 @@ fn custom_element_popover_reflection_is_visible_on_html_element_prototype() {
     );
 }
 
-
-
 #[test]
 fn custom_element_attach_internals_exposes_element_internals_surface() {
     let mut vm = new_storage_test_vm("https://example.com/");
