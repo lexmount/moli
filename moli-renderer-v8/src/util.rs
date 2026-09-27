@@ -350,19 +350,25 @@ pub(super) fn create_script_origin_with_base_url<'s>(
     line_offset: i32,
     base_url: Option<&Url>,
 ) -> v8::ScriptOrigin<'s> {
-    create_script_origin_with_base_url_and_nonce(scope, resource_name, line_offset, base_url, None)
+    create_script_origin_with_base_url_and_fetch_metadata(
+        scope,
+        resource_name,
+        line_offset,
+        base_url,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
+    )
 }
 
-pub(super) fn create_script_origin_with_base_url_and_nonce<'s>(
+pub(super) fn create_script_origin_with_base_url_and_fetch_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
     line_offset: i32,
     base_url: Option<&Url>,
-    nonce: Option<&str>,
+    metadata: &crate::module_runtime::ModuleFetchMetadata,
 ) -> v8::ScriptOrigin<'s> {
     let name = v8::String::new(scope, resource_name).expect("v8 string allocation");
     let host_defined_options = base_url.and_then(|base_url| {
-        script_host_defined_options_with_base_url_and_nonce(scope, base_url, nonce)
+        script_host_defined_options_with_fetch_metadata(scope, base_url, metadata, false, None)
     });
     v8::ScriptOrigin::new(
         scope,
@@ -496,42 +502,89 @@ pub(crate) fn script_base_url_continuation_data<'s>(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn script_host_defined_options_with_base_url_and_nonce<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base_url: &Url,
     nonce: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Data>> {
-    script_host_defined_options_with_fetch_metadata(scope, base_url, nonce, false, false, None)
+    let metadata =
+        crate::module_runtime::ModuleFetchMetadata::from_dynamic_import_referrer_fetch_metadata(
+            &crate::planning::ScriptFetchMetadata {
+                nonce: nonce.map(str::to_owned),
+                ..Default::default()
+            },
+        );
+    script_host_defined_options_with_fetch_metadata(scope, base_url, &metadata, false, None)
 }
 
 pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base_url: &Url,
-    nonce: Option<&str>,
-    parser_inserted: bool,
+    metadata: &crate::module_runtime::ModuleFetchMetadata,
     muted_errors: bool,
     request_url: Option<&Url>,
 ) -> Option<v8::Local<'s, v8::Data>> {
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
     let value = v8_string(scope, base_url.as_str())?;
-    let nonce = v8_string(scope, nonce.unwrap_or_default())?;
+    let nonce = v8_string(scope, metadata.nonce().unwrap_or_default())?;
     let parser_metadata = v8_string(
         scope,
-        if parser_inserted {
+        if metadata.parser_inserted {
             "parser-inserted"
         } else {
             "not-parser-inserted"
         },
     )?;
     let request_url = v8_string(scope, request_url.map(Url::as_str).unwrap_or_default())?;
-    let options = v8::PrimitiveArray::new(scope, 6);
+    let credentials = v8_string(
+        scope,
+        match metadata.credentials_mode {
+            moli_fetch::RequestCredentialsMode::Omit => "omit",
+            moli_fetch::RequestCredentialsMode::SameOrigin => "same-origin",
+            moli_fetch::RequestCredentialsMode::Include => "include",
+        },
+    )?;
+    let options = v8::PrimitiveArray::new(scope, 7);
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
     options.set(scope, 3, parser_metadata.into());
     options.set(scope, 4, v8::Boolean::new(scope, muted_errors).into());
     options.set(scope, 5, request_url.into());
+    options.set(scope, 6, credentials.into());
     Some(options.into())
+}
+
+pub(crate) fn script_fetch_metadata_from_host_defined_options(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_defined_options: v8::Local<'_, v8::Data>,
+) -> Option<crate::module_runtime::ModuleFetchMetadata> {
+    script_base_url_from_host_defined_options(scope, host_defined_options)?;
+    let options = script_host_defined_options_as_fixed_array(host_defined_options)?;
+    let credentials_mode = if options.length() < 7 {
+        moli_fetch::RequestCredentialsMode::SameOrigin
+    } else {
+        let value = v8::Local::<v8::String>::try_from(options.get(scope, 6)?).ok()?;
+        match value.to_rust_string_lossy(scope).as_str() {
+            "omit" => moli_fetch::RequestCredentialsMode::Omit,
+            "same-origin" => moli_fetch::RequestCredentialsMode::SameOrigin,
+            "include" => moli_fetch::RequestCredentialsMode::Include,
+            _ => return None,
+        }
+    };
+    Some(crate::module_runtime::ModuleFetchMetadata {
+        credentials_mode,
+        request_metadata: moli_fetch::ScriptFetchRequestMetadata {
+            nonce: script_nonce_from_host_defined_options(scope, host_defined_options),
+            ..Default::default()
+        },
+        parser_inserted: script_parser_inserted_from_host_defined_options(
+            scope,
+            host_defined_options,
+        )
+        .unwrap_or(false),
+    })
 }
 
 pub(super) fn enqueue_host_microtask(
@@ -1003,7 +1056,7 @@ mod tests {
 
     use super::{
         SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER, object_chain_contains,
-        script_base_url_from_host_defined_options,
+        script_base_url_from_host_defined_options, script_fetch_metadata_from_host_defined_options,
         script_host_defined_options_with_base_url_and_nonce,
         script_host_defined_options_with_fetch_metadata,
         script_muted_errors_from_host_defined_options, script_nonce_from_host_defined_options,
@@ -1171,8 +1224,7 @@ mod tests {
         let muted = script_host_defined_options_with_fetch_metadata(
             scope,
             &base_url,
-            None,
-            false,
+            &crate::module_runtime::ModuleFetchMetadata::default(),
             true,
             Some(&request_url),
         )
@@ -1239,8 +1291,14 @@ mod tests {
         let parser_options = script_host_defined_options_with_fetch_metadata(
             scope,
             &base_url,
-            Some("abc123"),
-            true,
+            &crate::module_runtime::ModuleFetchMetadata {
+                parser_inserted: true,
+                request_metadata: moli_fetch::ScriptFetchRequestMetadata {
+                    nonce: Some("abc123".to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             false,
             None,
         )
@@ -1249,6 +1307,78 @@ mod tests {
             script_parser_inserted_from_host_defined_options(scope, parser_options),
             Some(true)
         );
+    }
+
+    #[test]
+    fn script_host_defined_options_preserve_dynamic_import_credentials() {
+        use crate::module_runtime::ModuleFetchMetadata;
+        use moli_fetch::RequestCredentialsMode;
+
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let base_url = Url::parse("https://example.test/entry.js").unwrap();
+
+        for credentials_mode in [
+            RequestCredentialsMode::Omit,
+            RequestCredentialsMode::SameOrigin,
+            RequestCredentialsMode::Include,
+        ] {
+            let metadata = ModuleFetchMetadata {
+                credentials_mode,
+                parser_inserted: true,
+                request_metadata: moli_fetch::ScriptFetchRequestMetadata {
+                    nonce: Some("initiator-nonce".to_owned()),
+                    // The importing script's SRI hash must not apply to its imports.
+                    integrity: Some("sha256-AAAA".to_owned()),
+                    ..Default::default()
+                },
+            };
+            let options = script_host_defined_options_with_fetch_metadata(
+                scope, &base_url, &metadata, false, None,
+            )
+            .unwrap();
+            let decoded = script_fetch_metadata_from_host_defined_options(scope, options).unwrap();
+            assert_eq!(decoded.credentials_mode, credentials_mode);
+            assert_eq!(decoded.nonce(), Some("initiator-nonce"));
+            assert!(decoded.parser_inserted);
+            assert!(decoded.integrity().is_none());
+        }
+
+        let legacy = primitive_host_defined_options(
+            scope,
+            &[
+                SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER,
+                base_url.as_str(),
+                "",
+                "not-parser-inserted",
+            ],
+        );
+        assert_eq!(
+            script_fetch_metadata_from_host_defined_options(scope, legacy),
+            Some(ModuleFetchMetadata::default())
+        );
+        for (marker, credentials) in [
+            (SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER, "invalid"),
+            ("not-moli", "include"),
+        ] {
+            let options = primitive_host_defined_options(
+                scope,
+                &[
+                    marker,
+                    base_url.as_str(),
+                    "",
+                    "not-parser-inserted",
+                    "",
+                    "",
+                    credentials,
+                ],
+            );
+            assert!(script_fetch_metadata_from_host_defined_options(scope, options).is_none());
+        }
     }
 
     #[test]

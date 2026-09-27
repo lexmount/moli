@@ -10,6 +10,7 @@ use crate::types::ScriptSourceKind;
 use crate::{
     dom::native::{DomHost, NativeNodeId},
     frame_owner_model::MainDocumentScriptLoadDelayKind,
+    planning::ScriptFetchMetadata,
     {
         host::{
             EventTargetHandle, HostDocumentState, HostEventTargetRegistry, dispatch_host_event,
@@ -72,6 +73,7 @@ pub(crate) enum PreparedRuntimeScriptStartCommit {
         node: NativeNodeId,
         host_script_handle: String,
         source: String,
+        fetch_metadata: ScriptFetchMetadata,
     },
     InlineImportMap {
         node: NativeNodeId,
@@ -89,19 +91,31 @@ pub(crate) struct CommittedInlineClassicScript {
     node: NativeNodeId,
     host_script_handle: String,
     source: String,
+    fetch_metadata: ScriptFetchMetadata,
 }
 
 impl CommittedInlineClassicScript {
-    pub(crate) fn new(node: NativeNodeId, host_script_handle: String, source: String) -> Self {
+    pub(crate) fn new(
+        node: NativeNodeId,
+        host_script_handle: String,
+        source: String,
+        fetch_metadata: ScriptFetchMetadata,
+    ) -> Self {
         Self {
             node,
             host_script_handle,
             source,
+            fetch_metadata,
         }
     }
 
-    pub(crate) fn into_parts(self) -> (NativeNodeId, String, String) {
-        (self.node, self.host_script_handle, self.source)
+    pub(crate) fn into_parts(self) -> (NativeNodeId, String, String, ScriptFetchMetadata) {
+        (
+            self.node,
+            self.host_script_handle,
+            self.source,
+            self.fetch_metadata,
+        )
     }
 }
 
@@ -418,6 +432,7 @@ pub(crate) fn prepare_runtime_script_start_commit(
                 node,
                 host_script_handle,
                 source,
+                fetch_metadata: preparation.fetch_metadata,
             })
         }
         RuntimeScriptStartDecision::RegisterImportMap { source } => {
