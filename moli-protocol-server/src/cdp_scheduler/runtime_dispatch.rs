@@ -419,7 +419,7 @@ impl CdpScheduler {
                 _ = wait_until_runtime_deadline(deadline) => {
                     return Err(runtime_command_timeout_error());
                 }
-                maybe_input = receivers.recv_interleaved_input() => {
+                maybe_input = self.recv_interleaved_input(receivers) => {
                     let Some(input) = maybe_input else {
                         return Ok(None);
                     };
@@ -513,7 +513,7 @@ impl CdpScheduler {
                     pending.forget_scheduler_deferred_inspector_reply(&mut self.conn);
                     return Err(runtime_command_timeout_error());
                 }
-                maybe_input = receivers.recv_interleaved_input() => {
+                maybe_input = self.recv_interleaved_input(receivers) => {
                     let Some(input) = maybe_input else {
                         return Ok(None);
                     };
