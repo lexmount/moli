@@ -664,8 +664,6 @@ fn request_and_response_headers_share_intrinsic_prototype_methods() {
     assert_eq!(result, "ok");
 }
 
-
-
 #[test]
 fn headers_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://headers-prototype-methods.test/");
