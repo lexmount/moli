@@ -28,6 +28,9 @@ mod child_module_records;
 #[path = "dynamic_import_credentials.rs"]
 mod dynamic_import_credentials;
 
+#[path = "dynamic_import_referrer.rs"]
+mod dynamic_import_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -176,6 +179,7 @@ fn fixture_response(
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
+        "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/import-credentials.js" => (
             "200 OK",
             format!("{javascript}Cache-Control: no-store\r\n"),
