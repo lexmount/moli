@@ -4,6 +4,7 @@ mod cookie_store;
 mod header_bytes;
 mod header_eof;
 mod mixed_transport;
+mod referrer_redirects;
 mod request_security;
 mod response_progress;
 mod response_timing;
