@@ -14,6 +14,10 @@ where
     R: 'static,
     F: std::future::Future<Output = Result<R>> + 'static,
 {
+    // Page task futures carry script preparation state. Keep that state on the
+    // heap before wrapping it in executor/TLS and spawn futures, so nested owner
+    // turns do not repeatedly reserve large copies on the caller's stack.
+    let future = Box::pin(future);
     let (reply_tx, reply_rx) = oneshot::channel();
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let started = timing_enabled.then(std::time::Instant::now);
