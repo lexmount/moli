@@ -1,3 +1,5 @@
+mod before_unload;
+
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
     DevToolsGetNavigationHistoryCommand, DevToolsGetNavigationHistoryResult,
@@ -6,6 +8,11 @@ use crate::automation::{
     DevToolsNavigationWait, DevToolsReloadCommand, DevToolsTargetId,
     DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, FrontendProtocol,
     SameDocumentNavigationEvent, webdriver_bidi_navigation_id_from_loader_id,
+};
+use before_unload::NavigationAfterBeforeUnload;
+pub(super) use before_unload::{
+    CompletedBeforeUnloadNavigationCommand, PendingBeforeUnloadNavigationCommand,
+    complete_pending_beforeunload_navigation_command,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
@@ -198,6 +205,7 @@ impl PendingSameDocumentHistoryTraversalCommand {
 }
 
 pub(super) enum NavigateCommandStart {
+    PendingBeforeUnload(Box<PendingBeforeUnloadNavigationCommand>),
     CompletePlan(CommandOutputPlan),
     CompleteImmediate(CommandOutputPlan),
     PendingLoad(Box<PendingNavigateLoadCommand>),
@@ -447,32 +455,66 @@ impl MaterializedNavigationCompletion {
     }
 }
 
-/// A replacement response owns this unload command until its old Page's
-/// concrete output can be projected before committing the new renderer.
+struct PreparedMainDocumentNavigation {
+    token: DocumentNavigationToken,
+    state: NavigationDispatchState,
+    pending_fetch: Option<PendingFetchNavigation>,
+    fetch_request_stage: FetchRequestStage,
+    allow_background_navigation: bool,
+}
+
+struct NavigationBeforeLoad {
+    source: crate::conn::TargetPageResidenceIdentity,
+    navigation: PreparedMainDocumentNavigation,
+}
+
+enum PendingNavigationUnloadPhase {
+    BeforeLoad(Box<NavigationBeforeLoad>),
+    BeforeCommit(Box<MaterializedNavigationCompletion>),
+}
+
+/// The source Page's lifecycle command must publish its concrete output before
+/// the navigation may fetch a replacement or commit an already-loaded response.
 pub struct PendingNavigationUnload {
-    navigation: MaterializedNavigationCompletion,
-    pending: PendingPageCommand,
+    phase: PendingNavigationUnloadPhase,
+    pending: anyhow::Result<PendingPageCommand>,
 }
 
 impl std::fmt::Debug for PendingNavigationUnload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingNavigationUnload")
-            .field("token", &self.navigation.token)
-            .field("source", &self.navigation.unloaded_source)
+            .field("target_id", &self.target_id())
             .finish_non_exhaustive()
     }
 }
 
 impl PendingNavigationUnload {
     pub fn target_id(&self) -> &str {
-        &self.navigation.token.target_id
+        match &self.phase {
+            PendingNavigationUnloadPhase::BeforeLoad(check) => &check.navigation.token.target_id,
+            PendingNavigationUnloadPhase::BeforeCommit(navigation) => &navigation.token.target_id,
+        }
     }
 
     pub async fn wait(self) -> BackgroundNavigationCompletion {
-        BackgroundNavigationCompletion::AfterUnload(Box::new(NavigationAfterUnload {
-            navigation: self.navigation,
-            completed: self.pending.wait().await,
-        }))
+        let completed = match self.pending {
+            Ok(pending) => pending.wait().await,
+            Err(error) => Err(error),
+        };
+        match self.phase {
+            PendingNavigationUnloadPhase::BeforeLoad(check) => {
+                BackgroundNavigationCompletion::BeforeLoad(Box::new(NavigationAfterBeforeUnload {
+                    check: *check,
+                    completed,
+                }))
+            }
+            PendingNavigationUnloadPhase::BeforeCommit(navigation) => {
+                BackgroundNavigationCompletion::AfterUnload(Box::new(NavigationAfterUnload {
+                    navigation: *navigation,
+                    completed,
+                }))
+            }
+        }
     }
 }
 
@@ -595,6 +637,7 @@ impl BackgroundMainDocumentBodyCompletion {
 
 pub enum BackgroundNavigationCompletion {
     Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
+    BeforeLoad(Box<NavigationAfterBeforeUnload>),
     AfterUnload(Box<NavigationAfterUnload>),
     MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
 }
@@ -603,6 +646,9 @@ impl BackgroundNavigationCompletion {
     pub fn requested_url(&self) -> &str {
         match self {
             Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
+            Self::BeforeLoad(completion) => {
+                completion.check.navigation.state.requested_url.as_str()
+            }
             Self::AfterUnload(completion) => completion.navigation.requested_url(),
             Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
         }
@@ -611,6 +657,7 @@ impl BackgroundNavigationCompletion {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Lifecycle(_) => "lifecycle",
+            Self::BeforeLoad(_) => "before_load",
             Self::AfterUnload(_) => "after_unload",
             Self::MainDocumentBody(_) => "main_document_body",
         }
@@ -618,6 +665,11 @@ impl BackgroundNavigationCompletion {
 
     pub fn unload_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         match self {
+            Self::BeforeLoad(completion) => completion
+                .completed
+                .as_ref()
+                .ok()
+                .and_then(CompletedPageCommand::renderer_output_predecessor),
             Self::AfterUnload(completion) => completion
                 .completed
                 .as_ref()
@@ -2111,6 +2163,12 @@ pub(super) fn finish_started_navigation_command_for_parts(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> PageCommandTaskStep {
     match &mut start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            &owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -2138,6 +2196,15 @@ pub(super) fn finish_started_navigation_command_for_parts(
         }
     }
     match start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => {
+            PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
+                command_id,
+                owner_scope: owner,
+                kind: Box::new(super::PendingPageCommandKind::BeforeUnloadNavigation(
+                    pending,
+                )),
+            })
+        }
         NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::PendingLoad(pending) => {
@@ -2759,6 +2826,12 @@ fn clear_crash_state_for_renderer_navigation(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> NavigateCommandStart {
     match &mut start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -3020,6 +3093,63 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         );
     }
 
+    let navigation = PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    };
+    if initiator == NavigationStartInitiator::Browser
+        && navigation.state.requested_url.scheme() != "javascript"
+        && let Some(source) = conn.target_page_residence_identity_for_owner(owner)
+        && let Some(page) = conn
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .ok()
+            .and_then(|slot| slot.loaded_page_mut())
+    {
+        let pending = page.start_check_main_document_beforeunload();
+        let pending = PendingNavigationUnload {
+            phase: PendingNavigationUnloadPhase::BeforeLoad(Box::new(NavigationBeforeLoad {
+                source,
+                navigation,
+            })),
+            pending,
+        };
+        // Foreground DevTools callers must keep their typed result pending
+        // through the check and the following load. Background CDP commands
+        // publish the source turn through the lifecycle scheduler instead.
+        if !allow_background_navigation {
+            return NavigateCommandStart::PendingBeforeUnload(Box::new(
+                PendingBeforeUnloadNavigationCommand {
+                    pending,
+                    prefix_events: out,
+                },
+            ));
+        }
+        conn.push_scheduler_event(crate::conn::CdpSchedulerEvent::NavigationUnloadRequested {
+            pending: Box::new(pending),
+        });
+        let mut output = CommandOutputBuffer::default();
+        output.extend_background_events_after_messages(out);
+        return NavigateCommandStart::CompleteImmediate(output.into_plan());
+    }
+    start_prepared_main_document_navigation(conn, navigation, out)
+}
+
+fn start_prepared_main_document_navigation(
+    conn: &mut CdpConnection,
+    navigation: PreparedMainDocumentNavigation,
+    mut out: Vec<BackgroundProtocolEvent>,
+) -> NavigateCommandStart {
+    let PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: mut navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    } = navigation;
+    let owner = navigation_state.owner.clone();
     if let Some(mut pending) = pending_fetch_navigation {
         if fetch_request_stage == FetchRequestStage::Request {
             pending.request_cookie_report = navigation_cookie_access_report_for_owner(
@@ -3079,7 +3209,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     }
 
     if allow_background_navigation
-        && let Some(sender) = conn.background_navigation_completion_sender_for_owner(owner)
+        && let Some(sender) = conn.background_navigation_completion_sender_for_owner(&owner)
     {
         let body_progress_source = if navigation_state.request_id.is_some() {
             let request_cookie_report = navigation_cookie_access_report_for_owner(
@@ -3454,8 +3584,8 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
                 conn.push_scheduler_event(
                     crate::conn::CdpSchedulerEvent::NavigationUnloadRequested {
                         pending: Box::new(PendingNavigationUnload {
-                            navigation,
-                            pending,
+                            phase: PendingNavigationUnloadPhase::BeforeCommit(Box::new(navigation)),
+                            pending: Ok(pending),
                         }),
                     },
                 );
@@ -3641,10 +3771,20 @@ pub(crate) async fn complete_materialized_navigation_after_unload_into_buffer_as
             .emit_navigation_error_into_buffer(out, &error_text);
         }
     }
-    finish_renderer_navigation_into_buffer_async(conn, out, &navigation_owner, &token).await;
+    finish_document_navigation(conn, out, &navigation_owner, &token, &navigation_loader_id).await;
+}
+
+async fn finish_document_navigation(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    navigation_owner: &CommandOwnerScope,
+    token: &DocumentNavigationToken,
+    navigation_loader_id: &str,
+) {
+    finish_renderer_navigation_into_buffer_async(conn, out, navigation_owner, token).await;
     conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-        &navigation_owner,
-        &navigation_loader_id,
+        navigation_owner,
+        navigation_loader_id,
     );
 }
 

@@ -171,6 +171,10 @@ impl PageVm {
             RendererPageCommand::TriggerAutofill(request) => self
                 .trigger_autofill(request)
                 .map(RendererPageReply::AutofillTriggerOutcome),
+            RendererPageCommand::CheckMainDocumentBeforeUnload => self
+                .vm_mut()
+                .check_main_document_beforeunload()
+                .map(RendererPageReply::Bool),
             RendererPageCommand::UnloadMainDocumentForNavigationCommit => self
                 .vm_mut()
                 .unload_main_document_for_navigation_commit()

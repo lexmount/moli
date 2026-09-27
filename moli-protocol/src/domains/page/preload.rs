@@ -327,7 +327,7 @@ fn start_devtools_preload_command(
         }
         _ => PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
-            "UnsupportedDevToolsCommand",
+            "UnsupportedAutomationCommand",
         )),
     }
 }
@@ -413,7 +413,7 @@ async fn execute_devtools_single_route_preload_command_async(
         }
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
+            "UnsupportedAutomationCommand",
         )),
     };
     let mut ordered_events = command_context.take_protocol_events();
@@ -782,7 +782,7 @@ impl DevToolsPreloadResultKind {
             AutomationCommand::RemovePreloadScript(_) => Ok(Self::Remove),
             _ => Err(DevToolsError::new(
                 DevToolsErrorKind::Unsupported,
-                "UnsupportedDevToolsCommand",
+                "UnsupportedAutomationCommand",
             )),
         }
     }
@@ -844,7 +844,7 @@ fn devtools_preload_command_target_route(
         }
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
+            "UnsupportedAutomationCommand",
         )),
     }
 }
@@ -1302,6 +1302,9 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         Err(plan) => return PageCommandTaskStep::Complete(plan),
     };
     match start {
+        super::navigation::NavigateCommandStart::PendingBeforeUnload(_) => {
+            unreachable!("initial document navigation uses background lifecycle checks")
+        }
         super::navigation::NavigateCommandStart::CompleteImmediate(plan) => {
             if let Err(plan) = append_page_command_step_output(
                 &mut task.prefix_output,

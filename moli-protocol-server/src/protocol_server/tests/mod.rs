@@ -1236,6 +1236,7 @@ mod cdp_dynamic_page;
 mod classic;
 mod download;
 mod misc;
+mod navigation_beforeunload;
 mod navigation_unload;
 mod p6_output_handoff;
 mod screenshot;
