@@ -9,6 +9,7 @@ mod cross_document_drag_events;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
+mod document_location_activity;
 mod drag_drop_outcomes;
 mod idb_transaction_gc;
 mod message_port_transfer;
