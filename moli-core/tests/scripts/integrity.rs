@@ -43,6 +43,9 @@ mod module_document_referrer;
 #[path = "modulepreload_document_referrer.rs"]
 mod modulepreload_document_referrer;
 
+#[path = "classic_document_referrer.rs"]
+mod classic_document_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -199,6 +202,9 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/classic-policy.html" | "/classic-policy.js" => {
+            classic_document_referrer::fixture_response(path, query, origin, cross)
+        }
         "/preload-policy.html" | "/preload-policy.js" => {
             modulepreload_document_referrer::fixture_response(path, query, origin, cross)
         }

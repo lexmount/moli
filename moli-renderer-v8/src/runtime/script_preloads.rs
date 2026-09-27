@@ -1105,6 +1105,7 @@ impl BufferedScriptPreloadRequest {
             mode: self.mode_hint,
             source_kind: crate::types::ScriptSourceKind::External,
             fetch_metadata: self.fetch_metadata.clone(),
+            document_referrer_policy: self.document_referrer_policy.clone(),
             source: ScriptSource::External,
             url: self.url.clone(),
             base_url: self.url.clone(),

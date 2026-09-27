@@ -851,7 +851,7 @@ fn script_fetch_request_metadata(
     moli_fetch::ScriptFetchRequestMetadata {
         cross_origin: script.fetch_metadata.cross_origin.clone(),
         referrer_policy: script.fetch_metadata.referrer_policy.clone(),
-        document_referrer_policy: None,
+        document_referrer_policy: script.document_referrer_policy.clone(),
         charset: script.fetch_metadata.charset.clone(),
         integrity: script.fetch_metadata.integrity.clone(),
         nonce: script.fetch_metadata.nonce.clone(),
@@ -1032,6 +1032,7 @@ mod tests {
     fn prepared_external_classic_with_mode(mode: ScriptMode) -> PreparedScript {
         let url = url::Url::parse("https://example.test/app.js").unwrap();
         PreparedScript {
+            document_referrer_policy: None,
             position: 0,
             node_id: crate::dom::NodeId::new(1),
             kind: ScriptKind::Classic,
@@ -1111,6 +1112,7 @@ mod tests {
         initiator_url: url::Url,
     ) -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position: 0,
             node_id: crate::dom::NodeId::new(1),
             kind,
