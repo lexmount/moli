@@ -27,20 +27,22 @@ async ({kind, sourceURL}) => {
       }
     } else if (kind === 'blank' || kind === 'srcdoc') {
       target = await createFrame(document, kind);
-    } else if (kind === 'popup') {
+    } else if (kind === 'popup' || kind === 'blank-popup') {
       popup = open('about:blank');
       if (!popup) throw new Error('popup did not open');
-      const loaded = new Promise(resolve => {
-        const listener = event => {
-          if (event.source !== popup || event.data !== 'domain-setter-ready') return;
-          removeEventListener('message', listener);
-          resolve();
-        };
-        addEventListener('message', listener);
-      });
-      popup.location = sourceURL;
-      await loaded;
-      originOwner = popup.document;
+      if (kind === 'popup') {
+        const loaded = new Promise(resolve => {
+          const listener = event => {
+            if (event.source !== popup || event.data !== 'domain-setter-ready') return;
+            removeEventListener('message', listener);
+            resolve();
+          };
+          addEventListener('message', listener);
+        });
+        popup.location = sourceURL;
+        await loaded;
+        originOwner = popup.document;
+      }
       target = popup;
     }
 

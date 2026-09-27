@@ -12,6 +12,7 @@ async fn document_domain_setter_rejects_added_trailing_dots() {
         "nested-blank",
         "nested-srcdoc",
         "popup",
+        "blank-popup",
     ] {
         let network = matches!(kind, "iframe" | "nested-blank" | "nested-srcdoc" | "popup");
         let child = "<!doctype html><body>child<script>\
