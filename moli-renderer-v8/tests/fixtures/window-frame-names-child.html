@@ -1,0 +1,20 @@
+<!doctype html><body><p id="marker">peer document</p><script>
+addEventListener('message', event => {
+  const {action, name, index} = event.data;
+  const port = event.ports[0];
+  if (action === 'rename') {
+    window.name = name;
+    port.postMessage(window.name);
+  } else if (action === 'lookup') {
+    let stage = 'name';
+    try {
+      const named = parent[name];
+      stage = 'document';
+      port.postMessage({same: named === parent[index], text: named.document.querySelector('#marker').textContent});
+    } catch (error) {
+      port.postMessage({stage, error: error.name});
+    }
+  }
+  port.close();
+});
+</script>
