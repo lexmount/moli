@@ -55,6 +55,21 @@ async fn child_synthetic_css_module_uses_its_own_document_source() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn child_synthetic_text_module_shares_static_and_dynamic_records() -> Result<()> {
+    let result = child_synthetic_probe(
+        r#"import * as text from 'data:application/octet-stream,%EF%BB%BFhello%00world' with { type: 'text' };
+        window.result = import('data:application/octet-stream,%EF%BB%BFhello%00world', {with: {type:'text'}})
+          .then(again => JSON.stringify([text.default, text === again, Object.keys(text)]));"#,
+    )
+    .await?;
+    assert_eq!(
+        result["value"], r#"["hello\u0000world",true,["default"]]"#,
+        "{result:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn child_synthetic_json_parse_error_is_not_a_missing_source_error() -> Result<()> {
     let result = child_synthetic_probe(
         r#"import value from 'data:application/json,not-json' with { type: 'json' };

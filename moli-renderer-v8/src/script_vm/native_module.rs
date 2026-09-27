@@ -519,7 +519,7 @@ fn chromium_module_key(key: &ModuleMapKey) -> moli_module_script_tree::ModuleMap
             ModuleKind::JavaScript => moli_module_script_tree::ModuleKind::JavaScript,
             ModuleKind::Json => moli_module_script_tree::ModuleKind::Json,
             ModuleKind::Css => moli_module_script_tree::ModuleKind::Css,
-            ModuleKind::ModulePreloadText => moli_module_script_tree::ModuleKind::JavaScript,
+            ModuleKind::Text => moli_module_script_tree::ModuleKind::Text,
             ModuleKind::WebAssembly => moli_module_script_tree::ModuleKind::WebAssembly,
         },
         moli_module_script_tree::ModuleAttributesKey::from_pairs(key.attributes().pairs().to_vec()),
@@ -859,7 +859,7 @@ fn synthetic_text_module_evaluation_steps<'s>(
         return throw_synthetic_module_error(scope, "synthetic module source is not available");
     };
     match record.value() {
-        crate::module_runtime::SyntheticTextModuleValue::Json(value) => {
+        crate::module_runtime::SyntheticTextModuleValue::Value(value) => {
             let value = v8::Local::new(scope, value);
             set_synthetic_default_export(scope, module, value)
         }
