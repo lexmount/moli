@@ -1478,7 +1478,9 @@ impl DynamicScriptOwner {
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) {
         let ready_state = match script.source_kind {
-            ScriptSourceKind::External => {
+            ScriptSourceKind::External
+                if !crate::script_vm::prepared_script_uses_external_module_graph(&script) =>
+            {
                 let tx = self.owner_event_sender();
                 let loader = loader.clone();
                 let script_for_load = script.clone();
@@ -1516,10 +1518,15 @@ impl DynamicScriptOwner {
                 });
                 DynamicScriptReadyState::Loading
             }
-            ScriptSourceKind::Inline => DynamicScriptReadyState::Ready {
-                order: self.next_ready_order(),
-                source_network_result: None,
-            },
+            // Module roots must consult the Document's module map before any
+            // transport runs. The graph owner starts or joins that fetch and
+            // retains this script's ordering and load-delay lease.
+            ScriptSourceKind::Inline | ScriptSourceKind::External => {
+                DynamicScriptReadyState::Ready {
+                    order: self.next_ready_order(),
+                    source_network_result: None,
+                }
+            }
         };
 
         self.insert_script_with_ready_state(
