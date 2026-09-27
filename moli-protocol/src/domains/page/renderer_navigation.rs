@@ -344,6 +344,10 @@ impl PreparedRendererNavigation {
 
 pub(crate) enum PreparedRendererNavigationResult {
     Failure(PreparedNavigationFailureCleanup),
+    NoDocument {
+        token: DocumentNavigationToken,
+        state: Box<NavigationDispatchState>,
+    },
     Download {
         download: crate::domains::activity::PreparedMainDocumentDownload,
         token: DocumentNavigationToken,
@@ -437,6 +441,36 @@ impl PreparedRendererNavigationResult {
                     state: Box::new(state),
                 }
             }
+            network::MaterializedNavigationLoadOutcome::NoDocument(mut progress_gate) => {
+                let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
+                let mut output = CommandOutputBuffer::default();
+                output.extend_background_events_after_messages(prefix);
+                let mut events = Vec::new();
+                network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
+                    &mut events,
+                    &mut progress_gate,
+                );
+                super::emit_navigation_frame_stop_without_commit_background_events(
+                    &mut events,
+                    state.session_id.as_deref(),
+                    &state.frame_id,
+                    &state.loader_id,
+                );
+                output.extend_background_events_after_messages(events);
+                if state.navigate_id.is_some() {
+                    let mut result = state.result_projection.clone().into_payload();
+                    if state.result_projection.protocol() == crate::automation::FrontendProtocol::Cdp
+                        && let Some(payload) = result.as_object_mut()
+                        && payload.contains_key("frameId")
+                    {
+                        payload.insert("errorText".to_owned(), serde_json::json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT));
+                        payload.insert("isDownload".to_owned(), serde_json::json!(false));
+                    }
+                    output.push_result_after_messages(result);
+                }
+                output_mode.retain(context, &state, output.into_plan());
+                Self::NoDocument { token, state: Box::new(state) }
+            }
             network::MaterializedNavigationLoadOutcome::ResponseCommitReady(_) => {
                 unreachable!("prepared responses use their owned native commit")
             }
@@ -448,32 +482,33 @@ impl PreparedRendererNavigationResult {
         driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
-        match self {
-            Self::Failure(pending) => context
+        let (token, state) = match self {
+            Self::Failure(pending) => {
+                context
+                    .context_mut()
+                    .protocol_events_mut()
+                    .extend(pending.wait_using(driver).await?);
+                return Ok(());
+            }
+            Self::Download { download, token, state } => {
+                download.run(context).await;
+                (token, state)
+            }
+            Self::NoDocument { token, state } => (token, state),
+        };
+        let owner = state.owner.clone();
+        let finish_token = token.clone();
+        if let Some(finish) = driver.with_state(move |access| {
+            access.prepare_navigation_protocol_finish(owner, finish_token, None)
+        })? {
+            context
                 .context_mut()
                 .protocol_events_mut()
-                .extend(pending.wait_using(driver).await?),
-            Self::Download {
-                download,
-                token,
-                state,
-            } => {
-                download.run(context).await;
-                let owner = state.owner.clone();
-                let finish_token = token.clone();
-                if let Some(finish) = driver.with_state(move |access| {
-                    access.prepare_navigation_protocol_finish(owner, finish_token, None)
-                })? {
-                    context
-                        .context_mut()
-                        .protocol_events_mut()
-                        .extend(finish.wait_using(driver).await?);
-                }
-                driver.with_state(move |access| {
-                    access.finish_renderer_navigation_result(state.owner, state.loader_id)
-                })?;
-            }
+                .extend(finish.wait_using(driver).await?);
         }
+        driver.with_state(move |access| {
+            access.finish_renderer_navigation_result(state.owner, state.loader_id)
+        })?;
         Ok(())
     }
 }
