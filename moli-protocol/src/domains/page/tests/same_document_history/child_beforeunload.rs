@@ -133,6 +133,35 @@ async fn child_beforeunload_precedes_response_without_retiring_document_or_repea
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn child_beforeunload_protects_the_target_from_descendant_document_writes() {
+    for response in ["html", "204"] {
+        for method in ["href", "navigation", "src"] {
+            for operation in ["open", "write", "writeln"] {
+                let (mut page, gate) = beforeunload_page(response).await;
+                setup(&mut page, method, operation).await;
+                page.evaluate("beforeunloadProbe.start()").await;
+                ResponseGate::wait_for(&gate.requests, 2).await;
+                assert_pending(&page.evaluate("beforeunloadProbe.snapshot()").await);
+                gate.release.add_permits(1);
+                if response == "html" {
+                    let committed = page.evaluate("beforeunloadProbe.waitForLoad()").await;
+                    assert_eq!(committed["loads"], 1, "{method}/{operation}: {committed}");
+                    assert_eq!(committed["sameDocument"], false);
+                    assert_eq!(committed["url"], "?next");
+                } else {
+                    ResponseGate::wait_for(&gate.responses, 2).await;
+                    assert_eq!(
+                        page.evaluate("beforeunloadProbe.openSource()").await,
+                        json!([true, 0]),
+                        "{method}/{operation}: the source write guard must be released after the check"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_ignored_response_allows_a_fresh_navigation_check() {
     for response in ["204", "205", "attachment"] {
         for method in ["href", "navigation", "src", "form"] {

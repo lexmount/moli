@@ -33,15 +33,16 @@ impl JsContextHost {
         if !closing && navigation_unload_event_active(scope, window) {
             return false;
         }
-        let descendants = self
-            .lightweight_popup_document_handle(popup_id)
-            .map(|document| self.child_document_descendants_unload_snapshot(document))
-            .unwrap_or_default();
-        // Keep the navigation guard through descendant callbacks, but scope
-        // destructive-write suppression to each document's own beforeunload.
+        let Some(document) = self.lightweight_popup_document_handle(popup_id) else {
+            return false;
+        };
+        let descendants = self.child_document_descendants_unload_snapshot(document);
+        // Descendants must not erase the navigation target with open/write.
+        // Intermediate documents retain only their own callback's counter.
+        let _unload = self.enter_document_unload(document);
         let previous = replace_navigation_unload_event_active(scope, window, true);
         dispatch_beforeunload_for_runtime_owner(scope, window);
-        self.dispatch_child_documents_beforeunload(scope, descendants, is_current);
+        self.dispatch_child_documents_beforeunload(scope, descendants, None, is_current);
         replace_navigation_unload_event_active(scope, window, previous);
         is_current(self)
     }
