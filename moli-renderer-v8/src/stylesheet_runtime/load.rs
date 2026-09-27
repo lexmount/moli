@@ -284,6 +284,7 @@ pub(in crate::document_runtime) struct QueuedConnectedStyleLoad {
     owner: DomHandle,
     inline_source: Option<Arc<OwnerStyleSheetSource>>,
     event_admission: Option<ConnectedStyleLoadEventAdmission>,
+    document_referrer_policy: Option<String>,
 }
 
 impl QueuedConnectedStyleLoad {
@@ -291,16 +292,22 @@ impl QueuedConnectedStyleLoad {
         owner: DomHandle,
         inline_source: Option<Arc<OwnerStyleSheetSource>>,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
+        document_referrer_policy: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
             owner,
             inline_source,
             event_admission,
+            document_referrer_policy,
         })
     }
 
     pub(in crate::document_runtime) fn owner(&self) -> DomHandle {
         self.owner
+    }
+
+    pub(in crate::document_runtime) fn document_referrer_policy(&self) -> Option<&str> {
+        self.document_referrer_policy.as_deref()
     }
 
     pub(in crate::document_runtime) fn inline_source(&self) -> Option<&Arc<OwnerStyleSheetSource>> {
@@ -363,6 +370,7 @@ pub(in crate::document_runtime) struct ConnectedLinkReadinessFetchOptions {
     pub(in crate::document_runtime) request_resource_type: Option<moli_fetch::RequestResourceType>,
     pub(in crate::document_runtime) script_fetch_metadata:
         Option<crate::planning::ScriptFetchMetadata>,
+    pub(in crate::document_runtime) document_referrer_policy: Option<String>,
     pub(in crate::document_runtime) request_mode: moli_fetch::RequestMode,
     pub(in crate::document_runtime) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(in crate::document_runtime) fetch_priority_hint: Option<moli_fetch::FetchPriorityHint>,
