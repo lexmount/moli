@@ -12,6 +12,8 @@ use tokio::time::Duration;
 
 #[path = "fetch_behaviors/cache_timing.rs"]
 mod cache_timing;
+#[path = "fetch_behaviors/document_encoding.rs"]
+mod document_encoding;
 #[path = "fetch_behaviors/document_mime.rs"]
 mod document_mime;
 #[path = "fetch_behaviors/preload_as.rs"]

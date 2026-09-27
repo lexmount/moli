@@ -204,7 +204,7 @@ impl JsContextHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.mark_pending_document_load(load_id);
         }
-        let parent_character_set = self.document_character_set().to_owned();
+        let encoding_context = self.child_document_encoding_context(handle);
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
             let result = async {
@@ -242,7 +242,7 @@ impl JsContextHost {
                         request_headers,
                         head,
                         body,
-                        &parent_character_set,
+                        &encoding_context,
                     );
                 }
                 let response = task_resource_loader
@@ -256,7 +256,7 @@ impl JsContextHost {
                     request_headers,
                     head,
                     body,
-                    &parent_character_set,
+                    &encoding_context,
                 )
             }
             .await;
@@ -838,7 +838,7 @@ fn child_document_load_outcome_from_response(
     request_headers: Vec<(String, String)>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
-    parent_character_set: &str,
+    encoding_context: &super::encoding::ChildDocumentEncodingContext,
 ) -> Result<ChildDocumentLoadOutcome, String> {
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
@@ -850,6 +850,13 @@ fn child_document_load_outcome_from_response(
     let encoded_data_length = response_body.len();
     let content_type = child_document_content_type_from_headers(&head.headers)
         .or_else(|| child_document_content_type_for_url(&head.final_url));
+    let policy_container =
+        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
+    let fallback = encoding_context.fallback_encoding(
+        &head.final_url,
+        content_type.as_deref(),
+        policy_container.sandbox.forces_opaque_origin,
+    );
     let (markup, character_set) = {
         let body_bytes = response_body
             .try_bytes()
@@ -859,12 +866,10 @@ fn child_document_load_outcome_from_response(
             &head.headers,
             content_type.as_deref(),
             &head.final_url,
-            Some(parent_character_set),
+            fallback,
         );
         (markup, character_set.to_owned())
     };
-    let policy_container =
-        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
             final_url: head.final_url.clone(),
@@ -957,7 +962,7 @@ mod tests {
                 negotiated_http_version: None,
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
-            "UTF-8",
+            &super::super::encoding::ChildDocumentEncodingContext::default(),
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
