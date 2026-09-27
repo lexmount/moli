@@ -815,6 +815,7 @@ mod tests {
 
     fn prepared_script(position: usize) -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position,
             node_id: NodeId::new(position + 1),
             kind: ScriptKind::Classic,

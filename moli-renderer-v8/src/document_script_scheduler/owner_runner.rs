@@ -713,6 +713,7 @@ mod tests {
 
     fn prepared_classic_script() -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position: 1,
             node_id: NodeId::new(2),
             kind: ScriptKind::Classic,

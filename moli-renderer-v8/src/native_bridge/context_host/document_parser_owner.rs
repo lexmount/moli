@@ -315,10 +315,17 @@ impl ParserDomReadConsumer for ContextDocumentParserOwner<'_, '_, '_> {
     }
 
     fn parser_script_read(&mut self, node_id: DomHandle) -> Option<ParserScriptRead> {
-        <crate::dom::native::DomHost as ParserPlanningReadView>::parser_script_read(
-            self.host.dom_host(),
-            node_id,
-        )
+        let mut script =
+            <crate::dom::native::DomHost as ParserPlanningReadView>::parser_script_read(
+                self.host.dom_host(),
+                node_id,
+            )?;
+        script.document_referrer_policy =
+            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                self.host,
+                self.document_handle,
+            );
+        Some(script)
     }
 
     fn stylesheet_element(&mut self, node_id: DomHandle) -> Option<StylesheetElementRead> {
@@ -522,6 +529,12 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
                 child,
                 self.document_handle,
                 std::iter::once(node_id),
+            );
+            self.host.queue_child_parser_discovered_preloads(
+                self.scope,
+                child,
+                self.document_handle,
+                &[node_id],
             );
         }
     }
