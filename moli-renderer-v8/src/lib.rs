@@ -244,7 +244,7 @@ pub use runtime::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DetachedParserScriptFetchContinuation,
     DevToolsSessionKey, ExternalRawDocumentBodyStream, JsRuntime, JsRuntimeOwner, PageId,
     PendingHtmlPage, PendingRendererPageReplacement, PendingWorkerRuntimeInspectorSessionResponse,
-    PreparedRendererDocument, RendererAccessibilityPayloadsForObjectId,
+    PreparedRendererDocument, RendererAboutDocumentState, RendererAccessibilityPayloadsForObjectId,
     RendererActivityDiagnostics, RendererAgentAttachmentId, RendererAutofillAddressField,
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,

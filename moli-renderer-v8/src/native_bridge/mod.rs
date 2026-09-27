@@ -11,7 +11,7 @@ pub(crate) use context_host::MouseReleaseFollowUp;
 pub(crate) use context_host::{
     ChildDocumentFetch, DocumentDomainState, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
-    SharedResourceTimingBufferRegistry,
+    SharedResourceTimingBufferRegistry, WindowAccessOrigin,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use current_input::CurrentInputEventScope;

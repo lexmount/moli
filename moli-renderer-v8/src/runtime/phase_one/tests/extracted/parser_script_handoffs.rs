@@ -363,6 +363,8 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -488,6 +490,8 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -623,6 +627,8 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -793,6 +799,8 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -1109,6 +1117,8 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -1275,6 +1285,8 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,

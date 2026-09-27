@@ -1,8 +1,5 @@
 use super::history_runtime::native;
-use super::navigation_window::{
-    runtime_window_dispatch_scope, runtime_window_owner,
-    runtime_window_uses_top_level_history_model,
-};
+use super::navigation_window::runtime_window_dispatch_scope;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array};
 use moli_history::HistoryEntryRef;
@@ -64,14 +61,6 @@ fn visible_navigation_entries<'s>(
     if url::Url::parse(&current_entry.borrow().url).is_err() {
         return vec![current_entry];
     }
-    let owner = runtime_window_owner(scope, current_wrapper);
-    let top_level = runtime_window_uses_top_level_history_model(scope, owner);
-    let hidden = |entry: &HistoryEntryRef| {
-        top_level
-            && !Rc::ptr_eq(entry, &current_entry)
-            && entry.borrow().inherited_origin.is_none()
-            && entry.borrow().url.split('#').next() == Some("about:blank")
-    };
     let same_origin = |entry: &HistoryEntryRef| {
         let current = current_entry.borrow();
         let candidate = entry.borrow();
@@ -82,7 +71,7 @@ fn visible_navigation_entries<'s>(
     let mut start = current_index;
     while start > 0 {
         let candidate = &entries[start - 1];
-        if !hidden(candidate) && !same_origin(candidate) {
+        if !same_origin(candidate) {
             break;
         }
         start -= 1;
@@ -90,7 +79,7 @@ fn visible_navigation_entries<'s>(
     let mut end = current_index;
     while end + 1 < entries.len() {
         let candidate = &entries[end + 1];
-        if !hidden(candidate) && !same_origin(candidate) {
+        if !same_origin(candidate) {
             break;
         }
         end += 1;
@@ -102,9 +91,6 @@ fn visible_navigation_entries<'s>(
         } else {
             entry
         };
-        if hidden(entry) {
-            continue;
-        }
         let index = entry.borrow().index;
         if let Some(position) = visible
             .iter()

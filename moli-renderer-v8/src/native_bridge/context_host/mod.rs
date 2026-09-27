@@ -187,7 +187,9 @@ mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
 mod window_world;
-pub(crate) use window_security_tokens::{WindowSecurityOrigin, window_contexts_allow_access};
+pub(crate) use window_security_tokens::{
+    WindowAccessOrigin, WindowSecurityOrigin, window_contexts_allow_access,
+};
 mod workers;
 pub(crate) use window_security_tokens::DocumentDomainState;
 pub(crate) use window_security_tokens::set_window_security_token;
@@ -944,6 +946,7 @@ pub(crate) struct PageScriptHost {
     force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: DocumentDomainState,
+    about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,

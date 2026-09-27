@@ -52,7 +52,6 @@ use crate::{
 use anyhow::Result;
 use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
-use moli_url::origin_ascii_serialization;
 use moli_webapi::events::fallback::{PlainEventDeclaration, PlainPopStateEventDeclaration};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use std::{
@@ -1783,7 +1782,7 @@ impl PageScriptHost {
         &mut self,
         url: &Url,
     ) -> LightweightPopupStorageScope {
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         let relation = StoragePartitionRelation::from_sites(&site_for_url(url), &top_level_site);
         let storage_key = MoliStorageKey::new(
             "null".to_owned(),
@@ -1815,7 +1814,7 @@ impl PageScriptHost {
                 .map(LightweightPopupStorageScope::from_web_storage_scope);
         }
         if let Some(handle) = opener_child_handle {
-            let top_origin = origin_ascii_serialization(self.document_url());
+            let top_origin = self.main_document_origin();
             return self
                 .child_browsing_context_web_storage_scope(handle, &top_origin)
                 .map(LightweightPopupStorageScope::from_web_storage_scope);

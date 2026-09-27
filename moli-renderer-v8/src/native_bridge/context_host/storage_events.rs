@@ -130,7 +130,7 @@ impl PageScriptHost {
         area_key: &str,
     ) -> Vec<WindowTaskTarget> {
         let mut targets = Vec::new();
-        let top_origin = moli_url::origin_ascii_serialization(self.document_url());
+        let top_origin = self.main_document_origin();
 
         let top_is_eligible = source_scope != Some(OwnerDispatchScope::Top)
             && (!is_session
