@@ -79,10 +79,15 @@ pub(in crate::context_bootstrap) fn document_location_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    match object_location_slot_value(scope, receiver).filter(|value| !value.is_undefined()) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
+    let Some(value) = super::super::location_runtime::document_location_value(scope, receiver)
+    else {
+        webidl::throw_type_error(
+            scope,
+            "Document.location getter called on incompatible receiver.",
+        );
+        return;
+    };
+    rv.set(value);
 }
 
 pub(in crate::context_bootstrap) fn document_location_setter<'s>(
@@ -91,13 +96,6 @@ pub(in crate::context_bootstrap) fn document_location_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     super::super::location_runtime::put_forward_location_href(scope, args.this(), args.get(0));
-}
-
-fn object_location_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    object_window_slot_value(scope, object, WINDOW_LOCATION_SLOT)
 }
 
 fn object_window_slot_value<'s>(
