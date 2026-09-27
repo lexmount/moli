@@ -10,6 +10,8 @@ pub(crate) struct NativeModuleSingleFetchRequest {
     source_url: Url,
     base_url: Url,
     initiator_url: Url,
+    // Fetch-client defaults belong to this request, not the module's persistent options.
+    document_referrer_policy: Option<String>,
     module_key: ModuleMapKey,
     fetch_metadata: ModuleFetchMetadata,
 }
@@ -26,9 +28,15 @@ impl NativeModuleSingleFetchRequest {
             source_url,
             base_url,
             initiator_url,
+            document_referrer_policy: None,
             module_key,
             fetch_metadata,
         }
+    }
+
+    pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
+        self.document_referrer_policy = policy;
+        self
     }
 
     #[cfg(test)]
@@ -67,6 +75,7 @@ impl NativeModuleSingleFetchRequest {
             self.fetch_metadata.clone(),
             self.module_key.kind(),
         )
+        .with_document_referrer_policy(self.document_referrer_policy.clone())
     }
 }
 

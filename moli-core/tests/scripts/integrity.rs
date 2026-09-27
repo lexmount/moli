@@ -34,6 +34,9 @@ mod dynamic_import_referrer;
 #[path = "module_document_referrer.rs"]
 mod module_document_referrer;
 
+#[path = "modulepreload_document_referrer.rs"]
+mod modulepreload_document_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -181,6 +184,9 @@ fn fixture_response(
     match path {
         "/delivered-document-referrer.html" | "/delivered-meta-policy.html" | "/delivered-meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
+        }
+        "/preload-policy.html" | "/preload-policy.js" => {
+            modulepreload_document_referrer::fixture_response(path, query, origin, cross)
         }
         "/document-referrer.html" | "/document-referrer.js" => {
             module_document_referrer::fixture_response(path, query, origin, cross)

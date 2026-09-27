@@ -269,6 +269,7 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
 fn parser_eof_releases_preloads_only_for_the_current_document_transition() {
     fn ready_store(url: Url) -> crate::runtime::DocumentScriptPreloadStore {
         let request = crate::runtime::BufferedScriptPreloadRequest {
+            document_referrer_policy: None,
             url: url.clone(),
             initiator_url: url,
             kind_hint: ScriptKind::Classic,

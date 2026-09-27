@@ -1065,6 +1065,7 @@ fn buffered_script_preload_cache_keeps_spawn_time_source_after_late_document_cha
             source_bytes,
         );
         let request = BufferedScriptPreloadRequest {
+            document_referrer_policy: None,
             url: script.url.clone(),
             initiator_url: script.initiator_url.clone(),
             kind_hint: script.kind,
@@ -1123,6 +1124,7 @@ fn buffered_script_preload_cache_keeps_source_when_late_document_charset_is_utf8
             raw_bytes,
         );
         let request = BufferedScriptPreloadRequest {
+            document_referrer_policy: None,
             url: script.url.clone(),
             initiator_url: script.initiator_url.clone(),
             kind_hint: script.kind,
@@ -1204,6 +1206,7 @@ fn buffered_script_preload_cache_can_await_pending_source_for_blocking_script() 
             BufferedScriptPreloadKey::from_script(&script).expect("preload key"),
             BufferedScriptPreloadEntry {
                 request: BufferedScriptPreloadRequest {
+                    document_referrer_policy: None,
                     url: script.url.clone(),
                     initiator_url: script.initiator_url.clone(),
                     kind_hint: script.kind,
@@ -1879,7 +1882,7 @@ async fn parser_driver_finish_parser_blocking_pause_uses_service_worker_preload_
         service_worker_preload_context: state.service_worker_preload_context.as_ref(),
         input_closed: &state.input_closed,
     };
-    driver.finish_parser_blocking_pause();
+    driver.finish_parser_blocking_pause(|| None);
 
     let preload = driver
         .buffered_document_preloads
@@ -1939,9 +1942,9 @@ fn parser_driver_finish_parser_blocking_pause_resets_insertion_scanner_state() {
         };
 
         session.enqueue_script_input_preload_html("<script sr".to_owned());
-        driver.finish_parser_blocking_pause();
+        driver.finish_parser_blocking_pause(|| None);
         session.enqueue_script_input_preload_html("c=\"/write.js\"></script>".to_owned());
-        driver.finish_parser_blocking_pause();
+        driver.finish_parser_blocking_pause(|| None);
 
         assert!(
             !driver
