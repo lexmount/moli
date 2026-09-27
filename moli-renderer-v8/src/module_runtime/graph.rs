@@ -91,6 +91,7 @@ pub(crate) enum ModuleScriptGraphAdvance {
 pub(crate) struct NativeModuleGraphFetchRequest {
     source_url: Url,
     initiator_url: Url,
+    referrer: module_tree::ModuleReferrer,
     fetch_metadata: ModuleFetchMetadata,
     kind: ModuleKind,
     tree_client: Option<module_tree::SingleModuleClientToken>,
@@ -220,6 +221,7 @@ impl NativeModuleGraphFetchRequest {
         Self {
             source_url,
             initiator_url,
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata,
             kind,
             tree_client: None,
@@ -228,6 +230,11 @@ impl NativeModuleGraphFetchRequest {
             dependency: None,
             csp_context: None,
         }
+    }
+
+    fn with_referrer(mut self, referrer: module_tree::ModuleReferrer) -> Self {
+        self.referrer = referrer;
+        self
     }
 
     pub(crate) fn source_url(&self) -> &Url {
@@ -371,6 +378,13 @@ impl NativeModuleGraphFetchRequest {
             .with_request_origin(request_origin.clone())
             .with_credentials_mode(self.fetch_metadata.credentials_mode)
             .with_script_fetch_metadata(self.fetch_metadata.request_metadata.clone());
+        // A module's Referer identifies its importing script, while the request
+        // origin and cookie context still belong to the fetch client Document.
+        let request = if let Some(referrer) = &self.referrer.url {
+            request.with_fetch_referrer(referrer.as_str())?
+        } else {
+            request
+        };
         let request = match self.kind {
             ModuleKind::Css => request
                 .with_resource_type(RequestResourceType::CssStyleSheet)
@@ -578,7 +592,7 @@ impl NativeModuleGraphJob {
         let (label, chromium_tree, kind) = match owner {
             ModuleScriptCompletionOwner::Parser => (
                 "parser_owned_external",
-                external_chromium_tree_root_input(&root)
+                external_chromium_tree_root_input(&root, module_tree::ModuleReferrer::client())
                     .expect("parser-owned module graph root should be valid")
                     .map(tree_adapter::parser_owned_tree_job)
                     .expect("parser-owned module graph jobs require an external tree root"),
@@ -586,7 +600,7 @@ impl NativeModuleGraphJob {
             ),
             ModuleScriptCompletionOwner::Runtime => (
                 "runtime_module_script_external",
-                external_chromium_tree_root_input(&root)
+                external_chromium_tree_root_input(&root, module_tree::ModuleReferrer::client())
                     .expect("runtime module graph root should be valid")
                     .map(tree_adapter::runtime_module_script_tree_job)
                     .expect("runtime module graph jobs require an external tree root"),
@@ -807,7 +821,7 @@ impl NativeModuleGraphJob {
         };
         let root = dynamic_import_root_input(owner, request)?;
         trace_module_graph_job_created("dynamic_import_external", &root);
-        self.tree_job = external_chromium_tree_root_input(&root)?
+        self.tree_job = external_chromium_tree_root_input(&root, request.referrer())?
             .map(tree_adapter::dynamic_import_tree_job)
             .map(NativeModuleTreeJob::new);
         Ok(())
@@ -1734,7 +1748,8 @@ fn native_fetch_request_from_tree_fetch(
         raw.initiator_url.clone(),
         local_fetch_metadata(&raw.fetch_metadata),
         local_module_kind(raw.kind),
-    ))
+    )
+    .with_referrer(raw.referrer.clone()))
 }
 
 fn native_dependency_request_from_chromium(
@@ -2252,6 +2267,7 @@ fn external_module_script_root_input(
 
 fn external_chromium_tree_root_input(
     root: &ModuleRootInput,
+    referrer: module_tree::ModuleReferrer,
 ) -> std::result::Result<Option<moli_module_script_tree::ModuleRootInput>, ModuleLoadError> {
     if root.source_override.is_some() {
         return Ok(None);
@@ -2266,7 +2282,7 @@ fn external_chromium_tree_root_input(
             phase: chromium_import_phase(root.phase),
             kind_hint: Some(chromium_module_kind(key.kind())),
             fetch_metadata: chromium_fetch_metadata(&root.fetch_metadata),
-            referrer: moli_module_script_tree::ModuleReferrer::client(),
+            referrer,
             position: moli_module_script_tree::TextPosition::default(),
         },
     )))
@@ -3337,6 +3353,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3363,6 +3380,39 @@ import "./c.mjs";
     }
 
     #[test]
+    fn module_referrer_preserves_the_script_url_without_changing_the_fetch_client() {
+        let document = url("https://app.example.test/page.html");
+        let script = url("https://cdn.example.test/importer.js");
+        let dependency = url("https://third.example.test/dependency.js");
+        let origin = moli_url::WebOrigin::from_url(&document);
+        let metadata = ModuleFetchMetadata {
+            request_metadata: moli_fetch::ScriptFetchRequestMetadata {
+                referrer_policy: Some("unsafe-url".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let request = NativeModuleGraphFetchRequest::new(
+            dependency.clone(),
+            document.clone(),
+            metadata,
+            ModuleKind::JavaScript,
+        )
+        .with_referrer(module_tree::ModuleReferrer::from_url(script.clone()))
+        .request(&origin)
+        .unwrap();
+        assert_eq!(
+            request.referrer_header_value(&dependency).as_deref(),
+            Some(script.as_str())
+        );
+        assert_eq!(request.request_origin(), Some(&origin));
+        assert_eq!(
+            request.cookie_context.initiator_url.as_ref(),
+            Some(&document)
+        );
+    }
+
+    #[test]
     fn module_fetch_metadata_maps_use_credentials_to_include() {
         let script_metadata = ScriptFetchMetadata {
             cross_origin: Some("use-credentials".to_owned()),
@@ -3379,6 +3429,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3429,6 +3480,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3466,6 +3518,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/preload.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3522,6 +3575,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: dependency_metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3570,6 +3624,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/dynamic.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3607,6 +3662,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/inline.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3637,6 +3693,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -4420,6 +4477,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url,
             initiator_url,
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata,
             kind,
             tree_client: None,
@@ -4491,6 +4549,7 @@ import "./c.mjs";
         let request = NativeModuleGraphFetchRequest {
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
+            referrer: module_tree::ModuleReferrer::client(),
             fetch_metadata: root_metadata.for_descendant_fetches(),
             kind: ModuleKind::JavaScript,
             tree_client: None,

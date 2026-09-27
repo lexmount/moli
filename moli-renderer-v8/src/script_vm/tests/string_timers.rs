@@ -9,6 +9,7 @@ fn execute_nonce_script(vm: &mut ScriptVm, source: &str, url: &Url, nonce: Optio
         Some(&crate::planning::ScriptFetchMetadata {
             nonce: nonce.map(str::to_owned),
             cross_origin: Some("use-credentials".to_owned()),
+            referrer_policy: Some("no-referrer".to_owned()),
             parser_inserted: true,
             integrity: Some("sha256-AAAA".to_owned()),
             ..Default::default()
@@ -36,6 +37,14 @@ fn assert_import_nonce(vm: &mut ScriptVm, base_url: &Url, nonce: Option<&str>) {
     assert_eq!(request.specifier(), "./dependency.mjs");
     assert_eq!(request.base_url(), base_url);
     assert_eq!(request.fetch_metadata().nonce(), nonce);
+    assert_eq!(
+        request
+            .fetch_metadata()
+            .request_metadata
+            .referrer_policy
+            .as_deref(),
+        Some("no-referrer")
+    );
     assert_eq!(
         request.fetch_metadata().credentials_mode,
         moli_fetch::RequestCredentialsMode::Include

@@ -34,6 +34,9 @@ mod child_module_records;
 #[path = "dynamic_import_credentials.rs"]
 mod dynamic_import_credentials;
 
+#[path = "dynamic_import_referrer.rs"]
+mod dynamic_import_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -197,6 +200,7 @@ fn fixture_response(
         | "/child-sri-rejected.css"
         | "/child-sri-accepted.css"
         | "/child-sri-forbidden.css" => child_stylesheet_integrity::fixture_response(path, query),
+        "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/import-credentials.js" => (
             "200 OK",
             format!("{javascript}Cache-Control: no-store\r\n"),
