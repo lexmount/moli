@@ -9,6 +9,7 @@ mod history_limits;
 mod hyperlink_navigation;
 mod navigation_focus;
 mod navigation_window_reuse;
+mod no_document_navigation;
 mod popup_network_navigation;
 mod response_gate;
 mod stale_history_traversal;
