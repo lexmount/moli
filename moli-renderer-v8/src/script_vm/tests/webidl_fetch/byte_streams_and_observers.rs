@@ -1670,8 +1670,6 @@ yield; // Publish this scene before reading its geometry.
     );
 }
 
-
-
 #[test]
 fn resize_observer_declared_slots_ignore_prototype_spoofing() {
     let mut vm = new_storage_test_vm("https://resize-observer-declared-slots.test/");
