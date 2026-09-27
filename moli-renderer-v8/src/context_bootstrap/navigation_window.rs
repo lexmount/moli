@@ -297,7 +297,13 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
             .is_some_and(|origin| origin == "null");
     }
     if runtime_window_is_global(scope, owner) {
-        return top_level_navigation_document_has_opaque_origin(host.document_url());
+        // A response sandbox can make an HTTP(S) Document opaque without
+        // changing its URL. Use the active Document's policy, not just the URL.
+        return host
+            .document_policy_container()
+            .sandbox
+            .forces_opaque_origin
+            || top_level_navigation_document_has_opaque_origin(host.document_url());
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return false;
