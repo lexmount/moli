@@ -16,6 +16,8 @@ mod cache_timing;
 mod document_encoding;
 #[path = "fetch_behaviors/document_mime.rs"]
 mod document_mime;
+#[path = "fetch_behaviors/location_origin.rs"]
+mod location_origin;
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
 #[path = "fetch_behaviors/preload_crossorigin.rs"]
