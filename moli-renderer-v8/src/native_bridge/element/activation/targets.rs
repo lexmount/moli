@@ -49,7 +49,7 @@ fn navigate_target_window_location(
 }
 
 fn queue_top_level_location_navigation(
-    _scope: &mut v8::PinScope<'_, '_>,
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     resolved_url: &str,
     source: crate::native_bridge::OwnerDispatchScope,
@@ -59,6 +59,9 @@ fn queue_top_level_location_navigation(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let about_document_state = runtime.capture_about_document_state(source, &url, None);
+    if url.scheme() != "javascript" && !runtime.dispatch_main_document_tree_beforeunload(scope) {
+        return false;
+    }
     runtime.record_pending_location_navigation(url, None, about_document_state);
     true
 }

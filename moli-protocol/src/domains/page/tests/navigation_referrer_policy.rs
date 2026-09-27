@@ -189,11 +189,14 @@ async fn top_level_history_preserves_policy_changes_across_traversal_and_reload(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn navigation_api_captures_history_policy_before_unload_callbacks() {
+async fn scripted_navigation_captures_history_policy_before_unload_callbacks() {
     let (origin, server) = policy_server().await;
     let source = format!("{origin}/source");
     let destination = format!("{origin}/destination");
-    for event in ["beforeunload", "pagehide", "unload"] {
+    for (method, event) in ["navigation", "location"]
+        .into_iter()
+        .flat_map(|method| ["beforeunload", "pagehide", "unload"].map(|event| (method, event)))
+    {
         let mut ctx = context(&source).await;
         evaluate(
             &mut ctx,
@@ -203,16 +206,17 @@ async fn navigation_api_captures_history_policy_before_unload_callbacks() {
         )
         .await;
         ctx.sent.clear();
-        evaluate(
-            &mut ctx,
-            &format!("navigation.navigate({}); true", json!(destination)),
-        )
-        .await;
+        let action = if method == "navigation" {
+            format!("navigation.navigate({}); true", json!(destination))
+        } else {
+            format!("location.href={}; true", json!(destination))
+        };
+        evaluate(&mut ctx, &action).await;
         wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
         assert_eq!(
             evaluate(&mut ctx, "localStorage.getItem('policy-event')").await,
             "no-referrer",
-            "{event} must run and update the meta element"
+            "{method}: {event} must run and update the meta element"
         );
         let expected_source = if event == "beforeunload" {
             serde_json::Value::Null
@@ -222,7 +226,7 @@ async fn navigation_api_captures_history_policy_before_unload_callbacks() {
         assert_eq!(
             evaluate(&mut ctx, "navigation.entries().map(e=>e.url)").await,
             json!([expected_source, destination]),
-            "{event}"
+            "{method}: {event}"
         );
     }
     server.abort();
