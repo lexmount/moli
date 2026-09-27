@@ -2342,6 +2342,7 @@ mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+mod extracted;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
@@ -2515,7 +2516,6 @@ mod window_scheduling_receivers;
 
 mod window_immutable_prototype_chain;
 
-mod extracted;
 mod payment_response_interfaces;
 mod window_getter_consolidation;
 mod window_node_events;
