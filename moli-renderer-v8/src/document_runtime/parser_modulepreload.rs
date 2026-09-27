@@ -24,6 +24,14 @@ pub(crate) struct MainDocumentModulepreloadFetchOutcome {
 }
 
 impl MainDocumentModulepreloadFetchOutcome {
+    fn idle() -> Self {
+        Self {
+            job_run: None,
+            csp_violations: Vec::new(),
+            runtime_warning: None,
+        }
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -120,11 +128,39 @@ impl DocumentRuntime {
     ) -> std::result::Result<MainDocumentModulepreloadFetchOutcome, ModuleLoadError> {
         let start = self.fetch_single_native_module_for_modulepreload(request)?;
         let Some(request) = start.started_request() else {
-            return Ok(MainDocumentModulepreloadFetchOutcome {
-                job_run: None,
-                csp_violations: Vec::new(),
-                runtime_warning: None,
-            });
+            return Ok(MainDocumentModulepreloadFetchOutcome::idle());
+        };
+        self.schedule_reserved_main_document_modulepreload_fetch(
+            document_owner,
+            resource_scheduler,
+            request,
+        )
+    }
+
+    /// Register a connected link and start its fetch in the same insertion
+    /// turn. Cached results still deliver their link event through the Page
+    /// queue; no script runs while the DOM mutation is being committed.
+    pub(crate) fn start_main_document_modulepreload_link_fetch(
+        &mut self,
+        document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        resource_scheduler: &RendererResourceScheduler,
+        request: NativeModuleSingleFetchRequest,
+        link_client: std::sync::Arc<crate::module_runtime::NativeModulepreloadLinkClient>,
+    ) -> std::result::Result<MainDocumentModulepreloadFetchOutcome, ModuleLoadError> {
+        if link_client
+            .main_document_event_owner()
+            .is_none_or(|owner| owner.owner() != document_owner)
+        {
+            return Ok(MainDocumentModulepreloadFetchOutcome::idle());
+        }
+        let (start, pending_event) = self
+            .fetch_single_native_module_for_modulepreload_link(request, link_client)?
+            .into_parts();
+        if let Some(event) = pending_event {
+            self.enqueue_ready_native_modulepreload_link_event(event.into_ready_event());
+        }
+        let Some(request) = start.started_request() else {
+            return Ok(MainDocumentModulepreloadFetchOutcome::idle());
         };
         self.schedule_reserved_main_document_modulepreload_fetch(
             document_owner,
