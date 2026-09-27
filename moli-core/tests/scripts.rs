@@ -39,6 +39,9 @@ mod document_open_url;
 #[path = "scripts/document_default_view.rs"]
 mod document_default_view;
 
+#[path = "scripts/document_location.rs"]
+mod document_location;
+
 #[path = "scripts/retained_child_window.rs"]
 mod retained_child_window;
 
