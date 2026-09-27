@@ -47,6 +47,8 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
 
     fn module_request_initiator_url(&self, child_handle: Option<DomHandle>) -> Url;
 
+    fn module_request_document_referrer_policy(&self) -> Option<String>;
+
     fn dispatch_module_fetch_csp_report_only_violation(
         &mut self,
         key: &ModuleMapKey,
@@ -144,6 +146,10 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
 
     fn module_request_initiator_url(&self, child_handle: Option<DomHandle>) -> Url {
         (**self).module_request_initiator_url(child_handle)
+    }
+
+    fn module_request_document_referrer_policy(&self) -> Option<String> {
+        (**self).module_request_document_referrer_policy()
     }
 
     fn dispatch_module_fetch_csp_report_only_violation(
@@ -355,6 +361,10 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
             .dispatch_module_fetch_csp_report_only_violation_for_owner(key, fetch_metadata);
     }
 
+    fn module_request_document_referrer_policy(&self) -> Option<String> {
+        self.vm.module_request_document_referrer_policy(None)
+    }
+
     fn csp_blocked_module_fetch_error(
         &mut self,
         key: &ModuleMapKey,
@@ -515,6 +525,11 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
 
     fn module_request_initiator_url(&self, _child_handle: Option<DomHandle>) -> Url {
         self.module_request_initiator_url.clone()
+    }
+
+    fn module_request_document_referrer_policy(&self) -> Option<String> {
+        self.vm
+            .module_request_document_referrer_policy(Some((self.document_owner, self.realm_id)))
     }
 
     fn dispatch_module_fetch_csp_report_only_violation(

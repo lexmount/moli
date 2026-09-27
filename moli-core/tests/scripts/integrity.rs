@@ -31,6 +31,9 @@ mod dynamic_import_credentials;
 #[path = "dynamic_import_referrer.rs"]
 mod dynamic_import_referrer;
 
+#[path = "module_document_referrer.rs"]
+mod module_document_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -176,8 +179,11 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
-        "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
+        "/delivered-document-referrer.html" | "/delivered-meta-policy.html" | "/delivered-meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
+        }
+        "/document-referrer.html" | "/document-referrer.js" => {
+            module_document_referrer::fixture_response(path, query, origin, cross)
         }
         "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
         "/import-credentials.js" => (

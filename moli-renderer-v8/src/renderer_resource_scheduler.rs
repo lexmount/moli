@@ -159,6 +159,7 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         target: MainRuntimeModuleGraphFetchTarget,
         script: crate::planning::PreparedScript,
+        request: NativeModuleGraphFetchRequest,
         service_worker: crate::dynamic_script_owner::DynamicScriptServiceWorkerContext,
     ) {
         let schedule = MainModuleFetchSchedule::Runtime(target);
@@ -166,6 +167,23 @@ impl RendererResourceScheduler {
             service_worker.document_url.clone(),
             script.url.clone(),
         );
+        let request_origin = loader.fetch_context().request_origin();
+        let request = match request.request(&request_origin) {
+            Ok(request) => request.with_resource_type(crate::planning::script_fetch_resource_type(
+                script.kind,
+                script.mode,
+            )),
+            Err(error) => {
+                let error = error.to_string();
+                schedule.send_completion(
+                    &self.completion_tx,
+                    Err(error.clone()),
+                    Some(Arc::new(Err(error))),
+                    attribution,
+                );
+                return;
+            }
+        };
         let Some(load) = loader.register_load(
             crate::network::loads::ResourceLoadKind::Script,
             crate::network::loads::ResourceLoadDisposition::Ordinary,
@@ -182,7 +200,6 @@ impl RendererResourceScheduler {
         };
         let completion_tx = self.completion_tx.clone();
         let request_client = load.request_client();
-        let request_origin = loader.fetch_context().request_origin();
         let runner = load.task_runner();
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
         load.attach_consumer_cancel(move || {
@@ -193,8 +210,8 @@ impl RendererResourceScheduler {
             // lookup. Keep its Service Worker response filtering and SRI checks,
             // but publish the result to the graph's single-module reservation.
             let outcome = tokio::select! {
-                outcome = crate::planning::load_service_worker_aware_external_script_source_outcome(
-                    &script, &request_origin, &request_client, runner, None, None,
+                outcome = crate::planning::load_service_worker_aware_external_script_source_outcome_with_request(
+                    &script, &request_origin, &request_client, runner, None, request,
                     service_worker.browser_context_runtime, service_worker.client_id,
                     service_worker.document_url,
                 ) => outcome,

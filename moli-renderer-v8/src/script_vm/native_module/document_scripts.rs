@@ -1,6 +1,25 @@
 use super::*;
 
 impl ScriptVm {
+    pub(crate) fn module_request_document_referrer_policy(
+        &self,
+        owner: Option<(crate::frame_owner_model::FrameDocumentOwner, FrameRealmId)>,
+    ) -> Option<String> {
+        let host = self._context_host.borrow();
+        let document = if let Some((owner, realm_id)) = owner {
+            let snapshot = host.frame_owner_current_child_snapshot_for_realm(realm_id)?;
+            if snapshot.local_window_id != owner.local_window_id
+                || snapshot.document_id != owner.document_id
+            {
+                return None;
+            }
+            snapshot.document_handle
+        } else {
+            host.document_handle()
+        };
+        crate::context_bootstrap::document_referrer_policy_for_native_document(&host, document)
+    }
+
     pub(crate) fn current_main_document_task_owner(&self) -> Option<FrameDocumentTaskOwner> {
         self._context_host
             .borrow()

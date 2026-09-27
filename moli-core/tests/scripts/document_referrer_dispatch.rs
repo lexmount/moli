@@ -6,7 +6,7 @@ pub(super) fn fixture_response(
     referer: Option<&str>,
 ) -> (&'static str, String, String) {
     let (content_type, body, policy) = match path {
-        "/document-referrer.html" => {
+        "/delivered-document-referrer.html" => {
             let params: std::collections::HashMap<_, _> =
                 url::form_urlencoded::parse(query.as_bytes()).collect();
             (
@@ -15,7 +15,7 @@ pub(super) fn fixture_response(
                 params.get("response").map_or("unsafe-url", |value| value.as_ref()).to_owned(),
             )
         }
-        "/meta-policy.html" => (
+        "/delivered-meta-policy.html" => (
             "text/html",
             r#"<!doctype html><head><meta name=referrer content=no-referrer id=first></head><body>
             <script>
@@ -44,9 +44,9 @@ pub(super) fn fixture_response(
 async fn check_document_referrer_dispatch(owner: &str) -> Result<()> {
     let servers = IntegrityServers::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
-    let document_url = format!("{}/meta-policy.html?owner={owner}", servers.origin);
+    let document_url = format!("{}/delivered-meta-policy.html?owner={owner}", servers.origin);
     let parent_url = format!(
-        "{}/document-referrer.html?response=unsafe-url",
+        "{}/delivered-document-referrer.html?response=unsafe-url",
         servers.origin
     );
     let mut page = browser
@@ -61,7 +61,7 @@ async fn check_document_referrer_dispatch(owner: &str) -> Result<()> {
         let checks = 0;
         async function check(label, expected) {{
             for (const origin of {origins}) {{
-                const resource = origin + '/meta-policy-fetch?dispatch-' + ++checks;
+                const resource = origin + '/delivered-meta-policy-fetch?dispatch-' + ++checks;
                 const actual = await (await fetch(resource)).json();
                 if (actual !== expected) throw new Error(label + ': fetch ' + actual + ' != ' + expected);
                 const explicit = await (await fetch(resource + '-explicit', {{referrerPolicy:'unsafe-url'}})).json();
@@ -143,7 +143,7 @@ async fn check_document_referrer_dispatch(owner: &str) -> Result<()> {
     let requests = servers.requests.lock();
     let requests: Vec<_> = requests
         .iter()
-        .filter(|request| request.path.starts_with("/meta-policy-fetch?dispatch-"))
+        .filter(|request| request.path.starts_with("/delivered-meta-policy-fetch?dispatch-"))
         .collect();
     assert_eq!(requests.len(), 72, "{owner}: {requests:?}");
     for request in requests {
