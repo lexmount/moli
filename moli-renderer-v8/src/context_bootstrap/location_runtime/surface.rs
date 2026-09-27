@@ -55,7 +55,7 @@ struct DocumentLocationAccessorDeclaration {
 const CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT: &str = "__moliConstructedDocumentLocationGetter";
 const CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT: &str = "__moliConstructedDocumentLocationSetter";
 
-fn constructed_document_location_value<'s>(
+pub(in crate::context_bootstrap) fn document_location_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -65,29 +65,10 @@ fn constructed_document_location_value<'s>(
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
             .ok()?;
-    if !crate::native_bridge::document::document_has_browsing_context(
-        unsafe { &*runtime_ptr },
-        handle,
-    ) {
+    if !crate::native_bridge::document::document_is_fully_active(unsafe { &*runtime_ptr }, handle) {
         return Some(v8::null(scope).into());
     }
     get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)
-}
-
-fn constructed_document_location_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let receiver = args.this();
-    let Some(location) = constructed_document_location_value(scope, receiver) else {
-        webidl::throw_type_error(
-            scope,
-            "Document.location getter called on incompatible receiver.",
-        );
-        return;
-    };
-    rv.set(location);
 }
 
 fn constructed_document_location_setter_callback<'s>(
@@ -124,7 +105,7 @@ fn constructed_document_location_accessor_functions<'s>(
         return Ok((getter, setter));
     }
 
-    let getter = v8::Function::builder(constructed_document_location_getter_callback)
+    let getter = v8::Function::builder(document_location_getter)
         .build(scope)
         .ok_or_else(|| anyhow!("failed to build constructed Document.location getter"))?;
     getter.set_name(v8str(scope, "get location"));
