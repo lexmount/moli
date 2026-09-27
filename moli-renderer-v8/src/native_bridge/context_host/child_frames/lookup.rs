@@ -321,8 +321,14 @@ impl PageScriptHost {
                     .get(handle)
                     .is_some_and(|entry| entry.matches_browsing_context_name(key))
         })?;
-        self.window_scopes_have_same_origin(parent, OwnerDispatchScope::Child(first))
-            .then_some(first)
+        // Filter only after selecting the first matching target, so a hidden
+        // first match cannot expose a later duplicate. Browsers also expose a
+        // cross-origin child when its name is explicitly published by the frame
+        // owner; a child-authored window.name alone is not sufficient.
+        // https://github.com/whatwg/html/issues/12663
+        (self.window_scopes_have_same_origin(parent, OwnerDispatchScope::Child(first))
+            || self.dom_host().get_attribute(first, "name").as_deref() == Some(key))
+        .then_some(first)
     }
 
     fn child_browsing_context_handle_by_name_in_document_order_from_document(
