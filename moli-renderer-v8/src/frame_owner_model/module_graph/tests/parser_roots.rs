@@ -1,3 +1,5 @@
+use crate::frame_owner_model::FrameDocumentParserRootTerminalResult;
+
 use super::*;
 use crate::frame_owner_model::FrameDocumentModuleScriptTerminalTask;
 
@@ -115,11 +117,11 @@ fn child_parser_root_clients_fan_out_from_module_map_entry() {
     );
     assert!(matches!(
         works[0].result(),
-        FrameDocumentModuleFetchTerminalResult::Fetched(_)
+        FrameDocumentParserRootTerminalResult::Fetched(_)
     ));
     assert!(matches!(
         works[1].result(),
-        FrameDocumentModuleFetchTerminalResult::Fetched(_)
+        FrameDocumentParserRootTerminalResult::Fetched(_)
     ));
 }
 
@@ -168,7 +170,7 @@ fn child_parser_root_already_terminal_entries_emit_owner_tasks() {
     );
     assert!(matches!(
         first_parser_root_work.result(),
-        FrameDocumentModuleFetchTerminalResult::Fetched(_)
+        FrameDocumentParserRootTerminalResult::Fetched(_)
     ));
 
     let already_fetched_reservation = store.reserve_parser_root_module_client(
@@ -189,7 +191,7 @@ fn child_parser_root_already_terminal_entries_emit_owner_tasks() {
     let work = works.pop().expect("synthetic parser root terminal work");
     assert!(matches!(
         work.result(),
-        FrameDocumentModuleFetchTerminalResult::Fetched(_)
+        FrameDocumentParserRootTerminalResult::Fetched(_)
     ));
     assert_eq!(
         work.parser_root_payload().script_handle(),
@@ -230,7 +232,7 @@ fn child_parser_root_already_terminal_entries_emit_owner_tasks() {
     );
     assert!(matches!(
         first_failed_work.result(),
-        FrameDocumentModuleFetchTerminalResult::Failed(_)
+        FrameDocumentParserRootTerminalResult::Failed(_)
     ));
 
     let already_failed_reservation = store.reserve_parser_root_module_client(
@@ -253,7 +255,7 @@ fn child_parser_root_already_terminal_entries_emit_owner_tasks() {
         .expect("synthetic failed parser root terminal work");
     assert!(matches!(
         work.result(),
-        FrameDocumentModuleFetchTerminalResult::Failed(_)
+        FrameDocumentParserRootTerminalResult::Failed(_)
     ));
     assert_eq!(
         work.parser_root_payload().script_handle(),

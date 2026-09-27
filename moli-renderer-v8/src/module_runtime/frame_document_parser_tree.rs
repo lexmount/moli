@@ -11,8 +11,8 @@ use crate::frame_owner_model::{
     FrameDocumentModuleClientEntryId, FrameDocumentModuleClientId,
     FrameDocumentModuleClientRegistration, FrameDocumentModuleClientReservation,
     FrameDocumentModuleDependencyFetchTask, FrameDocumentModuleFetchDisposition,
-    FrameDocumentModuleFetchTerminalResult, FrameDocumentParserRootModuleClient,
-    FrameDocumentParserRootTerminalClient, FrameDocumentParserRootTerminalWork,
+    FrameDocumentParserRootModuleClient, FrameDocumentParserRootTerminalClient,
+    FrameDocumentParserRootTerminalResult, FrameDocumentParserRootTerminalWork,
     FrameDocumentStaticDependencyModuleClient, FrameDocumentTaskOwner, FrameRealmId,
 };
 use crate::planning::PreparedScript;
@@ -128,10 +128,13 @@ impl NativeDocumentModulator {
         &self,
         key: &ModuleMapKey,
         successful: bool,
-    ) -> Option<FrameDocumentModuleFetchTerminalResult> {
+    ) -> Option<FrameDocumentParserRootTerminalResult> {
         let entry_id = self.entry_id(key)?;
         let entry = self.entry(entry_id);
         if successful {
+            if entry.usable_compiled_record_id().is_some() {
+                return Some(FrameDocumentParserRootTerminalResult::Compiled);
+            }
             let source = entry.source().cloned()?;
             let final_url = entry.effective_key().url().clone();
             let response_referrer_policy = entry
@@ -139,7 +142,7 @@ impl NativeDocumentModulator {
                 .request_metadata
                 .referrer_policy
                 .clone();
-            Some(FrameDocumentModuleFetchTerminalResult::Fetched(
+            Some(FrameDocumentParserRootTerminalResult::Fetched(
                 ModuleGraphFetchedSource::new(final_url.clone(), final_url != *key.url(), source)
                     .with_response_referrer_policy(response_referrer_policy),
             ))
@@ -148,7 +151,7 @@ impl NativeDocumentModulator {
                 .failure()
                 .map(|error| error.message().to_owned())
                 .unwrap_or_else(|| "module map entry fetch failed".to_owned());
-            Some(FrameDocumentModuleFetchTerminalResult::Failed(message))
+            Some(FrameDocumentParserRootTerminalResult::Failed(message))
         }
     }
 

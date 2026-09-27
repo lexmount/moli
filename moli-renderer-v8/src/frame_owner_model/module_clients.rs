@@ -1360,11 +1360,18 @@ pub(crate) enum FrameDocumentModuleFetchTerminalResult {
     Failed(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FrameDocumentParserRootTerminalResult {
+    Fetched(ModuleGraphFetchedSource),
+    Compiled,
+    Failed(String),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FrameDocumentParserRootTerminalPayload {
     key: ModuleMapKey,
     client: FrameDocumentParserRootTerminalClient,
-    result: FrameDocumentModuleFetchTerminalResult,
+    result: FrameDocumentParserRootTerminalResult,
 }
 
 pub(crate) type FrameDocumentParserRootTerminalWork =
@@ -1376,7 +1383,7 @@ impl FrameDocumentParserRootTerminalWork {
         realm_id: FrameRealmId,
         key: ModuleMapKey,
         client: FrameDocumentParserRootTerminalClient,
-        result: FrameDocumentModuleFetchTerminalResult,
+        result: FrameDocumentParserRootTerminalResult,
     ) -> Self {
         Self::new(
             owner,
@@ -1400,7 +1407,7 @@ impl FrameDocumentParserRootTerminalWork {
     }
 
     #[cfg(test)]
-    pub(crate) fn result(&self) -> &FrameDocumentModuleFetchTerminalResult {
+    pub(crate) fn result(&self) -> &FrameDocumentParserRootTerminalResult {
         &self.payload().result
     }
 
@@ -1411,7 +1418,7 @@ impl FrameDocumentParserRootTerminalWork {
         FrameRealmId,
         ModuleMapKey,
         FrameDocumentParserRootModuleClient,
-        FrameDocumentModuleFetchTerminalResult,
+        FrameDocumentParserRootTerminalResult,
     ) {
         let (owner, realm_id, payload) = self.into_parts();
         (

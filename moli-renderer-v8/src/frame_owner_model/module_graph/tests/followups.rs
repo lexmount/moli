@@ -1468,11 +1468,13 @@ fn module_script_terminal_runner_dispatches_parser_root_terminal_batch() {
     let root_url =
         Url::parse("https://module-owner-event-runner.test/root.js").expect("module url");
     let key = ModuleMapKey::java_script(root_url.clone());
-    let fetched = FrameDocumentModuleFetchTerminalResult::Fetched(ModuleGraphFetchedSource::new(
-        root_url.clone(),
-        false,
-        ModuleSource::text("export const value = 1;".to_owned()),
-    ));
+    let fetched = crate::frame_owner_model::FrameDocumentParserRootTerminalResult::Fetched(
+        ModuleGraphFetchedSource::new(
+            root_url.clone(),
+            false,
+            ModuleSource::text("export const value = 1;".to_owned()),
+        ),
+    );
     let works = vec![
         FrameDocumentParserRootTerminalWork::from_terminal_parts(
             task_owner,
