@@ -1341,7 +1341,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         );
         return;
     }
-    let navigation_history = Url::parse(navigation.url())
+    let navigation_history = url::Url::parse(navigation.url())
         .ok()
         .and_then(|url| {
             conn.renderer_navigation_request_for_owner(

@@ -98,7 +98,7 @@ impl ScriptVm {
             .expect("main Window origin must reflect the navigation policy container");
     }
 
-    fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
+    pub(super) fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
         let host = self._context_host.borrow();
         let origin = host
             .window_document_origin(crate::native_bridge::OwnerDispatchScope::Top)
