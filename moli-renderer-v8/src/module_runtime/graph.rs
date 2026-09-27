@@ -363,7 +363,10 @@ impl NativeModuleGraphFetchRequest {
             ModuleKind::Json => {
                 request.with_browser_request_metadata(BrowserRequestMetadata::JsonModule)
             }
-            ModuleKind::JavaScript | ModuleKind::ModulePreloadText | ModuleKind::WebAssembly => {
+            ModuleKind::Text => {
+                request.with_browser_request_metadata(BrowserRequestMetadata::TextModule)
+            }
+            ModuleKind::JavaScript | ModuleKind::WebAssembly => {
                 request.with_browser_request_metadata(BrowserRequestMetadata::Script)
             }
         })
@@ -473,7 +476,7 @@ impl NativeModuleGraphFetchRequest {
                         ModuleKind::Css => {
                             super::validate_css_module_response_mime(&response.headers)
                         }
-                        ModuleKind::ModulePreloadText => Ok(()),
+                        ModuleKind::Text => Ok(()),
                     };
                     if let Err(error) = mime_result {
                         return Err(ModuleLoadError::new(ModuleLoadStage::Fetch, error)
@@ -520,7 +523,7 @@ impl NativeModuleGraphFetchRequest {
                         ModuleKind::JavaScript
                         | ModuleKind::Json
                         | ModuleKind::Css
-                        | ModuleKind::ModulePreloadText => ModuleGraphFetchedSource::new(
+                        | ModuleKind::Text => ModuleGraphFetchedSource::new(
                             head.final_url,
                             head.redirected,
                             ModuleSource::text(moli_encoding::decode_utf8(&body_bytes)),
@@ -1878,6 +1881,10 @@ fn local_module_key(
             key.url.clone(),
             attributes,
         )),
+        module_tree::ModuleKind::Text => Ok(ModuleMapKey::text_with_attributes(
+            key.url.clone(),
+            attributes,
+        )),
         module_tree::ModuleKind::WebAssembly => Ok(ModuleMapKey::webassembly(key.url.clone())),
     }
 }
@@ -1891,6 +1898,7 @@ fn local_module_kind(kind: module_tree::ModuleKind) -> ModuleKind {
         module_tree::ModuleKind::JavaScript => ModuleKind::JavaScript,
         module_tree::ModuleKind::Json => ModuleKind::Json,
         module_tree::ModuleKind::Css => ModuleKind::Css,
+        module_tree::ModuleKind::Text => ModuleKind::Text,
         module_tree::ModuleKind::WebAssembly => ModuleKind::WebAssembly,
     }
 }
@@ -2214,7 +2222,7 @@ fn chromium_module_kind(kind: ModuleKind) -> moli_module_script_tree::ModuleKind
         ModuleKind::JavaScript => moli_module_script_tree::ModuleKind::JavaScript,
         ModuleKind::Json => moli_module_script_tree::ModuleKind::Json,
         ModuleKind::Css => moli_module_script_tree::ModuleKind::Css,
-        ModuleKind::ModulePreloadText => moli_module_script_tree::ModuleKind::JavaScript,
+        ModuleKind::Text => moli_module_script_tree::ModuleKind::Text,
         ModuleKind::WebAssembly => moli_module_script_tree::ModuleKind::WebAssembly,
     }
 }
@@ -3742,7 +3750,7 @@ import "./c.mjs";
     }
 
     #[test]
-    fn static_import_with_text_module_type_fails_before_dependency_fetch() {
+    fn static_import_with_unsupported_module_type_fails_before_dependency_fetch() {
         let mut vm = new_test_vm("https://app.example.test/page");
         let root_url = url("https://app.example.test/root.mjs");
         let job = parser_owned_external_module_script_graph_job(
@@ -3755,15 +3763,17 @@ import "./c.mjs";
         let root_fetch = expect_single_fetch(
             advance_module_script_graph(&mut vm, job)
                 .expect("external parser graph should request root"),
-            "text module type root",
+            "unsupported module type root",
         );
         let error = match root_fetch.finish_source_for_test(
             &mut vm,
             Ok(ModuleSource::text(
-                r#"import text from "./dep.txt" with { type: "text" };"#.to_owned(),
+                r#"import text from "./dep.txt" with { type: "unsupported" };"#.to_owned(),
             )),
         ) {
-            Ok(_) => panic!("text import attribute type should fail before dependency fetch"),
+            Ok(_) => {
+                panic!("unsupported import attribute type should fail before dependency fetch")
+            }
             Err(error) => error,
         };
 
@@ -3773,16 +3783,16 @@ import "./c.mjs";
             Some(ScriptErrorConstructorKind::TypeError)
         );
         assert!(
-            error
-                .message()
-                .contains("module type `text` is not a valid module type for import `./dep.txt`"),
+            error.message().contains(
+                "module type `unsupported` is not a valid module type for import `./dep.txt`"
+            ),
             "{}",
             error.message()
         );
     }
 
     #[test]
-    fn dynamic_import_with_text_module_type_fails_before_fetch() {
+    fn dynamic_import_with_unsupported_module_type_fails_before_fetch() {
         let mut vm = new_test_vm("https://example.test/app/page.html");
         let _js_runtime = crate::JsRuntime::initialize();
         let mut isolate = v8::Isolate::new(Default::default());
@@ -3797,12 +3807,12 @@ import "./c.mjs";
             crate::module_runtime::DynamicModuleImportOwner::main_for_test(),
             "./dep.txt",
             url("https://example.test/app/page.html"),
-            ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "text".to_owned())]),
+            ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "unsupported".to_owned())]),
             ModuleImportPhase::Evaluation,
         ));
 
         let error = match job.advance_dynamic_import_owner_lane(&mut vm) {
-            Ok(_) => panic!("text module type dynamic import should fail before root fetch"),
+            Ok(_) => panic!("unsupported module type dynamic import should fail before root fetch"),
             Err(error) => error,
         };
 
@@ -3814,7 +3824,7 @@ import "./c.mjs";
         );
         assert!(
             error.message().contains(
-                "module type `text` is not a valid module type for module `https://example.test/app/dep.txt`"
+                "module type `unsupported` is not a valid module type for module `https://example.test/app/dep.txt`"
             ),
             "{}",
             error.message()

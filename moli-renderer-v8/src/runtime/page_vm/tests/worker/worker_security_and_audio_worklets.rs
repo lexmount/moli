@@ -1243,55 +1243,57 @@ async fn audio_worklet_add_module_expands_completed_sibling_descendants_before_s
 }
 
 #[tokio::test]
-async fn audio_worklet_json_static_import_uses_json_fetch_destination() {
-    run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_audio_worklet_json_destination_server().await;
-        let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
-        let module_url = format!("{base_url}/worklet/entry.js");
-        let module_url_literal =
-            serde_json::to_string(&module_url).expect("serialize worklet module URL");
-        let mut page_vm = test_page_vm_with_document_url(document_url);
-        let local_executor = page_vm.local_executor.clone();
+async fn audio_worklet_synthetic_static_import_uses_module_fetch_destination() {
+    for module_type in ["json", "text"] {
+        run_page_vm_async_test(async move {
+            let (base_url, server) = spawn_audio_worklet_synthetic_destination_server(module_type).await;
+            let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
+            let module_url = format!("{base_url}/worklet/entry.js");
+            let module_url_literal =
+                serde_json::to_string(&module_url).expect("serialize worklet module URL");
+            let mut page_vm = test_page_vm_with_document_url(document_url);
+            let local_executor = page_vm.local_executor.clone();
 
-        let result = local_executor
-            .run(async move {
-                page_vm.vm_mut().eval(&format!(
-                    r#"
-                    (() => {{
-                        globalThis.__audioWorkletJsonResult = null;
-                        globalThis.__audioWorkletJsonDone = false;
-                        const context = new AudioContext();
-                        context.audioWorklet.addModule({module_url_literal}).then(
-                            () => {{
-                                globalThis.__audioWorkletJsonResult = "loaded";
-                                globalThis.__audioWorkletJsonDone = true;
-                            }},
-                            (error) => {{
-                                globalThis.__audioWorkletJsonResult =
-                                    "error:" + (error && error.message ? error.message : String(error));
-                                globalThis.__audioWorkletJsonDone = true;
-                            }}
-                        );
-                    }})()
-                    "#
-                ))?;
-                drive_websocket_until_done(
-                    &mut page_vm,
-                    "String(globalThis.__audioWorkletJsonDone === true)",
-                    "AudioWorklet addModule with static JSON import should settle",
-                )
-                .await?;
-                page_vm.vm_mut().eval("globalThis.__audioWorkletJsonResult")
-            })
-            .await
-            .expect("AudioWorklet JSON destination test should run on owner lane");
+            let result = local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+                        (() => {{
+                            globalThis.__audioWorkletSyntheticResult = null;
+                            globalThis.__audioWorkletSyntheticDone = false;
+                            const context = new AudioContext();
+                            context.audioWorklet.addModule({module_url_literal}).then(
+                                () => {{
+                                    globalThis.__audioWorkletSyntheticResult = "loaded";
+                                    globalThis.__audioWorkletSyntheticDone = true;
+                                }},
+                                (error) => {{
+                                    globalThis.__audioWorkletSyntheticResult =
+                                        "error:" + (error && error.message ? error.message : String(error));
+                                    globalThis.__audioWorkletSyntheticDone = true;
+                                }}
+                            );
+                        }})()
+                        "#
+                    ))?;
+                    drive_websocket_until_done(
+                        &mut page_vm,
+                        "String(globalThis.__audioWorkletSyntheticDone === true)",
+                        "AudioWorklet addModule with static synthetic import should settle",
+                    )
+                    .await?;
+                    page_vm.vm_mut().eval("globalThis.__audioWorkletSyntheticResult")
+                })
+                .await
+                .expect("AudioWorklet synthetic destination test should run on owner lane");
 
-        assert_eq!(result, "loaded");
-        server
-            .await
-            .expect("AudioWorklet JSON destination server should finish");
-    })
-    .await;
+            assert_eq!(result, "loaded");
+            server
+                .await
+                .expect("AudioWorklet synthetic destination server should finish");
+        })
+        .await;
+    }
 }
 
 #[test]
@@ -1302,9 +1304,10 @@ fn audio_worklet_static_css_import_rejects_invalid_module_type_without_fetching_
 }
 
 #[test]
-fn audio_worklet_static_text_import_rejects_invalid_module_type_without_fetching_dependency() {
-    run_page_vm_large_stack_async_test("audio-worklet-static-text-invalid-type", || async {
-        run_audio_worklet_static_invalid_module_type_import_test("text", "text.txt").await;
+fn audio_worklet_static_unsupported_import_rejects_invalid_module_type_without_fetching_dependency()
+{
+    run_page_vm_large_stack_async_test("audio-worklet-static-unsupported-invalid-type", || async {
+        run_audio_worklet_static_invalid_module_type_import_test("unsupported", "text.txt").await;
     });
 }
 
