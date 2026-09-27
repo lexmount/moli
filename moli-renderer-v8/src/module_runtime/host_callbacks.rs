@@ -115,7 +115,7 @@ fn queue_native_dynamic_import<'s>(
     };
     let host = unsafe { &mut *host_ptr };
     let base_url = dynamic_import_base_url(scope, host_defined_options, resource_name, host);
-    let fetch_metadata = dynamic_import_referrer_fetch_metadata(scope, host_defined_options);
+    let referrer_script = dynamic_import_referrer_script(scope, host_defined_options);
     let attributes = dynamic_import_attributes(scope, import_attributes);
     if let Some(invalid_key) = attributes.invalid_import_attribute_key() {
         reject_dynamic_import(
@@ -153,8 +153,10 @@ fn queue_native_dynamic_import<'s>(
         base_url,
         attributes,
         phase,
-    )
-    .with_referrer_fetch_metadata(fetch_metadata);
+    );
+    if let Some((base_url, fetch_metadata)) = referrer_script {
+        request = request.with_referrer_script(base_url, fetch_metadata);
+    }
     if let Some(resolved_url) = resolved_url {
         request = request.with_resolved_url(resolved_url);
     }
@@ -214,17 +216,23 @@ fn dynamic_import_base_url<'s>(
         .unwrap_or_else(|| host.document_url().clone())
 }
 
-fn dynamic_import_referrer_fetch_metadata(
+fn dynamic_import_referrer_script(
     scope: &mut v8::PinScope<'_, '_>,
     host_defined_options: v8::Local<'_, v8::Data>,
-) -> super::ModuleFetchMetadata {
-    script_fetch_metadata_from_host_defined_options(scope, host_defined_options)
-        .or_else(|| {
-            scope
-                .get_current_host_defined_options()
-                .and_then(|options| script_fetch_metadata_from_host_defined_options(scope, options))
-        })
-        .unwrap_or_default()
+) -> Option<(Url, super::ModuleFetchMetadata)> {
+    fn from_options(
+        scope: &mut v8::PinScope<'_, '_>,
+        options: v8::Local<'_, v8::Data>,
+    ) -> Option<(Url, super::ModuleFetchMetadata)> {
+        Some((
+            script_base_url_from_host_defined_options(scope, options)?,
+            script_fetch_metadata_from_host_defined_options(scope, options)?,
+        ))
+    }
+    from_options(scope, host_defined_options).or_else(|| {
+        let options = scope.get_current_host_defined_options()?;
+        from_options(scope, options)
+    })
 }
 
 fn dynamic_import_base_url_from_compiled_string_resource(
