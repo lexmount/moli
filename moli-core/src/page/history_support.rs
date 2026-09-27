@@ -3,6 +3,10 @@ use anyhow::Result;
 use super::{CompletedPageCommand, Page, PendingPageCommand, RendererPageCommand};
 
 impl Page {
+    pub fn start_unload_main_document_for_navigation_commit(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::UnloadMainDocumentForNavigationCommit)
+    }
+
     pub fn navigation_history(&self) -> moli_renderer_v8::RendererNavigationHistory {
         self.page_state.state().navigation_history.clone()
     }

@@ -3,10 +3,7 @@ use super::location_runtime::location_href_slot;
 use super::navigation_entry::{
     history_index, navigation_current_entry, navigation_current_entry_index,
 };
-use super::navigation_events::{
-    dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner,
-    dispatch_unload_for_runtime_owner,
-};
+use super::navigation_events::dispatch_beforeunload_for_runtime_owner;
 use super::navigation_result::{
     navigation_cross_document_pending_result, navigation_pending_result,
 };
@@ -73,8 +70,6 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         );
         super::session_history::capture_for_navigation(scope, owner, &mut entry_seed);
         dispatch_beforeunload_for_runtime_owner(scope, owner);
-        dispatch_pagehide_for_runtime_owner(scope, owner);
-        dispatch_unload_for_runtime_owner(scope, owner);
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return v8::undefined(scope).into();
         };
