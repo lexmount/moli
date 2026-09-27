@@ -1246,6 +1246,12 @@ fn direct_navigation_result_from_completed_load(
     match &completed.navigation {
         Ok(navigation) => {
             result.set_navigation_identity(&completed.state.frame_id, &completed.state.loader_id);
+            if result.protocol == FrontendProtocol::Cdp
+                && matches!(navigation, NavigationLoadOutcome::NoDocument(_))
+            {
+                result.error_text = Some(NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+                result.is_download = Some(false);
+            }
             if result.protocol != FrontendProtocol::WebDriverBidi
                 && matches!(navigation, NavigationLoadOutcome::Download(_))
             {
@@ -3415,6 +3421,33 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
+        }
+        network::MaterializedNavigationLoadOutcome::NoDocument(mut progress_gate) => {
+            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
+            let mut events = Vec::new();
+            network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
+                &mut events,
+                &mut progress_gate,
+            );
+            super::emit_navigation_frame_stop_without_commit_background_events(
+                &mut events,
+                state.session_id.as_deref(),
+                &state.frame_id,
+                &state.loader_id,
+            );
+            out.extend_background_events_after_messages(events);
+            if state.navigate_id.is_some() {
+                let protocol = state.result_projection.protocol();
+                let mut result = state.result_projection.into_payload();
+                if protocol == DevToolsProtocol::Cdp
+                    && let Some(payload) = result.as_object_mut()
+                    && payload.contains_key("frameId")
+                {
+                    payload.insert("errorText".to_owned(), json!(NET_ERR_ABORTED_ERROR_TEXT));
+                    payload.insert("isDownload".to_owned(), json!(false));
+                }
+                out.push_result_after_messages(result);
+            }
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
             let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);

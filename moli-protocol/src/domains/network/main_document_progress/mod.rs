@@ -20,7 +20,8 @@ use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, NavigationRequestBlocked, ResponseCommitReady, TargetRuntimeSlot,
+    NavigationLoadOutcome, NavigationRequestBlocked, NoDocumentNavigation, ResponseCommitReady,
+    TargetRuntimeSlot,
 };
 
 #[cfg(test)]
@@ -102,6 +103,7 @@ pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
     Loaded(Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
+    NoDocument(MainDocumentProgressGate),
     Failed(MaterializedFailedDocumentProgress),
 }
 
@@ -371,6 +373,18 @@ fn materialize_navigation_load_outcome(
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
+        NavigationLoadOutcome::NoDocument(navigation) => {
+            record_failed_main_document_response_body(
+                conn,
+                state,
+                moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+            );
+            MaterializedNavigationLoadOutcome::NoDocument(no_document_navigation_progress_gate(
+                conn,
+                state,
+                *navigation,
+            ))
+        }
         NavigationLoadOutcome::NetworkFailure(error_text) => {
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
@@ -442,6 +456,25 @@ fn materialize_download_navigation_progress(
         progress_gate,
         body_artifact,
     }
+}
+
+fn no_document_navigation_progress_gate(
+    conn: &CdpConnection,
+    state: &NavigationDispatchState,
+    navigation: NoDocumentNavigation,
+) -> MainDocumentProgressGate {
+    let failure =
+        observed_navigation_failure_event(conn, state, moli_fetch::NET_ERR_ABORTED_ERROR_TEXT);
+    let context = completed_main_document_progress_context(
+        conn,
+        state,
+        main_document_network_observed(conn, state.session_id.as_deref()),
+        state.request_id.clone(),
+    );
+    let mut batches = context.event_batches(&navigation.network_events, &navigation.final_url, 0);
+    batches.body_finished = failure.into_iter().collect();
+    let source = MainDocumentProgressSource::completed_body(batches);
+    MainDocumentProgressGate::from_queue(MainDocumentProgressQueueHandle::from_source(source))
 }
 
 fn completed_document_body_progress_queue(
@@ -545,7 +578,20 @@ fn completed_or_streaming_document_progress_queue(
             MainDocumentProgressSource::streaming(),
         );
     };
-    let context = CompletedMainDocumentProgressContext::new(
+    let context =
+        completed_main_document_progress_context(conn, state, network_enabled, request_id);
+    MainDocumentProgressQueueHandle::from_source(MainDocumentProgressSource::completed_body(
+        context.event_batches(&events, final_url, encoded_data_length),
+    ))
+}
+
+fn completed_main_document_progress_context(
+    conn: &CdpConnection,
+    state: &NavigationDispatchState,
+    network_enabled: bool,
+    request_id: Option<String>,
+) -> CompletedMainDocumentProgressContext {
+    CompletedMainDocumentProgressContext::new(
         main_document_network_event_session_ids(conn, state.session_id.as_deref()),
         completed_body_main_document_network_request_id(network_enabled, request_id),
         state.request_announced,
@@ -556,10 +602,7 @@ fn completed_or_streaming_document_progress_queue(
         state.loader_id.clone(),
         state.frame_id.clone(),
         state.timestamp,
-    );
-    MainDocumentProgressQueueHandle::from_source(MainDocumentProgressSource::completed_body(
-        context.event_batches(&events, final_url, encoded_data_length),
-    ))
+    )
 }
 
 #[derive(Clone)]
@@ -813,11 +856,21 @@ impl MainDocumentBodyProgressSource {
         {
             MainDocumentBodyNetworkProgress::StreamingBody
         } else {
-            let mut completed_events = completed_events;
-            completed_events.response_stage_metadata_already_emitted = self.response_visibility
-                == MainDocumentResponseVisibility::AfterResponseStageContinue;
-            MainDocumentBodyNetworkProgress::CompletedBody(Box::new(completed_events))
+            MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
+                self.completed_body_network_events(completed_events),
+            ))
         }
+    }
+
+    /// Keep ignored responses and their terminal event on one progress gate,
+    /// including when Fetch continuation runs in the protocol command turn.
+    pub(crate) fn completed_body_network_events(
+        &self,
+        mut events: CompletedMainDocumentNetworkEvents,
+    ) -> CompletedMainDocumentNetworkEvents {
+        events.response_stage_metadata_already_emitted =
+            self.response_visibility == MainDocumentResponseVisibility::AfterResponseStageContinue;
+        events
     }
 }
 

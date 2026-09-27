@@ -582,7 +582,7 @@ pub use state::{
     DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
     EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
     LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
+    NoDocumentNavigation, PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
     RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 #[cfg(test)]
