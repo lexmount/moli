@@ -1518,8 +1518,8 @@ addEventListener("message", event => {{
   const middle = frames[0];
   const grandchild = middle[0];
   const adopted = grandchild.document.adoptNode(document.createElement("button"));
-  // Names are filtered against the middle Window's origin, even though the
-  // indexed grandchild is same-origin with the caller.
+  // The middle document publishes the grandchild through the iframe's name,
+  // so named and indexed access return the same live WindowProxy.
   const probe = callback => {
     try { return callback(); }
     catch (error) { return `${error.name}:${error instanceof DOMException}`; }
@@ -1541,7 +1541,7 @@ addEventListener("message", event => {{
         .expect("top should traverse the cross-origin middle Window index");
     assert_eq!(
         result,
-        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":"SecurityError:true","namedOwn":"SecurityError:true","namedMatchesIndexed":"SecurityError:true","namedDescriptorMatches":"SecurityError:true"}"#
+        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":true,"namedOwn":true,"namedMatchesIndexed":true,"namedDescriptorMatches":true}"#
     );
     assert_eq!(
         server.finish_targets().await,
