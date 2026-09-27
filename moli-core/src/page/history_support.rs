@@ -3,6 +3,10 @@ use anyhow::Result;
 use super::{CompletedPageCommand, Page, PendingPageCommand, RendererPageCommand};
 
 impl Page {
+    pub fn start_check_main_document_beforeunload(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::CheckMainDocumentBeforeUnload)
+    }
+
     pub fn start_unload_main_document_for_navigation_commit(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::UnloadMainDocumentForNavigationCommit)
     }
