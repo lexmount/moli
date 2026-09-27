@@ -3152,6 +3152,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::EventSource
                 | crate::BrowserRequestMetadata::Fetch
                 | crate::BrowserRequestMetadata::JsonModule
+                | crate::BrowserRequestMetadata::TextModule
                 | crate::BrowserRequestMetadata::Manifest
                 | crate::BrowserRequestMetadata::StyleModule
                 | crate::BrowserRequestMetadata::Xhr,

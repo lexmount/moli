@@ -1,5 +1,3 @@
-use moli_web_mime::is_text_mime;
-
 pub(crate) fn ensure_worker_wasm_module_mime(
     response: &moli_fetch::Response,
 ) -> Result<(), String> {
@@ -29,21 +27,4 @@ pub(super) fn ensure_worker_json_module_mime_from_headers(
 
 pub(crate) fn ensure_worker_css_module_mime(response: &moli_fetch::Response) -> Result<(), String> {
     crate::module_runtime::validate_css_module_response_mime(&response.headers)
-}
-
-pub(crate) fn ensure_worker_text_module_mime(
-    response: &moli_fetch::Response,
-) -> Result<(), String> {
-    let content_type = super::script_mime::worker_response_content_type(&response.headers);
-    let Some(content_type) = content_type else {
-        return Err(
-            "non-text module response for text import attribute: missing Content-Type".to_owned(),
-        );
-    };
-    if is_text_mime(&content_type) {
-        return Ok(());
-    }
-    Err(format!(
-        "non-text module response for text import attribute: `{content_type}`"
-    ))
 }

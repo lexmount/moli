@@ -17,7 +17,7 @@ pub(crate) struct SyntheticTextModuleSource {
 
 #[derive(Debug)]
 pub(crate) enum SyntheticTextModuleValue {
-    Json(v8::Global<v8::Value>),
+    Value(v8::Global<v8::Value>),
     Css(Arc<str>),
 }
 
@@ -108,14 +108,14 @@ mod tests {
             ModuleAttributesKey::empty(),
         );
         let value = v8::Number::new(scope, 1.0);
-        let first_value = SyntheticTextModuleValue::Json(v8::Global::new(
+        let first_value = SyntheticTextModuleValue::Value(v8::Global::new(
             scope,
             v8::Local::<v8::Value>::from(value),
         ));
         let first_source =
             SyntheticTextModuleSource::register(scope, first, key.clone(), first_value);
         let value = v8::Number::new(scope, 2.0);
-        let second_value = SyntheticTextModuleValue::Json(v8::Global::new(
+        let second_value = SyntheticTextModuleValue::Value(v8::Global::new(
             scope,
             v8::Local::<v8::Value>::from(value),
         ));
@@ -153,7 +153,7 @@ mod tests {
             ModuleAttributesKey::empty(),
         );
         let value = v8::Number::new(scope, 42.0);
-        let value = SyntheticTextModuleValue::Json(v8::Global::new(
+        let value = SyntheticTextModuleValue::Value(v8::Global::new(
             scope,
             v8::Local::<v8::Value>::from(value),
         ));
@@ -164,7 +164,7 @@ mod tests {
         let clone = record.clone();
         drop(record);
         let retained = SyntheticTextModuleSource::for_module(context, module).unwrap();
-        let SyntheticTextModuleValue::Json(value) = retained.value() else {
+        let SyntheticTextModuleValue::Value(value) = retained.value() else {
             panic!("expected retained JSON value");
         };
         assert_eq!(v8::Local::new(scope, value).number_value(scope), Some(42.0));

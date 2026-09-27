@@ -131,6 +131,7 @@ fn browser_request_needs_cors_redirect_checks(request: &Request) -> bool {
             BrowserRequestMetadata::Fetch
                 | BrowserRequestMetadata::EventSource
                 | BrowserRequestMetadata::JsonModule
+                | BrowserRequestMetadata::TextModule
                 | BrowserRequestMetadata::Manifest
                 | BrowserRequestMetadata::Script
                 | BrowserRequestMetadata::StyleModule
@@ -706,6 +707,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 BrowserRequestMetadata::Fetch
                     | BrowserRequestMetadata::EventSource
                     | BrowserRequestMetadata::JsonModule
+                    | BrowserRequestMetadata::TextModule
                     | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr,

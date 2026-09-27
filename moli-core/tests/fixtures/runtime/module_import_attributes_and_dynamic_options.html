@@ -27,13 +27,13 @@
 
       import(
         "/assets/module-text-import-target.txt",
-        { with: { type: "text" } }
+        { with: { type: "unsupported" } }
       ).then(() => {
-        window.moduleImportAttributesTextRejected = false;
+        window.moduleImportAttributesUnsupportedRejected = false;
       }, (error) => {
-        window.moduleImportAttributesTextRejected = true;
-        window.moduleImportAttributesTextErrorName = error && error.name;
-        window.moduleImportAttributesTextErrorMessage = String(error && error.message);
+        window.moduleImportAttributesUnsupportedRejected = true;
+        window.moduleImportAttributesUnsupportedErrorName = error && error.name;
+        window.moduleImportAttributesUnsupportedErrorMessage = String(error && error.message);
       });
     </script>
   </body>

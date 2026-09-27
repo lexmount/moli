@@ -69,9 +69,10 @@ impl ModuleGraphFetchedSource {
                 self.final_url.clone(),
                 request_key.attributes().clone(),
             ),
-            ModuleKind::ModulePreloadText => {
-                ModuleMapKey::modulepreload_text(self.final_url.clone())
-            }
+            ModuleKind::Text => ModuleMapKey::text_with_attributes(
+                self.final_url.clone(),
+                request_key.attributes().clone(),
+            ),
             ModuleKind::WebAssembly => ModuleMapKey::webassembly(self.final_url.clone()),
         }
     }
