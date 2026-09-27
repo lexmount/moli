@@ -8,6 +8,7 @@ mod frame_attribute_ancestors;
 mod history_limits;
 mod hyperlink_navigation;
 mod navigation_focus;
+mod navigation_inspector_output;
 mod navigation_window_reuse;
 mod no_document_navigation;
 mod popup_network_navigation;
