@@ -1441,5 +1441,5 @@ fn startup_output_plan(req: &CdpRequest) -> CommandOutputPlan {
 }
 
 #[cfg(test)]
-#[path = "dispatch_tests.rs"]
+#[path = "dispatch_tests/mod.rs"]
 mod tests;
