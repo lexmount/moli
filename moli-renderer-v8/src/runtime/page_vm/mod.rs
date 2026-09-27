@@ -1102,6 +1102,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    pub(crate) about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     pub(crate) navigation_history_source: Option<crate::runtime::RendererNavigationHistory>,
     pub(crate) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
@@ -1133,13 +1134,20 @@ impl PageVmEnvConfig {
         final_url: &Url,
         headers: &[(String, Vec<u8>)],
     ) {
-        self.document_policy_container =
-            crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
-                headers, final_url,
-            )
-            .with_content_security_policy_bypass(
-                self.document_settings.bypass_content_security_policy,
-            );
+        self.about_document_state = self
+            .about_document_state
+            .take()
+            .filter(|_| moli_url::is_about_blank(final_url));
+        self.document_policy_container = self
+            .about_document_state
+            .as_ref()
+            .map(|state| state.policy_container().clone())
+            .unwrap_or_else(|| {
+                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                    headers, final_url,
+                )
+            })
+            .with_content_security_policy_bypass(self.document_settings.bypass_content_security_policy);
         self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container
@@ -4485,6 +4493,7 @@ impl PageVm {
             env.main_document_commit.clone(),
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
+            env.about_document_state.clone(),
         )?;
             vm_bootstrap.finish()?
         };

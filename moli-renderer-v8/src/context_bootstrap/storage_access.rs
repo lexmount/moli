@@ -229,7 +229,7 @@ fn current_window_storage_access_request_context(
         .storage_key()
         .serialized_storage_key();
     let storage_key = moli_storage_key::deserialize_serialized_storage_key(&ambient_storage_key)?;
-    let embedding_origin = moli_url::origin_ascii_serialization(host.document_url());
+    let embedding_origin = host.main_document_origin();
     let permission = StorageAccessPermissionState::from_label(host.permission_state_for_origins(
         "storage-access",
         storage_key.origin(),
