@@ -894,12 +894,7 @@ fn script_resource_map_snapshot_preserves_aliases_and_requires_exact_run() {
             muted_errors: false,
             redirect_urls: vec![resource.final_url.clone()],
         });
-        service.finish_imported_script_loaded(
-            registration_id,
-            version_id,
-            run.clone(),
-            resource,
-        );
+        service.finish_imported_script_loaded(registration_id, version_id, run.clone(), resource);
     }
     let snapshot = service.script_resource_map_snapshot(&owner).unwrap();
     assert!(snapshot.can_import_new_scripts);
