@@ -5187,3 +5187,44 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
             .expect("repeated traverseTo should share one traversal task")
     );
 }
+
+#[test]
+fn history_mutation_empty_url_preserves_current_document_url() {
+    let mut vm = new_storage_test_vm("https://example.com/path/page.html?query=value#initial");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const head = document.head ||
+                root.insertBefore(document.createElement("head"), root.firstChild);
+              const base = document.createElement("base");
+              base.href = "https://example.com/different/base/";
+              head.appendChild(base);
+
+              const before = location.href;
+              history.pushState({ kind: "push" }, "", "");
+              const afterPush = location.href;
+              history.replaceState({ kind: "replace" }, "", "");
+
+              return JSON.stringify({
+                before,
+                afterPush,
+                afterReplace: location.href,
+                baseURI: document.baseURI,
+                length: history.length,
+                state: history.state.kind,
+                entryUrl: navigation.currentEntry.url
+              });
+            })()
+            "#,
+        )
+        .expect("empty history URL should preserve the current document URL");
+
+    assert_eq!(
+        result,
+        r#"{"before":"https://example.com/path/page.html?query=value#initial","afterPush":"https://example.com/path/page.html?query=value#initial","afterReplace":"https://example.com/path/page.html?query=value#initial","baseURI":"https://example.com/different/base/","length":2,"state":"replace","entryUrl":"https://example.com/path/page.html?query=value#initial"}"#
+    );
+}
