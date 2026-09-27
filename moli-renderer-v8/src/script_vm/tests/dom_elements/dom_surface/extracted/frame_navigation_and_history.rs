@@ -4004,3 +4004,171 @@ async fn popup_document_location_tracks_its_active_browsing_context() {
         "true"
     );
 }
+
+#[tokio::test]
+async fn iframe_src_fragment_preserves_document_and_initial_history_replacement() {
+    for mode in ["src", "setAttribute", "setAttributeNS", "attrValue"] {
+        for initial_document in [true, false] {
+            let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://iframe-attribute-fragment.test/page.html",
+                &loader,
+            );
+            vm.exec(
+                r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).append(frame);
+const initialDocument = frame.contentDocument;
+"#,
+                None,
+            )
+            .expect("initial iframe should connect");
+            if !initial_document {
+                vm.exec(
+                    "frame.contentWindow.location.replace('about:blank?committed');",
+                    None,
+                )
+                .expect("non-initial document should navigate");
+                advance_page_task_executor_until_eval_equals(&mut vm, &loader,
+                    "String(frame.contentDocument !== initialDocument && frame.contentDocument.readyState === 'complete')",
+                    "true", "non-initial document should finish").await;
+                vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                    .await
+                    .unwrap();
+            }
+            let loader_id = vm.child_browsing_context_frame_tree_snapshot_for_protocol()[0]
+                .loader_id
+                .clone();
+            vm.exec(&format!(r#"
+const savedDocument = frame.contentDocument;
+const savedWindow = frame.contentWindow;
+const beforeLength = history.length;
+const beforeHref = savedWindow.location.href;
+const fragmentHref = beforeHref + '#fragment';
+const events = [];
+savedWindow.addEventListener('hashchange', event => events.push('hash:' + event.oldURL + '>' + event.newURL));
+savedWindow.addEventListener('unload', () => events.push('unload'));
+frame.addEventListener('load', () => events.push('load'));
+const setSrc = url => {{
+  if ('{mode}' === 'setAttribute') frame.setAttribute('src', url);
+  else if ('{mode}' === 'setAttributeNS') frame.setAttributeNS(null, 'src', url);
+  else if ('{mode}' === 'attrValue') {{
+    const attribute = frame.getAttributeNode('src');
+    if (attribute) attribute.value = url;
+    else {{
+      const created = document.createAttribute('src');
+      created.value = url;
+      frame.setAttributeNode(created);
+    }}
+  }} else frame.src = url;
+}};
+setSrc(fragmentHref);
+"#), None).expect("attribute fragment navigation should start");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(events.some(event => event.startsWith('hash:') || event === 'load'))",
+                "true",
+                "attribute navigation must deliver its event",
+            )
+            .await;
+            assert_eq!(
+                vm.eval(
+                    r#"[
+  savedDocument === frame.contentDocument,
+  savedWindow.location.href === fragmentHref,
+  events.join('|') === 'hash:' + beforeHref + '>' + fragmentHref,
+  history.length - beforeLength
+].join('|')"#
+                )
+                .unwrap(),
+                format!("true|true|true|{}", i32::from(!initial_document)),
+                "{mode}, initial: {initial_document}"
+            );
+            assert_eq!(
+                vm.child_browsing_context_frame_tree_snapshot_for_protocol()[0].loader_id,
+                loader_id
+            );
+
+            vm.exec("setSrc(fragmentHref);", None).unwrap();
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                .await
+                .unwrap();
+            assert_eq!(
+                vm.eval("String(savedDocument === frame.contentDocument && events.length === 1)")
+                    .unwrap(),
+                "true"
+            );
+
+            vm.exec("frame.src = beforeHref;", None).unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(frame.contentDocument !== savedDocument && events.includes('load'))",
+                "true",
+                "the next real attribute navigation should commit",
+            )
+            .await;
+            assert_eq!(
+                vm.eval("history.length - beforeLength").unwrap(),
+                if initial_document { "0" } else { "2" },
+                "the initial Document must still be replaced after its fragment updates"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn canceled_iframe_src_fragment_does_not_queue_document_replacement() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://iframe-canceled-fragment.test/page.html",
+        &loader,
+    );
+    vm.exec(
+        r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).append(frame);
+const initialDocument = frame.contentDocument;
+frame.contentWindow.location.replace('about:blank?committed');
+"#,
+        None,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(&mut vm, &loader,
+        "String(frame.contentDocument !== initialDocument && frame.contentDocument.readyState === 'complete')",
+        "true", "a committed Document should expose navigation events").await;
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    vm.exec(
+        r#"
+const savedDocument = frame.contentDocument;
+const beforeLength = history.length;
+let navigations = 0, loads = 0, hashes = 0;
+frame.addEventListener('load', () => loads++);
+frame.contentWindow.addEventListener('hashchange', () => hashes++);
+frame.contentWindow.navigation.addEventListener('navigate', event => {
+  navigations++;
+  event.preventDefault();
+});
+frame.src = 'about:blank?committed#canceled';
+"#,
+        None,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"[
+  savedDocument === frame.contentDocument,
+  frame.contentWindow.location.href,
+  history.length === beforeLength, navigations, loads, hashes
+].join('|')"#
+        )
+        .unwrap(),
+        "true|about:blank?committed|true|1|0|0"
+    );
+}
