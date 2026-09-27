@@ -7,6 +7,9 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
+#[path = "document_referrer_dispatch.rs"]
+mod document_referrer_dispatch;
+
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
@@ -23,6 +26,7 @@ struct IntegrityRequest {
     path: String,
     origin: Option<String>,
     cookie: Option<String>,
+    referer: Option<String>,
     sec_fetch_dest: Option<String>,
     sec_fetch_mode: Option<String>,
     sec_fetch_site: Option<String>,
@@ -72,6 +76,7 @@ impl IntegrityServers {
                                     let incoming = IntegrityRequest {
                                         method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
                                         path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
+                                        referer: header("Referer"),
                                         sec_fetch_dest: header("Sec-Fetch-Dest"),
                                         sec_fetch_mode: header("Sec-Fetch-Mode"),
                                         sec_fetch_site: header("Sec-Fetch-Site"),
@@ -138,6 +143,9 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
+            document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
+        }
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"
