@@ -3528,8 +3528,6 @@ async fn named_popup_broadcast_precedes_its_queued_close() {
     .await;
 }
 
-
-
 #[test]
 fn window_open_initial_empty_history_push_is_a_replacement() {
     let mut vm = new_storage_test_vm("https://initial-popup-history.test/page.html");

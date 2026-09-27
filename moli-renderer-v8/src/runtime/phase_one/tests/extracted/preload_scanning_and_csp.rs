@@ -1959,12 +1959,12 @@ fn buffered_preload_scanner_clears_nonnonceable_script_nonces() {
     let requests = collect_preloadable_external_script_requests_from_html(
         &final_url,
         r#"
-            <script src="/safe.js" nonce="abc"></script>
-            <script src="/script.js" nonce="abc" data="value<script"></script>
-            <script src="/style.js" nonce="abc" data="value<style"></script>
-            <script src="/link.js" nonce="abc" data="value<link"></script>
-            <script src="/duplicate.js" nonce="abc" duplicate duplicate></script>
-        "#,
+                <script src="/safe.js" nonce="abc"></script>
+                <script src="/script.js" nonce="abc" data="value<script"></script>
+                <script src="/style.js" nonce="abc" data="value<style"></script>
+                <script src="/link.js" nonce="abc" data="value<link"></script>
+                <script src="/duplicate.js" nonce="abc" duplicate duplicate></script>
+            "#,
     );
 
     assert_eq!(requests.len(), 5);

@@ -2235,6 +2235,7 @@ mod dynamic_inline_scripts;
 mod element_click;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+mod extracted;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
@@ -2313,7 +2314,6 @@ mod window_event_receivers;
 mod window_execution_context;
 mod window_getter_consolidation;
 mod worklet_interfaces;
-mod extracted;
 mod payment_response_interfaces;
 
 mod body_mime_consolidation;
