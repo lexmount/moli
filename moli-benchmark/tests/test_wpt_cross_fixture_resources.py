@@ -452,6 +452,48 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                         finally:
                             connection.close()
 
+    def test_fixture_server_uses_configured_primary_hostname_for_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("", encoding="utf-8")
+            (root_path / "hosts.sub.txt").write_text(
+                "{{host}}|{{domains[]}}|{{hosts[][]}}|{{domains[www1]}}|"
+                "{{hosts[][élève]}}|{{hosts[alt][www2]}}|{{location[hostname]}}",
+                encoding="utf-8",
+            )
+            (root_path / "hosts.sub.txt.sub.headers").write_text(
+                "Access-Control-Allow-Origin: http://{{hosts[][]}}:{{ports[http][0]}}\n",
+                encoding="utf-8",
+            )
+            with WptFixtureServer(root_path, primary_hostname="web-platform.localhost") as server:
+                self.assertEqual(server.base_url, f"http://web-platform.localhost:{server.port}")
+                self.assertEqual(
+                    server.alternate_base_url,
+                    f"http://web-platform.localhost:{server.alternate_port}",
+                )
+                for hostname in ("web-platform.localhost", "www1.web-platform.localhost"):
+                    with self.subTest(hostname=hostname):
+                        connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                        try:
+                            connection.request(
+                                "GET", "/hosts.sub.txt",
+                                headers={"Host": f"{hostname}:{server.port}"},
+                            )
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(
+                                response.read().decode(),
+                                "web-platform.localhost|web-platform.localhost|web-platform.localhost|"
+                                "www1.web-platform.localhost|xn--lve-6lad.web-platform.localhost|"
+                                f"www2.alt.localhost|{hostname}",
+                            )
+                            self.assertEqual(
+                                response.getheader("Access-Control-Allow-Origin"), server.base_url,
+                            )
+                        finally:
+                            connection.close()
+
     def test_fixture_server_pipe_sub_requests_template_substitution(self) -> None:
         self.assertTrue(
             _needs_wpt_template_substitution(
