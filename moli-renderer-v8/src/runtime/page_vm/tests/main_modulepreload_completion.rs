@@ -301,9 +301,18 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
         let document_url = Url::parse(&format!("{base_url}/failure-page.html")).unwrap();
         let request_url = Url::parse(&format!("{base_url}/failed-main-modulepreload.mjs")).unwrap();
         let (key, request) = modulepreload_request(&document_url, &request_url);
-        let link_client = NativeModulepreloadLinkClient::new(NativeNodeId::new(7101), key.clone());
         let (mut page_vm, mut queue, mut wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url.clone());
+        let owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("main owner");
+        let link = NativeNodeId::new(7101);
+        let link_client = NativeModulepreloadLinkClient::new_with_main_document_event_owner(
+            link,
+            key.clone(),
+            crate::frame_owner_model::DocumentLinkEventOwner::new(owner, link),
+        );
 
         assert_eq!(
             page_vm

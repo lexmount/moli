@@ -19,6 +19,9 @@ mod preload;
 #[path = "text_network.rs"]
 mod text_modules;
 
+#[path = "runtime_modulepreload.rs"]
+mod runtime_modulepreload;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -152,6 +155,19 @@ fn fixture_response(
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
+        "/runtime-modulepreload.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            r#"<!doctype html><script type="importmap">{"integrity":{
+                "/echo-origin.js?map-integrity":"sha384-AAAA"
+            }}</script><body>runtime modulepreload"#
+                .to_owned(),
+        ),
+        "/module.json" => (
+            "200 OK",
+            "Content-Type: application/json\r\nCache-Control: no-store\r\n".to_owned(),
+            "{\"answer\":42}".to_owned(),
+        ),
         "/text-module.txt" => (
             "200 OK",
             "Content-Type: application/octet-stream\r\nCache-Control: no-store\r\n".to_owned(),
