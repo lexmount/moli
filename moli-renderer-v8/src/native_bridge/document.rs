@@ -1406,6 +1406,31 @@ pub(crate) fn document_has_browsing_context(runtime: &JsContextHost, handle: Dom
     runtime.document_has_browsing_context(handle)
 }
 
+pub(crate) fn document_is_fully_active(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    if runtime.page_context_resources_closed() {
+        return false;
+    }
+    // Each ancestor must still own its current Document. Retained Window
+    // associations and DOM connectivity alone cannot establish this chain.
+    let mut owner = runtime.owner_dispatch_scope_for_node(handle);
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        match owner {
+            Some(crate::native_bridge::OwnerDispatchScope::Top)
+            | Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)) => {
+                return true;
+            }
+            Some(crate::native_bridge::OwnerDispatchScope::Child(frame)) => {
+                if !visited.insert(frame) {
+                    return false;
+                }
+                owner = runtime.owner_dispatch_scope_for_node(frame);
+            }
+            None => return false,
+        }
+    }
+}
+
 fn document_is_hidden(runtime: &JsContextHost, handle: DomHandle) -> bool {
     !runtime.document_activity().visible
         || runtime

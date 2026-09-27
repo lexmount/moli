@@ -27,13 +27,15 @@ pub(super) use navigation::{
 pub(super) use slots::{location_href_slot, sync_location_object};
 pub(crate) use surface::refresh_global_location_security_origin;
 pub(crate) use surface::sync_global_location_runtime_state;
+pub(in crate::context_bootstrap) use surface::{
+    document_location_value, window_location_setter, window_navigation_setter,
+};
 pub(crate) use surface::{
     install_constructed_document_location_runtime_state,
     sync_document_location_runtime_state_from_window,
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
     window_location_href,
 };
-pub(in crate::context_bootstrap) use surface::{window_location_setter, window_navigation_setter};
 
 pub(in crate::context_bootstrap) fn put_forward_location_href<'s>(
     scope: &mut v8::PinScope<'s, '_>,
