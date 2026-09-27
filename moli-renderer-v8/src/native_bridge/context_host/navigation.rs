@@ -68,6 +68,7 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) initial_document_environment:
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
+    pub(crate) about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
         Option<crate::types::ServiceWorkerClientNavigateContinuation>,
@@ -280,11 +281,13 @@ impl JsContextHost {
         &mut self,
         url: Url,
         entry_seed: Option<NavigationHistoryEntrySeed>,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.record_pending_location_navigation_with_kind(
             url,
             entry_seed,
             BrowserNavigationRequestKind::Navigate,
+            about_document_state,
         );
     }
 
@@ -293,6 +296,7 @@ impl JsContextHost {
         url: Url,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.record_pending_location_navigation_request(
             url,
@@ -301,6 +305,7 @@ impl JsContextHost {
             Vec::new(),
             entry_seed,
             browser_navigation_kind,
+            about_document_state,
         );
     }
 
@@ -312,6 +317,7 @@ impl JsContextHost {
         request_headers: Vec<(String, String)>,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.cancel_planned_form_navigation_for_url(OwnerDispatchScope::Top, Some(&url));
         self.clear_pending_top_level_navigation();
@@ -334,6 +340,7 @@ impl JsContextHost {
                 navigation_initiator: None,
                 initial_document_environment: None,
                 entry_seed,
+                about_document_state,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
                 web_mcp_invocation: None,
@@ -367,6 +374,7 @@ impl JsContextHost {
                 navigation_initiator: None,
                 initial_document_environment: None,
                 entry_seed: None,
+                about_document_state: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
                 web_mcp_invocation: None,

@@ -566,6 +566,7 @@ impl ScriptVm {
                 .with_navigation_history(
                     pending.entry_seed.map(|seed| self.top_level_navigation_history().request(seed)),
                 )
+                .with_about_document_state(pending.about_document_state)
                 .with_web_mcp_invocation(pending.web_mcp_invocation)
                 .with_history_mutation(history_mutation)
                 .with_navigation_source(

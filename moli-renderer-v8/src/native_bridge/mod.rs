@@ -10,6 +10,7 @@ pub(crate) use context_host::{
     DocumentDomainState, JsContextHost, JsContextHostPageTaskCapabilities, MouseReleaseFollowUp,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, caller_can_access_window,
+    WindowAccessOrigin,
 };
 pub(crate) use current_input::{
     CurrentInputEvent, CurrentInputEventScope, InputNavigationPolicy, navigation_policy_from_event,

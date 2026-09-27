@@ -52,11 +52,14 @@ fn queue_top_level_location_navigation(
     _scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     resolved_url: &str,
+    source: crate::native_bridge::OwnerDispatchScope,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
         return false;
     };
-    unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+    let runtime = unsafe { &mut *runtime_ptr };
+    let about_document_state = runtime.capture_about_document_state(source, &url, None);
+    runtime.record_pending_location_navigation(url, None, about_document_state);
     true
 }
 

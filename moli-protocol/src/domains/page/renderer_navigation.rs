@@ -172,6 +172,18 @@ impl PreparedRendererNavigation {
                 )
             }
             crate::conn::TopLevelNavigationRequest::Location(navigation) => {
+                let navigation_history = url::Url::parse(navigation.url())
+                    .ok()
+                    .and_then(|url| {
+                        conn.renderer_navigation_request_for_owner(
+                            &owner,
+                            &url,
+                            navigation.browser_navigation_kind()
+                                == moli_fetch::BrowserNavigationRequestKind::Reload,
+                            navigation.navigation_history().cloned(),
+                        )
+                    })
+                    .map(|history| history.with_about_document_state(navigation.about_document_state().cloned()));
                 let start = super::navigation::start_session_owner_navigation_from_renderer(
                     conn,
                     &owner,
@@ -180,7 +192,7 @@ impl PreparedRendererNavigation {
                     navigation.request_body(),
                     navigation.request_headers(),
                     navigation.browser_navigation_kind(),
-                    navigation.navigation_history().cloned(),
+                    navigation_history,
                     navigation.web_mcp_invocation(),
                     Some(match navigation.browser_navigation_kind() {
                         moli_fetch::BrowserNavigationRequestKind::Reload => {
