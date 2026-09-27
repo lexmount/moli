@@ -311,7 +311,7 @@ pub(crate) fn document_referrer_policy_for_native_document(
     runtime: &crate::native_bridge::JsContextHost,
     document_handle: DomHandle,
 ) -> Option<String> {
-    document_referrer_policy_in_subtree(runtime, document_handle)
+    document_referrer_policy_in_subtree(runtime.dom_host(), document_handle)
         .or_else(|| {
             (document_handle == runtime.document_handle())
                 .then(|| runtime.response_referrer_policy().map(ToOwned::to_owned))
@@ -375,14 +375,11 @@ fn current_entry_referrer_policy<'s>(
         .and_then(|entry| navigation_entry_referrer_policy_value(scope, entry))
 }
 
-fn document_referrer_policy_in_subtree(
-    runtime: &crate::native_bridge::JsContextHost,
+pub(crate) fn document_referrer_policy_in_subtree(
+    dom: &crate::dom::native::DomHost,
     handle: DomHandle,
 ) -> Option<String> {
-    if let Some(element) = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
+    if let Some(element) = dom.node(handle).and_then(|node| node.as_element())
         && element.local_name().eq_ignore_ascii_case("meta")
         && element
             .attribute("name")
@@ -394,12 +391,12 @@ fn document_referrer_policy_in_subtree(
         return Some(policy);
     }
 
-    let mut child = runtime.dom_host().first_child(handle);
+    let mut child = dom.first_child(handle);
     while let Some(child_handle) = child {
-        if let Some(policy) = document_referrer_policy_in_subtree(runtime, child_handle) {
+        if let Some(policy) = document_referrer_policy_in_subtree(dom, child_handle) {
             return Some(policy);
         }
-        child = runtime.dom_host().next_sibling(child_handle);
+        child = dom.next_sibling(child_handle);
     }
     None
 }

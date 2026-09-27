@@ -51,6 +51,7 @@ pub(super) enum ParserBlockingPreloadDisposition {
 pub(super) struct BufferedDocumentPreloadState {
     pub(super) entries: DocumentScriptPreloadStore,
     document_character_set: String,
+    response_referrer_policy: Option<String>,
     script_fetch_requires_owner_admission: bool,
     response_csp_requires_parser_admission: bool,
     owner_wake: Option<RendererOwnerWakeSender>,
@@ -204,6 +205,7 @@ impl Default for BufferedDocumentPreloadState {
         Self {
             entries: DocumentScriptPreloadStore::default(),
             document_character_set: "UTF-8".to_owned(),
+            response_referrer_policy: None,
             script_fetch_requires_owner_admission: false,
             response_csp_requires_parser_admission: false,
             owner_wake: None,
@@ -357,6 +359,10 @@ impl BufferedDocumentPreloadState {
         self.document_character_set = document_character_set.to_owned();
     }
 
+    pub(super) fn set_response_referrer_policy(&mut self, policy: Option<String>) {
+        self.response_referrer_policy = policy;
+    }
+
     pub(super) fn set_script_fetch_requires_owner_admission(&mut self, required: bool) {
         self.script_fetch_requires_owner_admission = required;
     }
@@ -386,9 +392,12 @@ impl BufferedDocumentPreloadState {
         if html.is_empty() {
             return;
         }
-        let scanner = self
-            .main_document_scanner
-            .get_or_insert_with(|| Box::new(IncrementalHtmlPreloadScanner::new(final_url.clone())));
+        let scanner = self.main_document_scanner.get_or_insert_with(|| {
+            Box::new(
+                IncrementalHtmlPreloadScanner::new(final_url.clone())
+                    .with_document_referrer_policy(self.response_referrer_policy.clone()),
+            )
+        });
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
@@ -413,9 +422,12 @@ impl BufferedDocumentPreloadState {
             return;
         }
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        let scanner = self
-            .main_document_scanner
-            .get_or_insert_with(|| Box::new(IncrementalHtmlPreloadScanner::new(final_url.clone())));
+        let scanner = self.main_document_scanner.get_or_insert_with(|| {
+            Box::new(
+                IncrementalHtmlPreloadScanner::new(final_url.clone())
+                    .with_document_referrer_policy(self.response_referrer_policy.clone()),
+            )
+        });
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
@@ -467,14 +479,16 @@ impl BufferedDocumentPreloadState {
         html: &str,
         loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
+        document_referrer_policy: Option<String>,
     ) {
         if html.is_empty() {
             return;
         }
         let scanner = self.insertion_scanner.get_or_insert_with(|| {
-            Box::new(IncrementalHtmlPreloadScanner::new_conservative(
-                final_url.clone(),
-            ))
+            Box::new(
+                IncrementalHtmlPreloadScanner::new_conservative(final_url.clone())
+                    .with_document_referrer_policy(document_referrer_policy),
+            )
         });
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
@@ -868,6 +882,7 @@ pub(crate) struct BufferedScriptPreloadRequest {
     pub(super) mode_hint: crate::types::ScriptMode,
     pub(super) resource_type_hint: moli_fetch::RequestResourceType,
     pub(super) fetch_metadata: crate::planning::ScriptFetchMetadata,
+    pub(super) document_referrer_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1112,6 +1127,7 @@ impl BufferedScriptPreloadRequest {
             module_key,
             fetch_metadata,
         )
+        .with_document_referrer_policy(self.document_referrer_policy)
     }
 
     pub(crate) fn matches_script(&self, script: &PreparedScript) -> bool {
@@ -1220,6 +1236,11 @@ enum MetaCspScannerMode {
 }
 
 impl IncrementalHtmlPreloadScanner {
+    fn with_document_referrer_policy(self, policy: Option<String>) -> Self {
+        *self.tokenizer.sink.document_referrer_policy.borrow_mut() = policy;
+        self
+    }
+
     pub(super) fn new(initiator_url: Url) -> Self {
         Self::with_meta_csp_mode(initiator_url, MetaCspScannerMode::CollectDescriptors)
     }
@@ -1295,6 +1316,7 @@ impl IncrementalBufferedScriptPreloadScanner {
 struct HtmlPreloadScannerSink {
     final_url: Url,
     base_url: RefCell<Url>,
+    document_referrer_policy: RefCell<Option<String>>,
     has_valid_base: Cell<bool>,
     requests: RefCell<BufferedPreloadScannerRequests>,
     image_fetched: Cell<bool>,
@@ -1310,6 +1332,7 @@ impl HtmlPreloadScannerSink {
     fn new(final_url: Url, meta_csp_mode: MetaCspScannerMode) -> Self {
         Self {
             base_url: RefCell::new(final_url.clone()),
+            document_referrer_policy: RefCell::new(None),
             final_url,
             has_valid_base: Cell::new(false),
             requests: RefCell::new(BufferedPreloadScannerRequests::default()),
@@ -1413,6 +1436,7 @@ impl HtmlPreloadScannerSink {
                     self.image_fetched.get(),
                 ),
                 fetch_metadata,
+                document_referrer_policy: self.document_referrer_policy.borrow().clone(),
             });
         }
     }
@@ -1474,6 +1498,7 @@ impl HtmlPreloadScannerSink {
                 mode_hint,
                 resource_type_hint: moli_fetch::RequestResourceType::Script,
                 fetch_metadata,
+                document_referrer_policy: self.document_referrer_policy.borrow().clone(),
             });
         }
     }
@@ -1624,6 +1649,20 @@ impl HtmlPreloadScannerSink {
                 .set(self.seen_meta_csp_count.get().saturating_add(1));
         }
     }
+
+    fn maybe_update_referrer_policy(&self, tag: &Tag) {
+        if tag.name.as_ref() == "meta"
+            && html_attr_value(&tag.attrs, "name")
+                .is_some_and(|name| name.eq_ignore_ascii_case("referrer"))
+            && let Some(policy) = html_attr_value(&tag.attrs, "content")
+                .as_deref()
+                .and_then(crate::referrer_policy::normalize_referrer_policy)
+        {
+            // Capture policy in token order. A later meta must not rewrite
+            // the policy of an already discovered module request.
+            *self.document_referrer_policy.borrow_mut() = Some(policy);
+        }
+    }
 }
 
 fn buffered_script_preload_resource_type(
@@ -1691,6 +1730,7 @@ impl TokenSink for HtmlPreloadScannerSink {
         }
 
         self.maybe_note_meta_csp(&tag);
+        self.maybe_update_referrer_policy(&tag);
         match tag.name.as_ref() {
             "base" => {
                 self.maybe_update_base_url(&tag);

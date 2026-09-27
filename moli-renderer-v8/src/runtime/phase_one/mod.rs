@@ -736,6 +736,7 @@ mod tests {
         resource_type_hint: moli_fetch::RequestResourceType,
     ) -> BufferedScriptPreloadRequest {
         BufferedScriptPreloadRequest {
+            document_referrer_policy: None,
             url: script.url.clone(),
             initiator_url: script.initiator_url.clone(),
             kind_hint: script.kind,
