@@ -787,14 +787,24 @@ impl Request {
         crate::referrer_header_value(referrer_url, request_url, policy, document_policy)
     }
 
-    /// Retains the referrer already selected for this hop. A later, more
-    /// permissive policy cannot restore an omitted referrer or its stripped path.
-    pub fn update_referrer_for_redirect(&mut self, response_url: &Url) {
+    /// Retains the referrer already selected for this hop, then applies the
+    /// redirect response's policy. A later, more permissive policy cannot
+    /// restore an omitted referrer or its stripped path.
+    pub fn update_referrer_for_redirect(
+        &mut self,
+        response_url: &Url,
+        response_headers: &[(String, Vec<u8>)],
+    ) {
         self.referrer_url = self
             .referrer_header_value(response_url)
             .and_then(|value| Url::parse(&value).ok());
         if self.referrer_url.is_none() {
             self.infer_referrer_from_initiator = false;
+        }
+        if let Some(policy) = crate::response_referrer_policy_from_headers(response_headers) {
+            self.subresource_request_metadata
+                .get_or_insert_default()
+                .referrer_policy = Some(policy);
         }
     }
 

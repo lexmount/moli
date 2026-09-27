@@ -1577,6 +1577,8 @@ impl RuntimeOwner {
         if let Some(next_url) = next_url
             && job.request.follow_redirects
         {
+            job.request
+                .update_referrer_for_redirect(&response.final_url, &response.headers);
             let redirect_has_extra_info = request_extra_info.is_some() && !response.from_cache;
             job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
@@ -1876,6 +1878,8 @@ impl RuntimeOwner {
             {
                 tracing::debug!(url = %job.current_url, "failed to store streaming redirect response in disk cache: {error}");
             }
+            job.request
+                .update_referrer_for_redirect(&final_url, &headers);
             let redirect_has_extra_info = request_extra_info.is_some();
             job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
@@ -2269,6 +2273,8 @@ impl RuntimeOwner {
                 {
                     tracing::debug!(url = %job.current_url, "failed to store raw streaming redirect response in disk cache: {error}");
                 }
+                job.request
+                    .update_referrer_for_redirect(&final_url, &headers);
                 let redirect_has_extra_info = request_extra_info.is_some();
                 job.request.redirect_chain.push(RedirectInfo {
                     source: crate::RedirectSource::Network,
@@ -2416,6 +2422,8 @@ impl RuntimeOwner {
         if let Some(next_url) = next_url
             && job.request.follow_redirects
         {
+            job.request
+                .update_referrer_for_redirect(&final_url, &cached.headers);
             job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: final_url,
@@ -2478,6 +2486,8 @@ impl RuntimeOwner {
         if let Some(next_url) = next_url
             && job.request.follow_redirects
         {
+            job.request
+                .update_referrer_for_redirect(&final_url, &cached.headers);
             job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: final_url,
