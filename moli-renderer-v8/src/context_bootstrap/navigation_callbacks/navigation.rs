@@ -174,10 +174,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         );
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
-        rv.set(navigation_pending_result(scope).into());
-        return;
-    }
     if super::super::navigation_cancellation::window_navigation_is_stopping(scope, owner) {
         rv.set(
             navigation_rejected_dom_exception_result(scope, "Navigation was stopped", "AbortError")
@@ -243,11 +239,11 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
     if !can_update_current_entry && fragment_navigation {
         // Disabled Navigation entries suppress API tracking, not the underlying
         // fragment navigation or its legacy History/Location behavior.
-        super::super::location_navigation::navigate_location_object(
+        super::super::location_navigation::navigate_location_object_for_same_document(
             scope,
             location,
+            next_url.as_str(),
             same_document_kind,
-            Some(next_url.to_string()),
         );
         rv.set(navigation_pending_result(scope).into());
         return;

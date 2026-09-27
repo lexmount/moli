@@ -156,6 +156,27 @@ pub(crate) fn navigate_location_object<'s>(
     );
 }
 
+/// Executes a navigation already classified as same-document by its caller.
+/// An exact URL match must still honor the requested history mutation.
+pub(crate) fn navigate_location_object_for_same_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    href: &str,
+    kind: LocationNavigationKind,
+) {
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        Some(href.to_owned()),
+        None,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..LocationNavigationOptions::default()
+        },
+    );
+}
+
 pub(crate) fn navigate_location_object_for_element_fragment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
@@ -216,16 +237,11 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     // fragment-only string through Location: Chromium pushes a same-document
     // history entry and runs the Navigation/popstate surfaces even though the
     // serialized URL does not change.
-    navigate_location_object_with_source_element_and_child_navigate_event(
+    navigate_location_object_for_same_document(
         scope,
         location,
+        &target,
         kind,
-        Some(target),
-        None,
-        LocationNavigationOptions {
-            force_exact_same_document_navigation: true,
-            ..LocationNavigationOptions::default()
-        },
     );
     true
 }
