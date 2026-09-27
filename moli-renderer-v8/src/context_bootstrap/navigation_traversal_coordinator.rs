@@ -7,8 +7,7 @@ use super::navigation_activation::{
 };
 use super::navigation_entry::{history_entries, navigation_current_entry};
 use super::navigation_events::{
-    NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
-    dispatch_navigation_traverse_event_with_outcome,
+    NavigationDispatchOutcome, dispatch_navigation_traverse_event_with_outcome,
 };
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_seed::history_entry_seed_for_traversal;
@@ -187,8 +186,11 @@ pub(super) fn execute<'s>(
             {
                 unsafe { &mut *host_ptr }
                     .dispatch_lightweight_popup_tree_beforeunload(scope, popup_id);
-            } else {
-                dispatch_beforeunload_for_runtime_owner(scope, target.owner);
+            } else if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+                && !unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
+            {
+                abort(scope, &admission, None);
+                return;
             }
             if validate(scope, &admission).is_none() {
                 abort(scope, &admission, None);
