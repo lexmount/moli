@@ -1010,6 +1010,7 @@ mod tests {
             .node(inner_contents)
             .and_then(Node::owner_document)
             .expect("inner template contents owner document");
+        assert_eq!(inner_contents_document, contents_document);
 
         assert_eq!(document.child_ids(outer).count(), 0);
         assert_eq!(document.child_ids(inner).count(), 0);
