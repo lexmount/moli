@@ -906,6 +906,10 @@ impl PageVm {
             LoadedFollowedLocationNavigation::ExternalDocument { final_url, .. } => final_url,
             _ => unreachable!("only a Document response reaches navigation commit"),
         };
+        // This path freezes the next Document's seed before retiring the old
+        // realm. Publish its current policy at the same pre-unload boundary used
+        // by browser-owned navigation commits.
+        self.vm_mut().publish_main_document_navigation_history()?;
         let navigation_bootstrap_entry = navigation_history
             .as_ref()
             .map(|history| history.resolve(final_url))
