@@ -42,12 +42,15 @@ async function(method, action = 'none', destination = 'network') {
         if (type === 'beforeunload')
           details.push([event.isTrusted, event.target === owner, event.currentTarget === owner, original.hidden]);
         if (action === 'writes') {
-          const ancestors = type === 'beforeunload' ? [original] : nodes.slice(0, nodes.findIndex(n => n[0] === owner) + 1).map(n => n[1]);
+          const ancestors = type === 'beforeunload' ? [...new Set([doc, original])] : nodes.slice(0, nodes.findIndex(n => n[0] === owner) + 1).map(n => n[1]);
           writes.push([label + type, ...ancestors.map(attemptWrite)]);
         }
       });
     }
   }
+  if (action === 'intermediate') grandchild.contentWindow.addEventListener('beforeunload', () => {
+    writes.push(['intermediate', attemptWrite(childDoc)]);
+  }, {once: true});
   if (action === 'self') win.addEventListener('beforeunload', () => {
     win.location.href = '/history.html?forbidden';
   });
@@ -108,6 +111,7 @@ async function(method, action = 'none', destination = 'network') {
       await tick();
       return snapshot();
     },
+    openSource() { return [doc.open() === doc, doc.childNodes.length]; },
     close() { win.close(); },
   };
 }

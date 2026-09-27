@@ -199,6 +199,48 @@ async fn popup_unload_guards_cover_descendant_writes_and_navigation_reentry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn popup_beforeunload_does_not_protect_intermediate_documents_from_writes() {
+    let (mut page, gate) = lifecycle_page("html").await;
+    setup(&mut page, "href", "intermediate", "network").await;
+    page.evaluate("popupLifecycle.start()").await;
+    ResponseGate::wait_for(&gate.requests, 2).await;
+    let pending = page.evaluate("popupLifecycle.snapshot()").await;
+    assert_eq!(pending["sameDocument"], true);
+    assert_eq!(pending["oldHidden"], false);
+    assert_eq!(pending["writes"], json!([["intermediate", false]]));
+    assert_eq!(
+        pending["events"],
+        json!([
+            "beforeunload",
+            "child:beforeunload",
+            "grandchild:beforeunload",
+            "grandchild:pagehide",
+            "grandchild:unload"
+        ]),
+        "opening the intermediate document must remove its child"
+    );
+    gate.release.add_permits(1);
+    let committed = page.evaluate("popupLifecycle.waitForCommit()").await;
+    assert_eq!(committed["sameDocument"], false);
+    assert_eq!(committed["url"], "/popup-unload.html?step=next");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_beforeunload_releases_the_target_write_guard_after_the_check() {
+    let (mut page, gate) = lifecycle_page("204").await;
+    setup(&mut page, "href", "writes", "network").await;
+    page.evaluate("popupLifecycle.start()").await;
+    ResponseGate::wait_for(&gate.requests, 2).await;
+    assert_pending(&page.evaluate("popupLifecycle.snapshot()").await);
+    gate.release.add_permits(1);
+    ResponseGate::wait_for(&gate.responses, 2).await;
+    assert_eq!(
+        page.evaluate("popupLifecycle.openSource()").await,
+        json!([true, 0])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn popup_about_blank_navigation_and_close_unload_each_document_once() {
     for method in ["href", "navigation", "named", "close"] {
         let (mut page, gate) = lifecycle_page("html").await;

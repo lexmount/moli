@@ -44,6 +44,10 @@ async function (method, action = 'none') {
       if (action === 'forged-flag') win.__lmWindowUnloadEventActive = false;
       win.location.href = '/beforeunload.html?replacement';
     }, {once: true});
+  } else if (['open', 'write', 'writeln'].includes(action)) {
+    nested.contentWindow.addEventListener('beforeunload', () => {
+      doc[action]('<p>unexpected destructive write</p>');
+    }, {once: true});
   }
   const snapshot = () => ({
     events: events.slice(), details: details.slice(), loads,
@@ -83,6 +87,7 @@ async function (method, action = 'none') {
       await tick();
       return snapshot();
     },
+    openSource() { return [doc.open() === doc, doc.childNodes.length]; },
     remove() { frame.remove(); },
   };
 }

@@ -42,7 +42,7 @@ impl JsContextHost {
         let previous =
             crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, true);
         crate::context_bootstrap::dispatch_beforeunload_for_runtime_owner(scope, window);
-        self.dispatch_child_documents_beforeunload(scope, descendants, |host| {
+        self.dispatch_child_documents_beforeunload(scope, descendants, None, |host| {
             host.main_document_task_owner_is_current(owner)
         });
         crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, previous);
