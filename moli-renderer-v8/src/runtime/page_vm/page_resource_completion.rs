@@ -27,7 +27,7 @@ pub(crate) use main_module::{
     AuthorizedCurrentMainDynamicImportGraphFetchCompletion,
     AuthorizedCurrentMainParserModuleGraphFetchCompletion,
     AuthorizedCurrentMainRuntimeModuleGraphFetchCompletion,
-    AuthorizedLiveMainModulepreloadFetchCompletion,
+    AuthorizedLiveMainModuleGraphFetchCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
 };
 
 impl PageVm {
