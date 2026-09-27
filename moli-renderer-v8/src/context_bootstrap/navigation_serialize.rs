@@ -89,7 +89,7 @@ fn sync_navigation_entry_seed_from_owner_with_document_url<'s>(
     }
 }
 
-pub(super) fn publish_top_level_navigation_history<'s>(
+pub(crate) fn publish_top_level_navigation_history<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {

@@ -86,6 +86,7 @@ pub(crate) use navigation_serialize::current_document_referrer_policy;
 pub(crate) use navigation_entry::navigation_entry_public_token;
 pub(crate) use navigation_serialize::{
     document_referrer_policy_for_native_document, history_document_id_for_holder,
+    publish_top_level_navigation_history,
 };
 mod navigation_surface;
 mod navigation_transition_worlds;

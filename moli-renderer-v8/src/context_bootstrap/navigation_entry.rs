@@ -354,8 +354,9 @@ fn navigation_entry_url_getter<'s>(
             || navigation_entries_share_document(scope, current, args.this())
     });
     if !is_current_document
-        && navigation_entry_referrer_policy_value(scope, args.this())
-            .is_some_and(|policy| policy.eq_ignore_ascii_case("no-referrer"))
+        && navigation_entry_referrer_policy_value(scope, args.this()).is_some_and(|policy| {
+            policy.eq_ignore_ascii_case("no-referrer") || policy.eq_ignore_ascii_case("origin")
+        })
     {
         rv.set(v8::null(scope).into());
         return;

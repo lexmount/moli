@@ -412,6 +412,7 @@ mod document_content;
 mod frame_tree;
 mod lifecycle;
 mod navigation;
+mod navigation_referrer_policy;
 mod resources;
 mod runtime;
 mod same_document_history;
