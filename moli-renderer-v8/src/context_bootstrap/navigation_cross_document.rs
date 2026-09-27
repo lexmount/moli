@@ -25,6 +25,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
     next_url: &url::Url,
     navigate_history_kind: NavigationNavigateHistoryKind,
     navigation_signal: Option<(v8::Local<'s, v8::Object>, Option<v8::Local<'s, v8::Object>>)>,
+    about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
 ) -> v8::Local<'s, v8::Value> {
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
     let current_index = history_index(scope, history);
@@ -73,8 +74,11 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return v8::undefined(scope).into();
         };
-        unsafe { &mut *host_ptr }
-            .record_pending_location_navigation(next_url.clone(), Some(entry_seed));
+        unsafe { &mut *host_ptr }.record_pending_location_navigation(
+            next_url.clone(),
+            Some(entry_seed),
+            about_document_state,
+        );
         return navigation_signal
             .map(|(navigation, signal)| {
                 navigation_cross_document_pending_result(

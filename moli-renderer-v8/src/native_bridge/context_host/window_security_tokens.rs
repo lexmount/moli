@@ -421,7 +421,7 @@ impl JsContextHost {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;
         }
-        let origin = self.main_document_security_origin();
+        let origin = self.main_document_origin();
         if self.document_domain_override.get().is_some() {
             return None;
         }
@@ -450,7 +450,7 @@ impl JsContextHost {
             return None;
         }
         window_isolated_world_security_token_key(
-            self.main_document_security_origin(),
+            self.main_document_origin(),
             self.document_domain_override.get().is_some(),
         )
     }
@@ -859,6 +859,17 @@ impl JsContextHost {
             .map(|origin| origin.serialized_origin())
     }
 
+    pub(crate) fn main_document_origin(&self) -> String {
+        self.main_window_access_origin()
+            .map(|origin| origin.serialized_origin())
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    pub(crate) fn main_document_secure_context_url(&self) -> url::Url {
+        url::Url::parse(&self.main_document_origin())
+            .unwrap_or_else(|_| self.document_url().clone())
+    }
+
     pub(in crate::native_bridge::context_host) fn window_access_origin_for_dispatch_scope(
         &self,
         dispatch_scope: OwnerDispatchScope,
@@ -872,9 +883,22 @@ impl JsContextHost {
         }
     }
 
-    pub(in crate::native_bridge::context_host) fn main_window_access_origin(
-        &self,
-    ) -> Option<WindowAccessOrigin> {
+    pub(in crate::native_bridge::context_host) fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
+        if !self
+            .document_policy_container()
+            .sandbox
+            .forces_opaque_origin
+            && let Some(state) = &self.about_document_state
+        {
+            let mut origin = state.origin().clone();
+            if let WindowAccessOrigin::Tuple {
+                document_domain, ..
+            } = &mut origin
+            {
+                *document_domain = self.document_domain_override.get();
+            }
+            return Some(origin);
+        }
         let serialized_origin = self.main_document_security_origin();
         if self.document_sandbox_policy().forces_opaque_origin || serialized_origin == "null" {
             return Some(WindowAccessOrigin::opaque(
@@ -949,7 +973,7 @@ impl JsContextHost {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::native_bridge::context_host) enum WindowAccessOrigin {
+pub(crate) enum WindowAccessOrigin {
     Opaque {
         identity: Option<WindowExecutionContextOwner>,
     },
@@ -1076,7 +1100,7 @@ impl WindowAccessOrigin {
         }
     }
 
-    pub(in crate::native_bridge::context_host) fn serialized_origin(&self) -> String {
+    pub(crate) fn serialized_origin(&self) -> String {
         match self {
             Self::Opaque { .. } => "null".to_owned(),
             Self::Tuple {
