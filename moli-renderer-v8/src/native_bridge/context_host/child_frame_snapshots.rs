@@ -91,16 +91,13 @@ impl ChildBrowsingContextSnapshot {
         .with_fallback_base_url(fallback_base_url)
     }
 
-    pub(crate) fn srcdoc(
-        fallback_base_url: Url,
-        markup: String,
-        character_set: impl Into<String>,
-    ) -> Self {
+    pub(crate) fn srcdoc(fallback_base_url: Url, markup: String) -> Self {
+        // srcdoc supplies Unicode markup, serialized as UTF-8 for navigation.
         Self::with_character_set(
             Url::parse("about:srcdoc").expect("static about:srcdoc should parse"),
             markup,
             Some("text/html".to_owned()),
-            character_set,
+            "UTF-8",
         )
         .with_fallback_base_url(fallback_base_url)
     }
