@@ -421,6 +421,15 @@ async fn no_document_navigation_preserves_protocol_result_semantics() {
                     FrontendProtocol::WebDriverBidi,
                 ] {
                     let mut page = no_document_page(status, false).await;
+                    page.evaluate(
+                        r#"(() => {
+                        globalThis.protocolBeforeUnload = [];
+                        addEventListener('beforeunload', () => protocolBeforeUnload.push('root'));
+                        document.querySelector('iframe').contentWindow.addEventListener(
+                            'beforeunload', () => protocolBeforeUnload.push('child'));
+                    })()"#,
+                    )
+                    .await;
                     let tree = page.command("Page.getFrameTree", json!({})).await;
                     let url = page.base_url.replace("/history.html", "/no-document");
                     let outcome = tokio::time::timeout(
@@ -444,13 +453,22 @@ async fn no_document_navigation_preserves_protocol_result_semantics() {
                     .await
                     .expect("ignored response must settle the protocol navigation");
                     let (result, _, _, renderer_predecessor) = outcome.into_complete_parts();
-                    assert!(renderer_predecessor.is_none());
+                    page.ctx
+                        .route_direct_command_renderer_predecessor_for_test(
+                            renderer_predecessor
+                                .expect("beforeunload must publish its renderer turn"),
+                        )
+                        .await;
                     let AutomationResult::Navigate(result) = result.unwrap() else {
                         panic!("expected navigation result");
                     };
                     assert_eq!(
                         result.error_text.as_deref(),
                         (protocol == FrontendProtocol::Cdp).then_some("net::ERR_ABORTED")
+                    );
+                    assert_eq!(
+                        page.evaluate("protocolBeforeUnload").await,
+                        json!(["root", "child"])
                     );
                     assert_eq!(page.command("Page.getFrameTree", json!({})).await, tree);
                     assert_eq!(
