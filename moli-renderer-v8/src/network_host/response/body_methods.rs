@@ -102,7 +102,7 @@ fn finish_body_consumption<'s>(
     consumption: BodyConsumptionPromise<'s>,
     kind: NetworkBodyConsumptionKind,
 ) {
-    match consume_network_body_value_from_object(scope, consumption.object, kind) {
+    match consume_fetch_body_value_from_object(scope, consumption.object, kind) {
         NetworkBodyConsumption::Ready(value) => {
             let _ = consumption.resolver.resolve(scope, value);
         }

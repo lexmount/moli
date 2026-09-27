@@ -498,9 +498,13 @@ fn web_api_mime_surfaces_use_parser_normalization() {
     );
 }
 
-#[test]
-fn response_body_consumers_use_shared_content_type_helpers() {
-    let mut vm = new_storage_test_vm("https://response-body-mime.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_consumers_use_shared_content_type_helpers() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-body-mime.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -550,6 +554,14 @@ fn response_body_consumers_use_shared_content_type_helpers() {
     )
     .expect("Response body MIME probe should evaluate");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseBodyMimeProbe !== null)",
+        "true",
+        "Body MIME conversions",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseBodyMimeProbe)")
         .expect("Response body MIME promise chain should settle");
@@ -560,9 +572,13 @@ fn response_body_consumers_use_shared_content_type_helpers() {
     );
 }
 
-#[test]
-fn response_body_consumers_materialize_readable_stream_chunks() {
-    let mut vm = new_storage_test_vm("https://response-body-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_consumers_materialize_readable_stream_chunks() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-body-stream.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -604,10 +620,14 @@ fn response_body_consumers_materialize_readable_stream_chunks() {
     )
     .expect("Response stream body probe should evaluate");
 
-    for _ in 0..8 {
-        vm.eval("0")
-            .expect("Response stream body promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseBodyStreamProbe.includes('settled'))",
+        "true",
+        "response_body_consumers_materialize_readable_stream_chunks",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseBodyStreamProbe.sort())")
         .expect("Response stream body probe result should evaluate");
@@ -618,9 +638,13 @@ fn response_body_consumers_materialize_readable_stream_chunks() {
     );
 }
 
-#[test]
-fn response_clone_tees_user_readable_stream_body() {
-    let mut vm = new_storage_test_vm("https://response-clone-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_clone_tees_user_readable_stream_body() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-clone-stream.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -676,10 +700,14 @@ fn response_clone_tees_user_readable_stream_body() {
     )
     .expect("Response clone stream setup should evaluate");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("Response clone stream promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseCloneStreamProbe.length === 3)",
+        "true",
+        "response_clone_tees_user_readable_stream_body",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseCloneStreamProbe.sort())")
         .expect("Response clone stream probe result should evaluate");
@@ -690,9 +718,13 @@ fn response_clone_tees_user_readable_stream_body() {
     );
 }
 
-#[test]
-fn response_clone_tees_pending_network_body_after_parent_consumption() {
-    let mut vm = new_storage_test_vm("https://response-clone-pending-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_clone_tees_pending_network_body_after_parent_consumption() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-clone-pending-stream.test/",
+        &loader,
+    );
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url = Url::parse("https://response-clone-pending-stream.test/")
         .expect("document URL should parse");
@@ -784,10 +816,14 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
         })
         .expect("pending fetch response body should close");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("pending fetch clone promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__pendingFetchCloneProbe.length === 3)",
+        "true",
+        "response_clone_tees_pending_network_body_after_parent_consumption",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__pendingFetchCloneProbe.sort())")
         .expect("pending fetch clone probe result should evaluate");
@@ -1020,19 +1056,19 @@ fn materialize_response_object_rejects_locked_response_body() {
         .expect("locked response should reject materialization");
 }
 
-#[test]
-fn fetch_body_text_removes_one_initial_utf8_bom() {
-    assert_body_utf8_bom_probe("text");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_text_removes_one_initial_utf8_bom() {
+    assert_body_utf8_bom_probe("text").await;
 }
 
-#[test]
-fn fetch_body_json_removes_initial_utf8_bom_and_preserves_syntax_errors() {
-    assert_body_utf8_bom_probe("json");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_json_removes_initial_utf8_bom_and_preserves_syntax_errors() {
+    assert_body_utf8_bom_probe("json").await;
 }
 
-#[test]
-fn fetch_body_binary_and_form_methods_preserve_bom_bytes() {
-    assert_body_utf8_bom_probe("bytes");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_binary_and_form_methods_preserve_bom_bytes() {
+    assert_body_utf8_bom_probe("bytes").await;
 }
 
 #[test]
