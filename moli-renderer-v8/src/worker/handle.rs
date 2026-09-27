@@ -157,6 +157,8 @@ pub(crate) enum WorkerMessage {
     DispatchPendingPromiseRejections,
     /// Run one task from the worker's font loading task source.
     RunFontLoadingTask,
+    /// Run one task from the worker's networking task source.
+    RunNetworkingTask,
     /// Dispatch a CSP violation queued while the current worker was still evaluating script.
     DispatchContentSecurityPolicyViolation(
         Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,

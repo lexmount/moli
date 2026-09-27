@@ -12,8 +12,10 @@ struct NullableRequiredDictionaryValueProbe<'scope> {
 #[webapi(plain)]
 struct NullableRequiredDictionaryAbsentProbe {}
 
-fn assert_body_utf8_bom_probe(scenario: &str) {
-    let mut vm = new_storage_test_vm("https://body-utf8.test/");
+async fn assert_body_utf8_bom_probe(scenario: &str) {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://body-utf8.test/", &loader);
     let script = r#"
 globalThis.__bodyUtf8Result = 'pending';
 async function probeBodyUtf8(scenario) {
@@ -108,7 +110,14 @@ async function probeBodyUtf8(scenario) {
         "{script}\nprobeBodyUtf8({scenario:?}).then(value => __bodyUtf8Result = value, error => __bodyUtf8Result = String(error));"
     ))
     .expect("Body UTF-8 probe should schedule");
-    vm.eval("0").expect("Body UTF-8 promises should drain");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__bodyUtf8Result !== 'pending')",
+        "true",
+        "Body UTF-8 conversions",
+    )
+    .await;
     assert_eq!(
         vm.eval("__bodyUtf8Result")
             .expect("Body UTF-8 probe should finish"),

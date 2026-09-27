@@ -2274,7 +2274,7 @@ async fn navigator_service_worker_respond_with_fetch_body_methods_abort_headers_
         );
 
         let expected =
-            format!("200|{method}:AbortError:true:The operation was aborted.>next-microtask");
+            format!("200|next-microtask>{method}:AbortError:true:The operation was aborted.");
         drain_service_worker_test_until_eval_equals(
             &mut vm,
             &browser_context_runtime,
