@@ -25,13 +25,14 @@ impl ChildFrameOwnerElementKind {
 }
 
 impl JsContextHost {
-    pub(crate) fn clear_ignored_child_frame_navigation_attribute(&mut self, handle: DomHandle) {
+    pub(crate) fn clear_child_frame_navigation_attribute_state(&mut self, handle: DomHandle) {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.ignored_attribute_bootstrap = None;
+            entry.same_document_attribute_bootstrap = None;
         }
     }
 
-    pub(crate) fn child_frame_src_attribute_navigation_is_ignored(
+    pub(crate) fn child_frame_src_attribute_navigation_is_handled(
         &self,
         handle: DomHandle,
     ) -> bool {
@@ -39,7 +40,50 @@ impl JsContextHost {
             || self
                 .child_browsing_contexts
                 .get(&handle)
-                .is_some_and(|entry| entry.ignored_attribute_bootstrap.is_some())
+                .is_some_and(|entry| {
+                    entry.ignored_attribute_bootstrap.is_some()
+                        || entry.same_document_attribute_bootstrap.is_some()
+                })
+    }
+
+    pub(crate) fn run_child_frame_attribute_fragment_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) -> bool {
+        let Some(url) = self
+            .child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.same_document_attribute_bootstrap.as_ref())
+            .and_then(Self::child_browsing_context_bootstrap_url)
+        else {
+            return false;
+        };
+        let kind = if self.child_frame_attribute_navigation_replaces_current_entry(handle, &url) {
+            crate::context_bootstrap::LocationNavigationKind::Replace
+        } else {
+            crate::context_bootstrap::LocationNavigationKind::Assign
+        };
+        let Ok(context) = self.ensure_prebootstrapped_child_default_context(scope, handle) else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let window = context.global(scope);
+        let Some(location) = crate::context_bootstrap::window_location_for_holder(scope, window)
+        else {
+            return false;
+        };
+        // Every native attribute mutation uses this path, including Attr.value.
+        // The prior document load stays independent of this fragment update.
+        crate::context_bootstrap::navigate_location_object_for_element_fragment(
+            scope,
+            location,
+            url.as_str(),
+            kind,
+            None,
+            false,
+        );
+        true
     }
 
     pub(super) fn child_frame_attribute_bootstrap_repeats_ancestor(
