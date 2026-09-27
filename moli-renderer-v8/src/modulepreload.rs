@@ -167,6 +167,7 @@ pub(crate) fn modulepreload_fetch_candidate(
     request_url: Url,
     document_url: &Url,
     import_map_integrity: Option<String>,
+    document_referrer_policy: Option<String>,
 ) -> Option<ModulepreloadFetchCandidate> {
     if !modulepreload_media_matches(element) {
         return None;
@@ -197,7 +198,8 @@ pub(crate) fn modulepreload_fetch_candidate(
             document_url.clone(),
             key,
             ModuleFetchMetadata::from_modulepreload_script_fetch_metadata(&fetch_metadata),
-        ),
+        )
+        .with_document_referrer_policy(document_referrer_policy),
     })
 }
 
