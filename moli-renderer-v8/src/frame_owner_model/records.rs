@@ -1142,7 +1142,7 @@ impl DocumentLifecycleRecord {
         Some(finished)
     }
 
-    pub(super) fn begin_child_unload_dispatch(&mut self) -> bool {
+    pub(super) fn begin_unload_dispatch(&mut self) -> bool {
         if !self.child_load_event_has_started()
             || self.unload != DocumentUnloadEventProgress::Pending
         {
@@ -1152,7 +1152,7 @@ impl DocumentLifecycleRecord {
         true
     }
 
-    pub(super) fn finish_child_unload_dispatch(&mut self) -> bool {
+    pub(super) fn finish_unload_dispatch(&mut self) -> bool {
         if self.unload != DocumentUnloadEventProgress::Dispatching {
             return false;
         }

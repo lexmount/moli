@@ -159,15 +159,30 @@ async fn canceled_post_form_navigation_aborts_signal_in_dom_task_without_synthet
     );
 }
 
+fn new_unload_lifecycle_test_vm(url: &str) -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm(url);
+    let owner = vm.current_main_document_task_owner().unwrap();
+    let interactive = vm.finish_current_main_document_parsing(owner).unwrap();
+    vm.apply_main_document_interactive_lifecycle_action(interactive)
+        .unwrap();
+    vm.dispatch_main_document_domcontentloaded_lifecycle(owner);
+    assert!(
+        vm.dispatch_main_document_window_load_lifecycle(owner)
+            .unwrap()
+            .is_none()
+    );
+    vm
+}
+
 #[test]
 fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer() {
-    let mut vm = new_storage_test_vm("https://example.com/base");
+    let mut vm = new_unload_lifecycle_test_vm("https://example.com/base");
 
     let lifecycle = vm
         .eval(
             r##"
             (() => {
-              const log = [];
+              const log = globalThis.unloadLifecycleLog = [];
               addEventListener("beforeunload", event => log.push(`beforeunload:${event.isTrusted}`));
               addEventListener("pagehide", event => log.push([
                 "pagehide",
@@ -185,8 +200,10 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
         )
         .expect("cross-document unload lifecycle should evaluate");
 
+    assert_eq!(lifecycle, "beforeunload:true");
+    vm.unload_main_document_for_navigation_commit().unwrap();
     assert_eq!(
-        lifecycle,
+        vm.eval("unloadLifecycleLog.join('|')").unwrap(),
         "beforeunload:true|pagehide:true:false:true:true:true|unload:true"
     );
     assert!(
@@ -199,8 +216,8 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
 fn main_document_stream_operations_are_suppressed_only_during_unload() {
     for event in ["beforeunload", "pagehide", "unload"] {
         for operation in ["open", "write", "writeln"] {
-            let mut vm = new_storage_test_vm("https://document-open-unload.test/source");
-            let result = vm
+            let mut vm = new_unload_lifecycle_test_vm("https://document-open-unload.test/source");
+            vm
                 .eval(&format!(
                     r#"(() => {{
                       const doc = document;
@@ -223,19 +240,55 @@ fn main_document_stream_operations_are_suppressed_only_during_unload() {
                         dispatchEvent(new Event('nested-open'));
                         doc.dispatchEvent(new Event('retained-listener'));
                       }});
+                      globalThis.finishUnloadProbe = () => {{
+                        doc.open();
+                        return [retained, nestedRetained, listenerCount, converted,
+                          doc.documentElement !== root].join('|');
+                      }};
                       navigation.navigate('/destination');
-                      doc.open();
-                      return [retained, nestedRetained, listenerCount, converted,
-                        doc.documentElement !== root].join('|');
                     }})()"#
                 ))
                 .expect("main document unload stream operations should evaluate");
+            vm.unload_main_document_for_navigation_commit().unwrap();
+            let result = vm.eval("finishUnloadProbe()").unwrap();
             assert_eq!(
                 result,
                 format!("true|true|1|{}|true", usize::from(operation != "open")),
                 "{event}/{operation}"
             );
         }
+    }
+}
+
+#[test]
+fn main_document_unload_is_once_only_and_cancels_retired_window_timers() {
+    for visible in [true, false] {
+        let mut vm = new_unload_lifecycle_test_vm("https://unload-once.test/source");
+        vm.set_document_activity(moli_page_types::DocumentActivity::new(visible, visible))
+            .unwrap();
+        vm.eval(r#"(() => {
+        globalThis.unloadLog = [];
+        addEventListener('pagehide', e => unloadLog.push('pagehide:' + e.isTrusted));
+        document.addEventListener('visibilitychange', e => unloadLog.push('visibility:' + document.hidden + ':' + e.isTrusted));
+        addEventListener('visibilitychange', e => unloadLog.push('window-visibility:' + (e.target === document) + ':' + e.bubbles));
+        addEventListener('unload', e => unloadLog.push('unload:' + document.hidden + ':' + e.isTrusted));
+        setTimeout(() => unloadLog.push('timer'), 0);
+        globalThis.Event = function() { throw new Error('author Event constructor'); };
+    })()"#).unwrap();
+        vm.unload_main_document_for_navigation_commit().unwrap();
+        vm.unload_main_document_for_navigation_commit().unwrap();
+        assert_eq!(
+            vm.eval("unloadLog.join('|')").unwrap(),
+            if visible {
+                "pagehide:true|visibility:true:true|window-visibility:true:true|unload:true:true"
+            } else {
+                "pagehide:true|unload:true:true"
+            }
+        );
+        assert!(
+            !vm.has_ready_timeout(),
+            "the unloaded Window must not retain ready timers"
+        );
     }
 }
 

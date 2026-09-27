@@ -1262,6 +1262,7 @@ mod cdp_dynamic_page;
 mod classic;
 mod download;
 mod misc;
+mod navigation_unload;
 mod p6_output_handoff;
 mod screenshot;
 mod websocket;
