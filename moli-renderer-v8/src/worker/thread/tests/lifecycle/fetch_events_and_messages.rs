@@ -633,8 +633,6 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
     handle.terminate_and_join();
 }
 
-
-
 #[tokio::test]
 async fn service_worker_fetch_event_exposes_resulting_client_metadata() {
     ensure_v8();
