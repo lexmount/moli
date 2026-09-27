@@ -67,6 +67,8 @@ impl RendererPageCommand {
             | Self::RuntimeConsoleMessagesWithContext
             | Self::RuntimeHeapUsage
             | Self::StopDocumentLifecycle
+            | Self::CheckMainDocumentBeforeUnload
+            | Self::UnloadMainDocumentForNavigationCommit
             | Self::ResetNavigationHistory
             | Self::RenderMarkdown { .. }
             | Self::PrintToPdf(..)

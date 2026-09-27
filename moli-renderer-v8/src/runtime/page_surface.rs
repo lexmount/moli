@@ -5081,6 +5081,7 @@ pub enum RendererPageCommand {
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
     StopDocumentLifecycle,
+    CheckMainDocumentBeforeUnload,
     UnloadMainDocumentForNavigationCommit,
     ResetNavigationHistory,
     AccessibilityTreeNodes {

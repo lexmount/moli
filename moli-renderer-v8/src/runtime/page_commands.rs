@@ -101,6 +101,10 @@ impl PageVm {
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url, replace_current)
                 .map(RendererPageReply::Bool),
+            RendererPageCommand::CheckMainDocumentBeforeUnload => self
+                .vm_mut()
+                .check_main_document_beforeunload()
+                .map(RendererPageReply::Bool),
             RendererPageCommand::UnloadMainDocumentForNavigationCommit => self
                 .vm_mut()
                 .unload_main_document_for_navigation_commit()
