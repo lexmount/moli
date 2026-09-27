@@ -708,23 +708,8 @@ fn window_open_entered_policy_container(
     host: &crate::native_bridge::JsContextHost,
 ) -> DocumentPolicyContainer {
     let entry_scope = window_open_entry_scope(scope, host);
-    let mut policy = host
-        .document_policy_container_for_inheritance(entry_scope)
-        .unwrap_or_else(|| host.document_policy_container().clone());
-    let document = match entry_scope {
-        OwnerDispatchScope::Top => Some(host.document_handle()),
-        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle),
-        OwnerDispatchScope::LightweightPopup(popup_id) => {
-            host.lightweight_popup_document_handle(popup_id)
-        }
-    };
-    if let Some(document) = document {
-        policy.referrer_policy =
-            super::super::navigation_serialize::document_referrer_policy_for_native_document(
-                host, document,
-            );
-    }
-    policy
+    host.document_policy_container_for_inheritance(entry_scope)
+        .unwrap_or_else(|| host.document_policy_container().clone())
 }
 
 fn window_open_entered_window<'s>(
