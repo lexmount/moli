@@ -2653,10 +2653,10 @@ where
         attributes: request.attributes().clone(),
         phase: request.phase(),
         source_override: None,
-        fetch_metadata: ModuleFetchMetadata::from_dynamic_import_referrer_fetch_metadata(
-            request.fetch_metadata(),
-        )
-        .with_import_map_integrity(integrity),
+        fetch_metadata: request
+            .fetch_metadata()
+            .clone()
+            .with_import_map_integrity(integrity),
         parser_owned: false,
     })
 }

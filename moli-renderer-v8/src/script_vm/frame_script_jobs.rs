@@ -154,7 +154,7 @@ impl ScriptVm {
             source,
             script_url,
             base_url,
-            script_nonce,
+            script_fetch_metadata,
             ..
         } = job;
         let result = match source {
@@ -177,7 +177,7 @@ impl ScriptVm {
                             Some(&script_url),
                             Some(&base_url),
                             0,
-                            script_nonce.as_deref(),
+                            script_fetch_metadata.as_ref(),
                             true,
                             true,
                             source_completion_mode,
@@ -189,7 +189,7 @@ impl ScriptVm {
                             Some(&script_url),
                             Some(&base_url),
                             0,
-                            script_nonce.as_deref(),
+                            script_fetch_metadata.as_ref(),
                             source_completion_mode,
                             clean_up_classic_script,
                         ),

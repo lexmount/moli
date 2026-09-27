@@ -391,6 +391,7 @@ impl JsContextHost {
                 source_result: completion.result.clone(),
                 script_url: pending.script.url,
                 script_base_url: pending.script.base_url,
+                script_fetch_metadata: pending.script.fetch_metadata,
             };
             self.queue_ready_child_external_classic_document_script(work)
         } else {
@@ -450,6 +451,7 @@ impl JsContextHost {
                         Some(work.script_handle),
                         work.script_url.clone(),
                         work.script_base_url.clone(),
+                        work.script_fetch_metadata.clone(),
                         source.clone(),
                     )?,
             ),
@@ -1823,9 +1825,7 @@ impl JsContextHost {
                 unreachable!("frame classic execution action must have materialized source")
             }
         };
-        let script_nonce = fetch_metadata.nonce;
-        let script_integrity = fetch_metadata.integrity;
-        let mut job = self
+        let job = self
             .frame_owner_store
             .child_prepared_classic_script_job_for_owner(
                 target.child_handle(),
@@ -1835,10 +1835,9 @@ impl JsContextHost {
                 Some(script_handle),
                 script_url.clone(),
                 script_base_url.clone(),
-                script_nonce,
+                Some(fetch_metadata),
                 source,
             )?;
-        job.script_integrity = script_integrity;
         let finish = FrameDocumentClassicScriptExecutionFinish {
             child_handle: target.child_handle(),
             owner: target.owner(),
