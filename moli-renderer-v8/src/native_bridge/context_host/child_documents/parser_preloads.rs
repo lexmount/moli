@@ -11,6 +11,7 @@ pub(in crate::native_bridge::context_host) struct PendingChildParserPreload {
     owner: FrameDocumentTaskOwner,
     realm: FrameRealmId,
     link: DomHandle,
+    document_referrer_policy: String,
 }
 
 impl JsContextHost {
@@ -61,8 +62,20 @@ impl JsContextHost {
             {
                 continue;
             }
+            let document_referrer_policy =
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+                .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned());
             if self.connected_style_document_realm(owner).is_some() {
-                self.start_child_parser_preload(scope, child, document, owner, link);
+                self.start_child_parser_preload(
+                    scope,
+                    child,
+                    document,
+                    owner,
+                    link,
+                    document_referrer_policy,
+                );
                 continue;
             }
             if self
@@ -81,7 +94,14 @@ impl JsContextHost {
                 request,
                 FrameRealmMaterializationRequest::AlreadyMaterialized { .. }
             ) {
-                self.start_child_parser_preload(scope, child, document, owner, link);
+                self.start_child_parser_preload(
+                    scope,
+                    child,
+                    document,
+                    owner,
+                    link,
+                    document_referrer_policy,
+                );
             } else {
                 self.pending_child_parser_preloads
                     .push(PendingChildParserPreload {
@@ -90,6 +110,7 @@ impl JsContextHost {
                         owner,
                         realm: request.realm_id(),
                         link,
+                        document_referrer_policy,
                     });
             }
         }
@@ -102,6 +123,7 @@ impl JsContextHost {
         document: DomHandle,
         owner: FrameDocumentTaskOwner,
         link: DomHandle,
+        document_referrer_policy: String,
     ) {
         if !self.is_current_child_parser_preload(child, document, owner, link) {
             return;
@@ -116,7 +138,13 @@ impl JsContextHost {
         let host_ptr = self as *mut JsContextHost;
         // The policy snapshot is complete before the mutable runtime borrow.
         // Lifecycle commit below only accesses FrameOwnerStore.
-        unsafe { &mut *runtime }.prime_parser_preload_link(scope, host_ptr, link, check);
+        unsafe { &mut *runtime }.prime_parser_preload_link(
+            scope,
+            host_ptr,
+            link,
+            check,
+            document_referrer_policy,
+        );
     }
 
     pub(crate) fn promote_child_parser_preloads_after_realm_materialization(
@@ -136,6 +164,7 @@ impl JsContextHost {
                     pending.document,
                     owner,
                     pending.link,
+                    pending.document_referrer_policy,
                 );
             }
         }

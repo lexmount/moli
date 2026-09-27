@@ -725,6 +725,7 @@ mod tests {
         let script_url = url::Url::parse("https://child-frame-source.test/root.mjs")
             .expect("parser module URL should parse");
         let script = PreparedScript {
+            document_referrer_policy: None,
             position: 3,
             node_id: NodeId::new(41),
             kind: ScriptKind::Module,
@@ -758,6 +759,7 @@ mod tests {
         let document_url = url::Url::parse("https://child-frame-source.test/document")
             .expect("inline parser module document URL should parse");
         let script = PreparedScript {
+            document_referrer_policy: None,
             position: 3,
             node_id: NodeId::new(43),
             kind: ScriptKind::Module,

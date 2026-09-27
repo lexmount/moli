@@ -23,13 +23,14 @@ impl DocumentRuntime {
                 self.document_scripting_enabled(),
             )
         };
-        plan_script_start(
+        let plan = plan_script_start(
             &mut self.dom_host,
             &self.document,
             node,
             host_script_handle,
             options,
-        )
+        )?;
+        Some(plan.with_document_referrer_policy(self.current_document_referrer_policy()))
     }
 
     pub(crate) fn begin_runtime_script_text_preparation(
