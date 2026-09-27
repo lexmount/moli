@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use moli_page_types::{
@@ -16,6 +16,52 @@ use crate::native_bridge::{
     NestedHistoryStore,
 };
 
+/// Native state inherited by an about:blank Document. The protocol transports
+/// this snapshot without reconstructing an origin from a URL or JS property.
+/// History retains it by Document identity for reload and traversal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererAboutDocumentState(Arc<AboutDocumentState>);
+
+#[derive(Debug, PartialEq, Eq)]
+struct AboutDocumentState {
+    origin: crate::native_bridge::WindowAccessOrigin,
+    base_url: Url,
+    policy_container: crate::document_runtime::DocumentPolicyContainer,
+}
+
+impl RendererAboutDocumentState {
+    pub(crate) fn new(
+        origin: crate::native_bridge::WindowAccessOrigin,
+        base_url: Url,
+        policy_container: crate::document_runtime::DocumentPolicyContainer,
+    ) -> Self {
+        Self(Arc::new(AboutDocumentState {
+            origin,
+            base_url,
+            policy_container,
+        }))
+    }
+
+    pub(crate) fn origin(&self) -> &crate::native_bridge::WindowAccessOrigin {
+        &self.0.origin
+    }
+    pub(crate) fn base_url(&self) -> &Url {
+        &self.0.base_url
+    }
+    pub(crate) fn policy_container(&self) -> &crate::document_runtime::DocumentPolicyContainer {
+        &self.0.policy_container
+    }
+
+    pub(crate) fn storage_key(&self) -> Option<moli_storage_key::MoliStorageKey> {
+        if self.policy_container().sandbox.forces_opaque_origin {
+            return None;
+        }
+        Url::parse(&self.origin().serialized_origin())
+            .ok()
+            .map(|url| moli_storage_key::MoliStorageKey::first_party_from_url(&url, None))
+    }
+}
+
 /// The committed history of a renderer's top-level Document. Publishing a
 /// snapshot happens at a history mutation, never while capturing Page state.
 /// Browser navigation can read this handle without entering V8, including
@@ -26,6 +72,7 @@ pub struct RendererNavigationHistory {
     joint: Arc<Mutex<Option<JointSessionHistory>>>,
     nested: NestedHistoryStore,
     selected_step: Arc<Mutex<Option<(String, SessionHistoryStepId)>>>,
+    about_documents: Arc<Mutex<HashMap<NavigationHistoryDocumentId, RendererAboutDocumentState>>>,
 }
 
 impl PartialEq for RendererNavigationHistory {
@@ -109,6 +156,7 @@ impl RendererNavigationHistory {
             joint: Arc::new(Mutex::new(joint)),
             nested: self.nested.clone(),
             selected_step: Arc::default(),
+            about_documents: self.about_documents.clone(),
         }
     }
 
@@ -117,10 +165,27 @@ impl RendererNavigationHistory {
             *history = joint;
         }
     }
-    pub(crate) fn publish(&self, seed: NavigationHistoryEntrySeed) {
+    pub(crate) fn publish(
+        &self,
+        seed: NavigationHistoryEntrySeed,
+        state: Option<RendererAboutDocumentState>,
+    ) {
         if let Some(history) = seed.session_history.traversable.as_deref() {
             *self.joint.lock() = Some(history.clone());
         }
+        let mut documents = self.about_documents.lock();
+        documents.retain(|document, _| {
+            seed.entries
+                .iter()
+                .any(|entry| &entry.document_id == document)
+        });
+        if let Some(state) = state
+            && let Some(entry) = current_entry(&seed)
+        {
+            documents.insert(entry.document_id.clone(), state);
+        }
+        // Publish the seed only after its inherited state is available to a
+        // browser navigation reading this handle from another thread.
         *self.snapshot.lock() = Some(Arc::new(seed));
     }
 
@@ -212,12 +277,15 @@ impl RendererNavigationHistory {
         seed: NavigationHistoryEntrySeed,
     ) -> RendererNavigationHistoryRequest {
         let source_index = self.snapshot().map(|source| source.current_index);
+        let about_document_state = current_entry(&seed)
+            .and_then(|entry| self.about_documents.lock().get(&entry.document_id).cloned());
         RendererNavigationHistoryRequest {
             source: self.clone(),
             requested: Arc::new(seed),
             source_index,
             initial_empty_source: false,
             selected_step: self.selected_step.lock().clone(),
+            about_document_state,
         }
     }
 }
@@ -233,6 +301,7 @@ pub struct RendererNavigationHistoryRequest {
     source_index: Option<u32>,
     initial_empty_source: bool,
     selected_step: Option<(String, SessionHistoryStepId)>,
+    about_document_state: Option<RendererAboutDocumentState>,
 }
 
 impl PartialEq for RendererNavigationHistoryRequest {
@@ -240,12 +309,31 @@ impl PartialEq for RendererNavigationHistoryRequest {
         self.source == other.source
             && Arc::ptr_eq(&self.requested, &other.requested)
             && self.initial_empty_source == other.initial_empty_source
+            && self.about_document_state == other.about_document_state
     }
 }
 
 impl Eq for RendererNavigationHistoryRequest {}
 
 impl RendererNavigationHistoryRequest {
+    /// A new about:blank navigation inherits its initiator's frozen state.
+    /// Reload and traversal retain the destination Document's recorded state.
+    pub fn with_about_document_state(mut self, state: Option<RendererAboutDocumentState>) -> Self {
+        if !matches!(self.navigation_type(), Some("reload" | "traverse")) {
+            self.about_document_state = state;
+        }
+        self
+    }
+
+    pub(crate) fn about_document_state(
+        &self,
+        final_url: &Url,
+    ) -> Option<RendererAboutDocumentState> {
+        moli_url::is_about_blank(final_url)
+            .then(|| self.about_document_state.clone())
+            .flatten()
+    }
+
     pub(crate) fn source_history(&self) -> RendererNavigationHistory {
         let mut source = self.source.clone();
         source.selected_step = Arc::new(Mutex::new(self.selected_step.clone()));
@@ -314,7 +402,7 @@ impl RendererNavigationHistoryRequest {
             .ok_or_else(|| anyhow!("missing navigation history destination"))?;
         let current =
             current_entry(&source).ok_or_else(|| anyhow!("missing navigation history source"))?;
-        let seed = match self.navigation_type() {
+        let mut seed = match self.navigation_type() {
             Some("push" | "replace") => {
                 let mutation = if self.navigation_type() == Some("replace") {
                     NavigationHistoryMutation::Replace
@@ -362,6 +450,26 @@ impl RendererNavigationHistoryRequest {
             }
             _ => self.requested.as_ref().clone(),
         };
+        // about:blank's URL does not identify its inherited origin. Use the
+        // destination Document state and the source's native history record.
+        let destination_origin = self
+            .about_document_state(final_url)
+            .map(|state| state.origin().serialized_origin())
+            .unwrap_or_else(|| moli_url::origin_ascii_serialization(final_url));
+        let traversed_indices = source.current_index.min(seed.current_index)
+            ..=source.current_index.max(seed.current_index);
+        let source_is_contiguous = self.navigation_type() != Some("traverse")
+            || source
+                .entries
+                .iter()
+                .filter(|entry| traversed_indices.contains(&entry.history_index))
+                .all(|entry| entry.document_origin == destination_origin);
+        if let Some(activation) = &mut seed.activation {
+            activation.from = (destination_origin != "null"
+                && current.document_origin == destination_origin
+                && source_is_contiguous)
+                .then(|| current.clone());
+        }
         Ok(self.finish_seed(seed, final_url))
     }
 }

@@ -1005,6 +1005,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                         initiator: request.initiator,
                         initial_document_environment: None,
                     }),
+                    None,
                 );
                 crate::context_bootstrap::web_mcp::bind_root_navigation(runtime, navigation.form);
                 true

@@ -55,7 +55,7 @@ impl<'s> OpenedRendererWindow<'s> {
             let host = crate::util::context_host_ptr_from_window_object(scope, self.window_proxy)
                 .expect("a related Window retains its native host");
             // Run the URL after the opening script returns, without a network load.
-            unsafe { &mut *host }.record_pending_location_navigation(url, None);
+            unsafe { &mut *host }.record_pending_location_navigation(url, None, None);
             return true;
         }
         #[cfg(feature = "molio")]

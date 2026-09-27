@@ -668,6 +668,8 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
             reserved_service_worker_client_id: None,
 
             navigation_history_source: None,
+
+            about_document_state: None,
         },
         PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
         crate::dom::native::DomHost::from_dom(NativeDom::new(
@@ -958,6 +960,8 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -1136,6 +1140,8 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,
@@ -1736,6 +1742,8 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
                 reserved_service_worker_client_id: None,
 
                 navigation_history_source: None,
+
+                about_document_state: None,
             },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
             parser_dom_host,

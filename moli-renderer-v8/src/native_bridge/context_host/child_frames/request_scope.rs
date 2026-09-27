@@ -142,10 +142,7 @@ impl PageScriptHost {
             }
             current = self.child_browsing_context_parent_handle(current_handle);
         }
-        let top_url = self
-            .current_main_document_resource_loader()
-            .and_then(|loader| Url::parse(loader.fetch_context().origin()).ok())
-            .unwrap_or_else(|| self.document_url().clone());
+        let top_url = self.main_document_secure_context_url();
         // about:blank/srcdoc inherit their creator's trustworthiness, but a
         // trustworthy descendant cannot override an insecure ancestor.
         if moli_url::is_potentially_trustworthy_url(&top_url) {
@@ -314,7 +311,7 @@ impl PageScriptHost {
                 .get(&handle)
                 .copied()
         });
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         let origin = self.child_browsing_context_network_partition_origin(handle)?;
         let relation =
             StoragePartitionRelation::from_sites(&site_for_url(&current_url), &top_level_site);
@@ -331,7 +328,7 @@ impl PageScriptHost {
         bootstrap: &ChildBrowsingContextBootstrap,
         credentialless_storage_nonce: Option<OpaqueOriginNonce>,
     ) -> Option<String> {
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         let origin =
             self.child_browsing_context_navigation_network_partition_origin(handle, bootstrap)?;
         let target_url = Self::child_browsing_context_bootstrap_url(bootstrap)?;
@@ -350,7 +347,7 @@ impl PageScriptHost {
     }
 
     fn child_browsing_context_ancestor_chain_is_cross_site(&self, handle: DomHandle) -> bool {
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         let mut current = self.child_browsing_context_parent_handle(handle);
         let mut depth = 0;
         while let Some(parent) = current {
@@ -467,7 +464,7 @@ impl PageScriptHost {
             return None;
         }
         match identity.dispatch_scope() {
-            OwnerDispatchScope::Top => Some(self.document_url().clone()),
+            OwnerDispatchScope::Top => Some(self.main_document_secure_context_url()),
             OwnerDispatchScope::Child(handle) => {
                 self.child_browsing_context_secure_context_url(handle)
             }
@@ -481,7 +478,7 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
     ) -> Option<ActiveStorageContext> {
-        let top_origin = moli_url::origin_ascii_serialization(self.document_url());
+        let top_origin = self.main_document_origin();
         self.child_browsing_context_web_storage_scope(handle, &top_origin)
             .map(|scope| ActiveStorageContext::new(scope.into_storage_context()))
     }
@@ -495,7 +492,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn top_document_storage_context(&mut self) -> ActiveStorageContext {
-        let top_origin = moli_url::origin_ascii_serialization(self.document_url());
+        let top_origin = self.main_document_origin();
         ActiveStorageContext::new(
             self.web_storage_scope_for_top_document_origin(&top_origin)
                 .into_storage_context(),
@@ -523,7 +520,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn top_web_storage_scope(&mut self) -> WebStorageScope {
-        let top_origin = moli_url::origin_ascii_serialization(self.document_url());
+        let top_origin = self.main_document_origin();
         self.web_storage_scope_for_top_document_origin(&top_origin)
     }
 
@@ -548,7 +545,7 @@ impl PageScriptHost {
         let parent_has_cross_site_ancestor = parent_scope.storage_key().has_cross_site_ancestor();
         if self.child_browsing_context_has_opaque_origin(handle) {
             let url = self.child_browsing_context_current_url(handle)?;
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = self.top_level_storage_site();
             let relation = if moli_url::is_about_blank(&url) {
                 StoragePartitionRelation::Unknown
             } else {
@@ -580,7 +577,7 @@ impl PageScriptHost {
                     parent_scope.origin(),
                 )
             };
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = self.top_level_storage_site();
             let mut storage_key = web_storage_key_for_origin_and_top_level_site_with_nonce(
                 &origin,
                 top_level_site,
@@ -599,7 +596,7 @@ impl PageScriptHost {
             &url,
             parent_scope.origin(),
         );
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         let mut storage_key =
             web_storage_key_for_origin_and_top_level_site_with_nonce(&origin, top_level_site, None);
         if parent_has_cross_site_ancestor {
@@ -621,7 +618,7 @@ impl PageScriptHost {
             .is_some_and(|sandbox| sandbox_attribute_forces_opaque_origin(&sandbox))
             || url.scheme() == "data"
         {
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = self.top_level_storage_site();
             let relation = if moli_url::is_about_blank(url) {
                 StoragePartitionRelation::Unknown
             } else {
@@ -645,11 +642,18 @@ impl PageScriptHost {
             url,
             parent_scope.origin(),
         );
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.top_level_storage_site();
         WebStorageScope::new(
             origin.clone(),
             web_storage_key_for_origin_and_top_level_site_with_nonce(&origin, top_level_site, None),
         )
+    }
+
+    pub(in crate::native_bridge::context_host) fn top_level_storage_site(&self) -> String {
+        self.top_level_storage_key
+            .as_ref()
+            .map(|key| key.top_level_site().to_owned())
+            .unwrap_or_else(|| site_for_url(self.document_url()))
     }
 
     fn web_storage_scope_for_top_document_origin(&mut self, origin: &str) -> WebStorageScope {

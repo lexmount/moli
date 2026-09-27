@@ -1157,6 +1157,8 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
             reserved_service_worker_client_id: None,
 
  navigation_history_source: None,
+
+ about_document_state: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,

@@ -426,6 +426,7 @@ impl PageScriptHost {
             force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell::new(false),
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: DocumentDomainState::default(),
+            about_document_state: None,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),

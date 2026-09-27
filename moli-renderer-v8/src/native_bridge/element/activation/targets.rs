@@ -53,12 +53,14 @@ pub(super) fn queue_top_level_location_navigation(
     runtime_ptr: *mut PageScriptHost,
     resolved_url: &str,
     history: NavigationHistoryMutation,
+    source: crate::native_bridge::OwnerDispatchScope,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
         return false;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.record_pending_location_navigation(url, None);
+    let about_document_state = runtime.capture_about_document_state(source, &url, None);
+    runtime.record_pending_location_navigation(url, None, about_document_state);
     runtime.set_pending_location_navigation_history(history);
     true
 }

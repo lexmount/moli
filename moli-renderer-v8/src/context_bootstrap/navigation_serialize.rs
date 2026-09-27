@@ -117,8 +117,9 @@ pub(super) fn publish_top_level_navigation_history<'s>(
         &mut entries,
     );
     let traversable = host.session_histories.get_mut(None).clone();
-    host.top_level_navigation_history()
-        .publish(NavigationHistoryEntrySeed {
+    let about_document_state = host.current_about_document_state();
+    host.top_level_navigation_history().publish(
+        NavigationHistoryEntrySeed {
             session_history: moli_page_types::SessionHistorySeed {
                 traversable: Some(Box::new(traversable)),
                 ..Default::default()
@@ -128,7 +129,9 @@ pub(super) fn publish_top_level_navigation_history<'s>(
             // Activation belongs to the navigation operation, not the source
             // history. Reading public activation properties could invoke JS here.
             activation: None,
-        });
+        },
+        about_document_state,
+    );
 }
 
 pub(super) fn serialize_navigation_entry_object<'s>(

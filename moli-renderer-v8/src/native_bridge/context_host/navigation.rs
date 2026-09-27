@@ -69,6 +69,7 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
     /// Resolved history handling for requests without a prebuilt entry seed.
     pub(crate) history_mutation: Option<NavigationHistoryMutation>,
+    pub(crate) about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
         Option<crate::types::ServiceWorkerClientNavigateContinuation>,
@@ -287,12 +288,14 @@ impl PageScriptHost {
         &mut self,
         url: Url,
         entry_seed: Option<NavigationHistoryEntrySeed>,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.record_pending_location_navigation_with_kind(
             url,
             entry_seed,
             BrowserNavigationRequestKind::Navigate,
             None,
+            about_document_state,
         );
     }
 
@@ -302,6 +305,7 @@ impl PageScriptHost {
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         source: Option<LocationNavigationSource>,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.record_pending_location_navigation_request(
             url,
@@ -311,6 +315,7 @@ impl PageScriptHost {
             entry_seed,
             browser_navigation_kind,
             source,
+            about_document_state,
         );
     }
 
@@ -323,6 +328,7 @@ impl PageScriptHost {
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         source: Option<LocationNavigationSource>,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
         self.cancel_planned_form_navigation_for_url(OwnerDispatchScope::Top, Some(&url));
         self.clear_pending_top_level_navigation();
@@ -350,6 +356,7 @@ impl PageScriptHost {
                 initial_document_environment,
                 entry_seed,
                 history_mutation: None,
+                about_document_state,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
                 web_mcp_invocation: None,
@@ -384,6 +391,7 @@ impl PageScriptHost {
                 initial_document_environment: None,
                 entry_seed: None,
                 history_mutation: None,
+                about_document_state: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
                 web_mcp_invocation: None,

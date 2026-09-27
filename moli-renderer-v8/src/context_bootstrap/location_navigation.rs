@@ -334,6 +334,7 @@ pub(crate) fn queue_related_popup_navigation<'s>(
         Some(navigation_source),
         false,
         None,
+        None,
     );
 }
 
@@ -581,6 +582,19 @@ fn navigate_location_object_with_options<'s>(
         }
     }
     let exact_same_href = current_href == resolved.as_str();
+    let about_document_state = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        let host = unsafe { &*host_ptr };
+        let source_handle = source_element
+            .and_then(|element| {
+                crate::native_bridge::node_runtime_and_handle_from_object(scope, element).ok()
+            })
+            .map(|(_, handle)| handle);
+        host.capture_about_document_state(
+            location_navigation_initiator_scope(scope, host),
+            &resolved,
+            source_handle,
+        )
+    });
     let owner = runtime_window_owner(scope, location);
     let source_can_access_target = source_can_access_target.unwrap_or_else(|| {
         let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
@@ -1017,6 +1031,7 @@ fn navigate_location_object_with_options<'s>(
         navigation_source,
         browser_owned_hyperlink,
         named_hyperlink_popup,
+        about_document_state,
     );
 }
 
@@ -1037,6 +1052,7 @@ fn navigate_top_level_cross_document_location<'s>(
     navigation_source: Option<LocationNavigationSource>,
     browser_owned_hyperlink: bool,
     named_hyperlink_popup: Option<crate::native_bridge::element::NamedHyperlinkPopup>,
+    about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
 ) {
     let popup_id = crate::native_bridge::lightweight_popup_id_from_window(scope, owner);
     if let Some(event) = navigate_event
@@ -1143,6 +1159,7 @@ fn navigate_top_level_cross_document_location<'s>(
             moli_fetch::BrowserNavigationRequestKind::Navigate
         },
         navigation_source,
+        about_document_state,
     );
 }
 
