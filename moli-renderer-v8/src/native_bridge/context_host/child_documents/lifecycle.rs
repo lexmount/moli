@@ -898,6 +898,9 @@ impl JsContextHost {
         handle: DomHandle,
         navigation_load: Option<FrameDocumentNavigationLoadBinding>,
     ) -> bool {
+        let Some(document) = self.child_browsing_context_document_handle(handle) else {
+            return false;
+        };
         let is_current = |host: &Self| {
             navigation_load.is_none_or(|navigation_load| {
                 host.current_child_navigation_load(handle) == Some(navigation_load)
@@ -907,16 +910,18 @@ impl JsContextHost {
             })
         };
         let documents = self.child_document_unload_tree_snapshot(handle);
-        self.dispatch_child_documents_beforeunload(scope, documents, is_current)
+        self.dispatch_child_documents_beforeunload(scope, documents, Some(document), is_current)
     }
 
     pub(in crate::native_bridge::context_host) fn dispatch_child_documents_beforeunload(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         documents: Vec<(DomHandle, DomHandle, Option<DomHandle>)>,
+        navigation_target: Option<DomHandle>,
         is_current: impl Fn(&Self) -> bool,
     ) -> bool {
         let mut navigation_guards: Vec<(DomHandle, v8::Global<v8::Object>, bool)> = Vec::new();
+        let mut _target_unload = None;
         for (handle, document, parent_document) in documents {
             while navigation_guards
                 .last()
@@ -950,11 +955,17 @@ impl JsContextHost {
             if navigation_unload_event_active(scope, window) {
                 continue;
             }
+            // Acquire the target's counter only after admitting its event:
+            // the reentry check above also consults native unload counters.
+            // Keep this guard through every descendant's callback, without
+            // extending intermediate documents' own callback counters.
+            if Some(document) == navigation_target {
+                _target_unload = Some(self.enter_document_unload(document));
+            }
             // Prevent navigation reentry into ancestors while checking their
-            // descendants. Destructive writes are suppressed only during each
-            // document's own beforeunload callback, whose dispatcher owns the
-            // native unload counter. Checking does not retire the document or
-            // require Window load to have started.
+            // descendants. A target outside this list is protected by the
+            // caller. Checking does not retire the document or require Window
+            // load to have started.
             let previous = replace_navigation_unload_event_active(scope, window, true);
             navigation_guards.push((document, v8::Global::new(scope, window), previous));
             dispatch_beforeunload_for_runtime_owner(scope, window);
