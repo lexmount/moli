@@ -1,6 +1,7 @@
 mod async_policy;
 mod bootstrap_commit;
 mod commit;
+mod encoding;
 mod frame_owner_resource_timing;
 mod initial_empty;
 mod lifecycle;
