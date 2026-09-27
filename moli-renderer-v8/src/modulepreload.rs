@@ -163,6 +163,7 @@ pub(crate) fn modulepreload_fetch_candidate(
     request_url: Url,
     document_url: &Url,
     import_map_integrity: Option<String>,
+    document_referrer_policy: Option<String>,
 ) -> Option<ModulepreloadFetchCandidate> {
     let state = modulepreload_as_state(element);
     let attributes = modulepreload_attributes_for_state(state)?;
@@ -189,7 +190,8 @@ pub(crate) fn modulepreload_fetch_candidate(
             document_url.clone(),
             key,
             ModuleFetchMetadata::from_modulepreload_script_fetch_metadata(&fetch_metadata),
-        ),
+        )
+        .with_document_referrer_policy(document_referrer_policy),
     })
 }
 
