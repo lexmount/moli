@@ -18,6 +18,9 @@ use tokio::time::Duration;
 #[path = "scripts/child_synthetic_modules.rs"]
 mod child_synthetic_modules;
 
+#[path = "scripts/text_modules.rs"]
+mod text_modules;
+
 #[path = "scripts/preparation_errors.rs"]
 mod preparation_errors;
 
@@ -4541,7 +4544,7 @@ async fn module_import_attributes_and_dynamic_options_execute() -> Result<()> {
     browser
         .wait_for_script_truthy(
             &mut page,
-            "window.moduleImportAttributesDynamicValue === 'comment-ok' && window.moduleImportAttributesTextRejected === true",
+            "window.moduleImportAttributesDynamicValue === 'comment-ok' && window.moduleImportAttributesUnsupportedRejected === true",
             Duration::from_secs(2),
         )
         .await?;
@@ -4560,7 +4563,7 @@ async fn module_import_attributes_and_dynamic_options_execute() -> Result<()> {
         ))
     );
     assert_eq!(
-        diagnostic_global(&page, "moduleImportAttributesTextErrorName"),
+        diagnostic_global(&page, "moduleImportAttributesUnsupportedErrorName"),
         Some(&JsValueSnapshot::String("TypeError".to_owned()))
     );
 

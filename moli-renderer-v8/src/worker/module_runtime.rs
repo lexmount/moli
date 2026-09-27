@@ -1876,6 +1876,7 @@ fn worker_module_browser_request_metadata(
 ) -> BrowserRequestMetadata {
     match module_type {
         WorkerModuleType::Json => BrowserRequestMetadata::JsonModule,
+        WorkerModuleType::Text => BrowserRequestMetadata::TextModule,
         WorkerModuleType::JavaScriptOrWebAssembly => graph_metadata,
     }
 }
@@ -1893,7 +1894,7 @@ struct WorkerModuleGraph {
 struct WorkerModuleRecord {
     key: WorkerModuleKey,
     source_url: Url,
-    json_value: Option<v8::Global<v8::Value>>,
+    synthetic_value: Option<v8::Global<v8::Value>>,
     module: v8::Global<v8::Module>,
     requests: Vec<WorkerModuleRequest>,
     dependencies: Vec<WorkerModuleDependency>,
@@ -1932,6 +1933,7 @@ pub(super) enum WorkerModuleType {
     // share this entry; the fetched MIME type selects the compiled record.
     JavaScriptOrWebAssembly,
     Json,
+    Text,
 }
 
 impl WorkerModuleType {
@@ -1946,6 +1948,7 @@ impl WorkerModuleType {
                 super::module_mime::ensure_worker_json_module_mime_from_headers(headers)?;
                 Ok(WorkerScriptResourceKind::JsonModule)
             }
+            Self::Text => Ok(WorkerScriptResourceKind::TextModule),
             Self::JavaScriptOrWebAssembly => {
                 if super::worker_response_has_webassembly_mime(headers) {
                     return Ok(WorkerScriptResourceKind::WebAssemblyModule);
@@ -1978,7 +1981,7 @@ struct WorkerModuleDependency {
 }
 
 enum WorkerSyntheticModuleRecord {
-    Json(v8::Global<v8::Value>),
+    Value(v8::Global<v8::Value>),
     WebAssembly(WasmModuleRecord),
 }
 
@@ -2035,7 +2038,7 @@ impl WorkerModuleGraph {
         &mut self,
         key: WorkerModuleKey,
         source_url: Url,
-        json_value: Option<v8::Global<v8::Value>>,
+        synthetic_value: Option<v8::Global<v8::Value>>,
         module: v8::Global<v8::Module>,
         identity_hash: i32,
         requests: Vec<WorkerModuleRequest>,
@@ -2046,7 +2049,7 @@ impl WorkerModuleGraph {
         self.records.push(WorkerModuleRecord {
             key: key.clone(),
             source_url,
-            json_value,
+            synthetic_value,
             module,
             requests,
             dependencies: Vec::new(),
@@ -2171,10 +2174,10 @@ impl WorkerModuleGraph {
             return Some(WorkerSyntheticModuleRecord::WebAssembly(wasm.clone()));
         }
         match record.key.module_type {
-            WorkerModuleType::Json => record
-                .json_value
+            WorkerModuleType::Json | WorkerModuleType::Text => record
+                .synthetic_value
                 .clone()
-                .map(WorkerSyntheticModuleRecord::Json),
+                .map(WorkerSyntheticModuleRecord::Value),
             WorkerModuleType::JavaScriptOrWebAssembly => None,
         }
     }
@@ -2245,7 +2248,7 @@ fn ensure_worker_module_entry(
     if let Some(entry) = existing_entry {
         return Ok(entry);
     }
-    let (module, identity_hash, requests, wasm_module, json_value) =
+    let (module, identity_hash, requests, wasm_module, synthetic_value) =
         compile_worker_module_record(scope, source, &key, &source_url).inspect_err(|error| {
             graph
                 .borrow_mut()
@@ -2255,7 +2258,7 @@ fn ensure_worker_module_entry(
     Ok(graph.borrow_mut().insert(
         key,
         source_url,
-        json_value,
+        synthetic_value,
         module,
         identity_hash,
         requests,
@@ -2547,16 +2550,19 @@ fn compile_worker_module_record(
     Option<WasmModuleRecord>,
     Option<v8::Global<v8::Value>>,
 )> {
-    if key.module_type == WorkerModuleType::Json {
+    if matches!(
+        key.module_type,
+        WorkerModuleType::Json | WorkerModuleType::Text
+    ) {
         let Some(source) = source.text_source() else {
             return Err(Box::new(worker_bootstrap_error(
                 scope,
                 source_url.as_str(),
-                "JSON module worker source is not text",
+                "synthetic module worker source is not text",
                 WorkerParentErrorEventKind::Event,
             )));
         };
-        return compile_worker_synthetic_module_record(scope, source, source_url);
+        return compile_worker_synthetic_module_record(scope, source, source_url, key.module_type);
     }
     if let Some(bytes) = source.binary_source() {
         return compile_worker_wasm_module_record(scope, bytes, source_url);
@@ -2601,6 +2607,7 @@ fn compile_worker_synthetic_module_record(
     scope: &mut v8::PinScope<'_, '_>,
     source: &str,
     source_url: &Url,
+    module_type: WorkerModuleType,
 ) -> WorkerModuleBootstrapResult<(
     v8::Global<v8::Module>,
     i32,
@@ -2610,9 +2617,12 @@ fn compile_worker_synthetic_module_record(
 )> {
     let try_catch = pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    let Some(value) =
+    let value = if module_type == WorkerModuleType::Text {
+        v8_string(&scope, source).map(Into::into)
+    } else {
         crate::module_runtime::parse_json_module(&mut scope, source, source_url.as_str())
-    else {
+    };
+    let Some(value) = value else {
         let exception = scope.exception();
         let message = scope.message();
         let report = build_exception_report_without_stack(&mut scope, exception, message);
@@ -2842,6 +2852,11 @@ fn worker_module_key_for_attributes(
     };
     match module_type {
         "json" => Ok(WorkerModuleKey::json(url.clone(), attributes.clone())),
+        "text" => Ok(WorkerModuleKey {
+            url: url.clone(),
+            module_type: WorkerModuleType::Text,
+            attributes: attributes.clone(),
+        }),
         other => Err(format!("module type `{other}` is not a valid module type")),
     }
 }
@@ -3082,7 +3097,7 @@ fn worker_synthetic_module_evaluation_steps<'s>(
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .and_then(|graph| graph.borrow().synthetic_module_record_for(module))?;
     match synthetic {
-        WorkerSyntheticModuleRecord::Json(value) => {
+        WorkerSyntheticModuleRecord::Value(value) => {
             let value = v8::Local::new(scope, value);
             set_worker_synthetic_default_export(scope, module, value)
         }

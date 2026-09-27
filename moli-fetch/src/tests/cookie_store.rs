@@ -788,6 +788,29 @@ fn browser_json_module_subresource_headers_use_json_destination() {
 }
 
 #[test]
+fn browser_text_module_subresource_headers_use_text_destination() {
+    let config = FetchConfig::default();
+    let request = Request::new("GET", "https://example.com/data.json", None, vec![])
+        .unwrap()
+        .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
+        .with_browser_request_metadata(BrowserRequestMetadata::TextModule);
+
+    let headers = outgoing_request_headers(&config, &request, None);
+
+    assert_eq!(header_value(&headers, "accept"), Some("*/*"));
+    assert_eq!(
+        header_value(&headers, "sec-fetch-site"),
+        Some("same-origin")
+    );
+    assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
+    assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("text"));
+    assert_eq!(header_value(&headers, "origin"), None);
+}
+
+#[test]
 fn browser_manifest_subresource_headers_match_chromium() {
     let config = FetchConfig::default();
     let request = Request::new("GET", "https://example.com/app.webmanifest", None, vec![])

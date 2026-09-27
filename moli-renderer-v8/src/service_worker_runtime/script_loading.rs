@@ -433,6 +433,11 @@ fn load_imported_script_resource_for_update_check(
         .with_script_fetch_metadata(ScriptFetchRequestMetadata {
             ..ScriptFetchRequestMetadata::default()
         });
+    let request = if kind == WorkerScriptResourceKind::TextModule {
+        request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::TextModule)
+    } else {
+        request
+    };
     let response_started_at = Instant::now();
     let response = request_client
         .fetch_text_for_worker_blocking_boundary_with_cancel(request, FetchCancelHandle::new())
@@ -510,9 +515,7 @@ fn ensure_imported_script_resource_mime(
         WorkerScriptResourceKind::JsonModule => {
             crate::worker::ensure_worker_json_module_mime(response)
         }
-        WorkerScriptResourceKind::TextModule => {
-            crate::worker::ensure_worker_text_module_mime(response)
-        }
+        WorkerScriptResourceKind::TextModule => Ok(()),
         WorkerScriptResourceKind::WebAssemblyModule => {
             crate::worker::ensure_worker_wasm_module_mime(response)
         }
@@ -786,7 +789,7 @@ mod tests {
             (
                 "/app/dep.txt",
                 "HTTP/1.1 200 OK",
-                "text/plain; charset=utf-8",
+                "application/octet-stream; charset=utf-16",
                 "updated text".to_owned(),
             ),
         ]);
@@ -824,7 +827,12 @@ mod tests {
                 script_url: dep_url
             }
         );
-        server.join().expect("script response server should finish");
+        let requests = server.join().expect("script response server should finish");
+        assert!(
+            requests[1]
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("sec-fetch-dest: text"))
+        );
     }
 
     #[test]
@@ -968,7 +976,7 @@ mod tests {
 
     fn spawn_script_response_server(
         responses: Vec<(&'static str, &'static str, &'static str, String)>,
-    ) -> (String, thread::JoinHandle<()>) {
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind script response server");
         let addr = listener.local_addr().expect("script response server addr");
         let server = thread::spawn(move || {
@@ -981,6 +989,7 @@ mod tests {
                     )
                 })
                 .collect::<HashMap<_, _>>();
+            let mut requests = Vec::new();
             while !responses.is_empty() {
                 let (mut stream, _) = listener.accept().expect("accept script request");
                 let request = read_http_request_head(&mut stream);
@@ -992,6 +1001,7 @@ mod tests {
                 let (status_line, content_type, body) = responses
                     .remove(path)
                     .unwrap_or_else(|| panic!("unexpected script path: {path}"));
+                requests.push(request);
                 let response = format!(
                     "{status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -1001,6 +1011,7 @@ mod tests {
                     .write_all(response.as_bytes())
                     .expect("write script response");
             }
+            requests
         });
         (format!("http://{addr}"), server)
     }

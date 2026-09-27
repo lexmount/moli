@@ -2056,52 +2056,63 @@ async fn spawn_audio_worklet_dynamic_descendant_server() -> (String, JoinHandle<
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_audio_worklet_json_destination_server() -> (String, JoinHandle<()>) {
+async fn spawn_audio_worklet_synthetic_destination_server(
+    module_type: &'static str,
+) -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("bind AudioWorklet JSON destination server");
+        .expect("bind AudioWorklet synthetic destination server");
     let addr = listener
         .local_addr()
-        .expect("AudioWorklet JSON destination server addr");
+        .expect("AudioWorklet synthetic destination server addr");
     let server = tokio::spawn(async move {
         let (mut entry_stream, _) = listener
             .accept()
             .await
-            .expect("accept AudioWorklet JSON entry request");
+            .expect("accept AudioWorklet synthetic entry request");
         let (entry_request, entry_path) =
-            read_request_head_and_path(&mut entry_stream, "AudioWorklet JSON entry").await;
+            read_request_head_and_path(&mut entry_stream, "AudioWorklet synthetic entry").await;
         assert_eq!(entry_path, "/worklet/entry.js");
-        assert_audio_worklet_fetch_destination(&entry_request, "AudioWorklet JSON entry");
+        assert_audio_worklet_fetch_destination(&entry_request, "AudioWorklet synthetic entry");
         write_script_response(
             &mut entry_stream,
             [
-                "import data from './data.json' with { type: 'json' };",
-                "if (data.answer !== 42) throw new Error('missing JSON module');",
-                "registerProcessor('json-destination', class extends AudioWorkletProcessor {});",
+                format!("import data from './data.json' with {{ type: '{module_type}' }};"),
+                if module_type == "text" {
+                    r#"if (data !== '{"answer":42}') throw new Error('missing text module');"#.to_owned()
+                } else {
+                    "if (data.answer !== 42) throw new Error('missing JSON module');".to_owned()
+                },
+                "registerProcessor('synthetic-destination', class extends AudioWorkletProcessor {});".to_owned(),
             ]
             .join("\n"),
-            "AudioWorklet JSON entry",
+            "AudioWorklet synthetic entry",
         )
         .await;
 
-        let (mut json_stream, _) = listener
+        let (mut dependency_stream, _) = listener
             .accept()
             .await
-            .expect("accept AudioWorklet JSON dependency request");
-        let (json_request, json_path) =
-            read_request_head_and_path(&mut json_stream, "AudioWorklet JSON dependency").await;
-        assert_eq!(json_path, "/worklet/data.json");
-        assert_fetch_destination(&json_request, "json", "AudioWorklet JSON dependency");
+            .expect("accept AudioWorklet synthetic dependency request");
+        let (dependency_request, dependency_path) =
+            read_request_head_and_path(&mut dependency_stream, "AudioWorklet synthetic dependency")
+                .await;
+        assert_eq!(dependency_path, "/worklet/data.json");
+        assert_fetch_destination(
+            &dependency_request,
+            module_type,
+            "AudioWorklet synthetic dependency",
+        );
         let body = r#"{"answer":42}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
-        json_stream
+        dependency_stream
             .write_all(response.as_bytes())
             .await
-            .expect("write AudioWorklet JSON dependency response");
+            .expect("write AudioWorklet synthetic dependency response");
     });
 
     (format!("http://{addr}"), server)

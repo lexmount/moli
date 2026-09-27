@@ -177,6 +177,7 @@ pub enum ModuleKind {
     JavaScript,
     Json,
     Css,
+    Text,
     WebAssembly,
 }
 
