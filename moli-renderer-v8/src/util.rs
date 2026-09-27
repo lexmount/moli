@@ -545,7 +545,15 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
             moli_fetch::RequestCredentialsMode::Include => "include",
         },
     )?;
-    let options = v8::PrimitiveArray::new(scope, 7);
+    let referrer_policy = v8_string(
+        scope,
+        metadata
+            .request_metadata
+            .referrer_policy
+            .as_deref()
+            .unwrap_or_default(),
+    )?;
+    let options = v8::PrimitiveArray::new(scope, 8);
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
@@ -553,6 +561,7 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     options.set(scope, 4, v8::Boolean::new(scope, muted_errors).into());
     options.set(scope, 5, request_url.into());
     options.set(scope, 6, credentials.into());
+    options.set(scope, 7, referrer_policy.into());
     Some(options.into())
 }
 
@@ -573,10 +582,18 @@ pub(crate) fn script_fetch_metadata_from_host_defined_options(
             _ => return None,
         }
     };
+    let referrer_policy = if options.length() < 8 {
+        None
+    } else {
+        let value = v8::Local::<v8::String>::try_from(options.get(scope, 7)?).ok()?;
+        let policy = value.to_rust_string_lossy(scope);
+        (!policy.is_empty()).then_some(policy)
+    };
     Some(crate::module_runtime::ModuleFetchMetadata {
         credentials_mode,
         request_metadata: moli_fetch::ScriptFetchRequestMetadata {
             nonce: script_nonce_from_host_defined_options(scope, host_defined_options),
+            referrer_policy,
             ..Default::default()
         },
         parser_inserted: script_parser_inserted_from_host_defined_options(
@@ -1332,6 +1349,7 @@ mod tests {
                 parser_inserted: true,
                 request_metadata: moli_fetch::ScriptFetchRequestMetadata {
                     nonce: Some("initiator-nonce".to_owned()),
+                    referrer_policy: Some("no-referrer".to_owned()),
                     // The importing script's SRI hash must not apply to its imports.
                     integrity: Some("sha256-AAAA".to_owned()),
                     ..Default::default()
@@ -1344,6 +1362,10 @@ mod tests {
             let decoded = script_fetch_metadata_from_host_defined_options(scope, options).unwrap();
             assert_eq!(decoded.credentials_mode, credentials_mode);
             assert_eq!(decoded.nonce(), Some("initiator-nonce"));
+            assert_eq!(
+                decoded.request_metadata.referrer_policy.as_deref(),
+                Some("no-referrer")
+            );
             assert!(decoded.parser_inserted);
             assert!(decoded.integrity().is_none());
         }
