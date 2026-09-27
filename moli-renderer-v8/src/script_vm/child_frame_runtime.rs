@@ -510,6 +510,14 @@ impl ScriptVm {
             .take_pending_location_navigation_of_kind(kind)
     }
 
+    pub(crate) fn publish_main_document_navigation_history(&mut self) -> anyhow::Result<()> {
+        self.with_default_context_scope(|scope, _host_ptr| {
+            let window = scope.get_current_context().global(scope);
+            crate::context_bootstrap::publish_top_level_navigation_history(scope, window);
+            Ok(())
+        })
+    }
+
     pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {
         self.with_default_context_scope(|scope, host_ptr| {
             JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
