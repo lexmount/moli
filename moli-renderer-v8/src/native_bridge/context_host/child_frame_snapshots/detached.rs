@@ -372,15 +372,11 @@ impl JsContextHost {
             ChildBrowsingContextBootstrap::AboutBlank => Some(
                 ChildBrowsingContextSnapshot::about_blank(document_base_url.clone()),
             ),
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
-                Some(ChildBrowsingContextSnapshot::srcdoc(
-                    base_url.clone(),
-                    markup.clone(),
-                    self.document_character_set().to_owned(),
-                ))
-            }
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
+                ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone()),
+            ),
             ChildBrowsingContextBootstrap::Url(url) => self
-                .materialize_local_child_snapshot_for_url(url)
+                .materialize_local_child_snapshot_for_url(url, None)
                 .map(|snapshot| self.apply_page_csp_bypass_to_child_snapshot(snapshot)),
             ChildBrowsingContextBootstrap::Request(_) => None,
         }

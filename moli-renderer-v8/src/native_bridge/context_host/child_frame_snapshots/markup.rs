@@ -30,11 +30,7 @@ impl JsContextHost {
                 ))
             }
             ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
-                Some(ChildBrowsingContextSnapshot::srcdoc(
-                    base_url,
-                    markup,
-                    self.document_character_set().to_owned(),
-                ))
+                Some(ChildBrowsingContextSnapshot::srcdoc(base_url, markup))
             }
             ChildBrowsingContextBootstrap::Url(url) => {
                 if self.child_document_load_is_pending(handle) {
