@@ -1409,6 +1409,7 @@ mod tests {
     fn parser_module_script(url: &str) -> PreparedScript {
         let script_url = url::Url::parse(url).expect("module script url");
         PreparedScript {
+            document_referrer_policy: None,
             position: 1,
             node_id: NodeId::new(1),
             kind: ScriptKind::Module,
