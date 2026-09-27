@@ -948,6 +948,14 @@ impl DocumentRuntime {
         self.policy_container.referrer_policy.as_deref()
     }
 
+    pub(crate) fn current_document_referrer_policy(&self) -> Option<String> {
+        crate::context_bootstrap::document_referrer_policy_in_subtree(
+            &self.dom_host,
+            self.dom_host.document_handle(),
+        )
+        .or_else(|| self.response_referrer_policy().map(ToOwned::to_owned))
+    }
+
     pub(crate) fn cross_origin_embedder_policy(
         &self,
     ) -> crate::cross_origin_isolation::CrossOriginEmbedderPolicy {

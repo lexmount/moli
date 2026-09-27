@@ -506,6 +506,24 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
         }
         let effects = construction.finish_children(self.host.dom_host_mut(), node_id);
         self.consume_parser_mutation_effects(effects);
+        if self
+            .host
+            .dom_host()
+            .node(node_id)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.is_html_element("link"))
+            && let Some(child) = self
+                .host
+                .child_browsing_context_host_for_document_handle(self.document_handle)
+        {
+            // Admit the link at its parser token boundary. Waiting for a batch
+            // of discovery signals would capture policies from later meta tags.
+            self.host.queue_child_parser_discovered_modulepreload_links(
+                child,
+                self.document_handle,
+                std::iter::once(node_id),
+            );
+        }
     }
 
     fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {
