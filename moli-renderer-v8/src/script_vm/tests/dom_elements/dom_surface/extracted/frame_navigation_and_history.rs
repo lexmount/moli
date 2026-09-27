@@ -3619,6 +3619,50 @@ fn initial_empty_child_history_mutation_preserves_pending_srcdoc_navigation() {
     );
 }
 
+#[test]
+fn about_document_history_updates_preserve_relative_element_urls() {
+    for kind in ["blank", "srcdoc", "popup"] {
+        for mutation in ["fragment", "pushState", "replaceState"] {
+            let mut vm = new_storage_test_vm("https://inherited-base.test/path/page.html");
+            vm.exec(
+                &format!(
+                    r#"
+const frame = document.createElement('iframe');
+if ('{kind}' === 'srcdoc') frame.srcdoc = '<p>child</p>';
+(document.body || document.documentElement || document).append(frame);
+const child = '{kind}' === 'popup' ? open() : frame.contentWindow;
+"#
+                ),
+                None,
+            )
+            .expect("about Document should be created");
+            vm.drain_pending_child_frame_work_for_test();
+            assert_eq!(
+                vm.eval(&format!(
+                    r#"
+(() => {{
+  const saved = child.document;
+  const href = child.location.href + '#updated';
+  if ('{mutation}' === 'fragment') child.location.href = href;
+  else child.history['{mutation}'](null, '', href);
+  const anchor = saved.createElement('a'); anchor.href = 'next.html';
+  const image = saved.createElement('img'); image.src = 'next.html';
+  const form = saved.createElement('form'); form.action = 'next.html';
+  const expected = 'https://inherited-base.test/path/next.html';
+  return [saved === child.document, saved.URL === href,
+    saved.baseURI === 'https://inherited-base.test/path/page.html',
+    anchor.href === expected, image.src === expected, form.action === expected].join('|');
+}})()
+"#
+                ))
+                .expect("relative URL resolution after history update should evaluate"),
+                "true|true|true|true|true|true",
+                "{kind}: {mutation}"
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn child_location_function_uses_executing_document_as_navigation_referrer() {
     const HOST: &str = "child-location-referrer.test";
