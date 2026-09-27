@@ -1,6 +1,81 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn cross_origin_window_names_require_embedder_authorization() {
+    let child = include_str!("../../../tests/fixtures/window-frame-names-child.html");
+    let script = include_str!("../../../tests/fixtures/window-frame-container-names.js");
+    for kind in ["main", "child", "popup"] {
+        let server = StaticHttpServer::spawn_with_bodies(vec![child.to_owned(); 2]).await;
+        let loader = static_http_loader([
+            server.resolve_entry("owner.example.test"),
+            server.resolve_entry("peer.example.test"),
+        ]);
+        let mut vm = new_parsed_page_task_executor_test_vm(
+            server
+                .url_for_host("owner.example.test", "/page.html")
+                .as_str(),
+            "<!doctype html><body>owner",
+            &loader,
+        );
+        vm.exec(
+            &format!(
+                r#"
+globalThis.__frameContainerNames = null;
+(async () => {{
+  let ownerWindow = window, frame;
+  if ({kind:?} === 'child') {{
+    frame = document.createElement('iframe');
+    frame.srcdoc = '<!doctype html><body>owner';
+    const loaded = new Promise(resolve => {{frame.onload = resolve}});
+    document.body.append(frame);
+    await loaded;
+    ownerWindow = frame.contentWindow;
+  }} else if ({kind:?} === 'popup') {{
+    ownerWindow = open('about:blank');
+  }}
+  try {{
+    return await ({script})({{childURL:{child_url:?}, ownerWindow}});
+  }} finally {{
+    if (frame) frame.remove();
+    if ({kind:?} === 'popup') ownerWindow.close();
+  }}
+}})().then(
+  result => {{__frameContainerNames = result}},
+  error => {{__frameContainerNames = {{error:String(error)}}}}
+);
+"#,
+                child_url = server
+                    .url_for_host("peer.example.test", "/child.html")
+                    .as_str(),
+            ),
+            None,
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__frameContainerNames !== null)",
+            "true",
+            "frame container name checks should finish",
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(__frameContainerNames)").unwrap())
+                .unwrap();
+        assert_eq!(result["checks"], 32, "{kind}: {result}");
+        assert_eq!(
+            result["failures"],
+            serde_json::json!([]),
+            "{kind}: {result}"
+        );
+        assert_eq!(
+            server.finish_targets().await,
+            ["/child.html", "/child.html"]
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn cross_origin_window_names_follow_target_names_and_origin_filtering() {
     let host = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
