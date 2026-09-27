@@ -1209,8 +1209,7 @@ fn create_module_script_origin<'s>(
         crate::util::script_host_defined_options_with_fetch_metadata(
             scope,
             base_url,
-            fetch_metadata.nonce(),
-            fetch_metadata.parser_inserted,
+            fetch_metadata,
             false,
             None,
         )

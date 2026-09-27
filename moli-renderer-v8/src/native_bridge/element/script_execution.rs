@@ -38,8 +38,14 @@ pub(crate) fn prepare_inline_classic_frame_script_job_for_execution(
         script,
         source,
         ContentSecurityPolicyScriptElementRequest {
-            nonce: job.script_nonce.as_deref(),
-            integrity: job.script_integrity.as_deref(),
+            nonce: job
+                .script_fetch_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.nonce.as_deref()),
+            integrity: job
+                .script_fetch_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.integrity.as_deref()),
             parser_inserted,
         },
     ) else {

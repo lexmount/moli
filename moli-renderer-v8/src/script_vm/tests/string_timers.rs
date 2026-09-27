@@ -6,7 +6,13 @@ fn execute_nonce_script(vm: &mut ScriptVm, source: &str, url: &Url, nonce: Optio
         source,
         &CompiledStringProvenance::at_url(url.clone()),
         0,
-        nonce,
+        Some(&crate::planning::ScriptFetchMetadata {
+            nonce: nonce.map(str::to_owned),
+            cross_origin: Some("use-credentials".to_owned()),
+            parser_inserted: true,
+            integrity: Some("sha256-AAAA".to_owned()),
+            ..Default::default()
+        }),
         true,
     )
     .map_err(|error| error.into_anyhow())
@@ -29,9 +35,19 @@ fn assert_import_nonce(vm: &mut ScriptVm, base_url: &Url, nonce: Option<&str>) {
         .into_dynamic_import_request();
     assert_eq!(request.specifier(), "./dependency.mjs");
     assert_eq!(request.base_url(), base_url);
-    assert_eq!(request.fetch_metadata().nonce.as_deref(), nonce);
+    assert_eq!(request.fetch_metadata().nonce(), nonce);
+    assert_eq!(
+        request.fetch_metadata().credentials_mode,
+        moli_fetch::RequestCredentialsMode::Include
+    );
     assert!(!request.fetch_metadata().parser_inserted);
-    assert!(request.fetch_metadata().integrity.is_none());
+    assert!(
+        request
+            .fetch_metadata()
+            .request_metadata
+            .integrity
+            .is_none()
+    );
 }
 
 #[test]
@@ -52,8 +68,8 @@ fn dynamic_function_imports_preserve_each_initiators_nonce_for_identical_source(
             .into_dynamic_import_request();
         assert_eq!(request.specifier(), "./dependency.mjs");
         assert_eq!(request.base_url(), &script_url);
-        assert_eq!(request.fetch_metadata().nonce.as_deref(), nonce);
-        assert!(request.fetch_metadata().integrity.is_none());
+        assert_eq!(request.fetch_metadata().nonce(), nonce);
+        assert!(request.fetch_metadata().integrity().is_none());
     }
 }
 
@@ -92,7 +108,7 @@ fn dynamic_function_imports_keep_creation_metadata_when_invoked_by_another_scrip
             .expect("each created Function should queue its own import")
             .into_dynamic_import_request();
         assert_eq!(request.base_url(), &Url::parse(url).unwrap());
-        assert_eq!(request.fetch_metadata().nonce.as_deref(), nonce);
+        assert_eq!(request.fetch_metadata().nonce(), nonce);
     }
 }
 
@@ -113,7 +129,7 @@ fn dynamic_function_imports_keep_origins_for_async_and_generator_constructors() 
                 .expect("each constructor kind should queue an import")
                 .into_dynamic_import_request();
             assert_eq!(request.base_url(), &script_url);
-            assert_eq!(request.fetch_metadata().nonce.as_deref(), nonce);
+            assert_eq!(request.fetch_metadata().nonce(), nonce);
         }
     }
 }
@@ -199,7 +215,7 @@ fn dynamic_function_origin_keys_preserve_trusted_types_source_checks() {
 }
 
 #[test]
-fn string_timers_preserve_nonce_for_timeout_interval_and_nested_source() {
+fn string_timers_preserve_fetch_options_for_timeout_interval_and_nested_source() {
     for (source, timer_turns) in [
         (r#"setTimeout("import('./dependency.mjs')", 0);"#, 1),
         (

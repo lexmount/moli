@@ -605,7 +605,7 @@ impl ScriptVm {
                     } else {
                         0
                     },
-                    fetch_metadata.nonce.as_deref(),
+                    Some(fetch_metadata),
                     true,
                 );
                 match result {
