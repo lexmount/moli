@@ -400,11 +400,12 @@ mod tests {
     const DOM_DEBUGGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
     async fn command(ctx: &mut TestContext, message: Value, command_id: u64) -> Value {
-        tokio::time::timeout(DOM_DEBUGGER_COMMAND_TIMEOUT, ctx.process_async(message))
-            .await
-            .unwrap_or_else(|_| {
-                panic!("timed out processing DOMDebugger test command {command_id}")
-            });
+        tokio::time::timeout(
+            DOM_DEBUGGER_COMMAND_TIMEOUT,
+            ctx.process_and_wait_for_response_async(message),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("timed out processing DOMDebugger test command {command_id}"));
         ctx.take_response_by_id(command_id)
     }
 

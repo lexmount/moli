@@ -3910,7 +3910,10 @@ async fn streaming_fetch_body_clone_branches_both_receive_complete_body() {
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch clone test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 105;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3954,10 +3957,14 @@ async fn streaming_fetch_body_clone_branches_both_receive_complete_body() {
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"UX".to_vec());
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming fetch finish should close both clone branches");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch tee promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchTeeProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_clone_branches_both_receive_complete_body",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),
@@ -3983,7 +3990,10 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch() {
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch live-clone test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 102;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -4037,10 +4047,14 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch() {
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"clone".to_vec());
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming fetch finish should close the live clone branch");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch clone cancel promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchCloneCancelProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_cancel_does_not_abort_live_clone_branch",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),
@@ -4066,7 +4080,10 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch clone-error test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 106;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -4115,10 +4132,14 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
         Err("stream broke".to_owned()),
     )
     .expect("streaming fetch source error should error the live clone branch");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch clone error promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchCloneErrorProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_error",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),

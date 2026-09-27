@@ -51,6 +51,7 @@ pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_t
 pub(in crate::network_host) use self::body_source::{
     NetworkBodyConsumption, NetworkBodyConsumptionKind,
     clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
+    consume_fetch_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,

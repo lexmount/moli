@@ -62,6 +62,7 @@ struct ScheduledTimerFunction {
 enum ScheduledTimerCallback {
     Function(ScheduledTimerFunction),
     FontLoading(ScheduledTimerFunction),
+    Networking(ScheduledTimerFunction),
     WindowWebIdl(ScheduledWindowWebIdlCallback),
     Source(ScheduledTimerSource),
     AnimationFrameWake {
@@ -78,7 +79,7 @@ enum ScheduledTimerCallback {
 impl ScheduledTimerCallback {
     fn context<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Context> {
         match self {
-            Self::Function(function) | Self::FontLoading(function) => {
+            Self::Function(function) | Self::FontLoading(function) | Self::Networking(function) => {
                 v8::Local::new(scope, &function.relevant_context)
             }
             Self::WindowWebIdl(callback) => callback
@@ -92,7 +93,9 @@ impl ScheduledTimerCallback {
 
     fn realm_token(&self) -> Option<RuntimeObservableContextToken> {
         match self {
-            Self::Function(function) | Self::FontLoading(function) => Some(function.realm_token),
+            Self::Function(function) | Self::FontLoading(function) | Self::Networking(function) => {
+                Some(function.realm_token)
+            }
             Self::WindowWebIdl(callback) => callback.realm_token(),
             Self::Source(source) => source.realm_token,
             Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => None,
@@ -101,7 +104,9 @@ impl ScheduledTimerCallback {
 
     fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         match self {
-            Self::Function(function) | Self::FontLoading(function) => function.relevant_identity,
+            Self::Function(function) | Self::FontLoading(function) | Self::Networking(function) => {
+                function.relevant_identity
+            }
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
             Self::Source(_)
             | Self::ResourceTimingBufferFull { .. }
@@ -127,7 +132,7 @@ impl ScheduledTimerCallback {
         target_binding: Option<&WindowExecutionContextBinding>,
     ) -> Option<OwnerDispatchScope> {
         match self {
-            Self::Function(function) | Self::FontLoading(function) => {
+            Self::Function(function) | Self::FontLoading(function) | Self::Networking(function) => {
                 Some(function.relevant_dispatch_scope)
             }
             Self::WindowWebIdl(_) => {
@@ -154,7 +159,7 @@ impl ScheduledTimerCallback {
                 .map(|binding| binding.context(scope))
                 .unwrap_or_else(|| self.context(scope)),
             Self::Source(_) => self.context(scope),
-            Self::Function(_) | Self::FontLoading(_) => self.context(scope),
+            Self::Function(_) | Self::FontLoading(_) | Self::Networking(_) => self.context(scope),
             Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => {
                 self.context(scope)
             }
@@ -617,6 +622,23 @@ impl HostTimeoutScheduler {
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
     ) -> u32 {
+        self.queue_browser_task(scope, callback, ScheduledTimerCallback::FontLoading)
+    }
+
+    pub(crate) fn queue_networking_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+    ) -> u32 {
+        self.queue_browser_task(scope, callback, ScheduledTimerCallback::Networking)
+    }
+
+    fn queue_browser_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+        task_kind: fn(ScheduledTimerFunction) -> ScheduledTimerCallback,
+    ) -> u32 {
         let context = scope.get_current_context();
         let receiver = context.global(scope);
         let Some(callback) = scheduled_timer_function(scope, callback, receiver) else {
@@ -633,7 +655,7 @@ impl HostTimeoutScheduler {
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
-                    callback: ScheduledTimerCallback::FontLoading(callback),
+                    callback: task_kind(callback),
                     owner,
                     is_interval: false,
                     extra_args: Vec::new(),
@@ -965,6 +987,7 @@ impl HostTimeoutScheduler {
             !matches!(
                 task.callback,
                 ScheduledTimerCallback::FontLoading(_)
+                    | ScheduledTimerCallback::Networking(_)
                     | ScheduledTimerCallback::AnimationFrameWake { .. }
             ) && task
                 .owner
@@ -1212,7 +1235,8 @@ fn run_window_timer_callback(
 ) -> std::result::Result<HostTimeoutRunResult, HostTimeoutRunResult> {
     match callback {
         ScheduledTimerCallback::Function(function)
-        | ScheduledTimerCallback::FontLoading(function) => {
+        | ScheduledTimerCallback::FontLoading(function)
+        | ScheduledTimerCallback::Networking(function) => {
             let callback = v8::Local::new(scope, &function.callback);
             let receiver = v8::Local::new(scope, &function.receiver);
             let relevant_context = v8::Local::new(scope, &function.relevant_context);

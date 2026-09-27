@@ -584,9 +584,13 @@ fn blob_slice_allocates_in_foreign_receiver_realm() {
     })
     .expect("slice result should be allocated in the foreign receiver's context");
 }
-#[test]
-fn blob_stream_is_native_readable_stream_and_response_consumes_bytes() {
-    let mut vm = new_storage_test_vm("https://blob-stream-reader.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn blob_stream_is_native_readable_stream_and_response_consumes_bytes() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://blob-stream-reader.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -624,8 +628,14 @@ fn blob_stream_is_native_readable_stream_and_response_consumes_bytes() {
     )
     .expect("Blob stream reader probe should schedule");
 
-    vm.eval("0")
-        .expect("Blob stream reader promise chain should drain");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String('responseText' in __blobStreamProbe || 'error' in __blobStreamProbe)",
+        "true",
+        "Blob stream Body conversion",
+    )
+    .await;
 
     let result = vm
         .eval("JSON.stringify(globalThis.__blobStreamProbe)")

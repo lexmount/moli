@@ -950,9 +950,11 @@ fn headers_backing_slots_ignore_reflection_and_spoofing() {
     );
 }
 
-#[test]
-fn response_backing_slots_ignore_reflection_and_spoofing() {
-    let mut vm = new_storage_test_vm("https://response-slots.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_backing_slots_ignore_reflection_and_spoofing() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://response-slots.test/", &loader);
 
     vm.eval(
         r#"
@@ -1098,10 +1100,14 @@ fn response_backing_slots_ignore_reflection_and_spoofing() {
     )
     .expect("Response private slot spoofing setup should evaluate");
 
-    for _ in 0..8 {
-        vm.eval("0")
-            .expect("Response private slot spoofing promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseSlotProbe.consumed !== null && __responseSlotProbe.fakeBodyMethods !== null)",
+        "true",
+        "response_backing_slots_ignore_reflection_and_spoofing",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseSlotProbe)")
         .expect("Response private slot spoofing probe result should evaluate");
@@ -1112,9 +1118,11 @@ fn response_backing_slots_ignore_reflection_and_spoofing() {
     );
 }
 
-#[test]
-fn request_backing_slots_ignore_reflection_and_spoofing() {
-    let mut vm = new_storage_test_vm("https://request-slots.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn request_backing_slots_ignore_reflection_and_spoofing() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://request-slots.test/", &loader);
 
     vm.eval(
         r#"
@@ -1268,10 +1276,14 @@ fn request_backing_slots_ignore_reflection_and_spoofing() {
     )
     .expect("Request private slot spoofing setup should evaluate");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("Request private slot spoofing promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__requestSlotProbe.consumed !== null && __requestSlotProbe.fakeBodyMethods !== null)",
+        "true",
+        "request_backing_slots_ignore_reflection_and_spoofing",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__requestSlotProbe)")
         .expect("Request private slot spoofing probe result should evaluate");
@@ -1282,9 +1294,11 @@ fn request_backing_slots_ignore_reflection_and_spoofing() {
     );
 }
 
-#[test]
-fn request_constructor_rejects_used_or_locked_inherited_body() {
-    let mut vm = new_storage_test_vm("https://request-body.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn request_constructor_rejects_used_or_locked_inherited_body() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://request-body.test/", &loader);
 
     vm.eval(
         r#"
@@ -1348,10 +1362,14 @@ fn request_constructor_rejects_used_or_locked_inherited_body() {
     )
     .expect("Request bodyUsed probe setup should evaluate");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("Request bodyUsed promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__requestBodyUsedProbe.done !== null)",
+        "true",
+        "request_constructor_rejects_used_or_locked_inherited_body",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__requestBodyUsedProbe)")
         .expect("Request bodyUsed probe result should evaluate");
@@ -1362,9 +1380,13 @@ fn request_constructor_rejects_used_or_locked_inherited_body() {
     );
 }
 
-#[test]
-fn fetch_disturbs_the_input_request_body_before_network_completion() {
-    let mut vm = new_storage_test_vm("https://request-fetch-body-used.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_disturbs_the_input_request_body_before_network_completion() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://request-fetch-body-used.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -1394,10 +1416,14 @@ fn fetch_disturbs_the_input_request_body_before_network_completion() {
 "#,
     )
     .expect("fetch Request body disturbance probe should run");
-    for _ in 0..4 {
-        vm.eval("0")
-            .expect("fetch Request body disturbance promise should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__fetchRequestBodyUsed.text !== null)",
+        "true",
+        "fetch_disturbs_the_input_request_body_before_network_completion",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__fetchRequestBodyUsed)")
