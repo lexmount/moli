@@ -811,3 +811,185 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
             .expect("repeated traverseTo should share one traversal task")
     );
 }
+
+#[test]
+fn csp_sandbox_disables_top_navigation_entries_without_disabling_history() {
+    for (policy, opaque) in [
+        ("sandbox allow-scripts", true),
+        ("sandbox allow-scripts allow-same-origin", false),
+        ("default-src *", false),
+    ] {
+        let mut vm = new_storage_test_vm("https://sandbox-navigation.test/page");
+        vm.set_response_content_security_policies(&[policy.to_owned()]);
+        let result = vm
+            .eval(
+                r##"
+const navigationEvents = [];
+for (const type of ['navigate', 'currententrychange', 'navigatesuccess', 'navigateerror'])
+  navigation.addEventListener(type, () => navigationEvents.push(type));
+const beforeLength = history.length;
+const initial = [navigation.currentEntry === null, navigation.entries().length];
+// Window.origin is replaceable; the native Document origin must decide this.
+Object.defineProperty(window, 'origin', {value: 'https://forged.test', configurable: true});
+let update;
+try { navigation.updateCurrentEntry({state: 7}); update = 'updated'; }
+catch (error) { update = error.name + ':' + (error instanceof DOMException); }
+history.pushState({step: 1}, '', '#one');
+history.replaceState({step: 2}, '', '#two');
+JSON.stringify({initial, update, entries: navigation.entries().length,
+  currentIsNull: navigation.currentEntry === null, back: navigation.canGoBack,
+  forward: navigation.canGoForward, historyDelta: history.length - beforeLength,
+  historyState: history.state, hash: location.hash});
+"##,
+            )
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            result["initial"],
+            serde_json::json!([opaque, if opaque { 0 } else { 1 }]),
+            "{policy}"
+        );
+        assert_eq!(
+            result["update"],
+            if opaque {
+                "InvalidStateError:true"
+            } else {
+                "updated"
+            },
+            "{policy}"
+        );
+        assert_eq!(result["entries"], if opaque { 0 } else { 2 }, "{policy}");
+        assert_eq!(result["currentIsNull"], opaque, "{policy}");
+        assert_eq!(result["back"], !opaque, "{policy}");
+        assert_eq!(result["forward"], false, "{policy}");
+        assert_eq!(result["historyDelta"], 1, "{policy}");
+        assert_eq!(
+            result["historyState"],
+            serde_json::json!({"step":2}),
+            "{policy}"
+        );
+        assert_eq!(result["hash"], "#two", "{policy}");
+        assert_eq!(
+            vm.eval("String(navigationEvents.length === 0)").unwrap(),
+            opaque.to_string(),
+            "{policy}"
+        );
+    }
+}
+
+#[test]
+fn csp_sandbox_top_navigation_suppresses_events_and_keeps_navigate_promises_pending() {
+    let mut vm = new_storage_test_vm("https://sandbox-navigation.test/page");
+    vm.set_response_content_security_policies(&["sandbox allow-scripts".to_owned()]);
+    vm.exec(
+        r##"
+const events = [], settled = [], traversalErrors = [];
+for (const type of ['navigate', 'currententrychange', 'navigatesuccess', 'navigateerror'])
+  navigation.addEventListener(type, () => events.push(type));
+const result = navigation.navigate('#fragment');
+for (const name of ['committed', 'finished'])
+  result[name].then(() => settled.push(name), error => settled.push(error.name));
+for (const method of ['back', 'forward']) {
+  const traversal = navigation[method]();
+  for (const name of ['committed', 'finished'])
+    traversal[name].then(() => traversalErrors.push('resolved'),
+      error => traversalErrors.push(error.name));
+}
+"##,
+        None,
+    )
+    .unwrap();
+    let result = vm
+        .eval("JSON.stringify({hash: location.hash, events, settled, traversalErrors})")
+        .unwrap();
+    assert_eq!(
+        result,
+        r##"{"hash":"#fragment","events":[],"settled":[],"traversalErrors":["InvalidStateError","InvalidStateError","InvalidStateError","InvalidStateError"]}"##
+    );
+    vm.exec(
+        r#"
+const crossDocument = navigation.navigate('/next', {history: 'replace'});
+for (const name of ['committed', 'finished'])
+  crossDocument[name].then(() => settled.push(name), error => settled.push(error.name));
+"#,
+        None,
+    )
+    .unwrap();
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("opaque navigation must still queue the replacement Document");
+    assert_eq!(pending.url.as_str(), "https://sandbox-navigation.test/next");
+    let seed = pending
+        .entry_seed
+        .expect("navigation should carry history state");
+    assert_eq!(
+        seed.activation.unwrap().navigation_type.as_deref(),
+        Some("replace")
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify({events, settled})").unwrap(),
+        r#"{"events":[],"settled":[]}"#
+    );
+}
+
+#[test]
+fn csp_sandbox_repeated_navigation_preserves_fragment_documents_and_history_behavior() {
+    for fragment in ["", "#fragment"] {
+        for history in ["auto", "push", "replace"] {
+            let url = format!("https://sandbox-navigation.test/page{fragment}");
+            let mut vm = new_storage_test_vm(&url);
+            vm.set_response_content_security_policies(&["sandbox allow-scripts".to_owned()]);
+            vm.exec(
+                &format!(
+                    r#"
+const beforeLength = history.length;
+const originalDocument = document;
+const events = [], settled = [];
+for (const type of ['navigate', 'currententrychange', 'navigatesuccess', 'navigateerror'])
+  navigation.addEventListener(type, () => events.push(type));
+const result = navigation.navigate(location.href, {{history: {history:?}}});
+for (const name of ['committed', 'finished'])
+  result[name].then(() => settled.push(name), error => settled.push(error.name));
+"#
+                ),
+                None,
+            )
+            .unwrap();
+            let pending = vm.take_pending_location_navigation_with_seed();
+            if fragment.is_empty() {
+                let pending = pending.expect("a URL without a fragment must replace the Document");
+                assert_eq!(pending.url.as_str(), url);
+                assert_eq!(
+                    pending
+                        .entry_seed
+                        .unwrap()
+                        .activation
+                        .unwrap()
+                        .navigation_type
+                        .as_deref(),
+                    Some(if history == "push" { "push" } else { "replace" }),
+                    "{history}"
+                );
+            } else {
+                assert!(
+                    pending.is_none(),
+                    "repeated {history} fragment must retain the Document"
+                );
+            }
+            let result = vm
+                .eval("JSON.stringify({sameDocument: originalDocument === document, historyDelta: history.length - beforeLength, events, settled})")
+                .unwrap();
+            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(
+                result,
+                serde_json::json!({
+                    "sameDocument": true,
+                    "historyDelta": i32::from(!fragment.is_empty() && history == "push"),
+                    "events": [],
+                    "settled": [],
+                }),
+                "{fragment} {history}"
+            );
+        }
+    }
+}
