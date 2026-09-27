@@ -301,7 +301,7 @@ fn page_lifecycle_events_enabled_for_owner(
         .is_some_and(|state| state.page_lifecycle_events)
 }
 
-pub(crate) fn emit_navigation_frame_stop_after_download_background_events(
+pub(crate) fn emit_navigation_frame_stop_without_commit_background_events(
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
     frame_id: &str,
@@ -953,7 +953,7 @@ mod tests {
     fn download_frame_stop_emits_background_automation_events() {
         let mut out = Vec::new();
 
-        super::emit_navigation_frame_stop_after_download_background_events(
+        super::emit_navigation_frame_stop_without_commit_background_events(
             &mut out,
             Some("SID-page"),
             "FRAME-page",
