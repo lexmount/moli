@@ -37,6 +37,9 @@ mod modulepreload_document_referrer;
 #[path = "classic_document_referrer.rs"]
 mod classic_document_referrer;
 
+#[path = "meta_referrer_policy.rs"]
+mod meta_referrer_policy;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -182,6 +185,9 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/meta-policy.html" | "/meta-policy.js" | "/meta-policy-fetch" => {
+            meta_referrer_policy::fixture_response(path, request.referer.as_deref())
+        }
         "/classic-policy.html" | "/classic-policy.js" => {
             classic_document_referrer::fixture_response(path, query, origin, cross)
         }

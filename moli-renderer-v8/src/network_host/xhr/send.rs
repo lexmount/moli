@@ -315,6 +315,10 @@ fn send_synchronous_network_xhr(
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)
+    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+        document_referrer_policy: prepared.document_referrer_policy.clone(),
+        ..Default::default()
+    })
     .with_request_origin(prepared.request_origin.clone())
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())

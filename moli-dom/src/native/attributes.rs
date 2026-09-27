@@ -61,6 +61,7 @@ impl NativeDom {
         };
         let base_document =
             self.base_element_attribute_owner_document(node_id, None, &normalized_name);
+        let referrer_attribute = self.is_meta_referrer_attribute(node_id, None, &normalized_name);
         let changed = self
             .node_mut(node_id)
             .and_then(|node| node.data_mut().as_element_mut())
@@ -69,6 +70,9 @@ impl NativeDom {
             });
         if changed && let Some(document) = base_document {
             self.process_base_element(document, false);
+        }
+        if referrer_attribute {
+            self.process_meta_referrer(node_id);
         }
         changed
     }
@@ -85,6 +89,7 @@ impl NativeDom {
         };
         let base_document =
             self.base_element_attribute_owner_document(node_id, None, &normalized_name);
+        let referrer_attribute = self.is_meta_referrer_attribute(node_id, None, &normalized_name);
         let changed = self
             .node_mut(node_id)
             .and_then(|node| node.data_mut().as_element_mut())
@@ -99,6 +104,9 @@ impl NativeDom {
             });
         if changed && let Some(document) = base_document {
             self.process_base_element(document, false);
+        }
+        if referrer_attribute {
+            self.process_meta_referrer(node_id);
         }
         changed
     }
@@ -127,6 +135,9 @@ impl NativeDom {
             });
         if changed && let Some(document) = base_document {
             self.process_base_element(document, false);
+        }
+        if self.is_meta_referrer_attribute(node_id, Some(namespace), local_name) {
+            self.process_meta_referrer(node_id);
         }
         changed
     }

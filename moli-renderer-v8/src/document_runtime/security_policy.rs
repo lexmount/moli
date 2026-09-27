@@ -910,11 +910,12 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn current_document_referrer_policy(&self) -> Option<String> {
-        crate::context_bootstrap::document_referrer_policy_in_subtree(
-            &self.dom_host,
-            self.dom_host.document_handle(),
-        )
-        .or_else(|| self.response_referrer_policy().map(ToOwned::to_owned))
+        self.dom_host
+            .node(self.dom_host.document_handle())
+            .and_then(Node::as_document)
+            .and_then(|document| document.meta_referrer_policy())
+            .map(ToOwned::to_owned)
+            .or_else(|| self.response_referrer_policy().map(ToOwned::to_owned))
     }
 
     pub(crate) fn cross_origin_embedder_policy(
