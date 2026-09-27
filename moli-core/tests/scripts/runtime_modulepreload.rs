@@ -116,6 +116,204 @@ async fn runtime_modulepreloads_fetch_after_load_and_reuse_the_child_module_map(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn module_script_consumers_share_the_main_module_map() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let probe = r#"(async () => {
+      const check = (value, message) => { if (!value) throw new Error(message); };
+      const attach = (tag, url, attributes = {}) => new Promise((resolve, reject) => {
+        const element = document.createElement(tag);
+        if (tag === 'link') { element.rel = 'modulepreload'; element.href = url; }
+        else { element.type = 'module'; element.src = url; }
+        Object.assign(element, attributes);
+        const timeout = setTimeout(() => reject(new Error('no event: ' + url)), 3000);
+        element.onload = element.onerror = event => { clearTimeout(timeout); resolve(event.type); };
+        document.head.append(element);
+      });
+      for (const [name, warmup, ordered] of [
+        ['preloaded', 'preload', false],
+        ['ordered', 'preload', true],
+        ['credentials', 'preload', false],
+        ['integrity', 'preload', false],
+        ['imported', 'import', false],
+        ['evaluated', 'script', false],
+        ['concurrent', 'concurrent-preload', false],
+        ['cold', 'none', false]
+      ]) {
+        const url = '/echo-origin.js?consumer-' + name;
+        const before = globalThis.sriExecutions || 0;
+        const pending = [];
+        if (warmup === 'preload') {
+          check(await attach('link', url, {crossOrigin: 'anonymous'}) === 'load', name + ' preload');
+          check((globalThis.sriExecutions || 0) === before, name + ' premature evaluation');
+        } else if (warmup === 'import') await import(url);
+        else if (warmup === 'script') check(await attach('script', url) === 'load', name + ' first script');
+        else if (warmup === 'concurrent-preload') pending.push(attach('link', url));
+        const attributes = {async: !ordered};
+        if (name === 'credentials') attributes.crossOrigin = 'use-credentials';
+        // The already-fetched module is reused before new fetch options are examined.
+        if (name === 'integrity') attributes.integrity = 'sha384-AAAA';
+        pending.push(attach('script', url, attributes), attach('script', url, attributes));
+        check((await Promise.all(pending)).every(event => event === 'load'), name + ' terminal events');
+        check(sriExecutions === before + 1, name + ' must evaluate exactly once');
+        const namespace = await import(url);
+        check(namespace === await import(url), name + ' namespace identity');
+        check(sriExecutions === before + 1, name + ' import must reuse evaluation');
+      }
+      // Fetch policy must still be enforced on roots that are absent from the map.
+      check(await attach('script', '/echo-origin.js?consumer-bad-sri', {integrity:'sha384-AAAA'}) === 'error', 'fresh SRI');
+      check(await attach('script', '/missing.js?consumer-missing') === 'error', 'fresh 404');
+      const beforeClassic = sriExecutions;
+      for (let i = 0; i < 2; i++)
+        check(await attach('script', '/echo-origin.js?consumer-classic', {type:''}) === 'load', 'classic load');
+      check(sriExecutions === beforeClassic + 2, 'classic scripts must each evaluate');
+      return true;
+    })()"#;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(probe, true),
+    )
+    .await??;
+    assert_eq!(
+        result["value"],
+        true,
+        "{result}; requests={:?}",
+        servers.requests.lock()
+    );
+    let requests = servers.requests.lock();
+    for name in [
+        "preloaded",
+        "ordered",
+        "credentials",
+        "integrity",
+        "imported",
+        "evaluated",
+        "concurrent",
+        "cold",
+        "bad-sri",
+        "missing",
+        "classic",
+    ] {
+        let path = if name == "missing" {
+            "/missing.js?consumer-missing".to_owned()
+        } else {
+            format!("/echo-origin.js?consumer-{name}")
+        };
+        let matching: Vec<_> = requests
+            .iter()
+            .filter(|request| request.path == path)
+            .collect();
+        assert_eq!(
+            matching.len(),
+            if name == "classic" { 2 } else { 1 },
+            "{path}: {requests:?}"
+        );
+        assert_eq!(
+            matching[0].sec_fetch_dest.as_deref(),
+            Some("script"),
+            "{path}"
+        );
+        assert_eq!(
+            matching[0].sec_fetch_mode.as_deref(),
+            Some(if name == "classic" { "no-cors" } else { "cors" }),
+            "{path}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn module_script_map_reservations_preserve_service_worker_responses() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let cases = serde_json::json!([
+        {"name":"synthetic", "src":"/sw-default.js", "type":"module", "integrity":INTEGRITY, "expected":"load"},
+        {"name":"cors", "src":"/sw-cors.js", "type":"module", "integrity":INTEGRITY, "expected":"load"},
+        {"name":"opaque", "src":"/sw-opaque.js", "type":"module", "expected":"error"}
+    ]);
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true),
+    )
+    .await??;
+    assert_integrity_results(result, &cases);
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+                const before = sriExecutions;
+                await import('/sw-default.js');
+                const script = document.createElement('script');
+                script.type = 'module'; script.src = '/sw-default.js';
+                await new Promise((resolve, reject) => {
+                    script.onload = resolve; script.onerror = reject; document.head.append(script);
+                });
+                return sriExecutions === before;
+            })()"#,
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], true, "{result}");
+    assert!(
+        !servers
+            .requests
+            .lock()
+            .iter()
+            .any(|request| request.path.starts_with("/sw-")),
+        "intercepted roots must not reach the network"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn module_script_fetch_settles_the_retained_map_after_document_open() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(r#"(async () => {
+          const url = '/echo-origin.js?consumer-open';
+          globalThis.retiredModuleEvents = 0;
+          const script = document.createElement('script'); script.type = 'module'; script.src = url;
+          script.onload = script.onerror = () => retiredModuleEvents++;
+          document.head.append(script);
+          await fetch('/module-response-started');
+          document.open(); document.write('<!doctype html><head></head><body>replacement'); document.close();
+          const imported = import(url);
+          await fetch('/module-response-release');
+          await imported;
+          return JSON.stringify({executions: sriExecutions, retiredEvents: retiredModuleEvents,
+            entries: performance.getEntriesByName(new URL(url, location.href).href).length});
+        })()"#, true),
+    ).await??;
+    assert!(result["value"].is_string(), "{result}");
+    let actual: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    assert_eq!(
+        actual,
+        serde_json::json!({"executions":1,"retiredEvents":0,"entries":0})
+    );
+    assert_eq!(
+        servers
+            .requests
+            .lock()
+            .iter()
+            .filter(|request| request.path == "/echo-origin.js?consumer-open")
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_modulepreloads_keep_document_maps_and_retire_queued_child_starts() -> Result<()> {
     let servers = IntegrityServers::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
