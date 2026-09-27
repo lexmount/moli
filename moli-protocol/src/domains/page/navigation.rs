@@ -1666,7 +1666,10 @@ pub(super) fn start_session_owner_history_traversal_from_renderer(
             owner: owner.clone(),
             result_projection: NavigationResultProjection::Cdp(json!({})),
             reloaded_after_crash_session_ids,
-            allow_background_navigation: false,
+            // This handoff is projected from a renderer turn. The source
+            // must keep servicing tasks and publishing output while the
+            // traversal checks beforeunload and loads its destination.
+            allow_background_navigation: true,
         },
         HistoryTraversalStartSource::Renderer,
     )
@@ -1919,6 +1922,17 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             conn.mark_next_auxiliary_navigation_history_for_owner(owner, kind);
         }
         let result_projection = NavigationResultProjection::Cdp(result_payload);
+        // Top-level Navigation API traversals hand admission to the browser,
+        // unlike ordinary renderer navigations whose entry points own the
+        // source check. Keep this separate from the event's initiator.
+        let beforeunload = if navigation_history
+            .as_ref()
+            .is_some_and(|history| history.navigation_type() == Some("traverse"))
+        {
+            BeforeUnloadCheck::Required
+        } else {
+            BeforeUnloadCheck::RendererHandled
+        };
         start_navigate_to_url_command_with_background_policy_and_request(
             conn,
             None,
@@ -1951,6 +1965,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
                 }
             },
             NavigationStartInitiator::Renderer,
+            beforeunload,
             navigation_history,
             web_mcp_invocation,
             document_response,
@@ -2570,6 +2585,12 @@ fn clear_crash_state_for_renderer_navigation(
     start
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BeforeUnloadCheck {
+    Required,
+    RendererHandled,
+}
+
 fn start_navigate_to_url_command_with_background_policy(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
@@ -2594,6 +2615,9 @@ fn start_navigate_to_url_command_with_background_policy(
         allow_background_navigation,
         request_load_policy,
         initiator,
+        // Browser commands and renderer History API handoffs reach this
+        // entry point before checking the outgoing document tree.
+        BeforeUnloadCheck::Required,
         None,
         None,
         None,
@@ -2623,6 +2647,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
+    beforeunload: BeforeUnloadCheck,
     navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,

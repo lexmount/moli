@@ -93,6 +93,34 @@ async fn websocket_navigation_beforeunload_precedes_fetch_and_only_commit_unload
 }
 
 #[tokio::test]
+async fn websocket_renderer_history_beforeunload_precedes_fetch_and_only_commit_unloads() {
+    for method in [
+        "history-back",
+        "history-go",
+        "navigation-back",
+        "navigation-traverse",
+    ] {
+        for response in ["html", "204", "205", "attachment"] {
+            run_beforeunload_navigation(method, response, "normal").await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn websocket_renderer_history_beforeunload_debugger_pause_delays_fetch() {
+    for method in ["history-back", "navigation-back"] {
+        run_beforeunload_navigation(method, "html", "debugger").await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_renderer_history_beforeunload_precedes_fetch_interception() {
+    for method in ["history-back", "navigation-back"] {
+        run_beforeunload_navigation(method, "html", "fetch").await;
+    }
+}
+
+#[tokio::test]
 async fn websocket_navigation_beforeunload_debugger_pause_delays_fetch() {
     run_beforeunload_navigation("navigate", "html", "debugger").await;
 }
@@ -147,7 +175,11 @@ async fn run_beforeunload_navigation(method: &str, response: &'static str, mode:
     .await;
     let source = format!("http://{address}/source");
     let previous = format!("http://{address}/previous");
-    if method == "history" {
+    let is_history = matches!(
+        method,
+        "history" | "history-back" | "history-go" | "navigation-back" | "navigation-traverse"
+    );
+    if is_history {
         cdp_navigate_and_wait_for_load(&mut socket, 8, &session.session_id, &previous).await;
     }
     cdp_navigate_and_wait_for_load(&mut socket, 9, &session.session_id, &source).await;
@@ -176,12 +208,21 @@ async fn run_beforeunload_navigation(method: &str, response: &'static str, mode:
             15,
             "Fetch.enable",
             session_id,
-            json!({"patterns":[{"urlPattern":"*/destination","requestStage":"Request"}]}),
+            json!({"patterns":[{"urlPattern":if is_history {"*/previous"} else {"*/destination"},"requestStage":"Request"}]}),
         )
         .await;
     }
     let (command, params) = match method {
         "reload" => ("Page.reload", json!({})),
+        "history-back" | "history-go" | "navigation-back" | "navigation-traverse" => (
+            "Runtime.evaluate",
+            json!({"expression":match method {
+                "history-back" => "history.back()",
+                "history-go" => "history.go(-1)",
+                "navigation-back" => "navigation.back()",
+                _ => "navigation.traverseTo(navigation.entries().at(-2).key)",
+            }}),
+        ),
         "history" => {
             let messages = send_cdp_command(
                 &mut socket,
