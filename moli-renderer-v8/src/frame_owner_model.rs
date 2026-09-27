@@ -115,6 +115,7 @@ pub(crate) use module_clients::FrameDocumentParserModuleRootStartKind;
 pub(crate) use module_clients::FrameDocumentParserModuleRootStartTask;
 pub(crate) use module_clients::FrameDocumentParserRootModuleClient;
 pub(crate) use module_clients::FrameDocumentParserRootTerminalClient;
+pub(crate) use module_clients::FrameDocumentParserRootTerminalResult;
 pub(crate) use module_clients::FrameDocumentParserRootTerminalWork;
 pub(crate) use module_clients::FrameDocumentStaticDependencyModuleClient;
 #[cfg(test)]
