@@ -56,12 +56,16 @@ impl IntegrityServers {
         let origin = format!("http://{}", main.local_addr()?);
         let cross_origin = format!("http://{}", cross.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let module_started = Arc::new(tokio::sync::Notify::new());
+        let module_release = Arc::new(tokio::sync::Semaphore::new(0));
         let tasks = [main, cross]
             .into_iter()
             .map(|listener| {
                 let origin = origin.clone();
                 let cross_origin = cross_origin.clone();
                 let requests = Arc::clone(&requests);
+                let module_started = Arc::clone(&module_started);
+                let module_release = Arc::clone(&module_release);
                 tokio::spawn(async move {
                     let mut connections = JoinSet::new();
                     loop {
@@ -71,6 +75,8 @@ impl IntegrityServers {
                                 let origin = origin.clone();
                                 let cross_origin = cross_origin.clone();
                                 let requests = Arc::clone(&requests);
+                                let module_started = Arc::clone(&module_started);
+                                let module_release = Arc::clone(&module_release);
                                 connections.spawn(async move {
                                     let mut request = Vec::new();
                                     while !request.ends_with(b"\r\n\r\n") && request.len() < 16384 {
@@ -92,6 +98,15 @@ impl IntegrityServers {
                                     };
                                     let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
                                     requests.lock().push(incoming);
+                                    // Hold a module response across document.open without a timed sleep.
+                                    if path == "/echo-origin.js?consumer-open" {
+                                        module_started.notify_one();
+                                        let _ = module_release.acquire().await;
+                                    } else if path == "/module-response-started" {
+                                        module_started.notified().await;
+                                    } else if path == "/module-response-release" {
+                                        module_release.close();
+                                    }
                                     let response = format!(
                                         "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                                         body.len(),
@@ -155,6 +170,11 @@ fn fixture_response(
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
+        "/module-response-started" | "/module-response-release" => (
+            "200 OK",
+            "Content-Type: text/plain\r\nCache-Control: no-store\r\n".to_owned(),
+            String::new(),
+        ),
         "/runtime-modulepreload.html" => (
             "200 OK",
             "Content-Type: text/html\r\n".to_owned(),
