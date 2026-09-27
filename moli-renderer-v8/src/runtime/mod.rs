@@ -407,8 +407,8 @@ pub(crate) use self::page_vm::{
     AuthorizedCurrentMainParserModuleGraphFetchCompletion,
     AuthorizedCurrentMainRuntimeModuleGraphFetchCompletion,
     AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
-    CurrentChildDocumentLoadApplication,
+    AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModuleGraphFetchCompletion,
+    AuthorizedLiveMainModulepreloadFetchCompletion, CurrentChildDocumentLoadApplication,
 };
 pub(in crate::runtime) use self::page_vm::{
     PageVmCommittedNavigationBootstrap, PageVmDocumentCommitPreparation,

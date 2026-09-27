@@ -364,7 +364,9 @@ impl ModuleOwnerState {
         // dynamic-import resolver state belong to the live ScriptState. Only
         // parser/script-element work belongs to the replaced Document.
         self.document_modulator.clear_for_document_replacement();
-        self.graph_fetches.clear();
+        // Network fetches populate the retained ScriptState module map. Their
+        // initiating script elements retire here, but imports in the same realm
+        // must still receive the result (as they do for modulepreload).
         self.owner_event_tasks.update_ready_tasks(|events| {
             for event in events.iter_mut() {
                 event.retain_for_document_replacement();

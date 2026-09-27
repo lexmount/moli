@@ -154,6 +154,94 @@ impl RendererResourceScheduler {
         );
     }
 
+    pub(crate) fn schedule_main_runtime_module_root_fetch(
+        &self,
+        loader: DocumentResourceLoader,
+        target: MainRuntimeModuleGraphFetchTarget,
+        script: crate::planning::PreparedScript,
+        service_worker: crate::dynamic_script_owner::DynamicScriptServiceWorkerContext,
+    ) {
+        let schedule = MainModuleFetchSchedule::Runtime(target);
+        let attribution = MainModuleFetchNetworkAttribution::new(
+            service_worker.document_url.clone(),
+            script.url.clone(),
+        );
+        let Some(load) = loader.register_load(
+            crate::network::loads::ResourceLoadKind::Script,
+            crate::network::loads::ResourceLoadDisposition::Ordinary,
+            None,
+        ) else {
+            let error = "Document detached before module root fetch registration".to_owned();
+            schedule.send_completion(
+                &self.completion_tx,
+                Err(error.clone()),
+                Some(Arc::new(Err(error))),
+                attribution,
+            );
+            return;
+        };
+        let completion_tx = self.completion_tx.clone();
+        let request_client = load.request_client();
+        let request_origin = loader.fetch_context().request_origin();
+        let runner = load.task_runner();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        load.attach_consumer_cancel(move || {
+            let _ = cancel_tx.send(());
+        });
+        runner.clone().spawn(async move {
+            // This is the script-element transport previously used before map
+            // lookup. Keep its Service Worker response filtering and SRI checks,
+            // but publish the result to the graph's single-module reservation.
+            let outcome = tokio::select! {
+                outcome = crate::planning::load_service_worker_aware_external_script_source_outcome(
+                    &script, &request_origin, &request_client, runner, None, None,
+                    service_worker.browser_context_runtime, service_worker.client_id,
+                    service_worker.document_url,
+                ) => outcome,
+                _ = cancel_rx => {
+                    let error = "module root fetch cancelled".to_owned();
+                    load.finish();
+                    schedule.send_completion(
+                        &completion_tx, Err(error.clone()), Some(Arc::new(Err(error))), attribution,
+                    );
+                    return;
+                }
+            };
+            load.finish();
+            let result = outcome.source_result.map(|source| {
+                let response = outcome
+                    .network_result
+                    .as_deref()
+                    .and_then(|result| result.as_ref().ok());
+                let (url, redirected, referrer_policy) = response.map_or_else(
+                    || (script.url.clone(), false, None),
+                    |response| {
+                        (
+                            response.final_url.clone(),
+                            response.redirected,
+                            crate::referrer_policy::response_referrer_policy_from_headers(
+                                &response.headers,
+                            ),
+                        )
+                    },
+                );
+                ModuleGraphFetchedSource::new(
+                    url,
+                    redirected,
+                    outcome
+                        .source_bytes
+                        .filter(|_| crate::planning::is_webassembly_module_script_url(&script.url))
+                        .map_or_else(
+                            || crate::module_runtime::ModuleSource::text(source),
+                            crate::module_runtime::ModuleSource::binary,
+                        ),
+                )
+                .with_response_referrer_policy(referrer_policy)
+            });
+            schedule.send_completion(&completion_tx, result, outcome.network_result, attribution);
+        });
+    }
+
     pub(crate) fn schedule_main_modulepreload_fetch(
         &self,
         loader: DocumentResourceLoader,
