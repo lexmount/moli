@@ -4976,6 +4976,7 @@ pub enum RendererPageCommand {
         reference: RendererDomNodeReference,
     },
     TriggerAutofill(RendererAutofillTriggerRequest),
+    CheckMainDocumentBeforeUnload,
     UnloadMainDocumentForNavigationCommit,
     ResetNavigationHistory,
     SetFileInputFilesForBackendNodeId {

@@ -2509,6 +2509,10 @@ impl CdpConnection {
         command_context: &mut CommandDispatchContext,
     ) -> Vec<BackgroundProtocolEvent> {
         let completion = match completion {
+            crate::domains::page::BackgroundNavigationCompletion::BeforeLoad(completion) => {
+                completion.finish(self, command_context).await;
+                return Vec::new();
+            }
             crate::domains::page::BackgroundNavigationCompletion::AfterUnload(completion) => {
                 let completion = completion.finish(self);
                 return self
