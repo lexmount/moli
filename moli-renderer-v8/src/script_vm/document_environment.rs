@@ -127,7 +127,7 @@ impl ScriptVm {
             .expect("main Window origin must reflect the navigation policy container");
     }
 
-    fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
+    pub(super) fn refresh_main_document_origin_after_policy_change(&mut self) -> Result<()> {
         // Deferred realms read the updated native policy during bootstrap.
         self.with_current_main_world_scope(|scope, host_ptr| {
             let host = unsafe { &*host_ptr };
