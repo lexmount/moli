@@ -449,6 +449,19 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
     }
     let exact_same_href = current_href == resolved.as_str();
+    let about_document_state = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        let host = unsafe { &*host_ptr };
+        let source_handle = source_element
+            .and_then(|element| {
+                crate::native_bridge::node_runtime_and_handle_from_object(scope, element).ok()
+            })
+            .map(|(_, handle)| handle);
+        host.capture_about_document_state(
+            location_navigation_initiator_scope(scope, host),
+            &resolved,
+            source_handle,
+        )
+    });
     let owner = runtime_window_owner(scope, location);
     let source_can_access_target = source_can_access_target.unwrap_or_else(|| {
         let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
@@ -969,6 +982,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             moli_fetch::BrowserNavigationRequestKind::Navigate
         },
+        about_document_state,
     );
     if let Some((initiator, environment)) = navigation_source {
         unsafe { &mut *host_ptr }.set_pending_location_navigation_source(initiator, environment);
