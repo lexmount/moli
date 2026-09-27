@@ -320,6 +320,7 @@ struct RendererTopLevelNavigationRequest {
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     navigation_history: Option<super::RendererNavigationHistoryRequest>,
+    about_document_state: Option<super::RendererAboutDocumentState>,
 }
 
 impl RendererDocumentSourcedTopLevelLocationNavigation {
@@ -361,6 +362,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
                 request_headers,
                 browser_navigation_kind,
                 navigation_history: None,
+                about_document_state: None,
             }),
             runtime_command_cause,
         }
@@ -380,6 +382,18 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn navigation_history(&self) -> Option<&super::RendererNavigationHistoryRequest> {
         self.request.navigation_history.as_ref()
+    }
+
+    pub(crate) fn with_about_document_state(
+        mut self,
+        state: Option<super::RendererAboutDocumentState>,
+    ) -> Self {
+        self.request.about_document_state = state;
+        self
+    }
+
+    pub fn about_document_state(&self) -> Option<&super::RendererAboutDocumentState> {
+        self.request.about_document_state.as_ref()
     }
 
     pub fn url(&self) -> &str {

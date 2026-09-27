@@ -176,7 +176,9 @@ mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
-pub(crate) use window_security_tokens::{WindowSecurityOrigin, window_contexts_allow_access};
+pub(crate) use window_security_tokens::{
+    WindowAccessOrigin, WindowSecurityOrigin, window_contexts_allow_access,
+};
 mod workers;
 use window_security_tokens::DocumentDomainState;
 pub(crate) use window_security_tokens::set_window_security_token;
@@ -888,6 +890,7 @@ pub(crate) struct JsContextHost {
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: DocumentDomainState,
+    about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,

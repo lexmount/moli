@@ -221,7 +221,7 @@ pub(crate) fn structured_deserialize_value_for_message_event<'s>(
 pub(crate) fn current_runtime_message_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &*host_ptr };
-        let top_origin = moli_url::origin_ascii_serialization(host.document_url());
+        let top_origin = host.main_document_origin();
         if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
             return host.lightweight_popup_origin(popup_id);
         }

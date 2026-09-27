@@ -2273,6 +2273,7 @@ impl ScriptVmDefaultWorldBootstrap {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -2295,8 +2296,13 @@ impl ScriptVmDefaultWorldBootstrap {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
-        ScriptVmPageRealmBootstrap::new_from_dom_host(
+        let top_level_storage_key = about_document_state
+            .as_ref()
+            .and_then(crate::runtime::RendererAboutDocumentState::storage_key)
+            .or(top_level_storage_key);
+        let mut bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             bootstrap_dom_host,
             bypass_content_security_policy,
             page_task_tx,
@@ -2312,8 +2318,25 @@ impl ScriptVmDefaultWorldBootstrap {
             main_document_commit,
             top_level_storage_key,
             reserved_service_worker_client_id,
-        )?
-        .bootstrap_default_world()
+        )?;
+        if let Some(state) = &about_document_state {
+            bootstrap
+                .document_runtime
+                .set_main_navigation_policy_container(state.policy_container().clone());
+            bootstrap
+                .document_runtime
+                .initialize_inherited_meta_content_security_policies(
+                    bootstrap.document_runtime.document_handle(),
+                    &state
+                        .policy_container()
+                        .inherited_meta_content_security_policies,
+                );
+        }
+        bootstrap
+            .context_host
+            .borrow_mut()
+            .set_main_about_document_state(about_document_state);
+        bootstrap.bootstrap_default_world()
     }
 
     fn attach_context_and_capture_baseline_globals(

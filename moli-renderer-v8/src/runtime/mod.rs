@@ -50,7 +50,9 @@ mod lifecycle_decision;
 mod main_document_ready_gate;
 mod navigation;
 mod navigation_history;
-pub use navigation_history::{RendererNavigationHistory, RendererNavigationHistoryRequest};
+pub use navigation_history::{
+    RendererAboutDocumentState, RendererNavigationHistory, RendererNavigationHistoryRequest,
+};
 mod nested_main;
 mod owner;
 mod owner_deadline_index;

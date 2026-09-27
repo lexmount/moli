@@ -70,7 +70,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
         seed.session_history.target_step = target.joint_step;
         super::session_history::capture_for_navigation(scope, target.owner, &mut seed);
         if runtime_window_is_global(scope, target.owner) {
-            host.record_pending_location_navigation(target_url, Some(seed.clone()));
+            host.record_pending_location_navigation(target_url, Some(seed.clone()), None);
             return Some(navigation_pending_result(scope));
         }
         let target_key = traversal_target_entry(scope, &target)

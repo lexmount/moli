@@ -555,7 +555,8 @@ impl ScriptVm {
                     pending.request_headers,
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
-                ).with_navigation_history(pending.entry_seed.map(|seed| self.top_level_navigation_history().request(seed))),
+                ).with_navigation_history(pending.entry_seed.map(|seed| self.top_level_navigation_history().request(seed)))
+                .with_about_document_state(pending.about_document_state),
         );
         anyhow::ensure!(
             self._context_host

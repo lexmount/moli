@@ -320,7 +320,7 @@ impl ScriptVmContextBootstrap {
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
-            } => unsafe { &*host_ptr }.document_url().clone(),
+            } => unsafe { &*host_ptr }.main_document_secure_context_url(),
         };
         if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
             let owner_context = match child_handle {

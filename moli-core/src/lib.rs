@@ -21,13 +21,14 @@ pub use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
 pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{
-    PageId, RendererBrowserContextRuntimeId, RendererCdpCall, RendererDocumentLifecycleIdentity,
-    RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
-    RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
-    RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
+    PageId, RendererAboutDocumentState, RendererBrowserContextRuntimeId, RendererCdpCall,
+    RendererDocumentLifecycleIdentity, RendererDocumentTitleChanged,
+    RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
+    RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererNavigationHistory,
-    RendererNavigationHistoryRequest, RendererOutputCursor,
-    RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
+    RendererNavigationHistoryRequest, RendererOutputCursor, RendererOutputFence,
+    RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
     RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,

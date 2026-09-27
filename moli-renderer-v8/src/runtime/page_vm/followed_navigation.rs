@@ -526,6 +526,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     navigation_handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
     loaded: LoadedFollowedLocationNavigation,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
     stage: PageVmInitStage,
@@ -685,6 +686,16 @@ impl PageVm {
         let request_body = pending.request_body.clone();
         let request_headers = pending.request_headers.clone();
         let browser_navigation_kind = pending.browser_navigation_kind;
+        let navigation_history = pending.entry_seed.as_ref().map(|seed| {
+            self.vm()
+                .top_level_navigation_history()
+                .request(seed.clone())
+                .with_about_document_state(pending.about_document_state.clone())
+        });
+        let about_document_state = navigation_history.as_ref().map_or_else(
+            || pending.about_document_state.clone(),
+            |history| history.about_document_state(&url),
+        );
         let reserved_service_worker_client_id = pending
             .reserved_service_worker_client
             .map(|reserved| reserved.release());
@@ -791,6 +802,17 @@ impl PageVm {
             | LoadedFollowedLocationNavigation::ExternalDocument { .. }) => loaded,
         };
 
+        let final_url = match &loaded {
+            LoadedFollowedLocationNavigation::StreamingDocument { response, .. } => {
+                &response.final_url
+            }
+            LoadedFollowedLocationNavigation::ExternalDocument { final_url, .. } => final_url,
+            _ => unreachable!("only a Document response reaches navigation commit"),
+        };
+        let navigation_bootstrap_entry = navigation_history
+            .as_ref()
+            .map(|history| history.resolve(final_url))
+            .transpose()?;
         let termination = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),
             RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
@@ -811,7 +833,8 @@ impl PageVm {
                 initiator_url,
                 navigation_handoff,
                 loaded,
-                navigation_bootstrap_entry: pending.entry_seed,
+                navigation_bootstrap_entry,
+                about_document_state,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
                 stage,
@@ -829,6 +852,7 @@ impl PageVm {
             initiator_url,
             loaded,
             navigation_bootstrap_entry,
+            about_document_state,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
             stage,
@@ -838,6 +862,7 @@ impl PageVm {
             .bootstrap_followed_location_navigation(
                 loaded,
                 navigation_bootstrap_entry,
+                about_document_state,
                 reserved_service_worker_client_id,
                 stage,
                 FollowedLocationNavigationBootstrapBoundary::ContinuePhaseOne,
@@ -939,11 +964,13 @@ impl PageVm {
             navigation_handoff,
             loaded,
             navigation_bootstrap_entry,
+            about_document_state,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
             stage,
         } = prepared;
-        let env = self.followed_location_navigation_env();
+        let mut env = self.followed_location_navigation_env();
+        env.about_document_state = about_document_state;
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
@@ -1219,6 +1246,7 @@ impl PageVm {
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
             top_level_storage_key: None,
             navigation_bootstrap_entry: None,
+            about_document_state: None,
             navigation_history_source: Some(self.vm().top_level_navigation_history()),
             reserved_service_worker_client_id: None,
         }
@@ -1229,6 +1257,7 @@ impl PageVm {
         &mut self,
         loaded: LoadedFollowedLocationNavigation,
         navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+        about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
@@ -1244,7 +1273,8 @@ impl PageVm {
             LoadedFollowedLocationNavigation::StreamingDocument { .. }
                 | LoadedFollowedLocationNavigation::ExternalDocument { .. }
         ));
-        let env = self.followed_location_navigation_env();
+        let mut env = self.followed_location_navigation_env();
+        env.about_document_state = about_document_state;
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         if runtime_hooks.has_renderer_page_script_environment() {
             self.commit_main_window_proxy_navigation()?;

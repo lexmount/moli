@@ -1329,6 +1329,20 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         );
         return;
     }
+    let navigation_history = Url::parse(navigation.url())
+        .ok()
+        .and_then(|url| {
+            conn.renderer_navigation_request_for_owner(
+                command_owner,
+                &url,
+                navigation.browser_navigation_kind()
+                    == moli_fetch::BrowserNavigationRequestKind::Reload,
+                navigation.navigation_history().cloned(),
+            )
+        })
+        .map(|history| {
+            history.with_about_document_state(navigation.about_document_state().cloned())
+        });
     navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
@@ -1338,7 +1352,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         navigation.request_body(),
         navigation.request_headers(),
         navigation.browser_navigation_kind(),
-        navigation.navigation_history().cloned(),
+        navigation_history,
     )
     .await;
 }

@@ -18,6 +18,7 @@ use crate::{
     },
     util::get_private_value,
 };
+use url::Url;
 
 #[derive(Debug)]
 #[must_use = "the caller must stop a request when CSP blocks it"]
@@ -207,6 +208,96 @@ impl JsContextHost {
                 .meta_content_security_policy_strings_for_document(document);
         }
         Some(policy)
+    }
+
+    pub(crate) fn capture_about_document_state(
+        &self,
+        owner: OwnerDispatchScope,
+        destination: &Url,
+        source_element: Option<DomHandle>,
+    ) -> Option<crate::runtime::RendererAboutDocumentState> {
+        if !moli_url::is_about_blank(destination) {
+            return None;
+        }
+        let owner = source_element
+            .and_then(|element| self.owner_dispatch_scope_for_node(element))
+            .unwrap_or(owner);
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        let origin = self.window_access_origin_for_dispatch_scope(owner)?;
+        let mut policy_container = self.document_policy_container_for_inheritance(owner)?;
+        if let Some(document) = snapshot.document_handle {
+            policy_container.referrer_policy =
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                );
+        }
+        let element_referrer_policy = source_element
+            .and_then(|handle| self.dom_host().node(handle))
+            .and_then(|node| node.as_element())
+            .and_then(|element| {
+                if element.attribute("rel").is_some_and(|rel| {
+                    rel.split_ascii_whitespace()
+                        .any(|token| token.eq_ignore_ascii_case("noreferrer"))
+                }) {
+                    Some("no-referrer".to_owned())
+                } else {
+                    element
+                        .attribute("referrerpolicy")
+                        .and_then(crate::referrer_policy::normalize_referrer_policy)
+                }
+            });
+        policy_container.document_referrer = if origin.serialized_origin() == "null" {
+            String::new()
+        } else {
+            moli_fetch::referrer_value(
+                &snapshot.document_url,
+                destination,
+                element_referrer_policy.as_deref(),
+                policy_container.referrer_policy.as_deref(),
+            )
+            .unwrap_or_default()
+        };
+        let base_url = snapshot
+            .document_handle
+            .map(|document| self.document_base_url_for_handle(document))
+            .unwrap_or(snapshot.document_url);
+        Some(crate::runtime::RendererAboutDocumentState::new(
+            origin,
+            base_url,
+            policy_container,
+        ))
+    }
+
+    pub(crate) fn current_about_document_state(
+        &self,
+    ) -> Option<crate::runtime::RendererAboutDocumentState> {
+        let state = self.about_document_state.as_ref()?;
+        Some(crate::runtime::RendererAboutDocumentState::new(
+            self.window_access_origin_for_dispatch_scope(OwnerDispatchScope::Top)?,
+            state.base_url().clone(),
+            self.document_policy_container_for_inheritance(OwnerDispatchScope::Top)?,
+        ))
+    }
+
+    pub(crate) fn set_main_about_document_state(
+        &mut self,
+        state: Option<crate::runtime::RendererAboutDocumentState>,
+    ) {
+        let state = state.filter(|_| moli_url::is_about_blank(self.document_url()));
+        let document = self.document_handle();
+        self.dom_host_mut()
+            .set_document_fallback_base_url_for_handle(
+                document,
+                state.as_ref().map(|state| state.base_url().clone()),
+            );
+        if let Some(super::WindowAccessOrigin::Tuple {
+            document_domain: Some(domain),
+            ..
+        }) = state.as_ref().map(|state| state.origin())
+        {
+            self.document_domain_override.set(domain.clone());
+        }
+        self.about_document_state = state;
     }
 
     pub(crate) fn document_connect_policy_snapshot_for_owner(

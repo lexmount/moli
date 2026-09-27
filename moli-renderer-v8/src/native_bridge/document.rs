@@ -1270,9 +1270,18 @@ fn document_referrer_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let referrer = runtime
-        .child_browsing_context_referrer_for_document_handle(handle)
-        .or_else(|| runtime.lightweight_popup_referrer_for_document_handle(handle))
+    let referrer = (handle == runtime.document_handle())
+        .then(|| {
+            runtime
+                .document_policy_container()
+                .document_referrer
+                .as_str()
+        })
+        .or_else(|| {
+            runtime
+                .child_browsing_context_referrer_for_document_handle(handle)
+                .or_else(|| runtime.lightweight_popup_referrer_for_document_handle(handle))
+        })
         .unwrap_or("");
     set_document_string_return_value(scope, &mut rv, referrer);
 }

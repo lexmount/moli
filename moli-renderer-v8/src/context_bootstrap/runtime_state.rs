@@ -2118,7 +2118,9 @@ fn install_window_runtime_state<'s>(
         global,
         runtime.document_url().as_str(),
     )?;
-    let origin = moli_url::origin_ascii_serialization(runtime.document_url());
+    let origin = context_host_ptr_from_global_bridge(scope)
+        .map(|host| unsafe { &*host }.main_document_origin())
+        .unwrap_or_else(|| moli_url::origin_ascii_serialization(runtime.document_url()));
     set_window_origin_runtime_state(scope, global, &origin)?;
 
     let console = ConsoleObjectDeclaration::default()

@@ -9,10 +9,13 @@ impl JsContextHost {
         document_handle: DomHandle,
     ) -> String {
         if document_handle == self.document_handle() {
-            return self
-                .document_domain_override
-                .get()
-                .unwrap_or_else(|| url_host_domain(self.document_url()).unwrap_or_default());
+            let origin = Url::parse(&self.main_document_origin()).ok();
+            return self.document_domain_override.get().unwrap_or_else(|| {
+                origin
+                    .as_ref()
+                    .and_then(url_host_domain)
+                    .unwrap_or_default()
+            });
         }
         if let Some(child_handle) =
             self.child_browsing_context_handle_for_stored_document(document_handle)
@@ -39,7 +42,11 @@ impl JsContextHost {
             if self.document_sandbox_policy().sandboxes_document_domain {
                 return false;
             }
-            let Some(current_host) = url_host_domain(self.document_url()) else {
+            let Some(current_host) = Url::parse(&self.main_document_origin())
+                .ok()
+                .as_ref()
+                .and_then(url_host_domain)
+            else {
                 return false;
             };
             let Some(domain) = normalize_document_domain_value(value) else {

@@ -940,7 +940,7 @@ fn clipboard_permission_denied<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let host = unsafe { &mut *host_ptr };
-    let embedding_origin = moli_url::origin_ascii_serialization(host.document_url());
+    let embedding_origin = host.main_document_origin();
     let Some(requesting_origin) = host
         .current_runtime_window_execution_context_identity(scope)
         .and_then(|identity| host.storage_context_for_window_execution_context_identity(identity))

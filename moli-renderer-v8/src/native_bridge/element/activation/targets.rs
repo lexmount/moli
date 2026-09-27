@@ -52,11 +52,14 @@ fn queue_top_level_location_navigation(
     _scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     resolved_url: &str,
+    source: crate::native_bridge::OwnerDispatchScope,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
         return false;
     };
-    unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+    let runtime = unsafe { &mut *runtime_ptr };
+    let about_document_state = runtime.capture_about_document_state(source, &url, None);
+    runtime.record_pending_location_navigation(url, None, about_document_state);
     true
 }
 
@@ -511,7 +514,7 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
         return Some(target_window);
     };
     let navigated = if destination_scope == crate::native_bridge::OwnerDispatchScope::Top {
-        queue_top_level_location_navigation(scope, runtime_ptr, resolved_url)
+        queue_top_level_location_navigation(scope, runtime_ptr, resolved_url, navigation_source)
     } else {
         navigate_target_window_location(scope, target_window, resolved_url)
     };
