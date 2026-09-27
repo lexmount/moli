@@ -18,6 +18,69 @@ use crate::{
 };
 
 impl JsContextHost {
+    pub(crate) fn dispatch_main_document_unload_for_navigation_commit(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+    ) {
+        let Some(owner) = unsafe { &mut *host_ptr }
+            .frame_owner_store
+            .begin_current_main_document_unload()
+        else {
+            return;
+        };
+        let document = unsafe { &*host_ptr }.document_handle();
+        let descendants =
+            unsafe { &*host_ptr }.child_document_descendants_unload_snapshot(document);
+        let window = scope.get_current_context().global(scope);
+        // Claim the exact Document before author code runs, and keep the root's
+        // destructive-write guard active while descendant handlers execute.
+        let _unload = unsafe { &*host_ptr }.enter_document_unload(document);
+        let previous =
+            crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, true);
+        crate::context_bootstrap::dispatch_pagehide_for_runtime_owner(scope, window);
+        if unsafe { &*host_ptr }.main_document_task_owner_is_current(owner)
+            && unsafe { &*host_ptr }.document_activity().visible
+            && unsafe { &mut *host_ptr }
+                .dom_host_mut()
+                .set_document_visibility_hidden_for_handle(document, true)
+            && let Some(target) = unsafe { &mut *host_ptr }
+                .bridge
+                .wrap_handle(scope, host_ptr, document)
+            && let Ok(event) = crate::host::create_host_event(
+                scope,
+                "visibilitychange",
+                target.into(),
+                target.into(),
+                true,
+                false,
+            )
+        {
+            let _ = unsafe { &mut *host_ptr }.dispatch_public_event_best_effort(
+                scope,
+                host_ptr,
+                crate::document_runtime::EventTargetHandle::Node(document),
+                event,
+                "main document unload visibilitychange",
+            );
+        }
+        if unsafe { &*host_ptr }.main_document_task_owner_is_current(owner) {
+            crate::context_bootstrap::dispatch_unload_for_runtime_owner(scope, window);
+            Self::dispatch_child_documents_unload_without_beforeunload(
+                scope,
+                host_ptr,
+                descendants,
+                false,
+            );
+        }
+        crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, previous);
+        unsafe { &mut *host_ptr }
+            .frame_owner_store
+            .finish_current_main_document_unload(owner);
+        unsafe { &mut *(*host_ptr).runtime }.cancel_window_execution_context_timers(
+            crate::native_bridge::WindowExecutionContextOwner::Frame(owner.local_window_id),
+        );
+    }
+
     pub(crate) fn plan_and_commit_current_main_runtime_script_start(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

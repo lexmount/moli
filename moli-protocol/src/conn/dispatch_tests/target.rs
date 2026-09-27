@@ -456,7 +456,7 @@ async fn classic_create_target_ensures_fresh_initial_document_without_resolver_f
 
 #[tokio::test]
 async fn devtools_create_target_can_activate_created_target() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -464,7 +464,8 @@ async fn devtools_create_target_can_activate_created_target() {
         browser_context_id: None,
     };
 
-    let (first_result, _) = conn
+    let (first_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -482,21 +483,23 @@ async fn devtools_create_target_can_activate_created_target() {
     };
     let first_target_id = first_result.target_id.clone();
 
-    let (first_navigate, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: AutomationContext {
-                target_id: Some(first_target_id.clone()),
-                ..context.clone()
+    let first_navigate = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: AutomationContext {
+                    target_id: Some(first_target_id.clone()),
+                    ..context.clone()
+                },
+                url: "data:text/html,<title>first</title>first".to_owned(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            url: "data:text/html,<title>first</title>first".to_owned(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_complete_parts();
+        ))
+        .await;
     first_navigate.expect("first navigate should succeed");
 
-    let (second_result, _) = conn
+    let (second_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -514,7 +517,7 @@ async fn devtools_create_target_can_activate_created_target() {
     };
     let second_target_id = second_result.target_id.clone();
 
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
         browser_context.active_target_id(),
         Some("TID-2"),
@@ -534,7 +537,8 @@ async fn devtools_create_target_can_activate_created_target() {
         "the previous target should retain its loaded page after deactivation"
     );
 
-    let (first_realms_before_second_navigation, _) = conn
+    let (first_realms_before_second_navigation, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
             context: AutomationContext {
                 target_id: Some(first_target_id.clone()),
@@ -546,21 +550,23 @@ async fn devtools_create_target_can_activate_created_target() {
         .into_parts();
     first_realms_before_second_navigation
         .expect("deactivated first target realms should remain readable before second navigation");
-    let (second_navigate, _, _, _) = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: AutomationContext {
-                target_id: Some(second_target_id.clone()),
-                ..context.clone()
+    let second_navigate = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: AutomationContext {
+                    target_id: Some(second_target_id.clone()),
+                    ..context.clone()
+                },
+                url: "data:text/html,<title>second</title>second".to_owned(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            url: "data:text/html,<title>second</title>second".to_owned(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_complete_parts();
+        ))
+        .await;
     second_navigate.expect("second navigate should succeed");
 
-    let (first_realms, _) = conn
+    let (first_realms, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
             context: AutomationContext {
                 target_id: Some(first_target_id.clone()),
@@ -582,7 +588,8 @@ async fn devtools_create_target_can_activate_created_target() {
         "deactivated target should keep its window realm"
     );
 
-    let (all_realms, _) = conn
+    let (all_realms, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
             context,
             realm_type: Some("window".to_owned()),

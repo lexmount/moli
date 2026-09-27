@@ -144,14 +144,15 @@ async fn element_screenshot_reports_unsupported_without_initial_document_repair(
 
 #[tokio::test]
 async fn automation_command_low_backend_node_refs_miss_without_backend_binding() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
+    let (create_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: context.clone(),
@@ -172,13 +173,15 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         target_id: Some(target_id),
         ..context
     };
-    let _ = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: target_context.clone(),
-            url: "data:text/html,<!doctype html><html><body></body></html>".to_owned(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
+    let _ = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: target_context.clone(),
+                url: "data:text/html,<!doctype html><html><body></body></html>".to_owned(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
+            },
+        ))
         .await;
 
     let backend_node_id = moli_core::page::RENDERER_BACKEND_NODE_ID_START - 1;
@@ -192,7 +195,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         }
     });
     let pending_mutation = {
-        let page = conn
+        let page = ctx
+            .conn
             .browser_context
             .as_mut()
             .expect("browser context")
@@ -208,7 +212,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         .await
         .expect("runtime mutation should complete");
 
-    let (attributes_result, _) = conn
+    let (attributes_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: target_context.clone(),
@@ -221,7 +226,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (text_result, _) = conn
+    let (text_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -232,7 +238,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (property_result, _) = conn
+    let (property_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -244,7 +251,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (outer_html_result, _) = conn
+    let (outer_html_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: target_context.clone(),
@@ -258,7 +266,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (describe_result, _) = conn
+    let (describe_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::DescribeNode(
             DevToolsDescribeNodeCommand {
                 context: target_context.clone(),
@@ -273,7 +282,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (rooted_query_result, _) = conn
+    let (rooted_query_result, _) = ctx
+        .conn
         .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: target_context,
@@ -288,7 +298,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let page = conn
+    let page = ctx
+        .conn
         .browser_context
         .as_mut()
         .expect("browser context")

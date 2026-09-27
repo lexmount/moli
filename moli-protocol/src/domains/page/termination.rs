@@ -72,6 +72,7 @@ async fn complete_tokened_materialized_navigation_background_events_async(
         navigation_state,
         navigation,
         &mut command_context,
+        None,
     )
     .await;
     let mut plan = output.into_plan();
