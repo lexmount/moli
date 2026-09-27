@@ -1,7 +1,5 @@
 use super::super::constructors::illegal_constructor_callback;
-use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, runtime_window_dispatch_scope, runtime_window_owner,
-};
+use super::super::navigation_window::{runtime_window_dispatch_scope, runtime_window_owner};
 use super::helpers::{
     location_host_string, navigate_modified_location_url, parsed_location_url,
     require_location_href_slot, set_return_string, v8_value_to_string,
@@ -537,14 +535,11 @@ fn location_attribute_getter<'s>(
             set_return_string(scope, rv, &protocol);
         }
         LocationAttribute::Origin => {
-            let owner = runtime_window_owner(scope, holder);
-            let origin = if navigation_document_has_opaque_origin(scope, owner) {
-                "null".to_owned()
-            } else {
-                parsed_location_url(scope, holder)
-                    .map(|url| moli_url::origin_ascii_serialization(&url))
-                    .unwrap_or_default()
-            };
+            // The Document's origin controls access above; the exposed value
+            // serializes the URL even when sandboxing makes the Document opaque.
+            let origin = parsed_location_url(scope, holder)
+                .map(|url| moli_url::origin_ascii_serialization(&url))
+                .unwrap_or_default();
             set_return_string(scope, rv, &origin);
         }
         LocationAttribute::Host => {
