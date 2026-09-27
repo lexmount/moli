@@ -1,13 +1,17 @@
 use super::*;
 use crate::util::v8str;
 
-#[test]
-fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
+#[tokio::test(flavor = "current_thread")]
+async fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     use crate::types::AsyncSubresourceFetchResponseFilter as Filter;
     for streaming in [false, true] {
         for mode in ["cors", "no-cors"] {
             for cors in [false, true] {
-                let mut vm = new_storage_test_vm("https://response-client.test/");
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                    "https://response-client.test/",
+                    &loader,
+                );
                 vm.set_fetch_subresource_interception(
                     true,
                     Some(crate::types::SubresourceResourceType::Fetch),
@@ -124,7 +128,14 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                     )
                     .unwrap();
                 }
-                vm.exec("0", None).unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(result !== 'pending')",
+                    "true",
+                    "filtered response Body conversion",
+                )
+                .await;
                 assert_eq!(
                     vm.eval("result").unwrap(),
                     "ok",

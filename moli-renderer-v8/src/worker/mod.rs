@@ -17,6 +17,7 @@ mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod networking_tasks;
 mod script_loading;
 mod script_mime;
 mod thread;
@@ -25,6 +26,7 @@ mod timer_callback;
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;
 
+pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 
 pub(crate) use data_url::decode_data_url_script_source;
