@@ -1,5 +1,7 @@
 use super::*;
 
+mod main_beforeunload;
+
 #[tokio::test]
 async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
     for action in ["anchor", "submit", "requestSubmit"] {

@@ -947,16 +947,17 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
 
-    // A new top-level hyperlink leaves the source Location and history intact
-    // until the browser commits the response, just as the activation path did.
-    let browser_owned_hyperlink = hyperlink && !exact_same_href;
-    if !browser_owned_hyperlink && resolved.scheme() != "javascript" {
-        sync_location_object(scope, location, resolved.as_str());
-    }
-
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
+    if resolved.scheme() != "javascript"
+        && !unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
+    {
+        return;
+    }
+    // Cross-document requests leave the source Location and history intact
+    // until a response commits. This also preserves them for 204s and downloads.
+    let browser_owned_hyperlink = hyperlink && !exact_same_href;
     let entry_seed = if browser_owned_hyperlink {
         None
     } else if matches!(kind, LocationNavigationKind::Reload) {
