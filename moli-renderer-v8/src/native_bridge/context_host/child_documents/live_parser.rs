@@ -672,24 +672,21 @@ impl JsContextHost {
             document_handle,
             &preload_link_candidates,
         );
-        self.queue_child_parser_discovered_modulepreload_links(
-            child_handle,
-            document_handle,
-            preload_link_candidates,
-        );
     }
 
-    fn queue_child_parser_discovered_modulepreload_links(
+    pub(in crate::native_bridge::context_host) fn queue_child_parser_discovered_modulepreload_links(
         &mut self,
         child_handle: DomHandle,
         document_handle: DomHandle,
-        link_handles: Vec<DomHandle>,
+        link_handles: impl IntoIterator<Item = DomHandle>,
     ) {
-        if link_handles.is_empty() || !self.child_browsing_context_scripting_enabled(child_handle) {
+        if !self.child_browsing_context_scripting_enabled(child_handle) {
             return;
         }
         for link_handle in link_handles {
-            if self.dom_host().owner_document_handle(link_handle) != Some(document_handle) {
+            if !self.dom_host().is_connected(link_handle)
+                || self.dom_host().owner_document_handle(link_handle) != Some(document_handle)
+            {
                 continue;
             }
             let Some(element) = self
@@ -727,9 +724,16 @@ impl JsContextHost {
             else {
                 continue;
             };
-            let Some(candidate) =
-                modulepreload_fetch_candidate(element, request_url, &initiator_url, None)
-            else {
+            let Some(candidate) = modulepreload_fetch_candidate(
+                element,
+                request_url,
+                &initiator_url,
+                None,
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self,
+                    document_handle,
+                ),
+            ) else {
                 continue;
             };
             tracing::debug!(

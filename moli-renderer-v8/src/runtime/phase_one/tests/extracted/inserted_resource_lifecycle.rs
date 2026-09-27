@@ -153,7 +153,7 @@ fn parser_driver_finish_parser_blocking_pause_scans_document_write_preloads() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
             };
-            driver.finish_parser_blocking_pause();
+            driver.finish_parser_blocking_pause(|| None);
 
             assert!(
                 driver

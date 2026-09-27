@@ -108,6 +108,9 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
+        state
+            .buffered_document_preloads
+            .set_response_referrer_policy(env.document_policy_container.referrer_policy.clone());
         state.buffered_document_preloads.bind_resource_runtime(
             runtime_hooks.owner_wake(),
             runtime_hooks.resource_task_runner(),
@@ -345,6 +348,9 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
+        state
+            .buffered_document_preloads
+            .set_response_referrer_policy(env.document_policy_container.referrer_policy.clone());
         state.buffered_document_preloads.bind_resource_runtime(
             runtime_hooks.owner_wake(),
             runtime_hooks.resource_task_runner(),
