@@ -1123,6 +1123,7 @@ impl ScriptVm {
                             root_script
                                 .take()
                                 .expect("runtime root fetch retains its prepared script"),
+                            request,
                             service_worker,
                         );
                         continue;
