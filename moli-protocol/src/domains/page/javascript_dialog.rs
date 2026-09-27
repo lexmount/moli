@@ -1,3 +1,246 @@
+use super::*;
+
+pub(super) fn start_set_javascript_dialog_handler_enabled(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+    enabled: bool,
+) -> Result<(), String> {
+    if let Ok(slot) = conn.runtime_session_owner_slot_mut(session_id)
+        && let Some(page) = slot.loaded_page_mut()
+    {
+        return page
+            .start_set_javascript_dialog_handler_enabled(enabled)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+    }
+    if let Some(page) = conn.browser_context.as_mut().and_then(|browser_context| {
+        browser_context
+            .active_page_target_mut()
+            .runtime_slot
+            .loaded_page_mut()
+    }) {
+        return page
+            .start_set_javascript_dialog_handler_enabled(enabled)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn handle_javascript_dialog_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> CommandOutputPlan {
+    let command = match build_cdp_handle_javascript_dialog_command(conn, cmd) {
+        Ok(command) => command,
+        Err(plan) => return plan,
+    };
+    match start_devtools_page_command(
+        conn,
+        cmd.id,
+        DevToolsCommand::HandleJavaScriptDialog(command),
+    ) {
+        PageCommandTaskStep::Complete(plan) => plan,
+        PageCommandTaskStep::Pending(_) => {
+            CommandOutputPlan::error(-32000, "Unexpected pending handleJavaScriptDialog command")
+        }
+    }
+}
+
+pub(super) fn build_cdp_handle_javascript_dialog_command(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Result<DevToolsHandleJavaScriptDialogCommand, CommandOutputPlan> {
+    let params: HandleJavaScriptDialogParams = match cmd.get_params() {
+        Ok(Some(params)) => params,
+        _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
+    };
+    let (browser_context_id, target_id) = conn
+        .target_owner_identity_for_session(cmd.session_id)
+        .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
+        .unwrap_or((None, None));
+    Ok(DevToolsHandleJavaScriptDialogCommand {
+        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        accept: params.accept,
+        prompt_text: params.prompt_text.unwrap_or_default(),
+    })
+}
+
+pub(super) fn complete_devtools_handle_javascript_dialog_command(
+    conn: &mut CdpConnection,
+    command: DevToolsHandleJavaScriptDialogCommand,
+) -> CommandOutputPlan {
+    let owner = match page_command_owner(conn, &command.context) {
+        Ok(owner) => owner,
+        Err(error) => return CommandOutputPlan::from_devtools_error(error),
+    };
+    match finish_devtools_handle_javascript_dialog_command(conn, command, &owner) {
+        Ok(closed_event) => {
+            let mut plan = CommandOutputPlan::default();
+            plan.push_background_event(closed_event);
+            plan.push_success();
+            plan
+        }
+        Err(error) => CommandOutputPlan::from_devtools_error(error),
+    }
+}
+
+pub(super) fn finish_devtools_get_javascript_dialog_command(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let Some(dialog) = conn
+        .target_page_session_state_for_owner(owner)
+        .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
+        .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
+    else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::NoSuchAlert,
+            "No dialog is showing",
+        ));
+    };
+    Ok(DevToolsJavaScriptDialogResult {
+        dialog_type: dialog.dialog_type().to_owned(),
+        message: dialog.message().to_owned(),
+        default_prompt: dialog.default_prompt().to_owned(),
+    })
+}
+
+pub(super) fn finish_devtools_set_javascript_dialog_prompt_text_command(
+    conn: &mut CdpConnection,
+    command: DevToolsSetJavaScriptDialogPromptTextCommand,
+    owner: &CommandOwnerScope,
+) -> Result<DevToolsCommandResult, DevToolsError> {
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+        let dialog_state = &mut state.page_session_state.javascript_dialog_state;
+        let Some(dialog) = dialog_state
+            .peek_next()
+            .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
+        else {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchAlert,
+                "No dialog is showing",
+            ));
+        };
+        if dialog.dialog_type() != "prompt" {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::InvalidArgument,
+                "Dialog is not a prompt",
+            ));
+        }
+        if !dialog_state.set_next_prompt_text(command.prompt_text) {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchAlert,
+                "No dialog is showing",
+            ));
+        }
+        Ok(DevToolsCommandResult::Empty)
+    }) else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::NoSuchAlert,
+            "No dialog is showing",
+        ));
+    };
+    result
+}
+
+pub(super) fn finish_devtools_handle_javascript_dialog_command(
+    conn: &mut CdpConnection,
+    command: DevToolsHandleJavaScriptDialogCommand,
+    owner: &CommandOwnerScope,
+) -> Result<BackgroundProtocolEvent, DevToolsError> {
+    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
+    let command_prompt_text = command.prompt_text;
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let Some(dialog) = conn
+        .with_target_devtools_session_state_for_owner_mut(owner, |state| {
+            let dialog_state = &mut state.page_session_state.javascript_dialog_state;
+            if dialog_state
+                .peek_next()
+                .is_some_and(|dialog| current_page_owner.as_ref() != Some(dialog.page_owner()))
+            {
+                dialog_state.clear();
+                return None;
+            }
+            dialog_state.pop_next_with_prompt_text()
+        })
+        .flatten()
+    else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::NoSuchAlert,
+            "No dialog is showing",
+        ));
+    };
+    let (dialog, stored_prompt_text) = dialog;
+    let user_input = if command_prompt_text.is_empty() {
+        stored_prompt_text.unwrap_or_default()
+    } else {
+        command_prompt_text
+    };
+    let _ = dialog.finish(command.accept, user_input.clone());
+    let closed_event = UserPromptClosedEvent {
+        target_id: command.context.target_id,
+        frame_id: dialog.source_frame_id().into(),
+        prompt_type: dialog.dialog_type().to_owned(),
+        accepted: command.accept,
+        user_text: user_input,
+    };
+    Ok(BackgroundProtocolEvent::page_javascript_dialog_closed(
+        session_id,
+        closed_event,
+    ))
+}
+
+pub(in crate::domains) async fn emit_javascript_dialog_activity_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+) {
+    if let Some(dialogs) = prepared_outputs
+        .and_then(ProtocolOutputPayloads::page_mut)
+        .and_then(PagePreparedOutputSlot::take_javascript_dialogs)
+    {
+        javascript_dialog::emit_prepared(conn, out, dialogs);
+    }
+}
+
+pub(super) fn execute_devtools_get_javascript_dialog_command(
+    conn: &mut CdpConnection,
+    command: DevToolsGetJavaScriptDialogCommand,
+) -> Result<DevToolsCommandResult, DevToolsError> {
+    let owner = page_command_owner(conn, &command.context)?;
+    let result = finish_devtools_get_javascript_dialog_command(conn, &owner);
+    result.map(DevToolsCommandResult::JavaScriptDialog)
+}
+
+pub(super) fn execute_devtools_set_javascript_dialog_prompt_text_command(
+    conn: &mut CdpConnection,
+    command: DevToolsSetJavaScriptDialogPromptTextCommand,
+) -> Result<DevToolsCommandResult, DevToolsError> {
+    let owner = page_command_owner(conn, &command.context)?;
+    finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, &owner)
+}
+
+pub(super) fn execute_devtools_handle_javascript_dialog_command(
+    conn: &mut CdpConnection,
+    command: DevToolsHandleJavaScriptDialogCommand,
+) -> (
+    Result<DevToolsCommandResult, DevToolsError>,
+    Vec<BackgroundProtocolEvent>,
+) {
+    let owner = match page_command_owner(conn, &command.context) {
+        Ok(owner) => owner,
+        Err(error) => return (Err(error), Vec::new()),
+    };
+    let result = finish_devtools_handle_javascript_dialog_command(conn, command, &owner);
+    match result {
+        Ok(event) => (Ok(DevToolsCommandResult::Empty), vec![event]),
+        Err(error) => (Err(error), Vec::new()),
+    }
+}
+
 #[cfg(test)]
 use moli_core::page::RendererPendingJavaScriptDialog;
 
