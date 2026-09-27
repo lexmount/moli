@@ -1017,6 +1017,12 @@ fn direct_navigation_result_from_completed_load(
     match &completed.navigation {
         Ok(navigation) => {
             result.set_navigation_identity(&completed.state.frame_id, &completed.state.loader_id);
+            if result.protocol == FrontendProtocol::Cdp
+                && matches!(navigation, NavigationLoadOutcome::NoContent(_))
+            {
+                result.error_text = Some(NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+                result.is_download = Some(false);
+            }
             if result.protocol != FrontendProtocol::WebDriverBidi
                 && matches!(navigation, NavigationLoadOutcome::Download(_))
             {

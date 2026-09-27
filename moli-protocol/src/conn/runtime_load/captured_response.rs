@@ -46,6 +46,15 @@ impl PreparedNavigationLoadError {
 
 impl PreparedCapturedNavigationResponse {
     pub(crate) async fn run(mut self) -> Result<NavigationLoadOutcome> {
+        if response_status_has_no_content(self.head.status) {
+            return Ok(no_content_navigation_from_response(
+                self.head,
+                self.request_method,
+                self.request_headers,
+                self.network_observation_journal,
+                &self.body_progress_source,
+            ));
+        }
         if super::super::downloads::response_headers_indicate_download(&self.head.headers) {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
             let body = self
@@ -60,15 +69,6 @@ impl PreparedCapturedNavigationResponse {
                     RawResponse::from_head_and_body(self.head, body),
                     self.network_observation_journal,
                 ),
-            ));
-        }
-        if response_status_has_no_content(self.head.status) {
-            return Ok(no_content_navigation_from_response(
-                self.head,
-                self.request_method,
-                self.request_headers,
-                self.network_observation_journal,
-                &self.body_progress_source,
             ));
         }
         prepare_navigation_from_captured_raw_response_with_engine_async(
