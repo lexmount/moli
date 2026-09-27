@@ -10,6 +10,7 @@ mod runtime_errors;
 mod service_worker_import;
 mod source_phase;
 mod specifiers;
+mod text;
 
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x60, 0x01, 0x7f, 0x00, 0x60,
@@ -4599,12 +4600,12 @@ async fn worker_module_dynamic_css_import_rejects_invalid_module_type() {
 }
 
 #[tokio::test]
-async fn worker_module_dynamic_text_import_rejects_invalid_module_type() {
+async fn worker_module_dynamic_unsupported_import_rejects_invalid_module_type() {
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_kind(
         r#"
         try {
-            await import("data:text/plain,hello", { with: { type: "text" } });
+            await import("data:text/plain,hello", { with: { type: "unsupported" } });
             postMessage("unexpected");
         } catch (error) {
             postMessage({
@@ -4627,16 +4628,16 @@ async fn worker_module_dynamic_text_import_rejects_invalid_module_type() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"name":"TypeError","type":true,"message":"module type `text` is not a valid module type for dynamic import `data:text/plain,hello`"}"#
+        r#"{"name":"TypeError","type":true,"message":"module type `unsupported` is not a valid module type for dynamic import `data:text/plain,hello`"}"#
     );
 }
 
 #[tokio::test]
-async fn worker_module_static_text_import_rejects_invalid_module_type() {
+async fn worker_module_static_unsupported_import_rejects_invalid_module_type() {
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_kind(
         r#"
-        import text from "data:text/plain,hello" with { type: "text" };
+        import text from "data:text/plain,hello" with { type: "unsupported" };
         postMessage("unexpected");
         "#
         .into(),
@@ -4652,7 +4653,7 @@ async fn worker_module_static_text_import_rejects_invalid_module_type() {
     match msg {
         WorkerToParentMessage::Error { message, .. } => {
             assert!(
-                message.contains("module type `text` is not a valid module type"),
+                message.contains("module type `unsupported` is not a valid module type"),
                 "{message}"
             );
         }
@@ -5868,6 +5869,98 @@ async fn service_worker_module_static_json_import_reports_json_resource_kind() {
 }
 
 #[tokio::test]
+async fn service_worker_module_static_text_import_reports_text_resource_kind() {
+    ensure_v8();
+    let dep_body = "text payload";
+    let (base_url, server) = spawn_path_response_http_server(vec![(
+        "/worker/dep.bin",
+        "HTTP/1.1 200 OK",
+        "application/octet-stream; charset=windows-1252",
+        dep_body.to_owned(),
+        Duration::ZERO,
+    )])
+    .await;
+    let loader =
+        ResourceRequestClient::new(&FetchConfig::default()).expect("service worker module loader");
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            import data from "./dep.bin" with { type: "text" };
+            if (data !== "text payload") {
+                throw new Error("missing text module dep");
+            }
+            skipWaiting();
+            "#
+            .to_owned(),
+            format!("{base_url}/worker/sw.js"),
+        )
+        .with_request_client(loader)
+        .with_script_kind(WorkerScriptKind::Module)
+        .with_global_kind(super::super::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(11),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(13),
+            scope_url: url::Url::parse(&format!("{base_url}/worker/")).unwrap(),
+        }),
+    );
+
+    let expected_import_url = format!("{base_url}/worker/dep.bin");
+    let expected_hash = sha256_hex(dep_body.as_bytes());
+    let mut imported_resource = None;
+    let mut saw_skip_waiting = false;
+    while imported_resource.is_none() || !saw_skip_waiting {
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for service worker module text resource")
+            .expect("channel closed");
+        match message {
+            WorkerToParentMessage::ServiceWorkerImportedScriptLoaded {
+                registration_id,
+                version_id,
+                resource,
+            } => {
+                assert_eq!(
+                    registration_id,
+                    ServiceWorkerRegistrationId::from_u64_for_test(11)
+                );
+                assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(13));
+                imported_resource = Some(resource);
+            }
+            WorkerToParentMessage::ServiceWorkerSkipWaiting {
+                registration_id,
+                version_id,
+            } => {
+                assert_eq!(
+                    registration_id,
+                    ServiceWorkerRegistrationId::from_u64_for_test(11)
+                );
+                assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(13));
+                saw_skip_waiting = true;
+            }
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected service worker module text error: {message}");
+            }
+            _ => {}
+        }
+    }
+
+    let resource = imported_resource.expect("module static text import should report a resource");
+    assert_eq!(resource.request_url.as_str(), expected_import_url);
+    assert_eq!(resource.final_url.as_str(), expected_import_url);
+    assert_eq!(resource.kind, WorkerScriptResourceKind::TextModule);
+    assert_eq!(resource.status, 200);
+    assert_eq!(resource.body_len, dep_body.len());
+    assert_eq!(resource.body_sha256, expected_hash);
+    assert_eq!(
+        resource.mime_type.as_deref(),
+        Some("application/octet-stream; charset=windows-1252")
+    );
+    handle.terminate_and_join();
+    server
+        .await
+        .expect("service worker module text resource server should finish");
+}
+
+#[tokio::test]
 async fn service_worker_module_static_css_import_rejects_invalid_module_type() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(
@@ -5904,12 +5997,12 @@ async fn service_worker_module_static_css_import_rejects_invalid_module_type() {
 }
 
 #[tokio::test]
-async fn service_worker_module_static_text_import_rejects_invalid_module_type() {
+async fn service_worker_module_static_unsupported_import_rejects_invalid_module_type() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(
             r#"
-            import text from "data:text/plain,hello" with { type: "text" };
+            import text from "data:text/plain,hello" with { type: "unsupported" };
             skipWaiting();
             "#
             .to_owned(),
@@ -5930,7 +6023,7 @@ async fn service_worker_module_static_text_import_rejects_invalid_module_type() 
     match message {
         WorkerToParentMessage::Error { message, .. } => {
             assert!(
-                message.contains("module type `text` is not a valid module type"),
+                message.contains("module type `unsupported` is not a valid module type"),
                 "{message}"
             );
         }

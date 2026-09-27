@@ -16,6 +16,9 @@ const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++Ia
 #[path = "preload_integrity.rs"]
 mod preload;
 
+#[path = "text_network.rs"]
+mod text_modules;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -149,6 +152,16 @@ fn fixture_response(
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
+        "/text-module.txt" => (
+            "200 OK",
+            "Content-Type: application/octet-stream\r\nCache-Control: no-store\r\n".to_owned(),
+            SCRIPT.to_owned(),
+        ),
+        "/text-module-preload.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            text_modules::preload_markup(),
+        ),
         "/preload-parser.html" => (
             "200 OK",
             "Content-Type: text/html\r\n".to_owned(),

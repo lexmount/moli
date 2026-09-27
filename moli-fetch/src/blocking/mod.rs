@@ -442,6 +442,7 @@ fn append_browser_subresource_headers(
         BrowserRequestMetadata::Font => "font",
         BrowserRequestMetadata::Image => "image",
         BrowserRequestMetadata::JsonModule => "json",
+        BrowserRequestMetadata::TextModule => "text",
         BrowserRequestMetadata::Manifest => "manifest",
         BrowserRequestMetadata::Script => "script",
         BrowserRequestMetadata::SharedWorker => "sharedworker",
