@@ -6,16 +6,16 @@ use crate::{
         FrameDocumentParserModuleTreeAdvanceDependencyFetchResult,
         FrameDocumentParserModuleTreeAdvanceFailureTrace,
         FrameDocumentParserModuleTreeAdvanceHooks, FrameDocumentParserModuleTreeAdvanceRunner,
-        FrameDocumentParserRootModuleClient, FrameDocumentParserRootTerminalWork,
-        FrameDocumentStaticDependencyModuleClient, FrameDocumentTaskOwner, FrameRealmId,
-        frame_document_parser_module_tree_advance_action,
+        FrameDocumentParserRootModuleClient, FrameDocumentParserRootTerminalResult,
+        FrameDocumentParserRootTerminalWork, FrameDocumentStaticDependencyModuleClient,
+        FrameDocumentTaskOwner, FrameRealmId, frame_document_parser_module_tree_advance_action,
         module_script_graph_failed_work_from_root_client,
         module_script_graph_failed_work_from_tree_job, trace_child_module_dependency_failure,
         trace_child_parser_module_root_failure,
     },
     module_runtime::{
         ModuleEntryId, ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleLoadError,
-        ModuleLoadStage, ModuleMapKey, ModuleRequestRecord, ModuleSource,
+        ModuleLoadStage, ModuleMapEntryState, ModuleMapKey, ModuleRequestRecord, ModuleSource,
         NativeModuleGraphFetchRequest, NativeModuleGraphJobAdvance,
         NativeModuleTreeDocumentOwnerAdapter, NativeParserModuleTreeJobResume,
     },
@@ -31,6 +31,41 @@ pub(super) struct ChildModuleScriptTerminalOwner<'vm> {
 
 struct ScriptVmParserModuleTreeAdvanceHooks<'vm> {
     vm: &'vm mut ScriptVm,
+}
+
+struct ChildModuleRootRecord {
+    entry_id: ModuleEntryId,
+    key: ModuleMapKey,
+    base_url: Url,
+    requests: Vec<ModuleRequestRecord>,
+    fetch_metadata: ModuleFetchMetadata,
+}
+
+// Terminal tasks may have been queued before another consumer compiled the
+// module. Recheck the map at delivery, retaining its record and fetch options.
+fn cached_module_root_record(
+    owner: &impl NativeModuleTreeDocumentOwnerAdapter,
+    key: &ModuleMapKey,
+) -> Result<Option<ChildModuleRootRecord>, ModuleLoadError> {
+    let Some(entry_id) = owner.module_entry_id(key) else {
+        return Ok(None);
+    };
+    match owner.module_entry_state(entry_id) {
+        ModuleMapEntryState::Compiled
+        | ModuleMapEntryState::Instantiated
+        | ModuleMapEntryState::Evaluating
+        | ModuleMapEntryState::Evaluated => Ok(Some(ChildModuleRootRecord {
+            entry_id,
+            key: owner.module_entry_key(entry_id),
+            base_url: owner.module_entry_url(entry_id),
+            requests: owner.module_requests(entry_id),
+            fetch_metadata: owner.module_effective_fetch_metadata(entry_id),
+        })),
+        ModuleMapEntryState::Failed => Err(owner.module_failure(entry_id).unwrap_or_else(|| {
+            ModuleLoadError::new(ModuleLoadStage::Fetch, "module previously failed to load")
+        })),
+        ModuleMapEntryState::Fetching | ModuleMapEntryState::Fetched => Ok(None),
+    }
 }
 
 impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
@@ -78,7 +113,7 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
             realm_id,
             request_key,
             client,
-            FrameDocumentModuleFetchTerminalResult::Fetched(ModuleGraphFetchedSource::new(
+            FrameDocumentParserRootTerminalResult::Fetched(ModuleGraphFetchedSource::new(
                 source_url, false, source,
             )),
         )
@@ -175,7 +210,7 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
         self.apply_tree_advance(document_owner, realm_id, tree_id, resume, advance_result)
     }
 
-    fn compile_module_record_into_owner(
+    fn compile_or_reuse_module_record(
         &mut self,
         document_owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
@@ -184,13 +219,16 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
         source: &ModuleSource,
         source_url: &Url,
         fetch_metadata: &ModuleFetchMetadata,
-    ) -> Result<(ModuleEntryId, ModuleMapKey, Vec<ModuleRequestRecord>), ModuleLoadError> {
+    ) -> Result<ChildModuleRootRecord, ModuleLoadError> {
         self.vm
             .with_current_child_module_tree_owner_or_module_load_error(
                 document_owner,
                 realm_id,
                 source_url,
                 |module_owner| {
+                    if let Some(record) = cached_module_root_record(module_owner, &request_key)? {
+                        return Ok(record);
+                    }
                     module_owner
                         .compile_module_record(compile_key, source, source_url, fetch_metadata)
                         .map(|(record, identity)| {
@@ -202,7 +240,13 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
                                 identity,
                                 fetch_metadata.clone(),
                             );
-                            (entry_id, parent_key, requests)
+                            ChildModuleRootRecord {
+                                entry_id,
+                                key: parent_key,
+                                base_url: source_url.clone(),
+                                requests,
+                                fetch_metadata: fetch_metadata.clone(),
+                            }
                         })
                 },
             )
@@ -319,10 +363,10 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
         realm_id: FrameRealmId,
         request_key: ModuleMapKey,
         client: FrameDocumentParserRootModuleClient,
-        result: FrameDocumentModuleFetchTerminalResult,
+        result: FrameDocumentParserRootTerminalResult,
     ) -> FrameDocumentModuleScriptTerminalFollowup {
-        match result {
-            FrameDocumentModuleFetchTerminalResult::Fetched(fetched_source) => {
+        let record = match result {
+            FrameDocumentParserRootTerminalResult::Fetched(fetched_source) => {
                 let compile_url = if client.source_is_external() {
                     fetched_source.final_url().clone()
                 } else {
@@ -333,7 +377,6 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
                 } else {
                     request_key.clone()
                 };
-                let root_source = fetched_source.source().clone();
                 let fetch_metadata = if client.source_is_external() {
                     ModuleFetchMetadata::from_top_level_script_fetch_metadata(
                         client.fetch_metadata(),
@@ -344,86 +387,67 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
                     )
                 }
                 .with_response_referrer_policy(fetched_source.response_referrer_policy());
-                let compile_result = self.compile_module_record_into_owner(
+                self.compile_or_reuse_module_record(
                     task_owner.document_owner(),
                     realm_id,
                     request_key.clone(),
                     compile_key,
-                    &root_source,
+                    fetched_source.source(),
                     &compile_url,
                     &fetch_metadata,
-                );
-                match compile_result {
-                    Ok((entry_id, parent_key, requests)) => {
-                        let tree_id = self.vm.record_compiled_child_parser_root(
-                            task_owner,
-                            realm_id,
-                            client.pending_script_id(task_owner.document_owner()),
-                            client.script().clone(),
-                            client.script_handle(),
-                            request_key,
-                            compile_url.clone(),
-                            entry_id,
-                            parent_key,
-                            requests,
-                            fetch_metadata,
-                            client.load_delay_token(),
-                        );
-                        self.advance_tree_job(
-                            task_owner.document_owner(),
-                            realm_id,
-                            tree_id,
-                            &compile_url,
-                        )
-                    }
-                    Err(error) => {
-                        trace_child_parser_module_root_failure(
-                            task_owner,
-                            realm_id,
-                            client.script_handle(),
-                            &request_key,
-                            &error,
-                        );
-                        let work = module_script_graph_failed_work_from_root_client(
-                            task_owner,
-                            realm_id,
-                            client.pending_script_id(task_owner.document_owner()),
-                            client.script().clone(),
-                            client.script_handle(),
-                            request_key,
-                            client.load_delay_token(),
-                            error,
-                        );
-                        self.notify_graph_terminal_work(
-                            FrameDocumentModuleScriptGraphNotification::failed(work),
-                        )
-                    }
-                }
+                )
             }
-            FrameDocumentModuleFetchTerminalResult::Failed(error) => {
-                let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error);
-                trace_child_parser_module_root_failure(
+            FrameDocumentParserRootTerminalResult::Compiled => self
+                .vm
+                .with_current_child_module_tree_owner_or_module_load_error(
+                    task_owner.document_owner(),
+                    realm_id,
+                    request_key.url(),
+                    |module_owner| {
+                        cached_module_root_record(module_owner, &request_key)?.ok_or_else(|| {
+                            ModuleLoadError::new(
+                                ModuleLoadStage::Compile,
+                                "compiled child module terminal lost its module record",
+                            )
+                        })
+                    },
+                ),
+            FrameDocumentParserRootTerminalResult::Failed(error) => {
+                Err(ModuleLoadError::new(ModuleLoadStage::Fetch, error))
+            }
+        };
+        let record = match record {
+            Ok(record) => record,
+            Err(error) => {
+                return self.handle_parser_root_start_failure(
                     task_owner,
                     realm_id,
-                    client.script_handle(),
-                    &request_key,
-                    &error,
-                );
-                let work = module_script_graph_failed_work_from_root_client(
-                    task_owner,
-                    realm_id,
-                    client.pending_script_id(task_owner.document_owner()),
-                    client.script().clone(),
-                    client.script_handle(),
                     request_key,
-                    client.load_delay_token(),
+                    client,
                     error,
                 );
-                self.notify_graph_terminal_work(FrameDocumentModuleScriptGraphNotification::failed(
-                    work,
-                ))
             }
-        }
+        };
+        let tree_id = self.vm.record_compiled_child_parser_root(
+            task_owner,
+            realm_id,
+            client.pending_script_id(task_owner.document_owner()),
+            client.script().clone(),
+            client.script_handle(),
+            request_key,
+            record.base_url.clone(),
+            record.entry_id,
+            record.key,
+            record.requests,
+            record.fetch_metadata,
+            client.load_delay_token(),
+        );
+        self.advance_tree_job(
+            task_owner.document_owner(),
+            realm_id,
+            tree_id,
+            &record.base_url,
+        )
     }
 }
 
