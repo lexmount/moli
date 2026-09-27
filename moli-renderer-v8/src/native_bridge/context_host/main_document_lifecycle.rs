@@ -32,6 +32,10 @@ impl JsContextHost {
         let descendants =
             unsafe { &*host_ptr }.child_document_descendants_unload_snapshot(document);
         let window = scope.get_current_context().global(scope);
+        // Preserve the outgoing Document's effective policy before pagehide and
+        // unload run. Browser-owned navigations resolve their history from this
+        // published record, including changes made while the response was pending.
+        crate::context_bootstrap::publish_top_level_navigation_history(scope, window);
         // Claim the exact Document before author code runs, and keep the root's
         // destructive-write guard active while descendant handlers execute.
         let _unload = unsafe { &*host_ptr }.enter_document_unload(document);
