@@ -27,6 +27,7 @@ pub struct ParserScriptRead {
     pub async_attribute_present: bool,
     pub defer_attribute_present: bool,
     pub fetch_metadata: ScriptFetchMetadata,
+    pub document_referrer_policy: Option<String>,
 }
 
 fn parser_script_read_from_node(
@@ -84,6 +85,7 @@ fn parser_script_read_from_node(
         script_async: element.script_async(),
         async_attribute_present: element.attribute("async").is_some(),
         defer_attribute_present: is_html_script && element.attribute("defer").is_some(),
+        document_referrer_policy: None,
         fetch_metadata: ScriptFetchMetadata::from_script_attributes(
             element.attribute("crossorigin"),
             element.attribute("referrerpolicy"),
@@ -251,6 +253,10 @@ pub struct PreparedScript {
     pub mode: ScriptMode,
     pub source_kind: ScriptSourceKind,
     pub fetch_metadata: ScriptFetchMetadata,
+    /// The fetch client's policy at preparation time. Keep it separate from
+    /// script fetch options: later dynamic imports use the Document's current
+    /// policy when the script has no explicit referrerpolicy attribute.
+    pub document_referrer_policy: Option<String>,
     pub source: ScriptSource,
     pub url: Url,
     pub base_url: Url,
@@ -520,6 +526,7 @@ pub fn build_prepared_script(
                 mode,
                 source_kind: classification.source_kind,
                 fetch_metadata: classification.script.fetch_metadata.clone(),
+                document_referrer_policy: classification.script.document_referrer_policy.clone(),
                 source: ScriptSource::External,
                 base_url: url.clone(),
                 url,
@@ -540,6 +547,10 @@ pub fn build_prepared_script(
                     mode,
                     source_kind: classification.source_kind,
                     fetch_metadata: classification.script.fetch_metadata.clone(),
+                    document_referrer_policy: classification
+                        .script
+                        .document_referrer_policy
+                        .clone(),
                     source: ScriptSource::Inline(source),
                     url: document_url.clone(),
                     base_url: document_base_url,

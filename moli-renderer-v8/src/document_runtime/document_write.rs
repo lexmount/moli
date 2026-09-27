@@ -2652,6 +2652,7 @@ mod tests {
         url: Url,
     ) -> PreparedScript {
         PreparedScript {
+            document_referrer_policy: None,
             position: node_id.index(),
             node_id,
             kind,

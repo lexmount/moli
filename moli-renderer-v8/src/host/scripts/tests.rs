@@ -82,6 +82,7 @@ fn main_document_completion_recheck_reservation_coalesces_until_its_turn_begins(
 fn preparation(url: &str, _document: NodeId) -> RuntimeScriptPreparationContext {
     let document_url = Url::parse(url).expect("test url should parse");
     RuntimeScriptPreparationContext {
+        document_referrer_policy: None,
         base_url: document_url.clone(),
         document_url,
         fetch_metadata: crate::planning::ScriptFetchMetadata::default(),
@@ -681,6 +682,7 @@ fn runtime_owned_in_order_scripts_created_while_loading_do_not_wait_for_domconte
     scheduler
         .queue_dynamic_script(
             &RuntimeScriptPreparationContext {
+                document_referrer_policy: None,
                 document_url: Url::parse("https://example.test/").expect("test url should parse"),
                 base_url: Url::parse("https://example.test/").expect("test url should parse"),
                 fetch_metadata: crate::planning::ScriptFetchMetadata::default(),
@@ -729,6 +731,7 @@ fn runtime_owned_module_scripts_created_while_loading_do_not_wait_for_domcontent
     scheduler
         .queue_dynamic_script(
             &RuntimeScriptPreparationContext {
+                document_referrer_policy: None,
                 document_url: Url::parse("https://example.test/").expect("test url should parse"),
                 base_url: Url::parse("https://example.test/").expect("test url should parse"),
                 fetch_metadata: crate::planning::ScriptFetchMetadata::default(),

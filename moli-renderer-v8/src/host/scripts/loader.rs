@@ -18,6 +18,7 @@ pub(crate) struct RuntimeScriptPreparationContext {
     pub(super) document_url: Url,
     pub(super) base_url: Url,
     pub(super) fetch_metadata: ScriptFetchMetadata,
+    pub(super) document_referrer_policy: Option<String>,
 }
 
 impl RuntimeScriptPreparationContext {
@@ -44,6 +45,7 @@ impl RuntimeScriptPreparationContext {
         RuntimeScriptPreparationContext {
             document_url,
             base_url,
+            document_referrer_policy: None,
             fetch_metadata: ScriptFetchMetadata::from_script_attributes(
                 dom_host.get_attribute(node, "crossorigin").as_deref(),
                 dom_host.get_attribute(node, "referrerpolicy").as_deref(),
@@ -204,6 +206,7 @@ pub(crate) fn build_runtime_prepared_script(
         mode,
         source_kind,
         fetch_metadata: preparation.fetch_metadata.clone(),
+        document_referrer_policy: preparation.document_referrer_policy.clone(),
         source,
         initiator_url: preparation.document_url.clone(),
         base_url: url.clone(),
