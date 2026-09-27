@@ -306,7 +306,7 @@ impl ScriptVm {
             .has_pending_location_navigation()
     }
 
-    pub(super) fn has_planned_form_navigation_to(
+    pub(crate) fn has_planned_form_navigation_to(
         &self,
         target: crate::native_bridge::OwnerDispatchScope,
     ) -> bool {
@@ -502,7 +502,7 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn top_level_navigation_history(&self) -> crate::runtime::RendererNavigationHistory {
+    pub(crate) fn top_level_navigation_history(&self) -> crate::runtime::RendererNavigationHistory {
         self._context_host.borrow().top_level_navigation_history()
     }
 
@@ -816,9 +816,9 @@ impl ScriptVm {
         self.install_navigation_bootstrap_from_history(entry_seed, None);
     }
 
-    pub(super) fn install_navigation_bootstrap_from_history(
+    pub(crate) fn install_navigation_bootstrap_from_history(
         &mut self,
-        entry_seed: Option<super::native_bridge::NavigationHistoryEntrySeed>,
+        entry_seed: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
         source: Option<crate::runtime::RendererNavigationHistory>,
     ) {
         if let (Some(source), Some(seed)) = (&source, &entry_seed) {
