@@ -590,15 +590,6 @@ impl JsContextHost {
             .and_then(|entry| entry.document_referrer_policy())
     }
 
-    pub(crate) fn child_browsing_context_response_referrer_policy(
-        &self,
-        handle: DomHandle,
-    ) -> Option<String> {
-        self.child_browsing_contexts
-            .get(&handle)
-            .and_then(|entry| entry.document_referrer_policy().map(ToOwned::to_owned))
-    }
-
     pub(crate) fn child_browsing_context_policy_container_snapshot(
         &self,
         handle: DomHandle,

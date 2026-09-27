@@ -18,6 +18,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) execution_context: crate::native_bridge::WindowExecutionContextBinding,
     pub(super) resource_loader: crate::network::context::DocumentResourceLoader,
     pub(super) document_url: url::Url,
+    pub(super) document_referrer_policy: Option<String>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) network_partition_key: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
@@ -80,6 +81,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         frame_id,
     } = environment;
     let policy_context = effective_subresource_policy_context(scope, host, owner);
+    let document_referrer_policy = effective_subresource_referrer_policy(host, owner);
     let network_partition_key = active_subresource_network_partition_key(host, owner);
     let resolved_url =
         resolve_context_url(&base_url, &url_str, None).map_err(XhrSendPrepareError::Url)?;
@@ -100,6 +102,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         document_url,
         request_origin,
         network_partition_key,
+        document_referrer_policy,
         policy_context,
         resolved_url,
         blob_url_entry: blob_url_entry(scope, xhr),

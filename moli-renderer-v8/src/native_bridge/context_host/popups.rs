@@ -1846,11 +1846,6 @@ impl JsContextHost {
             .and_then(|policy| policy.referrer_policy.as_deref())
     }
 
-    pub(crate) fn lightweight_popup_referrer_policy(&self, popup_id: u64) -> Option<&str> {
-        self.lightweight_popup_document_record(popup_id)
-            .and_then(|document| document.state.policy_container.referrer_policy.as_deref())
-    }
-
     pub(crate) fn lightweight_popup_cross_origin_embedder_policy(
         &self,
         popup_id: u64,
