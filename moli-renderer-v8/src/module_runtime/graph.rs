@@ -92,6 +92,7 @@ pub(crate) struct NativeModuleGraphFetchRequest {
     source_url: Url,
     initiator_url: Url,
     referrer: module_tree::ModuleReferrer,
+    document_referrer_policy: Option<String>,
     fetch_metadata: ModuleFetchMetadata,
     kind: ModuleKind,
     tree_client: Option<module_tree::SingleModuleClientToken>,
@@ -222,6 +223,7 @@ impl NativeModuleGraphFetchRequest {
             source_url,
             initiator_url,
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata,
             kind,
             tree_client: None,
@@ -234,6 +236,11 @@ impl NativeModuleGraphFetchRequest {
 
     fn with_referrer(mut self, referrer: module_tree::ModuleReferrer) -> Self {
         self.referrer = referrer;
+        self
+    }
+
+    pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
+        self.document_referrer_policy = policy;
         self
     }
 
@@ -370,14 +377,18 @@ impl NativeModuleGraphFetchRequest {
         self.fetch_metadata.request_metadata.integrity.as_deref()
     }
 
-    fn request(&self, request_origin: &moli_url::WebOrigin) -> anyhow::Result<Request> {
+    pub(crate) fn request(&self, request_origin: &moli_url::WebOrigin) -> anyhow::Result<Request> {
+        // The client's default is captured for this fetch, not for the compiled
+        // module. Empty script policies must observe later document policy changes.
+        let mut metadata = self.fetch_metadata.request_metadata.clone();
+        metadata.document_referrer_policy = self.document_referrer_policy.clone();
         let request = Request::new("GET", self.source_url.as_str(), None, vec![])
             .expect("module graph URL should already be parsed")
             .with_page_network_policy()
             .with_initiator_url(&self.initiator_url)
             .with_request_origin(request_origin.clone())
             .with_credentials_mode(self.fetch_metadata.credentials_mode)
-            .with_script_fetch_metadata(self.fetch_metadata.request_metadata.clone());
+            .with_script_fetch_metadata(metadata);
         // A module's Referer identifies its importing script, while the request
         // origin and cookie context still belong to the fetch client Document.
         let request = if let Some(referrer) = &self.referrer.url {
@@ -992,14 +1003,17 @@ impl NativeModuleGraphJob {
         match advance {
             NativeModuleTreeJobAdvance::NeedFetches(fetches) => {
                 let mut requests = Vec::with_capacity(fetches.len());
+                let document_referrer_policy = owner.module_request_document_referrer_policy();
                 for fetch in fetches {
                     let key = fetch.key().clone();
-                    let request = native_fetch_request_from_tree_fetch(&fetch)?.with_tree_fetch(
-                        fetch.client(),
-                        fetch.graph_level(),
-                        key.clone(),
-                        fetch.dependency().cloned(),
-                    );
+                    let request = native_fetch_request_from_tree_fetch(&fetch)?
+                        .with_document_referrer_policy(document_referrer_policy.clone())
+                        .with_tree_fetch(
+                            fetch.client(),
+                            fetch.graph_level(),
+                            key.clone(),
+                            fetch.dependency().cloned(),
+                        );
                     let context =
                         match owner.module_fetch_csp_context(&key, &request.fetch_metadata) {
                             Ok(context) => context,
@@ -3354,6 +3368,7 @@ import "./c.mjs";
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3430,6 +3445,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3481,6 +3497,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3519,6 +3536,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/preload.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3576,6 +3594,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: dependency_metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3625,6 +3644,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/dynamic.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3663,6 +3683,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/inline.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -3694,6 +3715,7 @@ import "./c.mjs";
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: metadata,
             kind: ModuleKind::JavaScript,
             tree_client: None,
@@ -4478,6 +4500,7 @@ import "./c.mjs";
             source_url,
             initiator_url,
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata,
             kind,
             tree_client: None,
@@ -4550,6 +4573,7 @@ import "./c.mjs";
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
+            document_referrer_policy: None,
             fetch_metadata: root_metadata.for_descendant_fetches(),
             kind: ModuleKind::JavaScript,
             tree_client: None,

@@ -334,23 +334,26 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
 ) -> PreparedScriptSourceLoadOutcome {
-    load_prepared_script_source_outcome_with_optional_load(
+    // Keep the request-preserving adapter out of callers' nested async frames.
+    Box::pin(load_prepared_script_source_outcome_with_request(
         script,
         request_origin,
         loader,
         document_character_set,
         request_resource_type,
         None,
-    )
+        None,
+    ))
     .await
 }
 
-async fn load_prepared_script_source_outcome_with_optional_load(
+async fn load_prepared_script_source_outcome_with_request(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,
     loader: &ResourceRequestClient,
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
+    request: Option<moli_fetch::Request>,
     resource_load: Option<crate::network::loads::ResourceLoadLease>,
 ) -> PreparedScriptSourceLoadOutcome {
     match &script.source {
@@ -378,37 +381,54 @@ async fn load_prepared_script_source_outcome_with_optional_load(
             ) {
                 return outcome;
             }
-            let request = external_script_request(script, request_origin, request_resource_type);
-            // Box the streaming fetch future so parser/script planning does not
-            // inherit the chunk collector's larger state machine across awaits.
-            let response = if let Some(load) = resource_load {
-                Box::pin(loader.fetch_cacheable_script_text_stream_with_load(request, load)).await
-            } else {
-                Box::pin(loader.fetch_cacheable_script_text_stream(request)).await
-            };
-            match response {
-                Ok(response) => {
-                    let response = crate::protocol_types::NavigationResponse::from(response);
-                    external_script_source_load_outcome_from_response(
-                        script,
-                        request_origin,
-                        response,
-                        document_character_set,
-                        loader.web_security_disabled(),
-                    )
-                }
-                Err(error) => {
-                    let consumed_preload =
-                        error.is::<crate::network::preloads::ConsumedPreloadError>();
-                    let error = format!("failed to fetch script `{}`: {error}", script.url);
-                    PreparedScriptSourceLoadOutcome {
-                        source_result: Err(error.clone()),
-                        source_bytes: None,
-                        network_result: (!consumed_preload).then(|| Arc::new(Err(error))),
-                        muted_errors: false,
-                        network_request_handle: None,
-                    }
-                }
+            let request = request.unwrap_or_else(|| {
+                external_script_request(script, request_origin, request_resource_type)
+            });
+            load_external_script_request_source_outcome(
+                script,
+                request_origin,
+                loader,
+                document_character_set,
+                request,
+                resource_load,
+            )
+            .await
+        }
+    }
+}
+
+async fn load_external_script_request_source_outcome(
+    script: &PreparedScript,
+    request_origin: &moli_url::WebOrigin,
+    loader: &ResourceRequestClient,
+    document_character_set: Option<&str>,
+    request: moli_fetch::Request,
+    resource_load: Option<crate::network::loads::ResourceLoadLease>,
+) -> PreparedScriptSourceLoadOutcome {
+    // Box the streaming fetch future so parser/script planning does not
+    // inherit the chunk collector's larger state machine across awaits.
+    let response = if let Some(load) = resource_load {
+        Box::pin(loader.fetch_cacheable_script_text_stream_with_load(request, load)).await
+    } else {
+        Box::pin(loader.fetch_cacheable_script_text_stream(request)).await
+    };
+    match response {
+        Ok(response) => external_script_source_load_outcome_from_response(
+            script,
+            request_origin,
+            crate::protocol_types::NavigationResponse::from(response),
+            document_character_set,
+            loader.web_security_disabled(),
+        ),
+        Err(error) => {
+            let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
+            let error = format!("failed to fetch script `{}`: {error}", script.url);
+            PreparedScriptSourceLoadOutcome {
+                source_result: Err(error.clone()),
+                source_bytes: None,
+                network_result: (!consumed_preload).then(|| Arc::new(Err(error))),
+                muted_errors: false,
+                network_request_handle: None,
             }
         }
     }
@@ -452,6 +472,36 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     document_url: Url,
     resource_load: Option<crate::network::loads::ResourceLoadLease>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let request = external_script_request(script, request_origin, request_resource_type);
+    Box::pin(
+        load_service_worker_aware_external_script_source_outcome_with_request(
+            script,
+            request_origin,
+            loader,
+            resource_task_runner,
+            document_character_set,
+            request,
+            browser_context_runtime,
+            service_worker_client_id,
+            document_url,
+            resource_load,
+        ),
+    )
+    .await
+}
+
+pub(crate) async fn load_service_worker_aware_external_script_source_outcome_with_request(
+    script: &PreparedScript,
+    request_origin: &moli_url::WebOrigin,
+    loader: &ResourceRequestClient,
+    resource_task_runner: RendererResourceTaskRunner,
+    document_character_set: Option<&str>,
+    request: moli_fetch::Request,
+    browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
+    service_worker_client_id: crate::service_worker_runtime::ServiceWorkerClientId,
+    document_url: Url,
+    resource_load: Option<crate::network::loads::ResourceLoadLease>,
+) -> PreparedScriptSourceLoadOutcome {
     if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
         script,
         request_origin,
@@ -459,7 +509,6 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     ) {
         return outcome;
     }
-    let request = external_script_request(script, request_origin, request_resource_type);
     let fetch = browser_context_runtime.fetch_service_worker_subresource_for_client_with_metadata(
         service_worker_client_id,
         document_url,
@@ -502,12 +551,13 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             )
         }
         Ok(None) => {
-            load_prepared_script_source_outcome_with_optional_load(
+            load_prepared_script_source_outcome_with_request(
                 script,
                 request_origin,
                 loader,
                 document_character_set,
-                request_resource_type,
+                None,
+                Some(request),
                 resource_load,
             )
             .await
@@ -810,7 +860,7 @@ fn script_fetch_request_metadata(
     }
 }
 
-fn script_fetch_resource_type(
+pub(crate) fn script_fetch_resource_type(
     kind: ScriptKind,
     mode: ScriptMode,
 ) -> moli_fetch::RequestResourceType {

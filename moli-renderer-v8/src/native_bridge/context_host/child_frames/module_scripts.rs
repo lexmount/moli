@@ -928,8 +928,16 @@ impl PageScriptHost {
         ) {
             return;
         }
+        let policy = self
+            .child_browsing_context_document_handle(target.child_handle())
+            .and_then(|document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+            });
         let request =
-            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key());
+            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key())
+                .with_document_referrer_policy(policy);
         let csp_context = self.module_fetch_csp_context_for_owner(
             crate::native_bridge::context_host::OwnerDispatchScope::Child(target.child_handle()),
             request.source_url(),
