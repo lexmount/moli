@@ -70,7 +70,7 @@ impl ScriptVm {
                     origin,
                 )
             }
-            ModuleKind::Json | ModuleKind::Css => {
+            ModuleKind::Json | ModuleKind::Css | ModuleKind::Text => {
                 let ModuleSource::Text(source) = source else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
@@ -93,10 +93,6 @@ impl ScriptVm {
                 };
                 self.compile_wasm_module_record_in_context(context_ptr, key, bytes, source_url)
             }
-            ModuleKind::ModulePreloadText => Err(ModuleLoadError::new(
-                ModuleLoadStage::Compile,
-                format!("modulepreload text `{source_url}` is not a module graph record"),
-            )),
         }
     }
     pub(super) fn compile_javascript_module_record_in_context(
@@ -285,7 +281,14 @@ impl ScriptVm {
                             .unwrap_or_else(|| "failed to parse JSON module".to_owned());
                         anyhow::anyhow!("{message}")
                     })?;
-                    crate::module_runtime::SyntheticTextModuleValue::Json(v8::Global::new(
+                    crate::module_runtime::SyntheticTextModuleValue::Value(v8::Global::new(
+                        &scope, value,
+                    ))
+                } else if key.kind() == ModuleKind::Text {
+                    let value = v8_string(&scope, &source)
+                        .ok_or_else(|| anyhow::anyhow!("failed to allocate text module export"))?;
+                    let value: v8::Local<v8::Value> = value.into();
+                    crate::module_runtime::SyntheticTextModuleValue::Value(v8::Global::new(
                         &scope, value,
                     ))
                 } else {

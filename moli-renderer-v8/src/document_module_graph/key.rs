@@ -72,7 +72,7 @@ pub(crate) enum ModuleKind {
     JavaScript,
     Json,
     Css,
-    ModulePreloadText,
+    Text,
     WebAssembly,
 }
 
@@ -109,6 +109,7 @@ impl ModuleMapKey {
         match module_type {
             "json" => Ok(Self::json_with_attributes(url.clone(), attributes.clone())),
             "css" => Ok(Self::css_with_attributes(url.clone(), attributes.clone())),
+            "text" => Ok(Self::text_with_attributes(url.clone(), attributes.clone())),
             other => Err(format!("module type `{other}` is not a valid module type")),
         }
     }
@@ -149,12 +150,20 @@ impl ModuleMapKey {
         }
     }
 
-    pub(crate) fn modulepreload_text(url: Url) -> Self {
+    pub(crate) fn text_with_attributes(url: Url, attributes: ModuleAttributesKey) -> Self {
         Self {
             url,
-            kind: ModuleKind::ModulePreloadText,
-            attributes: ModuleAttributesKey::empty(),
+            kind: ModuleKind::Text,
+            attributes,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn modulepreload_text(url: Url) -> Self {
+        Self::text_with_attributes(
+            url,
+            ModuleAttributesKey::from_pairs(vec![("type".into(), "text".into())]),
+        )
     }
 
     pub(crate) fn webassembly(url: Url) -> Self {
