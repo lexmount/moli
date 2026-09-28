@@ -15,9 +15,10 @@ use super::super::{
     TrustedAttributeSetter, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
-    set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
-    trusted_attribute_value_string, update_iframe_snapshot_navigation,
+    set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
+    trusted_attribute_value_string, trusted_attribute_value_string16,
+    update_iframe_snapshot_navigation,
 };
 use super::{
     AttributeNameArgs, AttributeNamespaceNameArgs, SetAttributeArgs, SetAttributeNsArgs,
@@ -89,14 +90,13 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
         throw_invalid_attribute_name(scope);
         return;
     }
-    let runtime = unsafe { &*runtime_ptr };
-    let normalized_name = runtime
+    let normalized_name = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
         .map(|element| element.normalized_attribute_name(&parsed.name))
         .unwrap_or_else(|| parsed.name.clone());
-    let Some(value) = trusted_attribute_value_string(
+    let Some(units) = trusted_attribute_value_string16(
         scope,
         Some((runtime_ptr, handle)),
         None,
@@ -107,20 +107,28 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
         rv.set_undefined();
         return;
     };
+    let value = String::from_utf16_lossy(&units);
+    // Value conversion can adopt the receiver into a different native tree.
+    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttribute") else {
+        return;
+    };
     if parsed.name.eq_ignore_ascii_case("src")
-        && runtime.dom_host().is_html_element_named(handle, "iframe")
+        && unsafe { &*runtime_ptr }
+            .dom_host()
+            .is_html_element_named(handle, "iframe")
     {
         update_iframe_snapshot_navigation(scope, runtime_ptr, handle, &value);
         rv.set_undefined();
         return;
     }
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = set_live_element_attribute_appending_to_current_reaction_queue(
+        let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             &parsed.name,
             &value,
+            units,
         );
     });
     rv.set_undefined();
