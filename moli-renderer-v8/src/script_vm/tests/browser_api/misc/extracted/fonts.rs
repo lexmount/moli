@@ -21,7 +21,7 @@ fn css_highlights_declared_property_preserves_descriptor() {
     descriptor && descriptor.value === before,
     CSS.highlights === before,
     reflectSet,
-    Object.keys(CSS).join(","),
+    Object.keys(CSS).includes("highlights"),
     typeof Highlight,
     typeof CSS.highlights.set,
     CSS.highlights.set("declared", new Highlight()) === CSS.highlights,
@@ -34,7 +34,7 @@ fn css_highlights_declared_property_preserves_descriptor() {
 
     assert_eq!(
         result,
-        "true|false|false|true|object|true|true|false|escape,registerProperty,supports|function|function|true|true"
+        "true|false|false|true|object|true|true|false|false|function|function|true|true"
     );
 }
 #[test]

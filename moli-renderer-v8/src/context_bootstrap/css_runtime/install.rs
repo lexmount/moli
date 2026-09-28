@@ -59,7 +59,9 @@ pub(crate) fn install_css_runtime_state_for_document<'s>(
 pub(super) fn build_css_namespace<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    CssNamespaceObjectDeclaration::default()
+    let namespace = CssNamespaceObjectDeclaration::default()
         .bind(scope)
-        .expect("CSS namespace declaration should bind")
+        .expect("CSS namespace declaration should bind");
+    super::typed_om::install_numeric_factories(scope, namespace);
+    namespace
 }
