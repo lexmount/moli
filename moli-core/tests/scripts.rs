@@ -6711,3 +6711,6 @@ async fn parse_time_lifecycle_queue_can_stop_cleanly_at_load_stage_after_load_mi
 
 #[path = "scripts/document_write_errors.rs"]
 mod document_write_errors;
+
+#[path = "scripts/document_close.rs"]
+mod document_close;
