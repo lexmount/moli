@@ -54,6 +54,8 @@ mod fetch_client_referrer;
 
 #[path = "css_import_referrer.rs"]
 mod css_import_referrer;
+#[path = "local_worker_referrer.rs"]
+mod local_worker_referrer;
 #[path = "service_worker_referrer.rs"]
 mod service_worker_referrer;
 
@@ -230,6 +232,9 @@ fn fixture_response(
         | "/child-sri-accepted.css"
         | "/child-sri-forbidden.css" => child_stylesheet_integrity::fixture_response(path, query),
         "/import-referrer.js" => dynamic_import_referrer::fixture_response(query),
+        "/local-referrer-worker.js" | "/local-referrer-page.html" => {
+            local_worker_referrer::fixture_response(path, query, request.referer.as_deref())
+        }
         "/import-credentials.js" => (
             "200 OK",
             format!("{javascript}Cache-Control: no-store\r\n"),
