@@ -10,7 +10,7 @@ mod hierarchical_path;
 mod path_encoding;
 
 pub use origin::{
-    WebOrigin, is_about_blank, is_opaque_origin, is_potentially_trustworthy_url,
+    WebOrigin, is_about_blank, is_about_srcdoc, is_opaque_origin, is_potentially_trustworthy_url,
     origin_ascii_serialization, origin_ascii_serialization_with_about_blank_inheritance,
     origin_unicode_serialization, parsed_same_origin, same_origin, tuple_origin_url,
 };

@@ -66,6 +66,7 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     credentials_mode: String,
     request_origin: Option<String>,
     request_mode: String,
+    referrer: Option<String>,
     network_partition_key: Option<String>,
     cookie_context: String,
 }
@@ -642,6 +643,9 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
         request_mode: request.request_mode.as_ref().to_owned(),
+        // Policies and explicit Fetch referrers can select different headers
+        // without changing the origin or cookie initiator in this cache key.
+        referrer: request.referrer_header_value(&request.url),
         network_partition_key: request.network_partition_key().map(str::to_owned),
         cookie_context: format!("{:?}", request.cookie_context),
     })
@@ -808,6 +812,7 @@ fn raw_subresource_key_retained_bytes(key: &RawSubresourceCacheKey) -> usize {
         .saturating_add(key.credentials_mode.len())
         .saturating_add(key.request_origin.as_deref().map_or(0, str::len))
         .saturating_add(key.request_mode.len())
+        .saturating_add(key.referrer.as_deref().map_or(0, str::len))
         .saturating_add(key.network_partition_key.as_deref().map_or(0, str::len))
         .saturating_add(key.cookie_context.len())
 }
