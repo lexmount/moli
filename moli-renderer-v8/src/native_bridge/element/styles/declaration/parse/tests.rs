@@ -925,8 +925,7 @@ fn unresolved_legacy_color_functions_use_canonical_component_units() {
             moli_css_parse::CssSetResult::ParseError
         );
         assert_eq!(
-            pdb_property_value_for_cssom_query_with_side_entries(&block, "color", &[])
-                .as_deref(),
+            pdb_property_value_for_cssom_query_with_side_entries(&block, "color", &[]).as_deref(),
             Some(expected)
         );
     }
