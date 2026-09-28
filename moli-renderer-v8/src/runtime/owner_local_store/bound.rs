@@ -592,7 +592,10 @@ pub(in crate::runtime) async fn advance_runtime_expression_await_turn_on_entry_v
 ) -> (LivePageEntry, Result<PageVmRuntimeExpressionAwaitAdvance>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
-            entry
+            let replacement_lifecycle_snapshot = entry
+                .page_vm()
+                .document_replacement_lifecycle_action_snapshot();
+            let evaluation = entry
                 .page_vm_mut()
                 .advance_runtime_expression_await_turn(
                     execution_context_id,
@@ -601,7 +604,29 @@ pub(in crate::runtime) async fn advance_runtime_expression_await_turn_on_entry_v
                     remaining,
                     result_mode,
                 )
-                .await
+                .await;
+            // An awaited expression can synchronously open and close a new
+            // Document, then return a promise resolved by its DCL/load tasks.
+            // Admit those tasks at this action boundary, before awaiting the
+            // result, including when evaluation reports an error after mutation.
+            let reconciliation = {
+                let (page_vm, pending_document_lifecycle_turn) =
+                    entry.page_vm_and_document_lifecycle_turn_mut();
+                page_vm
+                    .reconcile_document_replacement_lifecycle_after_owner_action(
+                        replacement_lifecycle_snapshot,
+                        pending_document_lifecycle_turn,
+                    )
+                    .await
+            };
+            match (evaluation, reconciliation) {
+                (Ok(outcome), Ok(_)) => Ok(outcome),
+                (Err(evaluation_error), Ok(_)) => Err(evaluation_error),
+                (Ok(_), Err(reconciliation_error)) => Err(reconciliation_error),
+                (Err(evaluation_error), Err(reconciliation_error)) => Err(anyhow!(
+                    "runtime evaluation failed ({evaluation_error:#}) and its Document replacement lifecycle reconciliation also failed ({reconciliation_error:#})"
+                )),
+            }
         })
     })
     .await
