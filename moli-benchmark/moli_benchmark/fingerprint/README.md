@@ -63,3 +63,20 @@ uv run --project moli-benchmark --locked --extra fingerprint python \
 
 These fixtures originated in the survey's CDP-smoke diagnostics. They test
 collector correctness, not new CDP product functionality.
+
+## Reports and history
+
+Every run writes `manifest.json`, `summary.json`, `index.html` and individual
+sample results. The HTML is self-contained and shows collection state separately
+from the site's selected verdicts. Summaries are saved after each sample, so an
+interrupted run retains its completed observations; incomplete matrices are
+explicit, not backfilled from another run.
+
+Pass `--baseline-report path/to/previous-run` (or its `summary.json`) to also
+write `comparison.json`. It compares each engine/site/repetition and selected
+metric, preserving false, zero, null, absent and unsampled as different states.
+Numeric changes get deltas; bot verdicts and commercial scores are **not** turned
+into a blanket pass-rate or causal regression claim. Different workloads,
+environments, matrices or unverified inputs are flagged as incomparable. Browser
+and observed script-set changes remain visible. Public services can change
+server-side scoring and IP reputation without any browser-code change.
