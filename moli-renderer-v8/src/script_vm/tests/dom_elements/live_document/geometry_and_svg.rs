@@ -2378,6 +2378,19 @@ fn svg_animated_integers_use_native_identity_in_windowless_and_child_documents()
 }
 
 #[test]
+fn element_attribute_values_preserve_utf16_across_native_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://attribute-string.test/",
+        "<html><body></body></html>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("attribute_string_values.js"))
+            .expect("attribute string fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_marker_orient_reflects_the_current_content_attribute() {
     let mut vm = new_storage_test_vm("https://marker-orient.test/");
     let observed = vm
