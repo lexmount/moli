@@ -101,6 +101,7 @@ pub(crate) use script_execution::{
 };
 pub(in crate::native_bridge) use trusted_types::{
     TrustedAttributeSetter, trusted_attribute_string_value, trusted_attribute_value_string,
+    trusted_attribute_value_string16,
 };
 use trusted_types::{
     TrustedHtmlSink, TrustedScriptElementSink, trusted_html_sink_string,
