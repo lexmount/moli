@@ -1168,6 +1168,7 @@ impl DocumentRuntime {
             local_name,
             qualified_name,
             value,
+            None,
             AttributeChangedReactionPolicy::DispatchNow,
         )
     }
@@ -1192,6 +1193,33 @@ impl DocumentRuntime {
             local_name,
             qualified_name,
             value,
+            None,
+            AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+        )
+    }
+
+    pub(crate) fn set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        prefix: Option<&str>,
+        local_name: &str,
+        qualified_name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_ns_with_reaction_policy(
+            scope,
+            host_ptr,
+            handle,
+            namespace,
+            prefix,
+            local_name,
+            qualified_name,
+            value,
+            Some(units),
             AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
         )
     }
@@ -1206,6 +1234,7 @@ impl DocumentRuntime {
         local_name: &str,
         qualified_name: &str,
         value: &str,
+        units: Option<Vec<u16>>,
         reaction_policy: AttributeChangedReactionPolicy,
     ) -> bool {
         let started = dom_binding_timing_started();
@@ -1228,10 +1257,15 @@ impl DocumentRuntime {
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
             host_ptr, handle, namespace, local_name, state,
         );
-        let (effects, old_value) = self
-            .dom_host
-            .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
-            .into_parts();
+        let outcome = if let Some(units) = units {
+            self.dom_host.set_attribute_ns_utf16_units_mutation_outcome(
+                handle, namespace, prefix, local_name, value, units,
+            )
+        } else {
+            self.dom_host
+                .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
+        };
+        let (effects, old_value) = outcome.into_parts();
         if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, local_name);
         }
@@ -1327,6 +1361,7 @@ impl DocumentRuntime {
                 attribute.local_name(),
                 &qualified_name,
                 attribute.value(),
+                None,
                 AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
             )
         }

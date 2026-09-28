@@ -417,23 +417,25 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let namespace =
         svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
-    if attribute == "href" {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute_ns(
-            scope,
-            runtime_ptr,
-            handle,
-            namespace,
-            namespace.map(|_| "xlink"),
-            attribute,
-            if namespace.is_some() {
-                "xlink:href"
-            } else {
-                attribute
-            },
-            &value,
-        );
-    } else {
-        crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        if attribute == "href" {
+            let _ = unsafe { &mut *runtime_ptr }
+                .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    namespace,
+                    namespace.map(|_| "xlink"),
+                    attribute,
+                    if namespace.is_some() {
+                        "xlink:href"
+                    } else {
+                        attribute
+                    },
+                    &value,
+                    units,
+                );
+        } else {
             let _ = unsafe { &mut *runtime_ptr }
                 .set_attribute_utf16_units_appending_to_current_reaction_queue(
                     scope,
@@ -443,8 +445,8 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
                     &value,
                     units,
                 );
-        });
-    }
+        }
+    });
     Some(value)
 }
 

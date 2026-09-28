@@ -28,6 +28,45 @@ fn ordinary_elements_keep_control_state_unmaterialized_until_needed() {
 }
 
 #[test]
+fn namespaced_utf16_values_track_code_unit_changes_and_release_rare_data() {
+    let mut element = Element::new_html("div");
+    let write = |element: &mut Element, units: Vec<u16>| {
+        element.set_attribute_ns_utf16_units(
+            "value".to_owned(),
+            "urn:value".to_owned(),
+            Some("p".to_owned()),
+            String::from_utf16_lossy(&units),
+            units,
+        )
+    };
+
+    // Valid pairs need no sidecar; both lone surrogates serialize to U+FFFD but
+    // are distinct DOMString values and must count as separate native writes.
+    assert!(write(&mut element, vec![0xD800, 0xDC00]));
+    assert!(!element.rare_data.is_materialized());
+    assert!(write(&mut element, vec![0xD800]));
+    assert!(element.rare_data.is_materialized());
+    assert!(!write(&mut element, vec![0xD800]));
+    assert!(write(&mut element, vec![0xDC00]));
+    assert_eq!(
+        element.attribute_ns_utf16_units("urn:value", "value"),
+        Some([0xDC00].as_slice())
+    );
+    assert!(element.set_attribute_ns(
+        "value".to_owned(),
+        "urn:value".to_owned(),
+        Some("p".to_owned()),
+        "\u{FFFD}".to_owned(),
+    ));
+    assert_eq!(element.attribute_ns_utf16_units("urn:value", "value"), None);
+    assert!(!element.rare_data.is_materialized());
+
+    assert!(write(&mut element, vec![0xD800]));
+    assert!(element.remove_attribute_ns("urn:value", "value"));
+    assert!(!element.rare_data.is_materialized());
+}
+
+#[test]
 fn stateful_element_kinds_materialize_control_state_during_construction() {
     for local_name in ["input", "textarea", "option", "audio", "video", "script"] {
         let element = Element::new_html(local_name);

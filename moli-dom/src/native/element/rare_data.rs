@@ -1,5 +1,7 @@
 use std::sync::LazyLock;
 
+use html5ever::{LocalName, Namespace};
+
 use super::{Attribute, CustomElementState, ElementControlState};
 use crate::forms::{InputType, InputValueSanitizationContext};
 use crate::native::NativeNodeId;
@@ -30,7 +32,8 @@ struct ElementRareDataPayload {
     custom_element_is_name: Option<String>,
     parser_associated_form_owner: Option<NativeNodeId>,
     template_contents: Option<NativeNodeId>,
-    attribute_utf16_units: Vec<(String, Box<[u16]>)>,
+    // Different namespaces can use the same qualified name on one element.
+    attribute_utf16_units: Vec<(Namespace, LocalName, Box<[u16]>)>,
 }
 
 impl ElementRareDataPayload {
@@ -70,36 +73,48 @@ impl ElementRareData {
         }
     }
 
-    pub(super) fn attribute_utf16_units(&self, qualified_name: &str) -> Option<&[u16]> {
+    pub(super) fn attribute_utf16_units(&self, attribute: &Attribute) -> Option<&[u16]> {
         self.payload
             .as_deref()?
             .attribute_utf16_units
             .iter()
-            .find(|(name, _)| name == qualified_name)
-            .map(|(_, units)| units.as_ref())
+            .find(|(namespace, local_name, _)| {
+                namespace.as_ref() == attribute.namespace()
+                    && local_name.as_ref() == attribute.local_name()
+            })
+            .map(|(_, _, units)| units.as_ref())
     }
 
     pub(super) fn set_attribute_utf16_units(
         &mut self,
-        qualified_name: String,
+        attribute: &Attribute,
         units: Option<Box<[u16]>>,
     ) -> bool {
-        if self.attribute_utf16_units(&qualified_name) == units.as_deref() {
+        if self.attribute_utf16_units(attribute) == units.as_deref() {
             return false;
         }
 
         if let Some(units) = units {
             let values = &mut self.payload_mut().attribute_utf16_units;
-            if let Some((_, current)) = values.iter_mut().find(|(name, _)| name == &qualified_name)
-            {
+            if let Some((_, _, current)) = values.iter_mut().find(|(namespace, local_name, _)| {
+                namespace.as_ref() == attribute.namespace()
+                    && local_name.as_ref() == attribute.local_name()
+            }) {
                 *current = units;
             } else {
-                values.push((qualified_name, units));
+                values.push((
+                    Namespace::from(attribute.namespace()),
+                    LocalName::from(attribute.local_name()),
+                    units,
+                ));
             }
         } else if let Some(payload) = self.payload.as_deref_mut() {
             payload
                 .attribute_utf16_units
-                .retain(|(name, _)| name != &qualified_name);
+                .retain(|(namespace, local_name, _)| {
+                    namespace.as_ref() != attribute.namespace()
+                        || local_name.as_ref() != attribute.local_name()
+                });
         }
         self.release_empty_payload();
         true
