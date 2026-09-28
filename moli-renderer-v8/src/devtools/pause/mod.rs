@@ -57,6 +57,9 @@ struct RendererInspectorPauseBridgeState {
     quit_requested: bool,
     session_detach_arms: usize,
     document_replacements: usize,
+    unload_callbacks: usize,
+    terminate_replacement_pause: bool,
+    replacement_pauses_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
     target_closed: bool,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -74,6 +77,21 @@ struct RendererInspectorPauseBridgeState {
 pub(crate) struct RendererInspectorPausePrefaceGuard {
     bridge: RendererInspectorPauseBridge,
     id: u64,
+}
+
+#[must_use]
+pub(crate) struct RendererInspectorUnloadCallbackGuard {
+    bridge: RendererInspectorPauseBridge,
+}
+
+impl Drop for RendererInspectorUnloadCallbackGuard {
+    fn drop(&mut self) {
+        let mut state = self.bridge.shared.state.lock();
+        state.unload_callbacks = state
+            .unload_callbacks
+            .checked_sub(1)
+            .expect("unload callback scope underflow");
+    }
 }
 
 #[derive(Clone)]
@@ -127,6 +145,9 @@ impl RendererInspectorPauseBridge {
                 quit_requested: false,
                 session_detach_arms: 0,
                 document_replacements: 0,
+                unload_callbacks: 0,
+                terminate_replacement_pause: false,
+                replacement_pauses_awaiting_resumed: HashSet::new(),
                 target_closed: false,
                 pending_prefaces: VecDeque::new(),
                 paused_sessions_awaiting_resumed: HashSet::new(),
@@ -372,6 +393,20 @@ impl RendererInspectorPauseBridge {
         true
     }
 
+    pub(crate) fn begin_unload_callbacks(&self) -> RendererInspectorUnloadCallbackGuard {
+        let mut state = self.shared.state.lock();
+        // Replacement first terminates suspended old work, then deliberately
+        // runs pagehide/unload before committing. Those callbacks must remain
+        // debuggable, including when a second preparation overlaps them.
+        state.unload_callbacks = state
+            .unload_callbacks
+            .checked_add(1)
+            .expect("unload callback scope overflow");
+        RendererInspectorUnloadCallbackGuard {
+            bridge: self.clone(),
+        }
+    }
+
     pub(crate) fn finish_document_replacement(&self) {
         let mut state = self.shared.state.lock();
         state.document_replacements = state
@@ -389,7 +424,9 @@ impl RendererInspectorPauseBridge {
             if state.target_closed {
                 return Err(RendererInspectorPauseExitReason::TargetClosed);
             }
-            if state.document_replacements != 0 {
+            if (state.document_replacements != 0 && state.unload_callbacks == 0)
+                || state.terminate_replacement_pause
+            {
                 return Err(RendererInspectorPauseExitReason::DocumentReplacement);
             }
             if state.session_detach_arms != 0 {
@@ -418,6 +455,7 @@ impl RendererInspectorPauseBridge {
         state.phase = RendererInspectorPausePhase::Running;
         state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
         state.quit_requested = false;
+        state.terminate_replacement_pause = false;
         // Commands that lost the nested-loop race stay in their route-specific
         // ingress. Main retains its owner task; IO retains owner and interrupt
         // execution chances.
@@ -438,13 +476,17 @@ impl RendererInspectorPauseBridge {
         state.route = None;
         state.pending_prefaces.clear();
         state.paused_sessions_awaiting_resumed.clear();
+        state.replacement_pauses_awaiting_resumed.clear();
         state.pending_command_transition = None;
         match state.phase {
-            RendererInspectorPausePhase::Running => {}
+            RendererInspectorPausePhase::Running => {
+                state.terminate_replacement_pause = false;
+            }
             RendererInspectorPausePhase::Entering => {
                 state.phase = RendererInspectorPausePhase::Running;
                 state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
                 state.quit_requested = false;
+                state.terminate_replacement_pause = false;
             }
             RendererInspectorPausePhase::Paused => {
                 state.quit_requested = true;
@@ -460,6 +502,7 @@ impl RendererInspectorPauseBridge {
         state.quit_requested = true;
         state.pending_prefaces.clear();
         state.paused_sessions_awaiting_resumed.clear();
+        state.replacement_pauses_awaiting_resumed.clear();
         state.pending_command_transition = None;
         self.shared.pause_loop_wake.notify_all();
     }
@@ -511,6 +554,16 @@ impl RendererInspectorPauseBridge {
         if is_paused_notification && (state.route.is_none() || state.session_detach_arms != 0) {
             return RendererInspectorPauseNotificationRoute::Drop;
         }
+        if is_resumed_notification
+            && state
+                .replacement_pauses_awaiting_resumed
+                .remove(&session_route)
+        {
+            return RendererInspectorPauseNotificationRoute::Drop;
+        }
+        let replacement_pause = is_paused_notification
+            && ((state.document_replacements != 0 && state.unload_callbacks == 0)
+                || state.terminate_replacement_pause);
         let preface = if is_paused_notification {
             state
                 .pending_prefaces
@@ -524,7 +577,7 @@ impl RendererInspectorPauseBridge {
         } else {
             Vec::new()
         };
-        if is_paused_notification {
+        if is_paused_notification && !replacement_pause {
             state
                 .paused_sessions_awaiting_resumed
                 .insert(session_route.clone());
@@ -572,6 +625,20 @@ impl RendererInspectorPauseBridge {
                 state.pause_loop_policy = RendererInspectorPauseLoopPolicy::IoOnly;
             }
         }
+        if replacement_pause {
+            // V8 can report another break in an old-document timer while its
+            // prepared replacement is crossing the commit boundary. The pause
+            // loop will terminate that execution immediately, without serving
+            // frontend commands. Preserve real output before the break, but do
+            // not expose this internal termination cycle as an inspectable pause.
+            // Retain the decision even if preparation is cancelled before V8
+            // enters its loop, otherwise an unreported pause could block forever.
+            state.terminate_replacement_pause = true;
+            state
+                .replacement_pauses_awaiting_resumed
+                .insert(session_route);
+            return RendererInspectorPauseNotificationRoute::PublishPrefix { preface };
+        }
         if state.phase == RendererInspectorPausePhase::Running && !resumes_reported_pause {
             RendererInspectorPauseNotificationRoute::OrdinaryTurn
         } else {
@@ -590,6 +657,9 @@ impl RendererInspectorPauseBridge {
         let mut state = self.shared.state.lock();
         state
             .paused_sessions_awaiting_resumed
+            .remove(&(agent_token, session.clone()));
+        state
+            .replacement_pauses_awaiting_resumed
             .remove(&(agent_token, session.clone()));
         state
             .pending_prefaces

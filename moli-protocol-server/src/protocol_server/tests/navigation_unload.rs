@@ -112,7 +112,7 @@ async fn assert_navigation_unload_output_order(pause_in_unload: bool) {
             "Runtime.evaluate",
             Some(&session.session_id),
             json!({
-                "expression": "addEventListener('unload', () => { debugger; })"
+                "expression": "addEventListener('unload', () => { debugger; console.log('unload-after-debugger'); })"
             }),
         )
         .await;
@@ -165,6 +165,11 @@ async fn assert_navigation_unload_output_order(pause_in_unload: bool) {
             )
             .await,
         );
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message["id"] == 13 && message.get("error").is_none() })
+        );
     }
     if !messages.iter().any(|message| {
         message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
@@ -181,6 +186,16 @@ async fn assert_navigation_unload_output_order(pause_in_unload: bool) {
         .iter()
         .position(|message| message["method"] == "Page.frameNavigated")
         .expect("replacement must commit");
+    if pause_in_unload {
+        let resumed_handler = messages
+            .iter()
+            .position(|message| {
+                message["method"] == "Runtime.consoleAPICalled"
+                    && message["params"]["args"][0]["value"] == "unload-after-debugger"
+            })
+            .expect("unload handler must continue after Debugger.resume");
+        assert!(resumed_handler < commit, "{messages:?}");
+    }
     for (method, expected) in [
         (
             "Runtime.consoleAPICalled",

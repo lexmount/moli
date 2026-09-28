@@ -524,7 +524,27 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn check_main_document_beforeunload_in_inspector_scope(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+    ) -> bool {
+        let context = v8::Local::new(scope, &self.page_default_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        // The paused owner already holds the document isolate. Keep the host
+        // alive without a RefCell borrow across reentrant author callbacks.
+        let context_host = Rc::clone(&self._context_host);
+        let host_ptr = (*context_host).as_ptr();
+        let allowed = unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope);
+        // A paused Runtime command may own the active recorder. Flush its
+        // concrete prefix just as for a modal dialog, without closing that
+        // recorder or completing the suspended task. The navigation reply
+        // fences this prefix so console/binding output precedes the fetch.
+        unsafe { &*host_ptr }.publish_live_turn_output_prefix();
+        allowed
+    }
+
     pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {
+        let _unload_callbacks = self.devtools_target().pause_ref().begin_unload_callbacks();
         self.with_default_context_scope(|scope, host_ptr| {
             JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
             Ok(())
