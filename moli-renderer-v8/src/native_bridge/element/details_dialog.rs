@@ -13,8 +13,9 @@ use super::super::{
 };
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
-    property_dom_string_value, set_reflected_boolean_attribute,
+    construct_simple_event, dispatch_public_event, element_has_attribute,
+    html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
+    set_reflected_boolean_attribute,
 };
 
 pub(crate) fn queue_details_toggle_event_for_attribute_change(
@@ -455,4 +456,61 @@ fn queue_dialog_close_event(
         RendererPageUserInteractionEventKind::DialogClose,
         handle,
     );
+}
+
+/// Default action for a trusted `keydown` on Escape: run the spec's
+/// light-dismiss for the topmost open modal dialog. A cancelable, non-bubbling
+/// `cancel` event is fired at the dialog, and the dialog closes unless the
+/// event is canceled (or the keydown itself was prevented, which the caller
+/// already checks).
+pub(crate) fn perform_dialog_escape_default_action_for_dispatched_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    event: v8::Local<'_, v8::Object>,
+) {
+    if event_string_property(scope, event, "key").as_deref() != Some("Escape") {
+        return;
+    }
+    let Some(handle) = topmost_open_modal_dialog(unsafe { &*runtime_ptr }) else {
+        return;
+    };
+    let Some(cancel_event) = construct_simple_event(scope, "cancel", false, true, false) else {
+        return;
+    };
+    let outcome = dispatch_public_event(scope, runtime_ptr, handle, cancel_event);
+    if outcome.allows_default() {
+        close_dialog_element(scope, runtime_ptr, handle, None);
+    }
+}
+
+/// Returns the last connected `<dialog>` that is open as a modal dialog.
+fn topmost_open_modal_dialog(runtime: &JsContextHost) -> Option<DomHandle> {
+    runtime
+        .dom_host()
+        .dom()
+        .nodes()
+        .iter()
+        .rev()
+        .find_map(|node| {
+            if !node.is_connected() {
+                return None;
+            }
+            let element = node.as_element()?;
+            (element.is_html_element("dialog")
+                && element.dialog_modal()
+                && element.attribute("open").is_some())
+            .then_some(node.id())
+        })
+}
+
+fn event_string_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    event: v8::Local<'_, v8::Object>,
+    name: &str,
+) -> Option<String> {
+    let key = v8_string(scope, name)?;
+    event
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
 }
