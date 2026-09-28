@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -127,6 +128,30 @@ class TargetServeTests(unittest.TestCase):
             stopped["resources"]["samples"],
             [{"elapsed_ms": 1.0, "rss_bytes": 42}],
         )
+
+    def test_native_chromium_preserves_identity_and_does_not_sample_resources(self) -> None:
+        with (
+            patch("moli_benchmark.target_serve.subprocess.Popen", return_value=_FakeProcess()),
+            patch("moli_benchmark.target_serve.ResourceSampler") as sampler,
+            patch("moli_benchmark.target_serve.probe_url", return_value=True),
+            patch("moli_benchmark.target_serve._kill_process_group") as kill,
+        ):
+            handle = start_target_serve("chrome-cdp", Path("/bin/chromium"), 1, native=True)
+            self.assertIn("--remote-debugging-address=127.0.0.1", handle.command)
+            self.assertIn("--no-proxy-server", handle.command)
+            for forbidden in ["--headless", "--disable-gpu", "--no-sandbox", "--user-agent"]:
+                self.assertFalse(any(flag.startswith(forbidden) for flag in handle.command))
+            sampler.assert_not_called()
+            stopped = stop_target_serve(handle)
+            self.assertTrue(stopped["process_exited"])
+            self.assertEqual(stopped["resources"], {})
+            if os.name == "posix":
+                kill.assert_called_once()
+
+    def test_native_profile_rejects_custom_flags_and_unrelated_engines(self) -> None:
+        for target, flags in [("lightpanda-cdp", ()), ("chrome-cdp", ("--user-agent=Fake",))]:
+            with self.assertRaises(ValueError):
+                start_target_serve(target, Path("/unused"), 1, flags, native=True)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -12,6 +13,7 @@ from typing import Any
 
 from .config import REPO_ROOT, ReservedPort, clear_proxy_env, reserve_port
 from .sampling import ResourceSampler
+from .process import _kill_process_group
 from .serve import probe_url
 from .synthetic_compare import target_enables_all_resource_fetch, target_metadata
 
@@ -35,11 +37,12 @@ class TargetServeHandle:
     endpoint: str
     command: list[str]
     logs: list[str]
-    sampler: ResourceSampler
+    sampler: ResourceSampler | None
     log_threads: list[threading.Thread]
     port_lease: ReservedPort
     temp_dir: Path | None = None
     ready_ms: float | None = None
+    native: bool = False
 
 
 def _append_log(logs: list[str], line: str) -> None:
@@ -89,6 +92,8 @@ def _serve_command(
     port: int,
     temp_dir: Path | None,
     extra_args: tuple[str, ...] = (),
+    *,
+    native: bool = False,
 ) -> list[str]:
     engine = target_metadata(target)["engine"]
     if engine == "moli" or engine == "lightpanda":
@@ -112,6 +117,15 @@ def _serve_command(
     if engine == "chrome":
         if temp_dir is None:
             raise RuntimeError("chrome target requires a temporary profile directory")
+        if native:
+            if extra_args:
+                raise ValueError("native browser launches do not accept identity or feature overrides")
+            return [
+                str(binary), "--no-first-run", "--no-default-browser-check",
+                "--no-proxy-server", "--password-store=basic", "--window-size=1920,1080",
+                "--remote-debugging-address=127.0.0.1",
+                f"--user-data-dir={temp_dir}", f"--remote-debugging-port={port}", "about:blank",
+            ]
         return [
             str(binary),
             "--headless=new",
@@ -134,7 +148,10 @@ def start_target_serve(
     extra_args: tuple[str, ...] = (),
     *,
     sample_interval_seconds: float | None = None,
+    native: bool = False,
 ) -> TargetServeHandle:
+    if native and (target not in {"moli-full-cdp", "chrome-cdp"} or extra_args):
+        raise ValueError("native mode requires moli-full-cdp or chrome-cdp without extra flags")
     engine = target_metadata(target)["engine"]
     temp_dir = Path(tempfile.mkdtemp(prefix=f"moli-benchmark-{target}-")) if engine == "chrome" else None
     logs: list[str] = []
@@ -142,7 +159,7 @@ def start_target_serve(
     try:
         port = reserved_port.port
         endpoint = f"http://127.0.0.1:{port}"
-        command = _serve_command(target, binary, port, temp_dir, extra_args)
+        command = _serve_command(target, binary, port, temp_dir, extra_args, native=native)
         reserved_port.release_socket()
         process = subprocess.Popen(
             command,
@@ -163,12 +180,13 @@ def start_target_serve(
     ]
     for thread in log_threads:
         thread.start()
-    sampler = (
+    sampler = None if native else (
         ResourceSampler(process.pid)
         if sample_interval_seconds is None
         else ResourceSampler(process.pid, interval_seconds=sample_interval_seconds)
     )
-    sampler.start()
+    if sampler is not None:
+        sampler.start()
     handle = TargetServeHandle(
         target=target,
         process=process,
@@ -179,6 +197,7 @@ def start_target_serve(
         log_threads=log_threads,
         port_lease=reserved_port,
         temp_dir=temp_dir,
+        native=native,
     )
     started = time.perf_counter()
     deadline = started + timeout_seconds
@@ -212,19 +231,24 @@ def stop_target_serve(
     resources: dict[str, Any] = {}
     try:
         process_exited = _terminate_process(handle.process)
+        if handle.native and os.name == "posix":
+            # Native sessions own a fresh process group. Reap residual children
+            # even if Chromium's root crashed or Browser.close already exited it.
+            _kill_process_group(handle.process.pid, signal.SIGKILL)
         if process_exited:
             for thread in handle.log_threads:
                 thread.join(timeout=0.2)
         else:
             _append_log(handle.logs, "process did not exit after SIGKILL; skipped pipe drain")
-        resources = handle.sampler.stop()
-        if include_resource_samples:
+        resources = handle.sampler.stop() if handle.sampler is not None else {}
+        if include_resource_samples and handle.sampler is not None:
             resources["samples"] = list(handle.sampler.samples)
     finally:
         handle.port_lease.close()
         if handle.temp_dir is not None:
             shutil.rmtree(handle.temp_dir, ignore_errors=True)
     return {
+        "process_exited": process_exited,
         "returncode": handle.process.returncode,
         "resources": resources,
         "log_tail": handle.logs[-40:],
