@@ -464,3 +464,13 @@ pub fn style_value_text<'s>(
         .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
         .map(|value| value.to_rust_string_lossy(scope))
 }
+
+pub fn keyword_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: String,
+) -> v8::Local<'s, v8::Object> {
+    CssKeywordValueObjectDeclaration::new(value)
+        .bind(scope)
+        .expect("CSSKeywordValue should bind")
+}
+

@@ -6,7 +6,7 @@ use moli_webapi::css_values::{
 };
 pub(super) use moli_webapi::css_values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-    style_value_from_text, unit_value, opaque_style_value, associated_property,
+    style_value_from_text, unit_value, keyword_value, opaque_style_value, associated_property,
     css_unit_value_number, css_unit_value_unit, normalize_unit_name,
 };
 
@@ -43,7 +43,7 @@ pub(super) fn from_parsed<'s>(
         .zip(texts)
         .enumerate()
         .map(|(index, (value, text))| {
-            match value {
+            Some(match value {
                 TypedValue::Unparsed(parts) => super::unparsed::from_native(scope, parts),
                 TypedValue::Keyword(keyword) => CssKeywordValueObjectDeclaration::new(keyword.0)
                     .bind(scope)
@@ -60,15 +60,17 @@ pub(super) fn from_parsed<'s>(
                         .unwrap_or_else(|| f64::from(unit.value));
                     unit_value(scope, number, name.to_owned())
                 }
-                // Math expression reification and native transform/image objects
+                TypedValue::Transform(value) => transforms::from_native(scope, &value)?,
+                // Declared math expression reification and native image objects
                 // remain to be connected. Preserve an immutable, property-associated
                 // value rather than guessing a keyword or a single numeric unit.
-                TypedValue::Numeric(NumericValue::Math(_))
-                | TypedValue::Transform(_)
-                | TypedValue::Image(_) => opaque_style_value(scope, property, text.trim()),
-            }
+                TypedValue::Numeric(NumericValue::Math(_)) | TypedValue::Image(_) => {
+                    opaque_style_value(scope, property, text.trim())
+                }
+            })
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -111,6 +113,9 @@ pub(super) fn serialize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    if crate::web_api_interfaces::CSSTransformValue::is_instance(scope, value) {
+        return super::transforms::serialize(scope, value);
+    }
     if crate::web_api_interfaces::CSSUnparsedValue::is_instance(scope, value) {
         return super::unparsed::serialize(scope, value);
     }
@@ -174,9 +179,8 @@ pub(super) fn from_computed<'s>(
                         .expect("CSSKeywordValue declaration should bind")
                 }
                 TypedValue::Unparsed(parts) => unparsed::from_native(scope, parts.clone()),
-                TypedValue::Transform(_) | TypedValue::Image(_) => {
-                    opaque_style_value(scope, property, &text)
-                }
+                TypedValue::Transform(value) => transforms::from_native(scope, value)?,
+                TypedValue::Image(_) => opaque_style_value(scope, property, &text),
             })
         })
         .collect::<Option<Vec<_>>>()
