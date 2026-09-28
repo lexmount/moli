@@ -409,18 +409,9 @@ fn map_property_names<'s>(
     if !native_bridge::element::style_declaration_is_computed(scope, style) {
         return names;
     }
-    for property in css_style_declaration_standard_property_names() {
-        if native_bridge::element::computed_style_property_is_shorthand(property)
-            || names.iter().any(|name| name == property)
-        {
-            continue;
-        }
-        if detached_css_style::css_declaration_property_value(scope, style, property)
-            .is_some_and(|value| !value.is_empty())
-        {
-            names.push((*property).to_owned());
-        }
-    }
+    // The native computed declaration already enumerates its enabled longhands
+    // and custom properties. Queryable aliases and shorthands are not extra
+    // declarations, even when get() can synthesize a value for them.
     names.sort_by(|left, right| {
         typed_om_property_sort_category(left)
             .cmp(&typed_om_property_sort_category(right))
