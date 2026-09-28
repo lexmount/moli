@@ -165,6 +165,7 @@ impl DocumentRuntime {
                 .unwrap_or(style::context::QuirksMode::NoQuirks),
         )
         .with_interception(self.stylesheet_lifecycle.interception_context.clone(), None)
+        .with_document_referrer_policy(self.current_document_referrer_policy())
     }
 
     pub(super) fn stylesheet_fetcher_for_owner(
@@ -218,6 +219,15 @@ impl DocumentRuntime {
                 .and_then(|environment| environment.frame_id),
         )
         .with_request_initiator_type(request_initiator_type)
+        .with_document_referrer_policy(
+            host.dom_host()
+                .owner_document_handle(owner)
+                .and_then(|document| {
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        host, document,
+                    )
+                }),
+        )
     }
 
     pub(super) fn speculative_stylesheet_fetcher(
@@ -235,6 +245,7 @@ impl DocumentRuntime {
             link_preload,
         )
         .with_interception(self.stylesheet_lifecycle.interception_context.clone(), None)
+        .with_document_referrer_policy(self.current_document_referrer_policy())
     }
 
     fn stylesheet_service_worker_fetch_context(
