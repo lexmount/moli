@@ -474,3 +474,18 @@ pub fn keyword_value<'s>(
         .expect("CSSKeywordValue should bind")
 }
 
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::CSSImageValue)]
+struct CssImageValueObjectDeclaration {
+    #[webapi(slot = CSS_STYLE_VALUE_TEXT_SLOT)]
+    text: String,
+}
+
+pub fn image_value<'s>(scope: &mut v8::PinScope<'s, '_>, text: &str) -> v8::Local<'s, v8::Object> {
+    // Images have no author-visible fields or constructor. Their immutable
+    // native serialization is reusable across properties accepting images,
+    // unlike property-associated opaque CSSStyleValues.
+    CssImageValueObjectDeclaration::new(text.to_owned())
+        .bind(scope)
+        .expect("CSSImageValue declaration should bind")
+}

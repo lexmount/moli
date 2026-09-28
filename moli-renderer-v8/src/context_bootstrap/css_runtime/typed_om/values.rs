@@ -1,7 +1,7 @@
 use super::*;
 use moli_css_parse::CssDeclaredNumericValue;
 use moli_webapi::css_values::{
-    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration, css_keyword_value,
+    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration, css_keyword_value, image_value,
 };
 pub(super) use moli_webapi::css_values::{
     associated_property, css_keyword_value_constructor_callback,
@@ -67,9 +67,7 @@ pub(super) fn from_parsed<'s>(
                     sources.get(index).map_or(text.as_str(), String::as_str),
                     &value,
                 )?,
-                // Native image objects remain to be connected. Preserve an
-                // immutable value associated with the validated property.
-                TypedValue::Image(_) => opaque_style_value(scope, property, text.trim()),
+                TypedValue::Image(_) => image_value(scope, text.trim()),
             })
         })
         .collect::<Option<Vec<_>>>()
@@ -183,7 +181,7 @@ pub(super) fn from_computed<'s>(
                 }
                 TypedValue::Unparsed(parts) => unparsed::from_native(scope, parts.clone()),
                 TypedValue::Transform(value) => transforms::from_native(scope, value)?,
-                TypedValue::Image(_) => opaque_style_value(scope, property, &text),
+                TypedValue::Image(_) => image_value(scope, &text),
             })
         })
         .collect::<Option<Vec<_>>>()
