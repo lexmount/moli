@@ -191,6 +191,54 @@ async fn concurrent_image_consumers_share_one_transfer_and_exact_response() -> R
 }
 
 #[tokio::test]
+async fn streaming_image_consumers_join_materialized_loads_and_preserve_observations() -> Result<()>
+{
+    let mut server = ImageServer::start().await?;
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let client = owner.frozen_request_client();
+    let streaming = client.fetch_raw_stream_with_cancel_and_network_metadata(
+        server.request(),
+        FetchCancelHandle::new(),
+    );
+    let materialized = owner
+        .fetch_image_with_cancel_and_network_metadata(server.request(), FetchCancelHandle::new());
+    tokio::pin!(streaming, materialized);
+    assert!(poll!(&mut streaming).is_pending());
+    assert!(poll!(&mut materialized).is_pending());
+    server.next().await.response.send(()).unwrap();
+    let (streaming, materialized) =
+        timeout(DEADLINE, async { tokio::join!(streaming, materialized) }).await?;
+    let streaming = streaming?;
+    let materialized = materialized?;
+    assert!(streaming.request_observation().is_some());
+    assert_eq!(
+        streaming.response().final_url,
+        materialized.response().final_url
+    );
+    assert_eq!(streaming.response().status, 200);
+    assert_eq!(
+        streaming.response().headers,
+        materialized.response().headers
+    );
+    assert!(!streaming.response().from_cache);
+    let (_, encoded) = crate::network_host::collect_image_response_into_parkable(
+        streaming,
+        moli_parkable_image::ParkableImageManager::default(),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        encoded.snapshot()?.as_ref(),
+        materialized.response().body_bytes()
+    );
+    assert!(matches!(
+        server.requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancelling_one_image_consumer_keeps_the_other_transfer_alive() -> Result<()> {
     let mut server = ImageServer::start().await?;
     let owner = ResourceRequestClient::new(&FetchConfig::default())?;
