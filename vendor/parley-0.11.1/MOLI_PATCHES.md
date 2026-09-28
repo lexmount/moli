@@ -8,9 +8,10 @@ and the standalone lockfile are not part of this vendored dependency.
 ## Incremental float layout
 
 `BreakLines::last_line_metrics()` exposes the last committed line's metrics
-without changing the breaker. Moli uses its advance minus trailing whitespace
-to retry an unbreakable word in a wider float exclusion band. Reading only
-`LineBreakData::advance` would incorrectly include hanging whitespace.
+without changing the breaker. The original float implementation used it to
+exclude hanging whitespace. Moli now retains main's break-reason-aware float
+retry algorithm and upstream Taffy fixes; this accessor remains available but
+is no longer required by the float layout caller.
 
 Regression coverage: `moli-layout/tests/phase4_layout_contract.rs`.
 

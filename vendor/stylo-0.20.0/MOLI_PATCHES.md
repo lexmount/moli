@@ -1,7 +1,9 @@
 # Moli patches to Stylo 0.20.0
 
-Source: https://github.com/ldm0/stylo at
-`671d13d31b3b00e7b1e0088ba2b36a4e35c0858c`.
+Source: https://github.com/lexmount/stylo at
+`3c8bbb450a52f9a4dcb2de51061216a1d2727def`.
+This includes main's content alternative-text counter parsing fixes and tests,
+in addition to the earlier `671d13d31b3b00e7b1e0088ba2b36a4e35c0858c` base.
 The upstream workspace sources and per-file/per-crate licenses are retained;
 Stylo itself is MPL-2.0. Upstream CI workflows, build output and local Cargo
 caches are not part of this vendored library.
