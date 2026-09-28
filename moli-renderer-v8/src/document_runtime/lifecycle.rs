@@ -150,6 +150,7 @@ impl DocumentRuntime {
             authority,
             self.stylesheet_service_worker_fetch_context(),
         )
+        .with_document_referrer_policy(self.current_document_referrer_policy())
     }
 
     pub(super) fn stylesheet_fetcher_for_owner(
@@ -177,6 +178,15 @@ impl DocumentRuntime {
                 },
             ),
         )
+        .with_document_referrer_policy(
+            host.dom_host()
+                .owner_document_handle(owner)
+                .and_then(|document| {
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        host, document,
+                    )
+                }),
+        )
     }
 
     pub(super) fn speculative_stylesheet_fetcher(
@@ -193,6 +203,7 @@ impl DocumentRuntime {
             request_resource_type,
             link_preload,
         )
+        .with_document_referrer_policy(self.current_document_referrer_policy())
     }
 
     fn stylesheet_service_worker_fetch_context(

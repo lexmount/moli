@@ -44,6 +44,14 @@ impl JsContextHost {
                         client_id,
                     }),
                 )
+                .with_document_referrer_policy(
+                    self.child_browsing_context_document_handle(child_handle)
+                        .and_then(|document| {
+                            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                                self, document,
+                            )
+                        }),
+                )
             });
         let mut accepted = 0;
         for input in inputs {
@@ -126,6 +134,7 @@ impl JsContextHost {
         resource_loader.spawn_resource_task(async move {
             let mut network_results = Vec::with_capacity(requests.len());
             for (request_url, options, initiator_type) in requests {
+                let options = fetcher.prepare_stylesheet_fetch_options(options);
                 let terminal = fetcher
                     .fetch_stylesheet_resource(document_url.clone(), request_url.clone(), options)
                     .await;

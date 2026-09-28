@@ -49,6 +49,9 @@ mod referrer_policy_inheritance;
 #[path = "fetch_client_referrer.rs"]
 mod fetch_client_referrer;
 
+#[path = "service_worker_referrer.rs"]
+mod service_worker_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -362,6 +365,11 @@ fn fixture_response(
             "Content-Type: application/json\r\nCache-Control: max-age=60\r\nVary: Referer\r\n"
                 .to_owned(),
             serde_json::to_string(&request.referer).unwrap(),
+        ),
+        "/native-referrer-worker.js" => (
+            "200 OK",
+            format!("{javascript}Cache-Control: no-store\r\n"),
+            include_str!("native_referrer_worker.js").to_owned(),
         ),
         "/cors.js" | "/cors-null.js" | "/cors-origin.js" => (
             "200 OK",

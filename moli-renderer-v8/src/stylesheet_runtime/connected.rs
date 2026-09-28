@@ -962,7 +962,11 @@ impl DocumentRuntime {
         if let Some(disposition) = stylesheet_link_disposition(&self.dom_host, node_id) {
             let load_event_binding =
                 Self::load_event_binding_for_connected_admission(event_admission);
-            let stylesheet_fetcher = self.stylesheet_fetcher_for_owner(handle, host_ptr);
+            let mut stylesheet_fetcher = self.stylesheet_fetcher_for_owner(handle, host_ptr);
+            if let Some(policy) = document_referrer_policy.as_ref() {
+                stylesheet_fetcher =
+                    stylesheet_fetcher.with_document_referrer_policy(Some(policy.clone()));
+            }
             let document_url = stylesheet_fetcher
                 .resource_loader()
                 .fetch_context()
@@ -1150,12 +1154,15 @@ impl DocumentRuntime {
                         )
                     })
                     .unwrap_or(RequestResourceType::CssStyleSheet);
-                let fetcher = self
+                let mut fetcher = self
                     .stylesheet_fetcher_for_owner(handle, host_ptr)
                     .with_preload_metadata(request_resource_type, true)
                     .with_completion_producer(self.connected_style_task_producer(
                         event_admission.map(ConnectedStyleLoadEventAdmission::document_owner),
                     ));
+                if let Some(policy) = document_referrer_policy.as_ref() {
+                    fetcher = fetcher.with_document_referrer_policy(Some(policy.clone()));
+                }
                 let document_url = fetcher
                     .resource_loader()
                     .fetch_context()
