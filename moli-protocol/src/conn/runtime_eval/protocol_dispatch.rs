@@ -46,6 +46,28 @@ impl CdpConnection {
         }
     }
 
+    fn inspector_command_route_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        inspector_route: RendererInspectorCommandRoute,
+    ) -> Option<(
+        RuntimeProtocolMessagePageRoute,
+        Option<moli_core::page::RendererPageInspectorEndpoint>,
+    )> {
+        let mut route = self.runtime_protocol_message_page_route_for_owner(owner)?;
+        let endpoint = if inspector_route == RendererInspectorCommandRoute::Io {
+            let slot = self.runtime_session_owner_slot_for_owner(owner)?;
+            let endpoint = slot.current_inspector_endpoint()?;
+            route.renderer_agent_attachment_id = slot
+                .renderer_output_attachment_for_agent(endpoint.agent())?
+                .id();
+            Some(endpoint)
+        } else {
+            None
+        };
+        Some((route, endpoint))
+    }
+
     pub(crate) fn start_runtime_protocol_message_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -76,17 +98,13 @@ impl CdpConnection {
         raw_json: String,
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch> {
-        let route = self
-            .runtime_protocol_message_page_route_for_owner(owner)
+        let (route, endpoint) = self
+            .inspector_command_route_for_owner(owner, inspector_route)
             .context(NoDocumentLoaded)?;
         let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        if inspector_route == RendererInspectorCommandRoute::Io
-            && let Some(endpoint) = self
-                .runtime_session_owner_slot_for_owner(owner)
-                .and_then(|slot| slot.page_slot().prepared_document_inspector_endpoint())
-        {
+        if let Some(endpoint) = endpoint {
             let pending = moli_core::page::PendingRuntimeInspectorCommandDispatch::start_io(
                 &endpoint,
                 route.renderer_agent_attachment_id,
@@ -101,26 +119,11 @@ impl CdpConnection {
                 response_route: RuntimeProtocolResponseRoute::adapter_reply_without_receiver(),
             });
         }
-        let page = match inspector_route {
-            RendererInspectorCommandRoute::MainThread => {
-                self.loaded_page_mut_for_protocol_access_for_owner(owner)?
-            }
-            RendererInspectorCommandRoute::Io => self
-                .loaded_page_mut_for_owner(owner)
-                .context(NoDocumentLoaded)?,
-        };
-        let pending = match inspector_route {
-            RendererInspectorCommandRoute::MainThread => page
-                .start_runtime_protocol_message_for_inspector_session(
-                    inspector_session_id,
-                    raw_json,
-                )
-                .map(PendingRuntimeProtocolMessageDispatchKind::Page),
-            RendererInspectorCommandRoute::Io => page
-                .start_runtime_inspector_io_message_without_response(inspector_session_id, raw_json)
-                .map(PendingRuntimeProtocolMessageDispatchKind::Routable),
-        }
-        .context("runtime inspector dispatch failed")?;
+        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
+        let pending = page
+            .start_runtime_protocol_message_for_inspector_session(inspector_session_id, raw_json)
+            .map(PendingRuntimeProtocolMessageDispatchKind::Page)
+            .context("runtime inspector dispatch failed")?;
         Ok(PendingRuntimeProtocolMessageDispatch {
             owner: owner.clone(),
             route,
@@ -164,8 +167,8 @@ impl CdpConnection {
         command_id: u64,
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch> {
-        let route = self
-            .runtime_protocol_message_page_route_for_owner(owner)
+        let (route, endpoint) = self
+            .inspector_command_route_for_owner(owner, inspector_route)
             .context(NoDocumentLoaded)?;
         let (correlation, raw_json, response_sender, response_route) = self
             .prepare_renderer_call_for_owner(
@@ -176,11 +179,7 @@ impl CdpConnection {
             )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        if inspector_route == RendererInspectorCommandRoute::Io
-            && let Some(endpoint) = self
-                .runtime_session_owner_slot_for_owner(owner)
-                .and_then(|slot| slot.page_slot().prepared_document_inspector_endpoint())
-        {
+        if let Some(endpoint) = endpoint {
             let pending = moli_core::page::PendingRuntimeInspectorCommandDispatch::start_io(
                 &endpoint,
                 route.renderer_agent_attachment_id,
@@ -195,14 +194,7 @@ impl CdpConnection {
                 response_route,
             });
         }
-        let page_result = match inspector_route {
-            RendererInspectorCommandRoute::MainThread => {
-                self.loaded_page_mut_for_protocol_access_for_owner(owner)
-            }
-            RendererInspectorCommandRoute::Io => self
-                .loaded_page_mut_for_owner(owner)
-                .context(NoDocumentLoaded),
-        };
+        let page_result = self.loaded_page_mut_for_protocol_access_for_owner(owner);
         let page = match page_result {
             Ok(page) => page,
             Err(error) => {

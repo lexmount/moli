@@ -412,6 +412,12 @@ impl RendererPageInspectorEndpoint {
         self.agent
     }
 
+    pub fn has_announced_pause(&self) -> bool {
+        self.target
+            .pause_ref()
+            .has_announced_pause_for_agent(self.agent)
+    }
+
     pub fn has_session(&self, id: Option<&str>) -> bool {
         self.target.io_ref().session_connections().contains(
             &crate::devtools::ingress::lane::RendererDevToolsSessionLaneKey::new(

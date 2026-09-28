@@ -154,11 +154,21 @@ impl TargetRuntimeSlot {
         &mut self.page_slot
     }
 
+    pub(crate) fn inspector_endpoint_before_adoption(
+        &self,
+    ) -> Option<moli_core::page::RendererPageInspectorEndpoint> {
+        // An outgoing Document can pause in a pagehide or unload handler
+        // after the replacement's endpoint has been admitted.
+        self.loaded_page()
+            .map(Page::inspector_endpoint)
+            .filter(moli_core::page::RendererPageInspectorEndpoint::has_announced_pause)
+            .or_else(|| self.page_slot.prepared_document_inspector_endpoint())
+    }
+
     pub(crate) fn current_inspector_endpoint(
         &self,
     ) -> Option<moli_core::page::RendererPageInspectorEndpoint> {
-        self.page_slot
-            .prepared_document_inspector_endpoint()
+        self.inspector_endpoint_before_adoption()
             .or_else(|| self.loaded_page().map(Page::inspector_endpoint))
     }
 

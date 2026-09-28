@@ -792,10 +792,7 @@ impl CdpConnection {
         // for the navigation's Page adoption.
         if command.renderer_access() == CdpRendererCommandAccess::OwnerIndependent
             || (command.can_use_prepared_inspector_endpoint()
-                && slot
-                    .page_slot()
-                    .prepared_document_inspector_endpoint()
-                    .is_some())
+                && slot.inspector_endpoint_before_adoption().is_some())
         {
             return None;
         }

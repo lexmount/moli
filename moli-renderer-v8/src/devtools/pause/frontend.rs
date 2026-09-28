@@ -24,6 +24,8 @@ pub(super) struct PauseState {
     pause_loop_policy: RendererInspectorPauseLoopPolicy,
     quit_requested: bool,
     session_detach_arms: usize,
+    terminate_replacement_pause: bool,
+    replacement_pauses_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
     pub(super) pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     pub(super) paused_sessions_awaiting_resumed:
         HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -44,6 +46,8 @@ impl Default for PauseState {
             pause_loop_policy: RendererInspectorPauseLoopPolicy::MainAndIo,
             quit_requested: false,
             session_detach_arms: 0,
+            terminate_replacement_pause: false,
+            replacement_pauses_awaiting_resumed: HashSet::new(),
             pending_prefaces: VecDeque::new(),
             paused_sessions_awaiting_resumed: HashSet::new(),
             active_command_dispatch: None,
@@ -90,19 +94,25 @@ impl PauseState {
         self.quit_requested = true;
         self.pending_prefaces.clear();
         self.paused_sessions_awaiting_resumed.clear();
+        self.replacement_pauses_awaiting_resumed.clear();
         self.finish_owner_turn();
     }
 
     pub(super) fn detach_page(&mut self) -> bool {
         self.pending_prefaces.clear();
         self.paused_sessions_awaiting_resumed.clear();
+        self.replacement_pauses_awaiting_resumed.clear();
         self.finish_owner_turn();
         match self.phase {
-            RendererInspectorPausePhase::Running => false,
+            RendererInspectorPausePhase::Running => {
+                self.terminate_replacement_pause = false;
+                false
+            }
             RendererInspectorPausePhase::Entering => {
                 self.phase = RendererInspectorPausePhase::Running;
                 self.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
                 self.quit_requested = false;
+                self.terminate_replacement_pause = false;
                 false
             }
             RendererInspectorPausePhase::Paused => {
@@ -364,7 +374,9 @@ impl RendererInspectorPauseBridge {
             if state.target_closed {
                 return Err(RendererInspectorPauseExitReason::TargetClosed);
             }
-            if state.document_replacements != 0 {
+            if (state.document_replacements != 0 && state.unload_callbacks == 0)
+                || state.frontend.terminate_replacement_pause
+            {
                 return Err(RendererInspectorPauseExitReason::DocumentReplacement);
             }
             if state.frontend.session_detach_arms != 0 {
@@ -393,6 +405,7 @@ impl RendererInspectorPauseBridge {
         state.frontend.phase = RendererInspectorPausePhase::Running;
         state.frontend.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
         state.frontend.quit_requested = false;
+        state.frontend.terminate_replacement_pause = false;
         // Commands that lost the nested-loop race stay in their route-specific
         // ingress. Main retains its owner task; IO retains owner and interrupt
         // execution chances.
@@ -447,6 +460,17 @@ impl RendererInspectorPauseBridge {
         {
             return RendererInspectorPauseNotificationRoute::Drop;
         }
+        if is_resumed_notification
+            && state
+                .frontend
+                .replacement_pauses_awaiting_resumed
+                .remove(&session_route)
+        {
+            return RendererInspectorPauseNotificationRoute::Drop;
+        }
+        let replacement_pause = is_paused_notification
+            && ((state.document_replacements != 0 && state.unload_callbacks == 0)
+                || state.frontend.terminate_replacement_pause);
         let preface = if is_paused_notification {
             state
                 .frontend
@@ -461,7 +485,7 @@ impl RendererInspectorPauseBridge {
         } else {
             Vec::new()
         };
-        if is_paused_notification {
+        if is_paused_notification && !replacement_pause {
             state
                 .frontend
                 .paused_sessions_awaiting_resumed
@@ -512,6 +536,17 @@ impl RendererInspectorPauseBridge {
                 state.frontend.pause_loop_policy = RendererInspectorPauseLoopPolicy::IoOnly;
             }
         }
+        if replacement_pause {
+            // The old document can pause again during commit. Publish its
+            // preceding output and retain the decision to end the pause even
+            // if the replacement is cancelled before V8 enters the loop.
+            state.frontend.terminate_replacement_pause = true;
+            state
+                .frontend
+                .replacement_pauses_awaiting_resumed
+                .insert(session_route);
+            return RendererInspectorPauseNotificationRoute::PublishPrefix { preface };
+        }
         if state.frontend.phase == RendererInspectorPausePhase::Running && !resumes_reported_pause {
             RendererInspectorPauseNotificationRoute::OrdinaryTurn
         } else {
@@ -531,6 +566,10 @@ impl RendererInspectorPauseBridge {
         state
             .frontend
             .paused_sessions_awaiting_resumed
+            .remove(&(agent_token, session.clone()));
+        state
+            .frontend
+            .replacement_pauses_awaiting_resumed
             .remove(&(agent_token, session.clone()));
         state
             .frontend

@@ -184,7 +184,7 @@ impl InspectorOutbound {
         &self,
         mut preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<crate::devtools::pause::RendererInspectorPauseCommandOutputRoute>,
-        value: InspectorJson,
+        value: Option<InspectorJson>,
     ) {
         let session = self
             .session
@@ -207,9 +207,18 @@ impl InspectorOutbound {
             .output_journal
             .as_ref()
             .expect("a debugger pause notification requires a concrete Page output stream");
-        preface.push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
-            value,
-        ));
+        if let Some(value) = value {
+            preface.push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
+                value,
+            ));
+        }
+        if preface.is_empty() {
+            if let Some(recorder) = command_turn_output {
+                output_journal.append_records(recorder.drain_records());
+            }
+            let _ = output_journal.publish_pending();
+            return;
+        }
         let (causal_command, batch) = match command_output {
             Some(command_output) => (
                 Some(command_output.causal_identity),
@@ -247,7 +256,10 @@ impl InspectorOutbound {
             RendererInspectorPauseNotificationRoute::PublishImmediately {
                 preface,
                 command_output,
-            } => self.publish_pause_value(preface, command_output, value),
+            } => self.publish_pause_value(preface, command_output, Some(value)),
+            RendererInspectorPauseNotificationRoute::PublishPrefix { preface } => {
+                self.publish_pause_value(preface, None, None);
+            }
             RendererInspectorPauseNotificationRoute::Drop => {}
         }
     }

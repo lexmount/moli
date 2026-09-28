@@ -41,10 +41,26 @@ struct RendererInspectorPauseRoute {
 
 struct RendererInspectorPauseBridgeState {
     document_replacements: usize,
+    unload_callbacks: usize,
     target_closed: bool,
     route: Option<RendererInspectorPauseRoute>,
     #[cfg(feature = "devtools")]
     frontend: frontend::PauseState,
+}
+
+#[must_use]
+pub(crate) struct RendererInspectorUnloadCallbackGuard {
+    bridge: RendererInspectorPauseBridge,
+}
+
+impl Drop for RendererInspectorUnloadCallbackGuard {
+    fn drop(&mut self) {
+        let mut state = self.bridge.shared.state.lock();
+        state.unload_callbacks = state
+            .unload_callbacks
+            .checked_sub(1)
+            .expect("unload callback scope underflow");
+    }
 }
 
 #[derive(Clone)]
@@ -81,6 +97,7 @@ impl RendererInspectorPauseBridge {
         let shared = Arc::new(RendererInspectorPauseBridgeShared {
             state: Mutex::new(RendererInspectorPauseBridgeState {
                 document_replacements: 0,
+                unload_callbacks: 0,
                 target_closed: false,
                 route: None,
                 #[cfg(feature = "devtools")]
@@ -131,6 +148,20 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
+    pub(crate) fn has_announced_pause_for_agent(
+        &self,
+        agent: moli_page_types::RendererDevToolsAgentToken,
+    ) -> bool {
+        self.shared
+            .state
+            .lock()
+            .frontend
+            .paused_sessions_awaiting_resumed
+            .iter()
+            .any(|(owner, _)| *owner == agent)
+    }
+
     /// Ends the bounded handoff from a resume/step command to the renderer turn
     /// it released. A step that reaches the end of its task may never enter a
     /// new pause; owner settlement is the terminal that prevents its cause from
@@ -148,6 +179,20 @@ impl RendererInspectorPauseBridge {
         state.document_replacements += 1;
         self.shared.pause_loop_wake.notify_all();
         true
+    }
+
+    pub(crate) fn begin_unload_callbacks(&self) -> RendererInspectorUnloadCallbackGuard {
+        let mut state = self.shared.state.lock();
+        // Replacement first terminates suspended old work, then deliberately
+        // runs pagehide/unload before committing. Those callbacks must remain
+        // debuggable, including when a second preparation overlaps them.
+        state.unload_callbacks = state
+            .unload_callbacks
+            .checked_add(1)
+            .expect("unload callback scope overflow");
+        RendererInspectorUnloadCallbackGuard {
+            bridge: self.clone(),
+        }
     }
 
     pub(crate) fn finish_document_replacement(&self) {
