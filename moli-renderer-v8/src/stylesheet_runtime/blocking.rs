@@ -453,6 +453,7 @@ impl DocumentRuntime {
                     } else {
                         "link"
                     },
+                    import_options: None,
                     consumed_preload_error: result.terminal.is_consumed_preload_error(),
                     document_owner,
                     stylesheet_fetch: result.fetch,

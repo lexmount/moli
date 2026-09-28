@@ -873,6 +873,7 @@ enum LiveStylesheetCssomRuntimeState {
 pub(crate) struct LiveStylesheetImportRequest {
     pub(crate) edge_id: StylesheetImportEdgeId,
     pub(crate) url: url::Url,
+    pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
 }
 
 #[derive(Clone, Debug)]
@@ -883,6 +884,7 @@ pub(crate) struct LiveStylesheetImportResponse {
     pub(crate) parsed_stylesheet: Option<StylesheetImportParsedResponse>,
     pub(crate) successful: bool,
     pub(crate) origin_clean: bool,
+    pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
 }
 
 #[derive(Debug)]
@@ -959,6 +961,7 @@ pub(crate) struct LiveStylesheet {
     quirks_mode: QuirksMode,
     allow_import_rules: AllowImportRules,
     origin_clean: Cell<bool>,
+    import_options: RefCell<Option<crate::stylesheet_blocking::StylesheetFetchOptions>>,
     cssom_runtime_state: LiveStylesheetCssomRuntimeState,
     contents_revision: Cell<u64>,
     cascade_generation: Cell<u64>,
@@ -1333,6 +1336,7 @@ impl LiveStylesheet {
             quirks_mode,
             allow_import_rules,
             origin_clean: Cell::new(true),
+            import_options: RefCell::new(None),
             cssom_runtime_state,
             contents_revision: Cell::new(1),
             cascade_generation: Cell::new(1),

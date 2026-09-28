@@ -323,6 +323,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 self.clone(),
                 document_url,
                 urls,
+                self.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default()),
             ),
         )
     }
@@ -429,7 +430,8 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                         filter: response.response_filter,
                     }
                 };
-                return terminal_from_response(*response.response, response_provenance);
+                return terminal_from_response(*response.response, response_provenance)
+                    .with_service_worker_response_url(response.response_url);
             }
             Ok(None) => {}
             Err(error) => {
@@ -551,6 +553,7 @@ fn stylesheet_terminal_from_preload(
                 preload.response,
                 provenance,
             )
+            .with_service_worker_response_url(preload.service_worker_response_url)
         }
         Err(error) => StylesheetFetchTerminal::consumed_preload_error(error),
     }
@@ -563,9 +566,14 @@ pub(crate) fn stylesheet_request_mode_and_credentials(
 }
 
 pub(crate) fn apply_stylesheet_request_parameters(
-    request: moli_fetch::Request,
+    mut request: moli_fetch::Request,
     options: &StylesheetFetchOptions,
 ) -> moli_fetch::Request {
+    if let Some(referrer_url) = options.referrer_url() {
+        request = request
+            .with_fetch_referrer(referrer_url.as_str())
+            .expect("a parsed stylesheet referrer URL remains valid");
+    }
     let (request_mode, credentials_mode) = stylesheet_request_mode_and_credentials(options);
     request
         .with_request_mode(request_mode)
@@ -751,6 +759,7 @@ fn stylesheet_preload_response(
     // Preserve the fetch response even when it cannot be installed as CSS.
     Ok(crate::network::preloads::DocumentPreloadResponse {
         response: response.clone(),
+        service_worker_response_url: terminal.service_worker_response_url().cloned(),
         from_service_worker: terminal.from_service_worker(),
         response_filter: terminal.response_filter().cloned().map(Into::into),
     })
@@ -865,6 +874,102 @@ mod tests {
             cookie_set_reports: Vec::new(),
             from_cache: false,
             negotiated_http_version: None,
+        }
+    }
+
+    #[test]
+    fn imported_stylesheets_keep_document_origin_and_cookie_initiator() {
+        let document = Url::parse("https://page.test/document").unwrap();
+        let origin = moli_url::WebOrigin::from_url(&document);
+        let parent = Url::parse("https://user:password@cdn.test/parent.css#fragment").unwrap();
+        let target = Url::parse("https://cdn.test/child.css").unwrap();
+        for (policy, expected) in [
+            (None, Some("https://cdn.test/parent.css")),
+            (Some("no-referrer"), None),
+            (Some("origin"), Some("https://cdn.test/")),
+        ] {
+            let options =
+                StylesheetFetchOptions::for_import(parent.clone(), policy.map(str::to_owned))
+                    .with_document_referrer_policy(Some("no-referrer".to_owned()));
+            let request = stylesheet_readiness_request(
+                &document,
+                &origin,
+                &target,
+                &options,
+                moli_fetch::RequestResourceType::CssStyleSheet,
+                false,
+                None,
+            );
+            assert_eq!(request.referrer_header_value(&target).as_deref(), expected);
+            assert_eq!(request.browser_origin().unwrap(), &origin);
+            assert_eq!(
+                request.cookie_context.initiator_url.as_ref(),
+                Some(&document)
+            );
+        }
+    }
+
+    #[test]
+    fn stylesheet_import_policy_distinguishes_network_and_synthetic_responses() {
+        let url = Url::parse("https://example.test/parent.css").unwrap();
+        let origin = moli_url::WebOrigin::from_url(&url);
+        let document_options = StylesheetFetchOptions::default()
+            .with_document_referrer_policy(Some("no-referrer".to_owned()));
+        for (provenance, response_url, expected) in [
+            (
+                StylesheetResponseProvenance::Network,
+                None,
+                moli_fetch::DEFAULT_REFERRER_POLICY,
+            ),
+            (
+                StylesheetResponseProvenance::ServiceWorker { filter: None },
+                None,
+                "no-referrer",
+            ),
+            (
+                StylesheetResponseProvenance::ServiceWorker {
+                    filter: Some(AsyncSubresourceFetchResponseFilter::Network(
+                        moli_fetch::FetchResponseType::Basic,
+                    )),
+                },
+                None,
+                "no-referrer",
+            ),
+            (
+                StylesheetResponseProvenance::ServiceWorker {
+                    filter: Some(AsyncSubresourceFetchResponseFilter::Network(
+                        moli_fetch::FetchResponseType::Basic,
+                    )),
+                },
+                Some(url.clone()),
+                moli_fetch::DEFAULT_REFERRER_POLICY,
+            ),
+        ] {
+            let response = stylesheet_response(&url, Some("text/css"), "");
+            let terminal = stylesheet_terminal_from_response(
+                &origin,
+                &url,
+                &document_options,
+                response,
+                provenance,
+            );
+            let terminal = terminal.with_service_worker_response_url(response_url);
+            let options =
+                crate::document_runtime::stylesheet_import_options(&terminal, &document_options)
+                    .unwrap();
+            assert_eq!(options.referrer_policy(), Some(expected));
+            assert_eq!(options.referrer_url(), Some(&url));
+            let preload = stylesheet_preload_response(&terminal, &document_options).unwrap();
+            let consumed =
+                stylesheet_terminal_from_preload(&origin, &url, &document_options, Ok(preload));
+            let consumed_options =
+                crate::document_runtime::stylesheet_import_options(&consumed, &document_options)
+                    .unwrap();
+            assert_eq!(consumed_options.referrer_policy(), Some(expected));
+            assert_eq!(
+                consumed.service_worker_response_url(),
+                terminal.service_worker_response_url()
+            );
         }
     }
 

@@ -1,6 +1,19 @@
 use super::*;
 
 impl LiveStylesheet {
+    pub(crate) fn import_options(
+        &self,
+    ) -> Option<crate::stylesheet_blocking::StylesheetFetchOptions> {
+        self.import_options.borrow().clone()
+    }
+
+    pub(crate) fn set_import_options(
+        &self,
+        options: crate::stylesheet_blocking::StylesheetFetchOptions,
+    ) {
+        self.import_options.replace(Some(options));
+    }
+
     pub(crate) fn top_level_import_state(&self) -> (bool, Vec<url::Url>) {
         if self.import_edges.borrow().is_empty() {
             return (false, Vec::new());
@@ -19,6 +32,9 @@ impl LiveStylesheet {
                 Some(LiveStylesheetImportRequest {
                     edge_id: edge.id,
                     url: edge.rule.read_with(&guard).url.url()?.as_ref().clone(),
+                    import_options: self
+                        .import_options()
+                        .filter(|options| options.referrer_url().is_some()),
                 })
             })
             .collect()
