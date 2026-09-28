@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn css_generated_images_reify_native_lists_computed_values_and_typed_writes() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-generated-images.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_generated_images.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_image_values_reify_native_urls_and_preserve_brands_realms_and_writes() {
     let mut vm = new_parsed_test_vm(
         "https://css-image-values.test/",
