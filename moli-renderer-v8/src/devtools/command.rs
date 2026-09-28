@@ -304,6 +304,7 @@ pub(crate) enum RendererDevToolsMainNestedDispatch {
     /// V8 session dispatch followed by a native terminal in the same Main turn.
     NativeInspectorSession,
     PageAgent,
+    BeforeUnload,
     OwnerOnly,
 }
 
