@@ -221,6 +221,14 @@ fn css_style_value_to_string_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
+    if web_api_interfaces::CSSUnparsedValue::is_instance(scope, args.this()) {
+        if let Some(text) =
+            super::unparsed::serialize(scope, args.this()).and_then(|text| v8_string(scope, &text))
+        {
+            rv.set(text.into());
+        }
+        return;
+    }
     if let Some(unit) = css_unit_value_unit(scope, args.this()) {
         let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
         let number = v8::Number::new(scope, value)

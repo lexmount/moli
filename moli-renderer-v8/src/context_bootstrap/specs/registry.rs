@@ -249,6 +249,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::CssUnitValue,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CSSUnparsedValue::DESCRIPTOR,
+        kind: ConstructorKind::CssUnparsedValue,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSVariableReferenceValue::DESCRIPTOR,
+        kind: ConstructorKind::CssVariableReferenceValue,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::CSSStyleProperties::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

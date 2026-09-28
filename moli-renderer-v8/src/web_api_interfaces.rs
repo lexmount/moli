@@ -89,6 +89,8 @@ interfaces! {
     CSSStyleValue;
     CSSSupportsRule: CSSConditionRule;
     CSSUnitValue: CSSNumericValue;
+    CSSUnparsedValue: CSSStyleValue;
+    CSSVariableReferenceValue;
     Cache;
     CacheStorage;
     CanvasGradient;
