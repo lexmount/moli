@@ -225,11 +225,7 @@ pub(super) fn from_parsed<'s>(
                     .bind(scope)
                     .expect("CSSKeywordValue declaration should bind"),
                 TypedValue::Numeric(NumericValue::Unit(unit)) => {
-                    let name = if unit.unit_str() == "%" {
-                        "percent"
-                    } else {
-                        unit.unit_str()
-                    };
+                    let name = native_unit_name(unit.unit_str());
                     let number = sources
                         .get(index)
                         .and_then(|text| number::from_literal(text, unit.unit_str()))
@@ -337,6 +333,12 @@ fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
             }
         })
         .ok()
+}
+
+/// Use the Typed OM unit identifier at the style-engine boundary. Percentages
+/// serialize with `%`, but native numeric projections may already use `percent`.
+pub(super) fn native_unit_name(unit: &str) -> &str {
+    if unit == "%" { "percent" } else { unit }
 }
 
 pub(super) fn normalize_unit_name(unit: &str) -> Option<String> {
