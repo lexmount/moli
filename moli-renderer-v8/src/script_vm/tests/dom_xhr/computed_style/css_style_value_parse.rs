@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn css_all_keywords_preserve_native_realms_and_property_independent_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-all-keywords.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_all_keywords.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_style_value_parse_reifies_declared_math_with_native_brands_and_realms() {
     let mut vm = new_parsed_test_vm(
         "https://css-declared-math.test/",
