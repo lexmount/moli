@@ -349,6 +349,12 @@ fn style_values_for_property<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    if native_bridge::element::style_declaration_is_computed(scope, style)
+        && let Some(parsed) =
+            native_bridge::element::computed_typed_style_value_from_object(scope, style, property)
+    {
+        return values::from_computed(scope, property, parsed);
+    }
     let Some(text) = style_property_text(scope, style, property) else {
         return Vec::new();
     };
@@ -403,8 +409,8 @@ fn map_property_names<'s>(
         return detached_css_style::css_declaration_property_names(scope, style);
     }
     // Computed CSSStyleDeclaration and Typed OM enumerate one public property list.
-    let mut names = native_bridge::element::computed_style_property_names_from_object(scope, style)
-        .unwrap_or_default();
+    let mut names =
+        native_bridge::element::style_property_names_from_object(scope, style).unwrap_or_default();
     names.sort_by(|left, right| {
         typed_om_property_sort_category(left)
             .cmp(&typed_om_property_sort_category(right))
