@@ -1,5 +1,6 @@
 use super::*;
 
+mod beforeunload;
 mod superseded_interception;
 
 type TestSocket =

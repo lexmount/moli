@@ -2770,8 +2770,6 @@ impl RendererOwnerLocalStore {
             .document_replacement_lifecycle_action_snapshot();
         let command_epoch = Self::advance_command_epoch(entry);
         let slot = entry.slot.clone();
-        #[cfg(feature = "devtools")]
-        let _nested_main_page = super::nested_main::bind_active_nested_main_page(entry);
         let mut reply = slot
             .dispatch_async_owned(command_epoch, entry.page_vm_mut(), command)
             .await;

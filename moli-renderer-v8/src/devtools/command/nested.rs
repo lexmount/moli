@@ -6,12 +6,14 @@ use crate::runtime::{RendererDevToolsPageCommand, RendererPageCommand};
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        use RendererDevToolsMainNestedDispatch::{OwnerOnly, PageAgent};
+        use RendererDevToolsMainNestedDispatch::{BeforeUnload, OwnerOnly, PageAgent};
         match self {
             #[cfg(feature = "ace-protocol")]
             Self::AcePageTask(..) => OwnerOnly,
             Self::ForDocument { command, .. } => command.nested_dispatch(),
             Self::DevTools(command) => command.nested_dispatch(),
+            // The pause callback already has the V8 scope entered for beforeunload.
+            Self::CheckMainDocumentBeforeUnload => BeforeUnload,
             // These handlers read native document/agent state without entering
             // a new V8 scope. They can use the existing pause callback boundary.
             Self::HasPendingLocationNavigation
@@ -67,7 +69,6 @@ impl RendererPageCommand {
             | Self::RuntimeConsoleMessagesWithContext
             | Self::RuntimeHeapUsage
             | Self::StopDocumentLifecycle
-            | Self::CheckMainDocumentBeforeUnload
             | Self::UnloadMainDocumentForNavigationCommit
             | Self::ResetNavigationHistory
             | Self::RenderMarkdown { .. }

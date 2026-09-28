@@ -28,8 +28,6 @@ use crate::inspector_microtasks::with_scoped_inspector_microtasks;
 #[cfg(feature = "devtools")]
 use crate::inspector_session::InspectorSessionOutput;
 #[cfg(feature = "devtools")]
-use crate::runtime::dispatch_nested_main_page_command;
-#[cfg(feature = "devtools")]
 use crate::runtime::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
     RendererDevToolsMainNestedDispatch,
@@ -38,6 +36,11 @@ use crate::runtime::{
 use crate::runtime::{
     RendererOwnerReply, RendererPageCommand, RendererRuntimeCommandOutput,
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    dispatch_nested_main_beforeunload, dispatch_nested_main_page_command,
+    nested_main_beforeunload_is_allowed,
 };
 pub(crate) use interrupt::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
@@ -240,7 +243,7 @@ impl RendererInspectorSessionExecutorLocal {
                     {
                         self.target
                             .main_ref()
-                            .claim_for_pause()
+                            .claim_for_pause(nested_main_beforeunload_is_allowed())
                             .map(RendererInspectorNestedCommand::Main)
                             .or_else(|| {
                                 self.target
@@ -257,7 +260,7 @@ impl RendererInspectorSessionExecutorLocal {
                         .or_else(|| {
                             self.target
                                 .main_ref()
-                                .claim_for_pause()
+                                .claim_for_pause(nested_main_beforeunload_is_allowed())
                                 .map(RendererInspectorNestedCommand::Main)
                         }),
                 };
@@ -334,6 +337,21 @@ impl RendererInspectorSessionExecutorLocal {
         mut command: RendererInspectorMainCommand,
     ) {
         match command.nested_dispatch() {
+            RendererDevToolsMainNestedDispatch::BeforeUnload => {
+                let first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
+                let reply_tx = command.into_nested_beforeunload_reply();
+                // SAFETY: V8 synchronously called this pause loop on the owner
+                // thread with this isolate entered. Reuse its callback scope;
+                // borrowing the ScriptVm's isolate holder again would reenter
+                // the suspended owner's mutable isolate borrow.
+                let isolate = unsafe { &mut *self.isolate.get() };
+                let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
+                v8::callback_scope!(unsafe let scope, isolate);
+                let result = dispatch_nested_main_beforeunload(scope, first_dispatch)
+                    .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
+                let _ = reply_tx.send(result);
+                return;
+            }
             RendererDevToolsMainNestedDispatch::PageAgent => {
                 let first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
                 let (page_command, reply_tx) = command.into_nested_agent_parts();
