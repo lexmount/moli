@@ -14,8 +14,8 @@ mod scripts;
 use std::{collections::HashMap, sync::Arc};
 
 pub use document::{
-    Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentReadyState,
-    DocumentTitleSetterTarget, DocumentType,
+    Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentMetaReferrerPolicySource,
+    DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
     Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,
