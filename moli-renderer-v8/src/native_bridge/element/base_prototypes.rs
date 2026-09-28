@@ -965,7 +965,7 @@ pub(super) struct HtmlElementActionPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGElement)]
-struct SvgElementFocusPrototypeDeclaration {
+pub(super) struct SvgElementFocusPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
     #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]
@@ -974,7 +974,7 @@ struct SvgElementFocusPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MathMLElement)]
-struct MathMlElementFocusPrototypeDeclaration {
+pub(super) struct MathMlElementFocusPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
     #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]
