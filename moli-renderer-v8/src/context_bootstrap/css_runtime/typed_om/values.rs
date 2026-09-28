@@ -293,7 +293,7 @@ fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
 
 pub(super) fn normalize_unit_name(unit: &str) -> Option<String> {
     let unit = unit.to_ascii_lowercase();
-    VALID_UNIT_NAMES.contains(&unit.as_str()).then_some(unit)
+    (VALID_UNIT_NAMES.contains(&unit.as_str()) || unit == "x").then_some(unit)
 }
 
 fn css_style_value_to_string_callback<'s>(

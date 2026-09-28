@@ -5,6 +5,7 @@ mod array;
 mod conversion;
 mod graph;
 mod operations;
+mod parsing;
 mod serialization;
 mod types;
 
@@ -196,7 +197,9 @@ pub(super) fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
+    profile: crate::context_bootstrap::exposed_interfaces::TemplateBuildProfile,
 ) {
+    parsing::install(scope, template, name, profile);
     let prototype = template.prototype_template(scope);
     match name {
         "CSSNumericValue" => NumericPrototype::initialize_prototype_template(scope, prototype),
