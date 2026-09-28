@@ -5660,3 +5660,38 @@ async fn worker_importscripts_cross_origin_failure_reports_helper_callsite_from_
         .await
         .expect("cross-origin importScripts server should finish");
 }
+
+#[tokio::test]
+async fn worker_json_imports_use_shared_response_mime_extraction() {
+    ensure_v8();
+    for (mime, accepts) in [
+        ("text/plain, application/json", true),
+        ("application/json, invalid, */*", true),
+        ("application/json, text/plain", false),
+        (r#"text/plain; a=",application/json""#, false),
+        ("applic(ation/vnd.api+json", false),
+        ("*/*", false),
+    ] {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/worker/module.json",
+            "HTTP/1.1 200 OK",
+            mime,
+            r#"{"answer":42}"#.to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut handle = spawn_worker_with_request_client_and_kind(
+            "import('./module.json', {with:{type:'json'}}).then(m => postMessage(m.default.answer), e => postMessage(e.name));".into(),
+            format!("{base_url}/worker/main.js"), loader, WorkerScriptKind::Module,
+        );
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        assert_eq!(
+            expect_post_json(message),
+            if accepts { "42" } else { r#""TypeError""# },
+            "{mime}"
+        );
+        handle.terminate_and_join();
+        server.await.unwrap();
+    }
+}
