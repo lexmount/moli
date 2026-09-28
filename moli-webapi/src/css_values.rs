@@ -12,11 +12,8 @@ const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
 const CSS_UNIT_VALUE_VALUE_SLOT: &str = "__moliCssUnitValueValue";
 const CSS_UNIT_VALUE_UNIT_SLOT: &str = "__moliCssUnitValueUnit";
 
-const VALID_UNIT_NAMES: &[&str] = &[
-    "number", "percent", "em", "ex", "ch", "ic", "rem", "lh", "rlh", "vw", "vh", "vi", "vb",
-    "vmin", "vmax", "cm", "mm", "q", "in", "pt", "pc", "px", "deg", "grad", "rad", "turn", "s",
-    "ms", "hz", "khz", "dpi", "dpcm", "dppx", "fr",
-];
+pub mod factories;
+use factories::VALID_UNIT_NAMES;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CSSStyleValue)]
@@ -201,6 +198,16 @@ pub fn style_value_from_text<'s>(
     CssStyleValueObjectDeclaration::new(text.to_owned())
         .bind(scope)
         .expect("CSSStyleValue declaration should bind")
+}
+
+pub fn unit_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: f64,
+    unit: String,
+) -> v8::Local<'s, v8::Object> {
+    CssUnitValueObjectDeclaration::new(value, unit)
+        .bind(scope)
+        .expect("CSSUnitValue declaration should bind")
 }
 
 pub fn opaque_style_value<'s>(

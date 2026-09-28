@@ -6,7 +6,7 @@ use moli_webapi::css_values::{
 };
 pub(super) use moli_webapi::css_values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-    style_value_from_text,
+    style_value_from_text, unit_value,
 };
 
 mod number;
@@ -57,9 +57,7 @@ pub(super) fn from_parsed<'s>(
                         .get(index)
                         .and_then(|text| number::from_literal(text, unit.unit_str()))
                         .unwrap_or_else(|| f64::from(unit.value));
-                    CssUnitValueObjectDeclaration::new(number, name.to_owned())
-                        .bind(scope)
-                        .expect("CSSUnitValue declaration should bind")
+                    unit_value(scope, number, name.to_owned())
                 }
                 // CSSMath*, transforms and images still need their own native DOM
                 // interfaces. Preserve an immutable, property-associated CSS value
