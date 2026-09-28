@@ -15,9 +15,11 @@
         }
       }
       const rect = doc.documentElement.firstElementChild;
+      rect.x.baseVal.value = 17;
+      check(rect.getAttribute('x') === '17', 'preserved SVG interface remains usable');
       const target = document.implementation.createDocument(null, 'target');
       target.adoptNode(rect);
-      check(rect instanceof SVGRectElement && rect.ownerDocument === target, 'adoption preserves native interface');
+      check(rect instanceof SVGRectElement && rect.ownerDocument === target && rect.x.baseVal.value === 17, 'adoption preserves native interface');
     }
   }
   return true;
