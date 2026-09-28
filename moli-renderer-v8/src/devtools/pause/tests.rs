@@ -75,6 +75,72 @@ fn route_paused(bridge: &RendererInspectorPauseBridge) -> RendererInspectorPause
     }))
 }
 
+#[test]
+fn replacement_termination_preserves_output_and_balances_frontend_pause_events() {
+    let bridge = RendererInspectorPauseBridge::default();
+    configure_page(&bridge, PageId::new_for_testing(1));
+    let routes = [outbound_route(&bridge), outbound_route(&bridge)];
+    let paused = json!({"method": "Debugger.paused", "params": {"callFrames": []}});
+    let resumed = json!({"method": "Debugger.resumed", "params": {}});
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert!(bridge.begin_document_replacement());
+    assert_eq!(
+        bridge.wait_for_pause_work(|| Some(())),
+        Err(RendererInspectorPauseExitReason::DocumentReplacement)
+    );
+    bridge.leave_pause();
+    for route in &routes {
+        // The pause the frontend actually saw still needs its resumed event.
+        expect_immediate_preface(route.route_notification(&resumed));
+    }
+    {
+        let _unload = bridge.begin_unload_callbacks();
+        for route in &routes {
+            expect_immediate_preface(route.route_notification(&paused));
+        }
+        assert!(bridge.enter_pause().is_some());
+        assert_eq!(bridge.wait_for_pause_work(|| Some(42)), Ok(42));
+        bridge.leave_pause();
+        for route in &routes {
+            expect_immediate_preface(route.route_notification(&resumed));
+        }
+    }
+    let prefix = RendererRuntimeInspectorMessage::protocol(json!({
+        "method": "Runtime.consoleAPICalled", "params": {"type": "log"}
+    }));
+    for route in &routes {
+        let _preface = route.stage_pause_preface(vec![prefix.clone()]);
+        assert_eq!(
+            route.route_notification(&paused),
+            RendererInspectorPauseNotificationRoute::PublishPrefix {
+                preface: vec![prefix.clone()]
+            }
+        );
+    }
+    // Cancellation between notification and loop entry cannot strand an
+    // unreported V8 pause. Its termination decision belongs to this pause.
+    bridge.finish_document_replacement();
+    assert!(bridge.enter_pause().is_some());
+    assert_eq!(
+        bridge.wait_for_pause_work(|| Some(())),
+        Err(RendererInspectorPauseExitReason::DocumentReplacement)
+    );
+    bridge.leave_pause();
+    for route in &routes {
+        assert_eq!(
+            route.route_notification(&resumed),
+            RendererInspectorPauseNotificationRoute::Drop
+        );
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert_eq!(bridge.wait_for_pause_work(|| Some(42)), Ok(42));
+    bridge.leave_pause();
+}
+
 fn response_sender(
     call_id: i32,
 ) -> (

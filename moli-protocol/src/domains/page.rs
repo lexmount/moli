@@ -167,8 +167,7 @@ pub(crate) use navigation::{
     MaterializedNavigationCompletion,
     complete_materialized_navigation_after_unload_into_buffer_async,
     complete_materialized_navigation_into_buffer_async, emit_prepared_child_frame_activity,
-    push_superseded_navigation_result,
-    finish_renderer_navigation_into_buffer_async,
+    finish_renderer_navigation_into_buffer_async, push_superseded_navigation_result,
 };
 use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,

@@ -356,7 +356,10 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::MismatchedAgent);
         }
         if self.output_is_suspended() {
-            let releases_current_prefix = self.latest_navigation.as_ref().is_none_or(|latest| !latest.attachment_committed)
+            let releases_current_prefix = self
+                .latest_navigation
+                .as_ref()
+                .is_none_or(|latest| !latest.attachment_committed)
                 || batches
                     .iter()
                     .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);

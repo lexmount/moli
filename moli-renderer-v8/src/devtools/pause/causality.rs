@@ -73,6 +73,9 @@ pub(super) struct RendererInspectorPausePreface {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RendererInspectorPauseNotificationRoute {
     OrdinaryTurn,
+    PublishPrefix {
+        preface: Vec<RendererRuntimeInspectorMessage>,
+    },
     PublishImmediately {
         preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<RendererInspectorPauseCommandOutputRoute>,

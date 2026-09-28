@@ -128,6 +128,18 @@ impl RendererInspectorMainCommand {
         (command, reply_tx)
     }
 
+    pub(crate) fn into_nested_beforeunload_reply(
+        self,
+    ) -> tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>> {
+        assert_eq!(
+            self.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::BeforeUnload,
+            "only beforeunload may enter the nested lifecycle callback"
+        );
+        self.owner_reply_tx
+            .expect("a nested beforeunload command must retain its completion sender")
+    }
+
     #[cfg(test)]
     fn claimed_by(&self) -> Option<RendererInspectorMainCommandConsumer> {
         self.claimed_by
@@ -536,25 +548,36 @@ impl RendererInspectorMainIngress {
 
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorMainCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
-        let command = self.claim_next(RendererInspectorMainCommandConsumer::Owner);
+        let command = self.claim_next(RendererInspectorMainCommandConsumer::Owner, true);
         if command.is_none() && self.shared.state.lock().lanes.has_ready() {
             self.notify_execution_opportunities();
         }
         command
     }
 
-    pub(crate) fn claim_for_pause(&self) -> Option<RendererInspectorMainCommand> {
-        self.claim_next(RendererInspectorMainCommandConsumer::Pause)
+    pub(crate) fn claim_for_pause(
+        &self,
+        beforeunload_allowed: bool,
+    ) -> Option<RendererInspectorMainCommand> {
+        self.claim_next(
+            RendererInspectorMainCommandConsumer::Pause,
+            beforeunload_allowed,
+        )
     }
 
     fn claim_next(
         &self,
         consumer: RendererInspectorMainCommandConsumer,
+        beforeunload_allowed: bool,
     ) -> Option<RendererInspectorMainCommand> {
         let mut state = self.shared.state.lock();
         let (_, mut command) = state.lanes.claim_next(|command| {
             consumer != RendererInspectorMainCommandConsumer::Pause
-                || command.nested_dispatch() != RendererDevToolsMainNestedDispatch::OwnerOnly
+                || match command.nested_dispatch() {
+                    RendererDevToolsMainNestedDispatch::OwnerOnly => false,
+                    RendererDevToolsMainNestedDispatch::BeforeUnload => beforeunload_allowed,
+                    _ => true,
+                }
         })?;
         command.claimed_by = Some(consumer);
         let claim = match consumer {
@@ -563,7 +586,8 @@ impl RendererInspectorMainIngress {
             }
             RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
                 RendererDevToolsMainNestedDispatch::InspectorSession => None,
-                RendererDevToolsMainNestedDispatch::PageAgent => {
+                RendererDevToolsMainNestedDispatch::PageAgent
+                | RendererDevToolsMainNestedDispatch::BeforeUnload => {
                     Some(RendererInspectorMainCommandClaim::Page)
                 }
                 RendererDevToolsMainNestedDispatch::OwnerOnly => {
@@ -845,7 +869,7 @@ mod tests {
             r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"first"}}"#,
         );
 
-        let pause = ingress.claim_for_pause();
+        let pause = ingress.claim_for_pause(true);
         let owner = ingress.claim_for_owner();
         assert_eq!(
             usize::from(pause.is_some()) + usize::from(owner.is_some()),
@@ -883,13 +907,13 @@ mod tests {
         let mut first = ingress.claim_for_owner().expect("first ready Main session");
         assert!(first.raw_json().contains(r#""a1""#));
         let second = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("the other Main session remains independently ready");
         assert!(second.raw_json().contains(r#""b1""#));
         assert!(ingress.claim_for_owner().is_none());
 
         ingress.first_dispatch_guard(&mut first).release();
-        let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
+        let third = ingress.claim_for_pause(true).expect("a2 after a1 dispatch");
         assert!(third.raw_json().contains(r#""a2""#));
     }
 
@@ -979,7 +1003,7 @@ mod tests {
             r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"next"}}"#,
         );
         let mut command = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("the direct Inspector command should be claimable");
         assert!(
             ingress.claim_for_owner().is_none(),
@@ -1101,7 +1125,7 @@ mod tests {
             ),
         );
         let mut command = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("the direct Inspector command must reach nested Main");
         ingress.first_dispatch_guard(&mut command).release();
         publisher
@@ -1195,14 +1219,14 @@ mod tests {
         );
 
         let mut page = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("the Page agent command should be first");
         assert_eq!(
             page.nested_dispatch(),
             RendererDevToolsMainNestedDispatch::PageAgent
         );
         assert!(
-            ingress.claim_for_pause().is_none(),
+            ingress.claim_for_pause(true).is_none(),
             "the V8 command must remain behind the Page agent first-dispatch boundary"
         );
 
@@ -1216,7 +1240,7 @@ mod tests {
         .expect("test Page-agent output");
         ingress.first_dispatch_guard(&mut page).release();
         let v8 = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("the V8 command should follow Page dispatch while its reply is retained");
         assert_eq!(
             v8.nested_dispatch(),
@@ -1237,7 +1261,7 @@ mod tests {
             r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"1 + 1"}}"#,
         );
         let nested = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("default-world Runtime.evaluate should be pumpable by nested Main");
         assert_eq!(
             nested.claimed_by(),
@@ -1252,7 +1276,7 @@ mod tests {
             r#"{"id":2,"method":"Runtime.evaluate","params":{"contextId":41,"expression":"2 + 2"}}"#,
         );
         let explicit_context = ingress
-            .claim_for_pause()
+            .claim_for_pause(true)
             .expect("an Inspector-native context id should remain pumpable by nested Main");
         assert_eq!(
             explicit_context.claimed_by(),
@@ -1276,7 +1300,7 @@ mod tests {
             RendererPageStateCapturePolicy::ProtocolTurn,
         );
 
-        assert!(ingress.claim_for_pause().is_none());
+        assert!(ingress.claim_for_pause(true).is_none());
         let owner = ingress
             .claim_for_owner()
             .expect("the ordinary owner receiver must claim owner-only Main work");

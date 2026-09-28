@@ -302,6 +302,7 @@ pub struct RendererDevToolsMainCommandEnvelope {
 pub(crate) enum RendererDevToolsMainNestedDispatch {
     InspectorSession,
     PageAgent,
+    BeforeUnload,
     OwnerOnly,
 }
 

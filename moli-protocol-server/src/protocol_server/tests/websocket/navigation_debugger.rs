@@ -1,5 +1,6 @@
 use super::*;
 
+mod beforeunload;
 mod superseded_interception;
 
 type TestSocket =
@@ -139,7 +140,8 @@ async fn assert_navigation_exits_debugger_pause(body: &str, second_frontend: boo
     assert!(
         !messages
             .iter()
-            .any(|message| message["method"] == "Debugger.paused")
+            .any(|message| message["method"] == "Debugger.paused"),
+        "old execution must not pause again during replacement: {messages:#?}"
     );
     assert_eq!(
         cdp_runtime_evaluate_string(&mut socket, &session_id, 9, "document.title").await,

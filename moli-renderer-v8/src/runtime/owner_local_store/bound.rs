@@ -254,7 +254,10 @@ where
     R: 'static,
     F: for<'a> FnOnce(&'a mut LivePageEntry) -> EntryLocalTaskFuture<'a, R> + 'static,
 {
-    run_typed_entry_on_bound_owner_local_store_local_task(local_executor, entry, operation).await
+    run_typed_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
+        crate::runtime::nested_main::scope_active_nested_main_page(entry, operation)
+    })
+    .await
 }
 
 pub(in crate::runtime) fn take_entry_for_command_on_bound_owner_local_store(
