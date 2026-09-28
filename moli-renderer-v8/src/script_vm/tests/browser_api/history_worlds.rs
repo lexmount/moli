@@ -26,12 +26,21 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     constructor() { super('derived'); this.original = this; }
   }
   const derived = new DerivedEvent();
-  // Optional ErrorEvent.error must not be inferred from the first instance.
+  // A shared getter must preserve omitted, null and object-valued errors.
   const withoutError = new ErrorEvent('without');
   const nullError = new ErrorEvent('null', { error: null });
   const withError = new ErrorEvent('with', { error: first });
-  const toggle = new ToggleEvent('toggle');
-  const source = own(toggle, 'source');
+  // Prototype source accessors must not become cached own fields on wrappers.
+  const prototypeSource = [ToggleEvent, CommandEvent].every(ctor => {
+    const descriptor = own(ctor.prototype, 'source');
+    const source = document.createElement('button');
+    const withSource = new ctor('source', { source });
+    const withoutSource = new ctor('source');
+    return !Object.hasOwn(withSource, 'source') && !Object.hasOwn(withoutSource, 'source') &&
+      descriptor.enumerable && descriptor.configurable && descriptor.set === undefined &&
+      descriptor.get.name === 'get source' && descriptor.get.length === 0 &&
+      descriptor.get.call(withSource) === source && descriptor.get.call(withoutSource) === null;
+  });
   return JSON.stringify({
     getterCount: getters.size,
     fieldCount: Object.keys(first).length,
@@ -41,10 +50,10 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
     descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
     trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
-    optional: withoutError.error === undefined && nullError.error === null && withError.error === first &&
+    errorValues: withoutError.error === undefined && nullError.error === null && withError.error === first &&
       [withoutError, nullError, withError].every(event => !Object.hasOwn(event, 'error')) &&
       own(ErrorEvent.prototype, 'error').get.call(withError) === first,
-    toggle: !source.enumerable && !source.configurable,
+    prototypeSource,
     original: derived === derived.original && derived instanceof DerivedEvent,
     illegal
   });
@@ -57,7 +66,14 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
         serde_json::json!(["get type", 0, true, true, true])
     );
     for property in [
-        "base", "realm", "borrowed", "trusted", "optional", "toggle", "original", "illegal",
+        "base",
+        "realm",
+        "borrowed",
+        "trusted",
+        "errorValues",
+        "prototypeSource",
+        "original",
+        "illegal",
     ] {
         assert_eq!(result[property], true, "{property}: {result}");
     }
