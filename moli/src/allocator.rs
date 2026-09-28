@@ -1,11 +1,11 @@
-//! Process-wide fallback allocator configuration for the `moli` executable.
+//! Process-wide allocator configuration for the `moli` executable.
 //!
-//! Targets with an official pointer-compressed rusty_v8 archive use its
-//! PartitionAlloc shim instead. On other non-Windows targets, the low-resource
-//! jemalloc profile below favors returning short-lived page allocations to the
-//! operating system over maximizing allocator throughput. Keep this
-//! configuration beside the allocator declaration: changing either side
-//! requires another deterministic DOM and full Spider Bench A/B.
+//! Pointer-compressed rusty_v8 archives are linked without their allocator
+//! shim, so pointer encoding and process allocator policy remain independent.
+//! The low-resource jemalloc profile below favors returning short-lived page
+//! allocations to the operating system over maximizing allocator throughput.
+//! Keep this configuration beside the allocator declaration: changing either
+//! side requires another deterministic DOM and full Spider Bench A/B.
 //!
 //! `override_allocator_on_supported_platforms` makes jemalloc export the
 //! unprefixed C allocation symbols on Linux. This distinction is important:
@@ -89,9 +89,12 @@ mod tests {
             fn malloc(size: usize) -> *mut core::ffi::c_void;
         }
 
-        assert!(std::ptr::fn_addr_eq(
-            malloc as unsafe extern "C" fn(usize) -> *mut core::ffi::c_void,
-            tikv_jemalloc_sys::malloc as unsafe extern "C" fn(usize) -> *mut core::ffi::c_void
-        ));
+        assert!(
+            std::ptr::fn_addr_eq(
+                malloc as unsafe extern "C" fn(usize) -> *mut core::ffi::c_void,
+                tikv_jemalloc_sys::malloc as unsafe extern "C" fn(usize) -> *mut core::ffi::c_void
+            ),
+            "V8's archive allocator shim must not override Moli's process allocator"
+        );
     }
 }

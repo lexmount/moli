@@ -537,6 +537,10 @@ fn build_v8(is_asan: bool) {
     gn_args.push(arg.to_string());
   }
 
+  if uses_external_allocator() {
+    gn_args.push("use_allocator_shim=false".to_string());
+  }
+
   gn_args.push(format!(
     "v8_enable_v8_checks={}",
     env::var("CARGO_FEATURE_V8_ENABLE_V8_CHECKS").is_ok()
@@ -1060,6 +1064,18 @@ fn static_checksum_path(path: &Path) -> PathBuf {
 
 fn static_lib_dir() -> PathBuf {
   build_dir().join("gn_out").join("obj")
+}
+
+fn uses_external_allocator() -> bool {
+  env::var("CARGO_FEATURE_MOLI_USE_EXTERNAL_ALLOCATOR").is_ok()
+}
+
+fn external_allocator_static_lib_dir() -> PathBuf {
+  PathBuf::from(
+    env::var_os("OUT_DIR")
+      .expect("Cargo must provide OUT_DIR to prepare the V8 archive"),
+  )
+  .join("external_allocator")
 }
 
 fn build_dir() -> PathBuf {
@@ -1610,7 +1626,6 @@ fn download_static_lib_binaries() {
   let dir = static_lib_dir();
   fs::create_dir_all(&dir)
     .unwrap_or_else(|e| panic!("failed to create {}: {e}", dir.display()));
-  println!("cargo:rustc-link-search={}", dir.display());
 
   // RUSTY_V8_SKIP_DOWNLOAD skips fetching the static library (including from
   // RUSTY_V8_ARCHIVE) so that `cargo check` and rust-analyzer can resolve the
@@ -1638,6 +1653,12 @@ fn download_static_lib_binaries() {
          is built again without RUSTY_V8_SKIP_DOWNLOAD"
       );
     }
+    let link_dir = if static_lib_path().exists() && uses_external_allocator() {
+      prepare_external_allocator_archive(&static_lib_path())
+    } else {
+      dir
+    };
+    println!("cargo:rustc-link-search={}", link_dir.display());
     return;
   }
 
@@ -1669,6 +1690,78 @@ fn download_static_lib_binaries() {
     cache_key.as_deref(),
     expected_sha256.as_deref(),
   );
+
+  let link_dir = if uses_external_allocator() {
+    prepare_external_allocator_archive(&static_lib_path())
+  } else {
+    dir
+  };
+  println!("cargo:rustc-link-search={}", link_dir.display());
+}
+
+/// Creates a feature-private copy of the official prebuilt archive without
+/// its process-wide allocator shim.
+///
+/// The downloaded archive and its URL checksum live in a profile-shared cache.
+/// Mutating that file would make later builds silently reuse an archive whose
+/// contents no longer match the checksum. `OUT_DIR` is feature-specific, so
+/// filtering a copy there preserves both Cargo configurations.
+fn prepare_external_allocator_archive(source_archive: &Path) -> PathBuf {
+  let output_dir = external_allocator_static_lib_dir();
+  fs::create_dir_all(&output_dir).unwrap();
+  let output_archive = output_dir.join(static_lib_name(""));
+  copy_archive(&source_archive.to_string_lossy(), &output_archive)
+    .unwrap_or_else(|error| panic!("failed to copy the V8 archive: {error}"));
+
+  let member_list = list_archive_members(&output_archive);
+  let allocator_shims = allocator_shim_members(&member_list);
+  assert_eq!(
+    allocator_shims.len(),
+    1,
+    "the external-allocator V8 configuration requires exactly one \
+allocator_shim.o in {}, found {}",
+    source_archive.display(),
+    allocator_shims.len()
+  );
+
+  let status = cc::Build::new()
+    .get_archiver()
+    .arg("d")
+    .arg(&output_archive)
+    .arg(allocator_shims[0])
+    .status()
+    .expect("failed to remove the V8 allocator shim");
+  assert!(status.success(), "failed to remove the V8 allocator shim");
+  assert!(
+    allocator_shim_members(&list_archive_members(&output_archive)).is_empty(),
+    "the V8 allocator shim remains in the external-allocator archive"
+  );
+  output_dir
+}
+
+fn list_archive_members(archive: &Path) -> String {
+  let output = cc::Build::new()
+    .get_archiver()
+    .arg("t")
+    .arg(archive)
+    .output()
+    .expect("failed to list V8 static archive members");
+  assert!(
+    output.status.success(),
+    "failed to list V8 static archive members"
+  );
+  String::from_utf8(output.stdout)
+    .expect("V8 static archive members must be valid UTF-8")
+}
+
+fn allocator_shim_members(members: &str) -> Vec<&str> {
+  members
+    .lines()
+    .filter(|member| {
+      Path::new(member).file_name().and_then(|name| name.to_str())
+        == Some("allocator_shim.o")
+    })
+    .collect()
 }
 
 fn decompress_to_writer<R, W>(input: &mut R, output: &mut W) -> io::Result<()>
@@ -2691,6 +2784,24 @@ edge [fontsize=10]
         None,
       ),
       vec!["-resource-dir=/opt/llvm/lib/clang/21"]
+    );
+  }
+
+  #[test]
+  fn external_allocator_selects_only_the_process_allocator_shim() {
+    let members = "allocator_shim_dispatch_to_noop_on_free.o\n\
+                   obj/base/allocator/allocator_shim.o\n\
+                   allocator_shim_default_dispatch_to_partition_alloc.o\n";
+    assert_eq!(
+      allocator_shim_members(members),
+      vec!["obj/base/allocator/allocator_shim.o"]
+    );
+    assert_eq!(
+      allocator_shim_members(
+        "allocator_shim_dispatch_to_noop_on_free.o\n\
+         allocator_shim_default_dispatch_to_partition_alloc.o\n"
+      ),
+      Vec::<&str>::new()
     );
   }
 }
