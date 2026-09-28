@@ -320,7 +320,7 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
         return;
     }
     let runtime_and_handle = detached_surface_runtime_and_handle(scope, args.this(), element);
-    let Some(value) = super::super::super::element::trusted_attribute_value_string(
+    let Some(units) = super::super::super::element::trusted_attribute_value_string16(
         scope,
         runtime_and_handle,
         namespace.as_deref(),
@@ -330,6 +330,7 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
     ) else {
         return;
     };
+    let value = String::from_utf16_lossy(&units);
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {
         if let Some(has_native_attribute) =
             read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
@@ -346,6 +347,7 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
                 &local_name,
                 &qualified_name,
                 &value,
+                units,
             )
             .unwrap_or(false)
             {
@@ -385,7 +387,10 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
         {
             detached_map_delete(scope, attributes, &old_name);
         }
-        detached_map_set(scope, attributes, &qualified_name, &value);
+        let Some(js_value) = crate::util::v8_string_from_utf16_units(scope, &units) else {
+            return;
+        };
+        detached_map_set_value(scope, attributes, &qualified_name, js_value.into());
         let _ = sync_detached_surface_set_attribute_ns(
             scope,
             args.this(),
@@ -395,11 +400,12 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
             &local_name,
             &qualified_name,
             &value,
+            units,
         );
 
         let record = DetachedSurfaceNamespaceAttributeRecordDeclaration {
             name: v8_string(scope, &qualified_name).unwrap_or_else(|| v8::String::empty(scope)),
-            value: v8_string(scope, &value).unwrap_or_else(|| v8::String::empty(scope)),
+            value: js_value,
             namespace_uri: namespace
                 .as_deref()
                 .and_then(|namespace| v8_string(scope, namespace))
@@ -617,9 +623,10 @@ fn sync_detached_surface_set_attribute_ns<'s>(
     local_name: &str,
     qualified_name: &str,
     value: &str,
+    units: Vec<u16>,
 ) -> Option<bool> {
     let (runtime_ptr, handle) = detached_surface_runtime_and_handle(scope, bridge, element)?;
-    Some(crate::native_bridge::element::set_live_element_attribute_ns_appending_to_current_reaction_queue(
+    Some(crate::native_bridge::element::set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
         scope,
         runtime_ptr,
         handle,
@@ -628,6 +635,7 @@ fn sync_detached_surface_set_attribute_ns<'s>(
         local_name,
         qualified_name,
         value,
+        units,
     ))
 }
 
