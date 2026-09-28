@@ -8,6 +8,7 @@ from pathlib import Path
 from ..config import RESULTS_ROOT, moli_binary, optional_binary
 from .cases import CASES, select_cases
 from .runner import run_suite
+from .report import load_summary
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -17,9 +18,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chrome-bin")
     parser.add_argument("--runs", type=int, default=1, help="predeclared repetitions, never retries; 1..10")
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--baseline-report", type=Path, help="previous fingerprint summary.json or run directory")
 
 
 def command(args) -> int:
+    baseline = load_summary(args.baseline_report) if args.baseline_report else None
     engines = args.engine or ["moli", "chromium"]
     if len(set(engines)) != len(engines):
         raise ValueError("engine selection must be unique")
@@ -32,7 +35,7 @@ def command(args) -> int:
             raise ValueError("native Chromium is required; supply --chrome-bin (no bundled browser is launched)")
         binaries[engine] = binary
     output = args.output_dir or RESULTS_ROOT / ("fingerprint-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
-    summary = asyncio.run(run_suite(output, binaries, cases, runs=args.runs))
+    summary = asyncio.run(run_suite(output, binaries, cases, runs=args.runs, baseline=baseline))
     print(output)
     # A site's bot verdict never determines this process exit code. An incomplete
     # experiment or a broken collector still cannot silently return success.

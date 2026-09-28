@@ -18,6 +18,7 @@ from .browser import browser_session
 from .cases import Case, manifest
 from .observations import Observer, complete_fp_result, error_record
 from .probe import site_probe
+from .report import write_report
 
 SCHEMA_VERSION = 1
 
@@ -151,7 +152,7 @@ def build_summary(rows: list[dict], cases: tuple[Case, ...], engines: list[str],
             "cases": [case.id for case in cases], "runs": runs, "coverage": coverage, "samples": deepcopy(rows)}
 
 
-async def run_suite(output: Path, binaries: dict[str, Path], cases: tuple[Case, ...], *, runs: int = 1) -> dict:
+async def run_suite(output: Path, binaries: dict[str, Path], cases: tuple[Case, ...], *, runs: int = 1, baseline: dict | None = None) -> dict:
     if not cases or not binaries or set(binaries) - {"moli", "chromium"} or not 1 <= runs <= 10:
         raise ValueError("supply cases, native engines and 1..10 predeclared runs")
     binaries = {engine: path.resolve(strict=True) for engine, path in binaries.items()}
@@ -179,6 +180,7 @@ async def run_suite(output: Path, binaries: dict[str, Path], cases: tuple[Case, 
                     rows.append(row)
                     summary["suites"] = [build_summary(rows, cases, list(binaries), runs=runs)]
                     write_json(output / "summary.json", summary)
+                    write_report(output, summary, baseline)
                     if not row["process_cleaned_up"]:
                         raise RuntimeError("browser cleanup failed; refusing to start another public sample")
     finally:
@@ -188,4 +190,5 @@ async def run_suite(output: Path, binaries: dict[str, Path], cases: tuple[Case, 
         summary["finished_at"] = datetime.now(timezone.utc).isoformat()
         summary["matrix_complete"] = len(rows) == len(cases) * len(binaries) * runs
         write_json(output / "summary.json", summary)
+        write_report(output, summary, baseline)
     return summary
