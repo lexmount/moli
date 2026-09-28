@@ -504,9 +504,6 @@ impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
         if !self.targets_current_document() {
             return None;
         }
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         let child_handle = self
             .host
             .child_browsing_context_host_for_document_handle(request.document_handle)?;
@@ -521,7 +518,6 @@ impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             scope,
             host_ptr,
             request.document_handle,
-            document_has_body,
             request.local_name,
             request.namespace,
             request.prefix,
