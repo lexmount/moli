@@ -691,9 +691,9 @@ impl JsContextHost {
             })
             .unwrap_or_else(|| url.clone());
         let policy_container = self
-            .child_browsing_contexts
-            .get(&handle)
-            .map(|entry| entry.document_policy_container_snapshot())
+            .document_policy_container_for_inheritance(super::super::OwnerDispatchScope::Child(
+                handle,
+            ))
             .unwrap_or_default();
         let sandbox = self.child_browsing_context_sandbox_policy_from_owner(handle);
         let owner_credentialless = self

@@ -772,6 +772,67 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
         .await
         .expect("paused worker CSP report destination server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_fetch_receives_resolved_client_referrer_and_policy() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+        self.addEventListener('fetch', event => event.respondWith(new Response(JSON.stringify({
+            referrer: event.request.referrer, policy: event.request.referrerPolicy
+        }))));
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(
+        r#"
+        globalThis.clientReferrerResult = 'pending';
+        (async () => {
+            await navigator.serviceWorker.register('worker.js', {scope:'./'});
+            await navigator.serviceWorker.ready;
+            async function check(init, expectedReferrer, expectedPolicy) {
+                const input = new Request(location.origin + '/app/probe', init);
+                const before = [input.referrer, input.referrerPolicy].join('|');
+                const result = await (await fetch(input)).json();
+                if (result.referrer !== expectedReferrer || result.policy !== expectedPolicy)
+                    throw new Error(JSON.stringify(result) + ' != ' + expectedReferrer + '|' + expectedPolicy);
+                if ([input.referrer,input.referrerPolicy].join('|') !== before)
+                    throw new Error('fetch changed the public Request');
+            }
+            await check({}, location.href, 'strict-origin-when-cross-origin');
+            for (const policy of ['origin', 'no-referrer']) {
+                const meta = document.createElement('meta');
+                meta.name='referrer'; meta.content=policy; document.head.append(meta); meta.remove();
+                await check({}, policy === 'origin' ? location.origin + '/' : '', policy);
+            }
+            await check({referrer:'./selected#excluded',referrerPolicy:'unsafe-url'},
+                location.origin + '/app/selected', 'unsafe-url');
+            await check({referrer:'',referrerPolicy:'unsafe-url'}, '', 'unsafe-url');
+            clientReferrerResult = 'pass';
+        })().catch(error => clientReferrerResult = String(error));
+        "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(clientReferrerResult !== 'pending')",
+        "true",
+    )
+    .await;
+    assert_eq!(vm.eval("clientReferrerResult").unwrap(), "pass");
+    server.await.unwrap();
+}
+
 #[tokio::test]
 async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_policy_metadata() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
@@ -836,7 +897,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|cache=reload|referrer={base_url}/app/referrer.html|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
+            "200|cache=reload|referrer={base_url}/|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
         ),
     )
     .await;

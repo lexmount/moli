@@ -142,6 +142,25 @@ pub(super) fn prepare_window_fetch_request<'s>(
         .init_validation
         .validate(scope, parsed.request_mode.as_ref(), &parsed.cache)?
         .unwrap_or(parsed.referrer);
+    let referrer_policy = if parsed.referrer_policy.is_empty() {
+        document_referrer_policy
+            .clone()
+            .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned())
+    } else {
+        parsed.referrer_policy
+    };
+    let referrer_source = match referrer.as_str() {
+        "" => None,
+        "about:client" => host.document_client_referrer_source(request_scope),
+        _ => Some(resolve_context_url(&base_url, &referrer, None)?),
+    };
+    // Fetch resolves the client referrer and policy before service-worker or
+    // network dispatch. The public Request's stored "about:client" is unchanged.
+    let referrer = referrer_source
+        .and_then(|source| {
+            moli_fetch::referrer_value(&source, &resolved_url, Some(&referrer_policy), None)
+        })
+        .unwrap_or_default();
 
     let blob_url_entry = parsed
         .blob_url_entry
@@ -170,7 +189,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         priority: parsed.priority,
         cache: parsed.cache,
         referrer,
-        referrer_policy: parsed.referrer_policy,
+        referrer_policy,
         integrity: parsed.integrity,
         keepalive: parsed.keepalive,
     })
