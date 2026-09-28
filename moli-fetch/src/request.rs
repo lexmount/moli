@@ -765,6 +765,15 @@ impl Request {
         self.infer_referrer_from_initiator
     }
 
+    /// The nonempty policy used for both Fetch event metadata and network headers.
+    pub fn effective_referrer_policy(&self) -> &str {
+        let metadata = self.subresource_request_metadata();
+        crate::effective_referrer_policy(
+            metadata.and_then(|metadata| metadata.referrer_policy.as_deref()),
+            metadata.and_then(|metadata| metadata.document_referrer_policy.as_deref()),
+        )
+    }
+
     /// Computes the inferred Referer header without changing the initiator
     /// used for cookie-site and request-origin decisions.
     pub fn referrer_header_value(&self, request_url: &Url) -> Option<String> {
@@ -775,16 +784,12 @@ impl Request {
             .referrer_url
             .as_ref()
             .or(self.cookie_context.initiator_url.as_ref())?;
-        let (policy, document_policy) = self
-            .subresource_request_metadata()
-            .map(|metadata| {
-                (
-                    metadata.referrer_policy.as_deref(),
-                    metadata.document_referrer_policy.as_deref(),
-                )
-            })
-            .unwrap_or((None, None));
-        crate::referrer_header_value(referrer_url, request_url, policy, document_policy)
+        crate::referrer_header_value(
+            referrer_url,
+            request_url,
+            Some(self.effective_referrer_policy()),
+            None,
+        )
     }
 
     /// Retains the referrer already selected for this hop, then applies the

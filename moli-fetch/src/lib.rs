@@ -69,8 +69,9 @@ pub use network_fetch_result::{
     NetworkResponseObservation,
 };
 pub use referrer_policy::{
-    DEFAULT_REFERRER_POLICY, normalize_referrer_policy, origin_referrer_url, referrer_header_value,
-    referrer_value, response_referrer_policy_from_headers, sanitized_referrer_url,
+    DEFAULT_REFERRER_POLICY, effective_referrer_policy, normalize_referrer_policy,
+    origin_referrer_url, referrer_header_value, referrer_value,
+    response_referrer_policy_from_headers, sanitized_referrer_url,
 };
 pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchPriorityHint, Request, RequestAuth,
