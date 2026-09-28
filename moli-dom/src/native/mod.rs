@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use document::DocumentKind;
 pub use document::{
-    Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentReadyState,
-    DocumentTitleSetterTarget, DocumentType,
+    Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentMetaReferrerPolicySource,
+    DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
     Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,

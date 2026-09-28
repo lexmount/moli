@@ -2864,6 +2864,7 @@ dependencies = [
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",
+ "parking_lot",
  "percent-encoding",
  "selectors",
  "serde",

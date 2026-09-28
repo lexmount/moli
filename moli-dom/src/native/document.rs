@@ -12,6 +12,8 @@ mod tests;
 
 pub use base_url::DocumentBaseUrlPolicyCheck;
 use base_url::DocumentBaseUrlState;
+pub use referrer_policy::DocumentMetaReferrerPolicySource;
+use referrer_policy::MetaReferrerPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentTitleSetterTarget {
@@ -81,8 +83,6 @@ struct DocumentMetadata {
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
     base_url_state: DocumentBaseUrlState,
-    // Delivered meta policy survives element removal but belongs to this Document.
-    meta_referrer_policy: Option<&'static str>,
 }
 
 // Node relationships and the associated template-owner role belong to one
@@ -91,7 +91,7 @@ struct DocumentMetadata {
 struct DocumentArenaState {
     // Meta delivery updates policy in time order; removing the element does
     // not undo the policy it delivered to this Document.
-    meta_referrer_policy: Option<&'static str>,
+    meta_referrer_policy: MetaReferrerPolicy,
     // Sticky for this Document; aborting a parser disables document.open/write.
     active_parser_was_aborted: bool,
     is_inert_template_document: bool,
@@ -137,7 +137,6 @@ impl Document {
                 scripting_enabled,
                 default_language: None,
                 source_last_modified_ms: None,
-                meta_referrer_policy: None,
             },
             arena_state: DocumentArenaState::default(),
         }
@@ -162,7 +161,6 @@ impl Document {
                     .metadata
                     .base_url_state
                     .clone_without_tree_caches(self.url()),
-                meta_referrer_policy: None,
                 ..self.metadata.clone()
             },
             arena_state: DocumentArenaState::default(),
@@ -212,10 +210,6 @@ impl Document {
         self.metadata.ready_state
     }
 
-    pub fn meta_referrer_policy(&self) -> Option<&str> {
-        self.metadata.meta_referrer_policy
-    }
-
     pub fn active_parser_was_aborted(&self) -> bool {
         self.arena_state.active_parser_was_aborted
     }
@@ -225,7 +219,11 @@ impl Document {
     }
 
     pub fn meta_referrer_policy(&self) -> Option<&str> {
-        self.arena_state.meta_referrer_policy
+        self.arena_state.meta_referrer_policy.get()
+    }
+
+    pub fn meta_referrer_policy_source(&self) -> DocumentMetaReferrerPolicySource {
+        self.arena_state.meta_referrer_policy.source()
     }
 
     pub fn visibility_hidden(&self) -> bool {
