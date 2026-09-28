@@ -10,6 +10,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
     stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
     document_url: Url,
     urls: Vec<Url>,
+    options: crate::stylesheet_blocking::StylesheetFetchOptions,
     source_owners: Vec<DomHandle>,
 ) -> (
     Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
@@ -20,6 +21,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             stylesheet_fetcher,
             document_url.clone(),
             urls,
+            options,
         )
         .await,
     );
@@ -31,8 +33,10 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             let start_unix_millis = result.start_unix_millis();
             let terminal = result.terminal();
             let origin_clean = terminal.origin_clean().unwrap_or(false);
+            let import_options = result.import_options().cloned();
             let result = terminal.physical().as_result();
             ConnectedLoadNetworkResult {
+                import_options,
                 consumed_preload_error: terminal.is_consumed_preload_error(),
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -62,6 +66,7 @@ pub(crate) fn live_stylesheet_import_responses(
             let terminal = result.terminal();
             let ready_response = terminal.ready_response();
             crate::live_stylesheet::LiveStylesheetImportResponse {
+                import_options: result.import_options().cloned(),
                 request_url: result.request_url().clone(),
                 response_url: match terminal.physical() {
                     crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {

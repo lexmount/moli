@@ -2548,6 +2548,7 @@ impl ScriptVm {
         let mut host = self._context_host.borrow_mut();
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
+                import_options,
                 consumed_preload_error,
                 document_owner,
                 stylesheet_fetch,
@@ -2611,6 +2612,7 @@ impl ScriptVm {
                     });
                 if is_import_graph_result {
                     let response = crate::live_stylesheet::LiveStylesheetImportResponse {
+                        import_options: import_options.clone(),
                         request_url: request_url.clone(),
                         response_url: stylesheet_base_url.clone(),
                         css_text: stylesheet_text.clone(),

@@ -103,6 +103,7 @@ impl DocumentRuntime {
                     request_url.clone(),
                     prepared.clone(),
                 ));
+                host.retain_linked_stylesheet_import_options(load.owner(), terminal);
             }
             let import_root = prepared.as_ref().and_then(|_| {
                 host.linked_live_stylesheet(load.owner()).map(|stylesheet| {
