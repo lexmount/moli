@@ -67,8 +67,8 @@
         records[1].oldValue === '#fallback' && records[3].attributeNamespace === null &&
         records[3].oldValue === '', 'native mutation records');
       observer.disconnect();
-      element.setAttribute('href', '#before-after');
-      check(href.baseVal === '#before-after' && href.animVal === '#before-after', 'native attribute read');
+      element.setAttribute('href', '#before\uD800after');
+      check(href.baseVal === '#before\uD800after' && href.animVal === '#before\uD800after', 'native UTF-16 attribute read');
       element.removeAttribute('href');
       check(href.baseVal === '#changed', 'removal reveals xlink');
       element.removeAttributeNS(xlink, 'href');
