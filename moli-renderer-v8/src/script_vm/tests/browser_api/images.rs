@@ -433,7 +433,7 @@ async fn image_current_src_distinguishes_initial_and_replacement_requests() {
 }
 
 #[tokio::test]
-async fn picture_source_and_image_tree_mutations_reselect_requests() {
+async fn picture_source_and_image_tree_mutations_update_current_src() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_image_fetch_enabled(true);
     let (mut vm, _resource_completion_queue) =

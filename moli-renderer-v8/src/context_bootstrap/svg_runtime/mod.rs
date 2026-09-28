@@ -1296,7 +1296,6 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedEnumeration" => {
             bindings::install_svg_animated_enumeration_bindings(scope, template)
         }
-        "SVGUnitTypes" => bindings::install_svg_unit_types_bindings(scope, template),
         "SVGAnimatedTransformList" => {
             bindings::install_svg_animated_transform_list_bindings(scope, template)
         }
