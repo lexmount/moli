@@ -334,7 +334,7 @@ fn coerce_values<'s>(
                 .and_then(|v| v.values)
                 .ok_or(CoercionError::Invalid)?;
                 if probe.values.len() != 1
-                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value)) if value.unit_str() == if unit == "percent" { "%" } else { &unit })
+                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value)) if values::native_unit_name(value.unit_str()) == unit)
                 {
                     return Err(CoercionError::Invalid);
                 }
