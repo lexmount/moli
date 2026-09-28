@@ -59,6 +59,7 @@ mod computed_style_access;
 mod content_and_invalidation;
 mod cross_document_and_animations;
 mod css_computed_map_enumeration;
+mod css_numeric_serialization;
 mod css_style_value_parse;
 mod css_unparsed;
 mod nested_document_invalidation;

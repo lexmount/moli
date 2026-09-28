@@ -73,7 +73,7 @@ struct CssUnitValuePrototypeDeclaration {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSUnitValue")]
 struct CssUnitValueConstructorArgs {
-    #[webidl(required)]
+    #[webidl(required, converter = "double")]
     value: f64,
     #[webidl(required)]
     unit: String,
@@ -314,14 +314,24 @@ fn css_style_value_to_string_callback<'s>(
     }
     if let Some(unit) = css_unit_value_unit(scope, args.this()) {
         let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
-        let number = v8::Number::new(scope, value)
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| value.to_string());
-        let text = match unit.as_str() {
-            "number" => number,
-            "percent" => format!("{number}%"),
-            _ => format!("{number}{unit}"),
+        let number = moli_css_parse::serialize_css_number(value);
+        let text = if !value.is_finite() {
+            // IDL constructors/setters require finite doubles; values reified
+            // from CSS math may nevertheless carry a non-finite result.
+            if unit == "number" {
+                format!("calc({number})")
+            } else {
+                format!(
+                    "calc({number} * 1{})",
+                    if unit == "percent" { "%" } else { &unit }
+                )
+            }
+        } else {
+            match unit.as_str() {
+                "number" => number,
+                "percent" => format!("{number}%"),
+                _ => format!("{number}{unit}"),
+            }
         };
         if let Some(text) = v8_string(scope, &text) {
             rv.set(text.into());
