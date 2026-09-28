@@ -401,6 +401,11 @@ fn fixture_response(
             };
             ("200 OK", format!("Content-Type: {mime}\r\nCache-Control: max-age=600\r\nVary: Sec-Fetch-Dest\r\n"), body.to_owned())
         }
+        "/native-referrer-worker.js" => (
+            "200 OK",
+            format!("{javascript}Cache-Control: no-store\r\n"),
+            include_str!("native_referrer_worker.js").to_owned(),
+        ),
         "/page.html" | "/parser.html" | "/cookie-page.html" | "/csp-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
             if path == "/csp-page.html" {
@@ -1221,3 +1226,6 @@ mod text_modules;
 
 #[path = "module_cache.rs"]
 mod module_cache;
+
+#[path = "service_worker_referrer.rs"]
+mod service_worker_referrer;
