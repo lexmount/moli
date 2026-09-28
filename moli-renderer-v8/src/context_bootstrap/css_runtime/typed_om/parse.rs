@@ -84,7 +84,7 @@ fn parse_values<'s>(
     ))
 }
 
-fn base_url(scope: &mut v8::PinScope<'_, '_>) -> Option<url::Url> {
+pub(super) fn base_url(scope: &mut v8::PinScope<'_, '_>) -> Option<url::Url> {
     let host = unsafe { &*crate::util::context_host_ptr_from_global_bridge(scope)? };
     let binding = host.current_runtime_window_execution_context_binding(scope)?;
     let loader = host.document_resource_loader_for_dispatch_scope(binding.dispatch_scope())?;
