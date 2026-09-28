@@ -227,9 +227,9 @@ pub(super) fn from_parsed<'s>(
                         .unwrap_or_else(|| f64::from(unit.value));
                     unit_value(scope, number, name.to_owned())
                 }
-                // CSSMath*, transforms and images still need their own native DOM
-                // interfaces. Preserve an immutable, property-associated CSS value
-                // in the meantime, rather than guessing a keyword or numeric type.
+                // Math expression reification and native transform/image objects
+                // remain to be connected. Preserve an immutable, property-associated
+                // value rather than guessing a keyword or a single numeric unit.
                 TypedValue::Numeric(NumericValue::Math(_))
                 | TypedValue::Transform(_)
                 | TypedValue::Image(_) => opaque_style_value(scope, property, text.trim()),
@@ -318,6 +318,9 @@ pub(super) fn serialize<'s>(
 ) -> Option<String> {
     if web_api_interfaces::CSSUnparsedValue::is_instance(scope, value) {
         return super::unparsed::serialize(scope, value);
+    }
+    if web_api_interfaces::CSSMathValue::is_instance(scope, value) {
+        return super::math::serialize(scope, value);
     }
     if let Some(unit) = css_unit_value_unit(scope, value) {
         let value = css_unit_value_number(scope, value)?;

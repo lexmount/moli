@@ -12,6 +12,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod factories;
 mod map;
+mod math;
 mod parse;
 mod unparsed;
 mod values;
@@ -26,6 +27,13 @@ pub(in crate::context_bootstrap) use values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
 };
 
+pub(in crate::context_bootstrap) use math::{
+    css_math_clamp_constructor_callback, css_math_invert_constructor_callback,
+    css_math_max_constructor_callback, css_math_min_constructor_callback,
+    css_math_negate_constructor_callback, css_math_product_constructor_callback,
+    css_math_sum_constructor_callback,
+};
+
 pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -36,4 +44,5 @@ pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     unparsed::install_template_bindings(scope, template, interface_name);
     map::install_computed_style_map_template_bindings(scope, template, interface_name);
     values::install_typed_value_template_bindings(scope, template, interface_name);
+    math::install(scope, template, interface_name);
 }

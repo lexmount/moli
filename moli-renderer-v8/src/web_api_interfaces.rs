@@ -65,9 +65,18 @@ interfaces! {
     CSSLayerBlockRule: CSSGroupingRule;
     CSSLayerStatementRule: CSSRule;
     CSSMarginRule: CSSRule;
+    CSSMathClamp: CSSMathValue;
+    CSSMathInvert: CSSMathValue;
+    CSSMathMax: CSSMathValue;
+    CSSMathMin: CSSMathValue;
+    CSSMathNegate: CSSMathValue;
+    CSSMathProduct: CSSMathValue;
+    CSSMathSum: CSSMathValue;
+    CSSMathValue: CSSNumericValue;
     CSSMediaRule: CSSConditionRule;
     CSSNamespaceRule: CSSRule;
     CSSNestedDeclarations: CSSRule;
+    CSSNumericArray;
     CSSNumericValue: CSSStyleValue;
     CSSPageDescriptors: CSSStyleDeclaration;
     CSSPageRule: CSSGroupingRule;

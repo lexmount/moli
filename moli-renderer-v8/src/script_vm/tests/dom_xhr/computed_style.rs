@@ -58,6 +58,7 @@ mod advanced_style_values;
 mod computed_style_access;
 mod content_and_invalidation;
 mod cross_document_and_animations;
+mod css_math;
 mod css_numeric_factories;
 mod css_numeric_serialization;
 mod css_style_property_map;
