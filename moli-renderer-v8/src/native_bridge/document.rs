@@ -301,8 +301,6 @@ pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 pub(crate) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
-pub(crate) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
-pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
 #[derive(Clone, Copy)]
 #[repr(u32)]
