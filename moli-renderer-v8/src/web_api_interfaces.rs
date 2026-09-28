@@ -398,7 +398,6 @@ interfaces! {
     Response;
     SVGAElement: SVGGraphicsElement;
     SVGAnimatedEnumeration;
-    SVGUnitTypes;
     SVGAnimatedString;
     SVGAnimatedLength;
     SVGAnimatedLengthList;
