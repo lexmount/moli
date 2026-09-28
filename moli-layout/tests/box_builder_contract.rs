@@ -664,6 +664,40 @@ fn contents_text_is_an_item_of_the_flattened_flex_or_grid_container() {
 }
 
 #[test]
+fn floated_children_establish_an_ifc_only_in_flow_containers() {
+    for (display, expected_ifc) in [
+        (LayoutDisplay::Block, true),
+        (LayoutDisplay::Flex, false),
+        (LayoutDisplay::InlineFlex, false),
+        (LayoutDisplay::Grid, false),
+        (LayoutDisplay::InlineGrid, false),
+    ] {
+        let source = TestSource {
+            root: 0,
+            nodes: vec![
+                TestNode::element("root", vec![1]),
+                TestNode::element("floated", Vec::new()),
+            ],
+        };
+        let mut styles = TestStyles::default();
+        styles.primary.insert(0, style(display));
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::Block).with_float(taffy::Float::Left, taffy::Clear::None),
+        );
+
+        let world = build_layout_world(&source, &mut styles).unwrap();
+        let root = world.box_by_id(world.root()).unwrap();
+        assert_eq!(
+            root.establishes_inline_formatting_context(),
+            expected_ifc,
+            "display={display:?}",
+        );
+        assert_eq!(root.children(), &[world.source_box(1).unwrap()]);
+    }
+}
+
+#[test]
 fn whitespace_does_not_create_an_ifc_around_only_out_of_flow_content() {
     let source = TestSource {
         root: 0,
