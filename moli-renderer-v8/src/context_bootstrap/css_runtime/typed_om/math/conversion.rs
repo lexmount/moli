@@ -249,6 +249,33 @@ fn sum_value(graph: &Graph) -> Result<Vec<Term>, Error> {
     Ok(results[root].take().unwrap())
 }
 
+/// Convert internal numeric state without invoking an overridable JS method.
+pub(in crate::context_bootstrap::css_runtime::typed_om) fn to_unit_number<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit: &str,
+) -> Option<f64> {
+    let graph = Graph::read(scope, &[object])?;
+    let result = sum_value(&graph).and_then(|mut terms| {
+        if terms.len() != 1 {
+            return Err(Error::Incompatible);
+        }
+        terms
+            .pop()
+            .unwrap()
+            .into_unit()?
+            .convert(unit)
+            .ok_or(Error::Incompatible)
+    });
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            throw(scope, error);
+            None
+        }
+    }
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSNumericValue.to")]
 struct ToArgs {

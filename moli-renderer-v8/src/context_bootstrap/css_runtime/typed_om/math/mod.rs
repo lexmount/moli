@@ -227,7 +227,7 @@ fn numberish<'s>(
     numberish_in_realm(scope, value, context, realm)
 }
 
-fn numberish_in_realm<'s>(
+pub(super) fn numberish_in_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
@@ -381,6 +381,32 @@ fn numeric_type<'s>(
     result.hint = (hint >= 0).then_some(hint as usize);
     Some(result)
 }
+
+/// Match a numeric grammar using native dimensional exponents and percent hints.
+/// A length-percentage permits a length hint; plain dimensions do not.
+pub(super) fn matches_dimension<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit: &str,
+    allow_percentage: bool,
+) -> bool {
+    let Some(value) = numeric_type(scope, object) else {
+        return false;
+    };
+    let Some(expected) = NumericType::from_unit(unit) else {
+        return false;
+    };
+    if allow_percentage {
+        (value.hint.is_none() || value.hint == Some(0))
+            && (value.powers == expected.powers
+                || value.powers == NumericType::from_unit("percent").unwrap().powers)
+    } else {
+        value.hint.is_none() && value.powers == expected.powers
+    }
+}
+
+pub(super) use conversion::to_unit_number;
+pub(super) use graph::equals as equal_values;
 
 fn type_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

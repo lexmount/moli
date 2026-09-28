@@ -199,3 +199,39 @@ async fn worker_navigator_surface_is_available() {
         r#"{"navigatorOwn":true,"ctorOwn":true,"navigatorType":"object","ctorType":"function","ctorName":"WorkerNavigator","protoCtor":"WorkerNavigator","tag":"[object WorkerNavigator]","instanceofWorkerNavigator":true,"ownUserAgent":false,"userAgentGetterType":"function","appCodeName":"Mozilla","appName":"Netscape","appVersionStartsWithWebKit":false,"platformType":"string","userAgentStartsWithWebKit":false,"product":"Gecko","language":"en-US","languages":["en-US"],"onLineType":"boolean","hardwareConcurrencyPositive":true,"deviceMemoryPositive":true,"assignError":"TypeError","serviceWorkerType":"object","serviceWorkerControllerIsNull":true,"serviceWorkerRegisterType":"function","serviceWorkerGetRegistrationType":"function","serviceWorkerAddEventListenerType":"function","serviceWorkerOncontrollerchangeIsNull":true,"storageCtorOwn":true,"storageEstimateCtorOwn":true,"storageType":"object","storageTag":"[object StorageManager]","storageInstanceof":true,"storageOwnEstimate":false,"storageOwnPersisted":false,"storageOwnPersist":false,"storageOwnGetDirectory":false,"storageKeys":[],"storageProtoPersisted":true,"storageProtoEstimate":true,"storageProtoPersist":false,"storageProtoGetDirectory":true,"storagePersistedName":"persisted","storagePersistedLength":0,"storageEstimateName":"estimate","storageEstimateLength":0,"storageGetDirectoryName":"getDirectory","storageGetDirectoryLength":0,"storagePersistType":"undefined","persisted":false,"estimateTag":"[object StorageEstimate]","estimateKeys":["quota","usage","usageDetails"],"estimateQuota":1073741824,"estimateUsage":0,"estimateUsageDetailsTag":"[object Object]","estimateUsageDetailsKeys":[],"illegalReceiverError":"TypeError","spoofedReceiverError":"TypeError"}"#
     );
 }
+
+#[tokio::test]
+async fn worker_css_transforms_use_native_objects_numeric_conversion_and_matrices() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        try {
+            const unit = (value, name) => new CSSUnitValue(value, name);
+            const translation = new CSSTranslate(unit(2.54, 'cm'), unit(10, 'px'));
+            const components = [
+                translation, new CSSRotate(unit(90, 'deg')), new CSSScale(2, 3),
+                new CSSSkew(unit(0, 'deg'), unit(0, 'deg')),
+                new CSSSkewX(unit(0, 'deg')), new CSSSkewY(unit(0, 'deg')),
+                new CSSPerspective(new CSSKeywordValue('none')),
+                new CSSMatrixComponent(new DOMMatrixReadOnly()),
+            ];
+            const value = new CSSTransformValue(components);
+            let branded = false;
+            try { CSSTransformComponent.prototype.toMatrix.call(new Proxy(translation, {})); }
+            catch (e) { branded = e instanceof TypeError; }
+            postMessage(value instanceof CSSStyleValue && value.length === 8 &&
+                [...value].every((component, i) => component === components[i] && component instanceof CSSTransformComponent) &&
+                translation.toMatrix() instanceof DOMMatrix && translation.toMatrix().e === 96 &&
+                value.toMatrix() instanceof DOMMatrix && !value.toMatrix().is2D &&
+                typeof CSSStyleValue.parse === 'undefined' && branded);
+        } catch (e) { postMessage(String(e)); }
+        close();
+        "#.into(),
+        "https://worker-transforms.test/main.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(message), "true");
+}
