@@ -1,7 +1,7 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
-use super::{construct_event, event_constructor};
+use super::{construct_event, event_constructor, mark_event_trusted};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -808,7 +808,11 @@ pub(crate) fn construct_drop_input_event<'s>(
     data_transfer: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_input_event_with_transfer(
-        scope, event_type, TextEditInputType::InsertFromDrop, None, Some(data_transfer),
+        scope,
+        event_type,
+        TextEditInputType::InsertFromDrop,
+        None,
+        Some(data_transfer),
     )
 }
 
@@ -824,13 +828,26 @@ fn construct_input_event_with_transfer<'s>(
         Some(text) => v8_string(scope, text)?.into(),
         None => v8::null(scope).into(),
     };
-    let data_transfer = data_transfer.map(|value| value.into()).unwrap_or_else(|| v8::null(scope).into());
-    let init =
-        InputEventInitDeclaration::new(true, event_type == "beforeinput", true, input_type, data, data_transfer)
-            .bind(scope)
-            .ok()?;
+    let data_transfer = data_transfer
+        .map(|value| value.into())
+        .unwrap_or_else(|| v8::null(scope).into());
+    let init = InputEventInitDeclaration::new(
+        true,
+        event_type == "beforeinput",
+        true,
+        input_type,
+        data,
+        data_transfer,
+    )
+    .bind(scope)
+    .ok()?;
     // Native editing must not invoke a page-replaced InputEvent constructor.
-    let ctor = crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "InputEvent").ok()?;
+    let ctor =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
+            scope,
+            "InputEvent",
+        )
+        .ok()?;
     let event_type = v8_string(scope, event_type)?;
     let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
     mark_event_trusted(scope, event);
