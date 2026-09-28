@@ -1,5 +1,5 @@
 use super::*;
-use cssparser::{ToCss, TokenSerializationType, serialize_identifier};
+use cssparser::{TokenSerializationType, serialize_identifier};
 
 struct Frame<'s> {
     owner: v8::Local<'s, v8::Object>,
@@ -84,8 +84,7 @@ fn serialize_tokens(mut source: &str) -> String {
             if previous.needs_separator_when_before(next) {
                 output.push_str("/**/");
             }
-            token
-                .to_css(&mut output)
+            moli_css_parse::serialize_css_token(&token, &source[..consumed], &mut output)
                 .expect("String writes cannot fail");
             previous = next;
         }
