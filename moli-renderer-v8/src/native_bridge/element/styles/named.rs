@@ -209,6 +209,7 @@ pub(crate) fn set_live_style_named_property_value<'s>(
         &property,
         &value,
         false,
+        None,
     )
     .is_some()
     {
@@ -296,6 +297,8 @@ pub(crate) fn set_live_style_named_property_value<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
+        &property,
+        None,
     );
     true
 }
