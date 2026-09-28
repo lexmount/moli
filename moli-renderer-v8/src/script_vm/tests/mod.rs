@@ -2160,3 +2160,5 @@ mod history_replace_forward;
 
 mod extracted;
 mod navigation_timing_inheritance;
+
+mod resize_observer_entries;

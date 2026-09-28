@@ -1,3 +1,4 @@
+mod entry;
 use super::*;
 use crate::host::report_event_callback_exception;
 use crate::observer_runtime::ObserverCallbackId;
@@ -5,6 +6,8 @@ use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value}
 use crate::web_api_interfaces;
 use crate::webidl;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunctionOutcome;
+use entry::ResizeObserverEntryData;
+pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -27,36 +30,12 @@ struct ResizeObserverObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ResizeObserverEntry, prototype = "Object")]
-struct ResizeObserverEntryDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    target: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    content_rect: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    content_box_size: Vec<ResizeObserverSizeDeclaration>,
-    #[webapi(data_property, enumerable)]
-    border_box_size: Vec<ResizeObserverSizeDeclaration>,
-    #[webapi(data_property, enumerable)]
-    device_pixel_content_box_size: Vec<ResizeObserverSizeDeclaration>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(plain)]
 struct ResizeObserverObservedRecordDeclaration<'scope> {
     #[webapi(slot = RESIZE_OBSERVER_RECORD_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
     #[webapi(slot = RESIZE_OBSERVER_RECORD_BOX_SLOT)]
     observed_box: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ResizeObserverSize, prototype = "Object")]
-struct ResizeObserverSizeDeclaration {
-    #[webapi(data_property, enumerable)]
-    inline_size: f64,
-    #[webapi(data_property, enumerable)]
-    block_size: f64,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -297,7 +276,14 @@ fn resize_observer_flush_callback<'s>(
         set_resize_observer_pending_targets(scope, observer, pending_targets);
         return;
     };
-    let entries = match build_resize_observer_entries(scope, pending_targets) {
+    let Some(callback_context) = callback.relevant_context(scope) else {
+        return;
+    };
+    let result = {
+        let scope = &mut v8::ContextScope::new(scope, callback_context);
+        build_resize_observer_entries(scope, pending_targets)
+    };
+    let entries = match result {
         Ok(entries) => entries,
         Err(error) => {
             let pending_targets = v8::Array::new(scope, 0);
@@ -494,10 +480,10 @@ fn build_resize_observer_entries<'s>(
             .as_ref()
             .map(|metrics| f64::from(metrics.offset_size.height))
             .unwrap_or(0.0);
-        let rect = build_dom_rect_object(scope, 0.0, 0.0, content_width, content_height);
-        let content_box_size = resize_observer_box_size_list(content_width, content_height);
-        let border_box_size = resize_observer_box_size_list(border_width, border_height);
-        let device_pixel_content_box_size = resize_observer_box_size_list(
+        let rect = (0.0, 0.0, content_width, content_height);
+        let content_box_size = (content_width, content_height);
+        let border_box_size = (border_width, border_height);
+        let device_pixel_content_box_size = (
             (content_width * f64::from(dpr)).round(),
             (content_height * f64::from(dpr)).round(),
         );
@@ -519,15 +505,14 @@ fn build_resize_observer_entries<'s>(
             }
             set_resize_observer_last_reported_size(scope, record, observed_size);
         }
-        let entry = ResizeObserverEntryDeclaration {
+        let entry = ResizeObserverEntryData {
             target: entry.target,
             content_rect: rect,
             content_box_size,
             border_box_size,
             device_pixel_content_box_size,
         }
-        .bind(scope)
-        .expect("ResizeObserverEntry declaration should bind");
+        .into_object(scope);
         entries.push(entry);
     }
     Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
@@ -644,16 +629,6 @@ fn observed_record_index<'s>(
             .get_index(scope, index)
             .is_some_and(|candidate| observed_record_matches_target(scope, candidate, target))
     })
-}
-
-fn resize_observer_box_size_list(
-    inline_size: f64,
-    block_size: f64,
-) -> Vec<ResizeObserverSizeDeclaration> {
-    vec![ResizeObserverSizeDeclaration {
-        inline_size,
-        block_size,
-    }]
 }
 
 fn throw_resize_observer_layout_error(

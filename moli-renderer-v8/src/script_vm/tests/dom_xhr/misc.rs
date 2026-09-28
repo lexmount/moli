@@ -1720,7 +1720,7 @@ fn geometry_rect_objects_expose_domrect_to_json() {
     rangeRect instanceof DOMRect,
     typeof rangeRect.toJSON,
     rangeRects[0] instanceof DOMRect,
-    contentRect instanceof DOMRect,
+    Object.getPrototypeOf(contentRect) === DOMRectReadOnly.prototype,
     typeof contentRect.toJSON,
     Object.hasOwn(DOMRectReadOnly.prototype, 'toJSON'),
     Object.hasOwn(DOMRect.prototype, 'toJSON')
