@@ -440,6 +440,30 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                         "presentation" | "none"
                     )
                 });
+                // A raw HTML table keeps cell associations, but Markdown code
+                // extractors cannot see a <pre> nested inside that block. No
+                // Markdown table syntax can contain a fenced block either, so
+                // keep the visible cells in source order and let the ordinary
+                // block visitor emit the preformatted content as a fence.
+                if crate::html_table::has_preformatted(
+                    self.dom,
+                    node,
+                    depth,
+                    self.options.max_depth,
+                ) {
+                    for attribute in ["id", "name"] {
+                        if let Some(id) = self.dom.attribute(node, attribute)
+                            && self.anchor_targets.contains(id)
+                            && self.emitted_anchors.insert(id.to_owned())
+                        {
+                            self.writer().inline_html(&crate::anchors::markup(id));
+                        }
+                    }
+                    self.writer().boundary(2);
+                    self.tasks.push(Task::Boundary);
+                    self.children(node, depth + 1);
+                    return;
+                }
                 if (!presentation
                     && crate::html_table::needed(self.dom, node, depth, self.options.max_depth))
                     || (!self.anchor_targets.is_empty()

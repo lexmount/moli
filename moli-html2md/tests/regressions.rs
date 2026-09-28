@@ -223,10 +223,7 @@ fn complex_tables_keep_media_choices_and_literal_content_inert() {
     let source = "<table onclick='bad()'><tr><td colspan='2'><iframe src='/lecture' title='Lecture'></iframe><select><option label='Day'>long label</option><option>Night</option></select><pre>&lt;script&gt;literal&lt;/script&gt;\n\nline</pre><script>bad()</script><a href='javascript:bad()'>Bad link</a></td></tr></table>";
     let html = rendered_html(&markdown(source, false));
     assert!(html.contains("href=\"/lecture\">Lecture</a>"), "{html}");
-    assert!(
-        html.contains("<option label=\"Day\">long label</option><option>Night</option>"),
-        "{html}"
-    );
+    assert!(html.contains("Day\nNight"), "{html}");
     assert!(
         html.contains("&lt;script&gt;literal&lt;/script&gt;"),
         "{html}"
@@ -917,6 +914,24 @@ fn preformatted_code_preserves_externally_referenced_targets() {
         "{result}"
     );
     assert!(!result.contains("<pre>"), "{result}");
+}
+
+#[test]
+fn preformatted_code_inside_complex_tables_remains_markdown_code() {
+    let result = markdown(
+        "<a href='#line-1'>Source</a><table><tr><th rowspan='2'>Code</th><td><pre><code><span id='line-1'>let x = 1;</span>\nlet y = 2;</code></pre></td></tr><tr><td>Explanation</td></tr></table>",
+        false,
+    );
+    assert!(result.contains("[Source](#line-1)"), "{result}");
+    assert!(result.contains("<a id=\"line-1\"></a>"), "{result}");
+    assert!(
+        result.contains("```\nlet x = 1;\nlet y = 2;\n```"),
+        "{result}"
+    );
+    assert!(result.contains("Code"), "{result}");
+    assert!(result.contains("Explanation"), "{result}");
+    assert!(!result.contains("<table"), "{result}");
+    assert!(!result.contains("<pre"), "{result}");
 }
 
 #[test]

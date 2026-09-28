@@ -515,7 +515,8 @@ fn markdown_parser_recovers_pipes_and_preformatted_code_inside_tables() {
     let markdown = convert(&dom, 0);
     let html = support::rendered_html(&markdown);
     assert!(html.contains("<code>a|b</code>"), "{html}");
-    assert_eq!(html.matches("<td>").count(), 2);
+    assert_eq!(html.matches("<td>").count(), 0);
+    assert!(markdown.contains("```\n  <a>|b\nnext\n```"), "{markdown}");
     let parsed = support::Tree::parse(&html);
     assert!(
         parsed

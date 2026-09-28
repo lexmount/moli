@@ -156,13 +156,14 @@ fn other_table_roles_do_not_change_conversion() {
 #[test]
 fn table_cells_preserve_block_syntax_and_code_whitespace() {
     let html = "<table><tr><td>intro</td><td><h2>Heading</h2><pre><code>  a\n  b\n</code></pre><blockquote>quote</blockquote><ul><li>item</li></ul></td><td>end</td></tr></table>";
-    assert_preserves_table(html);
-    let tree = Tree::parse(&rendered_html(&markdown(html)));
-    assert!(
-        tree.nodes
-            .iter()
-            .any(|node| node.text.as_deref() == Some("  a\n  b\n"))
-    );
+    let output = markdown(html);
+    assert!(output.contains("intro\n\n## Heading"), "{output}");
+    assert!(output.contains("```\n  a\n  b\n```"), "{output}");
+    assert!(output.contains("> quote"), "{output}");
+    assert!(output.contains("- item"), "{output}");
+    assert!(output.ends_with("end"), "{output}");
+    assert!(!output.contains("<table"), "{output}");
+    assert!(!output.contains("<pre"), "{output}");
 }
 
 #[test]
@@ -330,7 +331,6 @@ fn complex_tables_keep_cell_associations_without_duplicate_content() {
         assert_preserves_table(&source);
     }
     for content in [
-        "<pre>  code\nnext\n</pre>",
         "<ul><li>item</li></ul>",
         "<h2>Title</h2>",
         "<blockquote>quote</blockquote>",

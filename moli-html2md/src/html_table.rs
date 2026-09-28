@@ -76,6 +76,29 @@ pub(crate) fn has_cells<D: Dom + ?Sized>(
     false
 }
 
+pub(crate) fn has_preformatted<D: Dom + ?Sized>(
+    dom: &D,
+    root: D::NodeId,
+    depth: usize,
+    limit: usize,
+) -> bool {
+    let mut stack = vec![(dom.first_child(root), depth + 1)];
+    while let Some((node, depth)) = stack.pop() {
+        let Some(node) = node else {
+            continue;
+        };
+        if depth >= limit {
+            continue;
+        }
+        if matches!(dom.node_kind(node), NodeKind::Element("pre")) {
+            return true;
+        }
+        stack.push((dom.next_sibling(node), depth));
+        stack.push((dom.first_child(node), depth + 1));
+    }
+    false
+}
+
 enum Task<Id> {
     Node(Id, usize),
     Siblings(Option<Id>, usize),
