@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn svg_switch_and_mpath_use_native_interfaces_and_live_href() {
+    let mut vm = new_parsed_test_vm("https://svg-switch-mpath.test/", "<body></body>");
+    assert_eq!(
+        vm.eval(include_str!("svg_switch_mpath.js"))
+            .expect("SVG switch and mpath fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn element_attribute_values_preserve_utf16_across_native_documents() {
     let mut vm = new_parsed_test_vm(
         "https://attribute-string.test/",

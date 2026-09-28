@@ -1100,7 +1100,7 @@ pub(super) fn reflect_svg_string_list_to_owner_attribute<'s>(
     };
     let value = serialize_svg_string_list(scope, list, &attribute);
     let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
     else {
         return;
     };

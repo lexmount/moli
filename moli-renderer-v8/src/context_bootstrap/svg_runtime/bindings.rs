@@ -2118,6 +2118,13 @@ struct SvgUriReferencePrototypeAccessorsDeclaration {
     href: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGMPathElement, enumerable, receiver)]
+struct SvgMPathElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "href", getter = svg_mpath_href_getter)]
+    href: (),
+}
+
 pub(super) fn install_svg_length_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -2693,6 +2700,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGAElement" | "SVGScriptElement" => {
             SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGMPathElement" => {
+            SvgMPathElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }

@@ -325,6 +325,20 @@ pub(super) fn svg_uri_href_getter<'s>(
     svg_animated_string_attribute_getter(scope, args, rv, SVG_URI_HREF_SLOT, "href");
 }
 
+pub(super) fn svg_mpath_href_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // The binding checks the concrete receiver in the callee realm; its
+    // cached SVGAnimatedString belongs to the element's realm.
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    svg_uri_href_getter(scope, args, rv);
+}
+
 pub(super) fn svg_fe_convolve_matrix_preserve_alpha_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

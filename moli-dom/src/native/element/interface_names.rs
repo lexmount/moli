@@ -140,6 +140,7 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "marker" => "SVGMarkerElement",
         "mask" => "SVGMaskElement",
         "metadata" => "SVGMetadataElement",
+        "mpath" => "SVGMPathElement",
         "path" => "SVGPathElement",
         "pattern" => "SVGPatternElement",
         "polygon" => "SVGPolygonElement",
