@@ -29,8 +29,8 @@ pub(crate) use accessors::{
 pub(in crate::native_bridge::element) use declaration::style_base_url;
 pub(crate) use declaration::{ComputedStyleRead, StyleObservation};
 use declaration::{
-    StyleComputationContext, style_property_count_with_context, style_property_value_with_context,
-    style_runtime_and_handle_from_object,
+    StyleComputationContext, shorthand_longhands, style_property_count_with_context,
+    style_property_value_with_context, style_runtime_and_handle_from_object,
 };
 pub(crate) use declaration::{
     StyleMode, active_css_animation_transform_value, css_animation_start_applies,
@@ -49,7 +49,8 @@ pub(crate) use declaration::{
     style_entries_property_value_with_pdb, style_property_value,
 };
 pub(crate) use methods::{
-    clear_inline_style_from_object, set_style_property_from_object, style_declaration_is_computed,
+    clear_inline_style_from_object, computed_typed_style_value_from_object,
+    set_style_property_from_object, style_declaration_is_computed,
     style_get_property_priority_callback, style_get_property_value_callback, style_item_callback,
     style_property_names_from_object, style_property_value_from_object,
     style_remove_property_callback, style_set_property_callback,
@@ -89,6 +90,10 @@ pub(crate) fn is_live_style_declaration_object(
     style: v8::Local<'_, v8::Object>,
 ) -> bool {
     style_runtime_and_handle_from_object(scope, style).is_ok()
+}
+
+pub(crate) fn computed_style_property_is_shorthand(property: &str) -> bool {
+    shorthand_longhands(property).is_some()
 }
 
 fn style_object_forces_empty_computed<'s>(
