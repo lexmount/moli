@@ -523,6 +523,7 @@ interfaces! {
     StorageEvent: Event;
     StorageManager;
     StylePropertyMapReadOnly;
+    StylePropertyMap: StylePropertyMapReadOnly;
     StylePropertyMapReadOnlyIterator = "StylePropertyMapReadOnly Iterator";
     StyleSheet;
     StyleSheetList;

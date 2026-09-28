@@ -3055,6 +3055,60 @@ fn style_item_callback<'s>(
     }
 }
 
+// Shared native entry points for Typed OM. Both inline DOM declarations and
+// rule declarations retain their existing storage, notification and cascade paths.
+pub(crate) fn css_declaration_property_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<String> {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_property_value_from_object(scope, style, name);
+    }
+    let style = lightweight_style_receiver(scope, style)?;
+    Some(style_property_value(scope, style, name))
+}
+
+pub(crate) fn css_declaration_property_names<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> Vec<String> {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_property_names_from_object(scope, style)
+            .unwrap_or_default();
+    }
+    lightweight_style_receiver(scope, style)
+        .map(|style| style_property_names(scope, style))
+        .unwrap_or_default()
+}
+
+pub(crate) fn set_css_declaration_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: &str,
+) {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        crate::native_bridge::element::set_style_property_from_object(
+            scope, style, name, value, false,
+        );
+    } else if let Some(style) = lightweight_style_receiver(scope, style) {
+        set_style_entry(scope, style, name, value, false);
+        notify_style_changed(scope, style);
+    }
+}
+
+pub(crate) fn clear_css_declaration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        crate::native_bridge::element::clear_inline_style_from_object(scope, style);
+    } else {
+        set_lightweight_css_style_css_text(scope, style, "");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

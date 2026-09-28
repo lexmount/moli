@@ -31,8 +31,7 @@ pub(crate) fn style_set_property_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, args.this())
-    else {
+    let Ok((_, _, mode)) = style_runtime_and_handle_from_object(scope, args.this()) else {
         throw_style_declaration_method_illegal_invocation(scope, "setProperty");
         return;
     };
@@ -52,25 +51,45 @@ pub(crate) fn style_set_property_callback<'s>(
         );
         return;
     }
-    if parsed.property.starts_with("--")
-        && !moli_css_parse::is_cssom_custom_property_name(&parsed.property)
-    {
-        return;
-    }
-    let name = canonical_style_property_name(&parsed.property);
     if !parsed.priority.is_empty() && !parsed.priority.eq_ignore_ascii_case("important") {
         return;
     }
+    set_style_property_from_object(
+        scope,
+        args.this(),
+        &parsed.property,
+        &parsed.value,
+        parsed.priority.eq_ignore_ascii_case("important"),
+    );
+}
+
+/// Mutate the native declaration without consulting author-overridable JS methods.
+pub(crate) fn set_style_property_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+    value: &str,
+    priority: bool,
+) {
+    let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
+        return;
+    };
+    if mode == StyleMode::Computed {
+        return;
+    }
+    if property.starts_with("--") && !moli_css_parse::is_cssom_custom_property_name(property) {
+        return;
+    }
+    let name = canonical_style_property_name(property);
     if !supported_declared_property(&name) {
         return;
     }
-    let priority = parsed.priority.eq_ignore_ascii_case("important");
     if set_inline_style_property_with_pdb_storage(
         scope,
         runtime_ptr,
         handle,
         &name,
-        &parsed.value,
+        value,
         priority,
     )
     .is_some()
@@ -80,14 +99,14 @@ pub(crate) fn style_set_property_callback<'s>(
     let (style_object_entries, current_base_url) = {
         let runtime = unsafe { &*runtime_ptr };
         (
-            style_entries_for_style_object(scope, args.this(), runtime, handle),
+            style_entries_for_style_object(scope, style, runtime, handle),
             style_base_url(runtime, handle),
         )
     };
     let mut entries = style_object_entries.entries;
-    let update_inline_style_base = name == "background-image" && !parsed.value.is_empty();
+    let update_inline_style_base = name == "background-image" && !value.is_empty();
     if let Some(longhands) = shorthand_longhands(&name) {
-        if parsed.value.is_empty() {
+        if value.is_empty() {
             if !entries.iter().any(|entry| {
                 entry.name == name || longhands.iter().any(|longhand| entry.name == *longhand)
             }) {
@@ -100,7 +119,7 @@ pub(crate) fn style_set_property_callback<'s>(
             let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
                 &entries,
                 &name,
-                &parsed.value,
+                value,
                 priority,
                 Some(&current_base_url),
             ) else {
@@ -114,7 +133,7 @@ pub(crate) fn style_set_property_callback<'s>(
             entries.extend(parsed_entries.entries);
         }
     } else if name == "all" {
-        if parsed.value.is_empty() {
+        if value.is_empty() {
             if !entries
                 .iter()
                 .any(|entry| entry.name == "all" || all_shorthand_applies_to(&entry.name))
@@ -125,7 +144,7 @@ pub(crate) fn style_set_property_callback<'s>(
         } else {
             let Some(parsed_entries) = parse_style_property_entries_for_cssom_write(
                 &name,
-                &parsed.value,
+                value,
                 priority,
                 Some(&current_base_url),
             ) else {
@@ -134,7 +153,7 @@ pub(crate) fn style_set_property_callback<'s>(
             entries.retain(|entry| entry.name != "all");
             entries.extend(parsed_entries.entries);
         }
-    } else if parsed.value.is_empty() {
+    } else if value.is_empty() {
         let before_len = entries.len();
         if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(&name) {
             retain_unaffected_style_entries(&mut entries, &name, &affected_names);
@@ -148,7 +167,7 @@ pub(crate) fn style_set_property_callback<'s>(
         let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
             &entries,
             &name,
-            &parsed.value,
+            value,
             priority,
             Some(&current_base_url),
         ) else {
@@ -233,7 +252,7 @@ pub(crate) fn style_get_property_value_callback<'s>(
     }
 }
 
-pub(crate) fn computed_style_property_value_from_object<'s>(
+pub(crate) fn style_property_value_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
     property: &str,
@@ -241,9 +260,6 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return None;
     };
-    if mode != StyleMode::Computed {
-        return None;
-    }
     if style_object_forces_empty_computed(scope, style, mode) {
         return Some(String::new());
     }
@@ -257,16 +273,13 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
     Some(value)
 }
 
-pub(crate) fn computed_style_property_names_from_object<'s>(
+pub(crate) fn style_property_names_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<String>> {
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return None;
     };
-    if mode != StyleMode::Computed {
-        return None;
-    }
     if style_object_forces_empty_computed(scope, style, mode) {
         return Some(Vec::new());
     }
@@ -475,4 +488,25 @@ fn throw_style_declaration_method_illegal_invocation(
         scope,
         &format!("Failed to execute '{method}' on 'CSSStyleDeclaration': Illegal invocation."),
     );
+}
+
+/// Whether this native CSS declaration represents computed rather than specified style.
+pub(crate) fn style_declaration_is_computed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> bool {
+    style_runtime_and_handle_from_object(scope, style)
+        .is_ok_and(|(_, _, mode)| mode == StyleMode::Computed)
+}
+
+pub(crate) fn clear_inline_style_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) {
+    let Ok((runtime_ptr, handle, StyleMode::Inline)) =
+        style_runtime_and_handle_from_object(scope, style)
+    else {
+        return;
+    };
+    super::declaration::set_inline_style_css_text_with_pdb_storage(scope, runtime_ptr, handle, "");
 }
