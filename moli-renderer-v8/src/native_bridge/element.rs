@@ -653,13 +653,14 @@ pub(super) use styles::{
 };
 pub(crate) use styles::{
     clear_inline_style_from_object, computed_style_property_is_shorthand,
-    cssom_style_entry_is_pdb_supplemental_side_entry, cssom_style_property_affected_names_with_pdb,
-    is_live_style_declaration_object, live_style_named_property_value,
-    set_live_style_named_property_value, set_style_property_from_object,
-    style_css_text_getter_callback, style_css_text_setter_callback, style_declaration_is_computed,
-    style_for_element, style_get_property_priority_callback, style_get_property_value_callback,
-    style_item_callback, style_length_getter_callback, style_property_names_from_object,
-    style_property_value_from_object, style_remove_property_callback, style_set_property_callback,
+    computed_typed_style_value_from_object, cssom_style_entry_is_pdb_supplemental_side_entry,
+    cssom_style_property_affected_names_with_pdb, is_live_style_declaration_object,
+    live_style_named_property_value, set_live_style_named_property_value,
+    set_style_property_from_object, style_css_text_getter_callback, style_css_text_setter_callback,
+    style_declaration_is_computed, style_for_element, style_get_property_priority_callback,
+    style_get_property_value_callback, style_item_callback, style_length_getter_callback,
+    style_property_names_from_object, style_property_value_from_object,
+    style_remove_property_callback, style_set_property_callback,
 };
 pub(crate) use stylesheets::{
     detach_cached_style_sheet_for_element, detach_cached_style_sheet_if_live_stylesheet_changed,

@@ -349,6 +349,12 @@ fn style_values_for_property<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    if native_bridge::element::style_declaration_is_computed(scope, style)
+        && let Some(parsed) =
+            native_bridge::element::computed_typed_style_value_from_object(scope, style, property)
+    {
+        return values::from_computed(scope, property, parsed);
+    }
     let Some(text) = style_property_text(scope, style, property) else {
         return Vec::new();
     };
