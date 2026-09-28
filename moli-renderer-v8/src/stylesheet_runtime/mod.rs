@@ -37,6 +37,7 @@ pub(crate) use connected::{ConnectedStyleLoadPrimeResult, PreparedConnectedStyle
 pub(super) use import_graph::{ConnectedStyleImportReadiness, connected_style_import_readiness};
 pub(crate) use import_graph::{
     fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,
+    stylesheet_import_options,
 };
 pub(super) use import_graph_projection::fetch_observed_stylesheet_import_graph;
 pub(crate) use import_graph_projection::live_stylesheet_import_responses;

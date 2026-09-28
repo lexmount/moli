@@ -107,7 +107,7 @@ pub(crate) use stylesheet_runtime::{
     ConnectedLoadCompletion, LinkedStylesheetImportGraphCompletion,
     LiveStylesheetImportLoadCompletion, StylesheetImportCompletionAuthority,
     fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,
-    live_stylesheet_import_responses,
+    live_stylesheet_import_responses, stylesheet_import_options,
 };
 use stylesheet_runtime::{
     ConnectedLoadOperation, LinkedStylesheetImportGraphs, QueuedConnectedStyleLoad,
@@ -449,6 +449,7 @@ impl ConnectedStyleImportRoot {
 pub(crate) struct ConnectedLoadNetworkResult {
     /// Request provenance survives clearing the stylesheet installation owner.
     pub(crate) resource_timing_initiator_type: &'static str,
+    pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
     pub(crate) consumed_preload_error: bool,
     /// Exact request Document, independent of an element's current location.
     pub(crate) document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
@@ -2730,6 +2731,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -2782,6 +2784,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(active_load.fetch().clone()),
@@ -2839,6 +2842,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
@@ -2896,6 +2900,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
@@ -3507,6 +3512,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3606,6 +3612,7 @@ mod tests {
                 network_results: vec![ConnectedLoadNetworkResult {
                     network_observed: false,
                     resource_timing_initiator_type: "css",
+                    import_options: None,
                     consumed_preload_error: false,
                     document_owner: None,
                     stylesheet_fetch: None,
@@ -3683,6 +3690,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "css",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3748,6 +3756,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "css",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3890,6 +3899,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,

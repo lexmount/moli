@@ -9,7 +9,7 @@ use crate::module_runtime::{
 use crate::planning::{ScriptFetchMetadata, module_script_credentials_mode};
 use crate::service_worker_runtime::ServiceWorkerRequestDestination;
 use crate::stylesheet_blocking::{
-    StylesheetFetchOptions, connected_preload_like_link_url,
+    StylesheetFetchOptions, StylesheetFetcher, connected_preload_like_link_url,
     document_owned_blocking_stylesheet_candidate_for_node, link_rel_includes_token,
     preload_like_link_loads_stylesheet, stylesheet_link_disposition,
     stylesheet_preload_link_request,
@@ -46,6 +46,7 @@ struct ConnectedLinkReadinessFetchResponse {
     response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     integrity_matches: bool,
     from_service_worker: bool,
+    service_worker_response_url: Option<Url>,
 }
 
 impl ConnectedLinkReadinessFetchResponse {
@@ -55,6 +56,7 @@ impl ConnectedLinkReadinessFetchResponse {
         load_event_successful: bool,
         integrity: Option<&str>,
         from_service_worker: bool,
+        service_worker_response_url: Option<Url>,
     ) -> Self {
         // Hash the original body, including binary responses. A matching digest
         // must not make an opaque response eligible, including SW responses to
@@ -77,6 +79,7 @@ impl ConnectedLinkReadinessFetchResponse {
             response_filter,
             integrity_matches,
             from_service_worker,
+            service_worker_response_url,
         }
     }
 
@@ -87,6 +90,7 @@ impl ConnectedLinkReadinessFetchResponse {
             return Err("preload response failed its integrity check".to_owned());
         }
         Ok(crate::network::preloads::DocumentPreloadResponse {
+            service_worker_response_url: self.service_worker_response_url.clone(),
             response: self.response.clone(),
             from_service_worker: self.from_service_worker,
             response_filter: self.response_filter.clone(),
@@ -1355,6 +1359,7 @@ impl DocumentRuntime {
                         resource_timing_initiator_type: preload_like_resource_initiator_type(
                             resource_type,
                         ),
+                        import_options: None,
                         consumed_preload_error: false,
                         document_owner,
                         stylesheet_fetch: None,
@@ -1542,11 +1547,14 @@ impl DocumentRuntime {
             .document_url()
             .clone();
         let resource_loader = stylesheet_fetcher.resource_loader().clone();
+        let options =
+            stylesheet_fetcher.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default());
         resource_loader.spawn_resource_task(async move {
             let (graph, network_results) = fetch_observed_stylesheet_import_graph(
                 stylesheet_fetcher,
                 document_url,
                 urls,
+                options,
                 vec![handle],
             )
             .await;
@@ -1582,10 +1590,10 @@ impl DocumentRuntime {
         root_is_external_resource: bool,
         host_ptr: *mut PageScriptHost,
     ) {
-        let urls = stylesheet
-            .pending_import_requests_in_graph()
-            .into_iter()
-            .map(|request| request.url)
+        let pending_imports = stylesheet.pending_import_requests_in_graph();
+        let urls = pending_imports
+            .iter()
+            .map(|request| request.url.clone())
             .collect::<Vec<_>>();
         if urls.is_empty() {
             return;
@@ -1599,14 +1607,14 @@ impl DocumentRuntime {
                 )
         });
         let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_resource_url);
-        let urls = match connected_style_import_readiness(urls) {
+        match connected_style_import_readiness(urls) {
             ConnectedStyleImportReadiness::Ready(_) => {
                 let _ = unsafe { &mut *host_ptr }
                     .install_and_refresh_live_stylesheet_import_graph(root, &[]);
                 return;
             }
-            ConnectedStyleImportReadiness::Pending(urls) => urls,
-        };
+            ConnectedStyleImportReadiness::Pending(_) => {}
+        }
         let task_producer = self
             .stylesheet_lifecycle
             .task_producer
@@ -1619,16 +1627,38 @@ impl DocumentRuntime {
             .document_url()
             .clone();
         let resource_loader = stylesheet_fetcher.resource_loader().clone();
+        let document_options =
+            stylesheet_fetcher.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default());
+        let mut groups = Vec::<(StylesheetFetchOptions, Vec<Url>)>::new();
+        let mut group_indices = HashMap::new();
+        for request in pending_imports {
+            let options = request
+                .import_options
+                .unwrap_or_else(|| document_options.clone());
+            let index = *group_indices.entry(options.clone()).or_insert_with(|| {
+                groups.push((options, Vec::new()));
+                groups.len() - 1
+            });
+            groups[index].1.push(request.url);
+        }
         resource_loader.spawn_resource_task(async move {
-            let (_, mut network_results) = fetch_observed_stylesheet_import_graph(
-                stylesheet_fetcher,
-                document_url,
-                urls,
-                vec![owner],
-            )
-            .await;
-            for result in &mut network_results {
-                result.import_roots.push(root.clone());
+            let results =
+                futures_util::future::join_all(groups.into_iter().map(|(options, urls)| {
+                    fetch_observed_stylesheet_import_graph(
+                        stylesheet_fetcher.clone(),
+                        document_url.clone(),
+                        urls,
+                        options,
+                        vec![owner],
+                    )
+                }))
+                .await;
+            let mut network_results = Vec::new();
+            for (_, results) in results {
+                for mut result in results {
+                    result.import_roots.push(root.clone());
+                    network_results.push(result);
+                }
             }
             let _ = task_producer.send_live_import_completion(LiveStylesheetImportLoadCompletion {
                 network_results,
@@ -2544,6 +2574,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
                     load_event_successful,
                     integrity,
                     !response.from_network_fallback,
+                    response.response_url,
                 ));
             }
             Ok(None) => {}
@@ -2575,6 +2606,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 load_event_successful,
                 integrity,
                 false,
+                None,
             )
         })
 }

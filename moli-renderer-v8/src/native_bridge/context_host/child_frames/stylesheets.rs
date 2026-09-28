@@ -154,6 +154,9 @@ impl PageScriptHost {
         // not retroactively constrain an already admitted link or inline import.
         let csp_context = fetcher.csp_context().cloned();
         let fetch_document_url = document_url.clone();
+        let import_options = fetcher.prepare_stylesheet_fetch_options(
+            crate::stylesheet_blocking::StylesheetFetchOptions::default(),
+        );
         let graph = match &signature {
             DocumentBlockingStylesheetSignature::Link { url, options } => {
                 let started = moli_time::unix_epoch_millis();
@@ -180,6 +183,7 @@ impl PageScriptHost {
                         fetcher,
                         fetch_document_url,
                         urls.clone(),
+                        import_options,
                     ),
                 )
             }
@@ -452,6 +456,7 @@ impl PageScriptHost {
                         prepared,
                     ),
                 );
+                self.retain_linked_stylesheet_import_options(owner, terminal);
                 if has_import_rules && let Some(sheet) = self.linked_live_stylesheet(owner) {
                     import_roots.push(crate::document_runtime::ConnectedStyleImportRoot::new(
                         owner,

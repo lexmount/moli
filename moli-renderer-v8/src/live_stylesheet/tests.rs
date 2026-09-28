@@ -254,6 +254,7 @@ fn descendant_import_replacement_invalidates_a_root_graph_snapshot() {
             root_revision,
             stale_import_generation,
             &[LiveStylesheetImportResponse {
+                import_options: None,
                 request_url: stale_leaf_request.url.clone(),
                 response_url: stale_leaf_request.url,
                 css_text: ".stale { color: red; }".to_owned(),
@@ -285,6 +286,7 @@ fn imported_leaf_releases_detached_parse_and_reuses_contents_for_later_owners() 
         ),
     );
     let response = LiveStylesheetImportResponse {
+        import_options: None,
         request_url: leaf_url.clone(),
         response_url: leaf_url,
         css_text: leaf_text.to_owned(),
@@ -359,6 +361,7 @@ fn import_graph_uses_each_response_url_as_the_nested_parser_base() {
     );
     let responses = vec![
         LiveStylesheetImportResponse {
+            import_options: None,
             request_url: url::Url::parse("https://example.test/assets/redirected.css").unwrap(),
             response_url: child_url,
             css_text: String::new(),
@@ -367,6 +370,7 @@ fn import_graph_uses_each_response_url_as_the_nested_parser_base() {
             origin_clean: true,
         },
         LiveStylesheetImportResponse {
+            import_options: None,
             request_url: leaf_url.clone(),
             response_url: leaf_url,
             css_text: String::new(),
@@ -454,6 +458,7 @@ fn deep_import_graph_walks_and_generation_propagation_are_iterative() {
             root.contents_revision(),
             generation_before_terminal,
             &[LiveStylesheetImportResponse {
+                import_options: None,
                 request_url: pending[0].url.clone(),
                 response_url: pending[0].url.clone(),
                 css_text: ".terminal { color: green; }".to_owned(),

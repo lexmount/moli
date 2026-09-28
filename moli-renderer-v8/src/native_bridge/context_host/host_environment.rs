@@ -308,11 +308,49 @@ impl PageScriptHost {
             .imported_stylesheet_for_rule_wrapper(id, expected_stylesheet_id)
     }
 
+    pub(crate) fn retain_linked_stylesheet_import_options(
+        &self,
+        owner: DomHandle,
+        terminal: &crate::stylesheet_blocking::StylesheetFetchTerminal,
+    ) {
+        let document_policy = self
+            .dom_host()
+            .owner_document_handle(owner)
+            .and_then(|document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+            });
+        let document_options = crate::stylesheet_blocking::StylesheetFetchOptions::default()
+            .with_document_referrer_policy(document_policy);
+        if let Some(options) =
+            crate::document_runtime::stylesheet_import_options(terminal, &document_options)
+            && let Some(stylesheet) = self.linked_live_stylesheet(owner)
+        {
+            stylesheet.set_import_options(options);
+        }
+    }
+
     pub(crate) fn install_and_refresh_live_stylesheet_import_graph(
         &mut self,
         root: crate::document_runtime::ConnectedStyleImportRoot,
         responses: &[crate::live_stylesheet::LiveStylesheetImportResponse],
     ) -> Option<bool> {
+        let document_policy =
+            self.dom_host()
+                .owner_document_handle(root.owner)
+                .and_then(|document| {
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        self, document,
+                    )
+                });
+        let stylesheet = self.live_stylesheets.get(root.stylesheet_id)?;
+        stylesheet.set_import_options(
+            stylesheet
+                .import_options()
+                .unwrap_or_default()
+                .with_document_referrer_policy(document_policy),
+        );
         let successful = self.live_stylesheets.install_import_graph(
             root.stylesheet_id,
             root.contents_revision,

@@ -189,6 +189,7 @@ pub struct StylesheetImportNetworkResult {
     pub(crate) start_unix_millis: f64,
     pub(crate) terminal: StylesheetFetchTerminal,
     parsed_stylesheet: Option<StylesheetImportParsedResponse>,
+    import_options: Option<crate::StylesheetFetchOptions>,
 }
 
 impl StylesheetImportNetworkResult {
@@ -202,6 +203,7 @@ impl StylesheetImportNetworkResult {
             start_unix_millis,
             terminal,
             parsed_stylesheet: None,
+            import_options: None,
         }
     }
 
@@ -223,6 +225,15 @@ impl StylesheetImportNetworkResult {
 
     pub fn terminal(&self) -> &StylesheetFetchTerminal {
         &self.terminal
+    }
+
+    pub fn with_import_options(mut self, options: Option<crate::StylesheetFetchOptions>) -> Self {
+        self.import_options = options;
+        self
+    }
+
+    pub fn import_options(&self) -> Option<&crate::StylesheetFetchOptions> {
+        self.import_options.as_ref()
     }
 
     pub fn into_parts(self) -> (Url, f64, StylesheetFetchTerminal) {
