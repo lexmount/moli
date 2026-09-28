@@ -312,7 +312,7 @@ fn shared_worker_constructor_callback_inner<'s>(
             .local_worker_content_security_policy_source_for_global(scope, global)
             .map(|source| source.read().clone())
             .unwrap_or_default();
-        script_load.with_ready_content_security_policy(policy)
+        script_load.with_ready_inherited_policies(policy, context.document_referrer_policy.clone())
     } else {
         script_load
     };

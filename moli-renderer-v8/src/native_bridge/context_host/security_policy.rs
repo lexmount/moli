@@ -345,6 +345,25 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn object_url_policy_source_for_global<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+    ) -> Option<crate::blob::ObjectUrlPolicySource> {
+        let owner = policy_owner_dispatch_scope_for_global(scope, global);
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        Some(crate::blob::ObjectUrlPolicySource {
+            content_security_policy: self
+                .local_worker_content_security_policy_source_for_owner(owner)?,
+            referrer_policy: snapshot.policy_container.referrer_policy,
+            document_meta_referrer_policy: snapshot
+                .document_handle
+                .and_then(|document| self.dom_host().node(document))
+                .and_then(moli_dom::native::Node::as_document)
+                .map(moli_dom::native::Document::meta_referrer_policy_source),
+        })
+    }
+
     pub(crate) fn document_permissions_policy_for_owner(
         &self,
         owner: OwnerDispatchScope,

@@ -53,9 +53,24 @@ type RendererBlobStore = BlobStore<
     ResourceOwnerId,
     RendererStoragePartitionIdentity,
     ObjectUrlAccessKey,
-    crate::content_security_policy::ContentSecurityPolicySource,
+    ObjectUrlPolicySource,
     Arc<MediaSourceObject>,
 >;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ObjectUrlPolicySource {
+    pub(crate) content_security_policy: crate::content_security_policy::ContentSecurityPolicySource,
+    pub(crate) referrer_policy: Option<String>,
+    pub(crate) document_meta_referrer_policy:
+        Option<moli_dom::native::DocumentMetaReferrerPolicySource>,
+}
+
+#[derive(Default)]
+pub(crate) struct ObjectUrlPolicySnapshot {
+    pub(crate) content_security_policy:
+        crate::content_security_policy::InheritedContentSecurityPolicy,
+    pub(crate) referrer_policy: Option<String>,
+}
 
 static BLOB_STORE: OnceLock<RendererBlobStore> = OnceLock::new();
 
@@ -389,16 +404,20 @@ pub(super) fn create_object_url_for_object<'s>(
     let origin = storage_key.origin().to_owned();
     let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
         .map(native_bridge::RuntimeObservableContextToken::as_u64);
-    let policy_source = if let Some(host_ptr) =
-        crate::util::context_host_ptr_from_global_bridge(scope)
-    {
-        let global = scope.get_current_context().global(scope);
-        // SAFETY: the Window callback keeps its host alive for this call.
-        unsafe { &*host_ptr }.local_worker_content_security_policy_source_for_global(scope, global)
-    } else {
-        crate::worker::worker_content_security_policy_snapshot(scope)
-            .map(|policy| Arc::new(parking_lot::RwLock::new(policy)))
-    };
+    let policy_source =
+        if let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) {
+            let global = scope.get_current_context().global(scope);
+            // SAFETY: the Window callback keeps its host alive for this call.
+            unsafe { &*host_ptr }.object_url_policy_source_for_global(scope, global)
+        } else {
+            crate::worker::worker_content_security_policy_snapshot(scope).map(|policy| {
+                ObjectUrlPolicySource {
+                    content_security_policy: Arc::new(parking_lot::RwLock::new(policy)),
+                    referrer_policy: crate::worker::worker_referrer_policy(scope),
+                    document_meta_referrer_policy: None,
+                }
+            })
+        };
     blob_store().create_object_url_with_target(
         owner_id,
         lifetime_id,
@@ -418,10 +437,17 @@ pub(crate) fn object_url_data(url: &str) -> Option<RendererObjectUrlData> {
     blob_store().object_url_data(url)
 }
 
-pub(crate) fn object_url_content_security_policy(
-    url: &str,
-) -> Option<crate::content_security_policy::InheritedContentSecurityPolicy> {
-    Some(blob_store().object_url_metadata(url)?.read().clone())
+pub(crate) fn object_url_policy(url: &str) -> Option<ObjectUrlPolicySnapshot> {
+    let source = blob_store().object_url_metadata(url)?;
+    Some(ObjectUrlPolicySnapshot {
+        content_security_policy: source.content_security_policy.read().clone(),
+        referrer_policy: source
+            .document_meta_referrer_policy
+            .as_ref()
+            .and_then(moli_dom::native::DocumentMetaReferrerPolicySource::get)
+            .map(str::to_owned)
+            .or(source.referrer_policy),
+    })
 }
 
 pub(super) fn revoke_object_url(

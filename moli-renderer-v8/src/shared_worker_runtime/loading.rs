@@ -359,12 +359,14 @@ impl SharedWorkerLoadedScript {
 }
 
 impl SharedWorkerScriptLoad {
-    pub(crate) fn with_ready_content_security_policy(
+    pub(crate) fn with_ready_inherited_policies(
         mut self,
         policy: crate::content_security_policy::InheritedContentSecurityPolicy,
+        referrer_policy: Option<String>,
     ) -> Self {
         if let SharedWorkerScriptLoadKind::Ready(script) = &mut self.kind {
             script.content_security_policy_snapshot = Some(Box::new(policy));
+            script.response_referrer_policy = referrer_policy;
         }
         self
     }
@@ -608,12 +610,13 @@ pub(super) fn load_shared_worker_blob_script_source(
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);
-    let policy =
-        crate::blob::object_url_content_security_policy(resource_url.as_str()).unwrap_or_default();
+    let policy = crate::blob::object_url_policy(resource_url.as_str()).unwrap_or_default();
     crate::blob::object_url_body_and_type(resource_url.as_str())
         .map(|(body, _)| {
             let mut script = SharedWorkerLoadedScript::new(script_url.to_string(), body);
-            script.content_security_policy_snapshot = Some(Box::new(policy));
+            script.content_security_policy_snapshot =
+                Some(Box::new(policy.content_security_policy));
+            script.response_referrer_policy = policy.referrer_policy;
             script
         })
         .ok_or_else(|| {

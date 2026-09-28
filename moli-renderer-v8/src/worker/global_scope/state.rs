@@ -303,6 +303,10 @@ pub(crate) fn worker_storage_partition_identity(
     )
 }
 
+pub(crate) fn worker_referrer_policy(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
+    get_worker_state(scope)?.borrow().referrer_policy.clone()
+}
+
 pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {
     get_worker_state(scope)?.borrow().current_script_url.clone()
 }
