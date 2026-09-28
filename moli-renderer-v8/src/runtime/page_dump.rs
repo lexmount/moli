@@ -84,12 +84,18 @@ impl PageVm {
                         "top".to_owned(),
                         "color".to_owned(),
                         "text-shadow".to_owned(),
+                        "animation-name".to_owned(),
+                        "animation-duration".to_owned(),
+                        "animation-fill-mode".to_owned(),
                     ],
                 );
             nodes
                 .into_iter()
                 .zip(values)
                 .map(|(node, mut values)| {
+                    let animation_fill_mode = values.pop().unwrap_or_default();
+                    let animation_duration = values.pop().unwrap_or_default();
+                    let animation_name = values.pop().unwrap_or_default();
                     let text_shadow = values.pop().unwrap_or_default();
                     let foreground = values.pop().unwrap_or_default();
                     // Preserve the visibility adapter's stable field layout.
@@ -121,6 +127,9 @@ impl PageVm {
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
                     values.push(text_shadow);
                     values.push(background_images.get(&node).cloned().unwrap_or_default());
+                    values.push(animation_name);
+                    values.push(animation_duration);
+                    values.push(animation_fill_mode);
                     (node, values)
                 })
                 .collect::<Vec<_>>()

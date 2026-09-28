@@ -263,12 +263,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 tag,
                 "head" | "script" | "style" | "noscript" | "template" | "title"
             )
+            && let Some(id) = self.anchor_targets.target(self.dom, node)
+            && self.emitted_anchors.insert(id.to_owned())
         {
-            if let Some(id) = self.anchor_targets.target(self.dom, node)
-                && self.emitted_anchors.insert(id.to_owned())
-            {
-                self.writer().inline_html(&crate::anchors::markup(id));
-            }
+            self.writer().inline_html(&crate::anchors::markup(id));
         }
         match tag {
             "math" => {

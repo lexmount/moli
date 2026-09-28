@@ -30,6 +30,12 @@ impl<'a> MarkdownDom<'a> {
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
         let body = dom.body_node_id();
+        let document_visibility_is_hidden = styles.iter().any(|(node, values)| {
+            (Some(*node) == document_element || Some(*node) == body)
+                && values
+                    .get(1)
+                    .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
+        });
         let fragment_links = styles.iter().any(|(node, _)| {
             Dom::attribute(dom, *node, "href").is_some_and(|href| href.starts_with('#'))
         });
@@ -153,6 +159,7 @@ impl<'a> MarkdownDom<'a> {
         let mut resolved_urls = HashMap::new();
         let mut unchecked_controls = HashSet::new();
         let mut disclosure_regions = HashSet::new();
+        let mut visibility_restored_regions = HashSet::new();
         for (node, values) in styles {
             let role = Dom::attribute(dom, node, "role").unwrap_or_default();
             if matches!(Dom::node_kind(dom, node), NodeKind::Element("input"))
@@ -227,11 +234,19 @@ impl<'a> MarkdownDom<'a> {
                                 == (background.0, background.1, background.2)
                     });
             let document_root = Some(node) == document_element || Some(node) == body;
+            let visibility_restored = document_visibility_is_hidden
+                && !document_root
+                && values.get(1).is_some_and(|value| value == "visible");
+            if visibility_restored {
+                visibility_restored_regions.insert(node);
+            }
+            let opacity_revealed_by_animation = animation_reveals_content(&values);
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
                     && !lazy_media
+                    && !opacity_revealed_by_animation
                     && !document_root)
                 && !preserves_disclosure)
                 || uninitialized_template
@@ -321,6 +336,10 @@ impl<'a> MarkdownDom<'a> {
                 .get(1)
                 .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
                 && !preserves_disclosure
+                && (!document_visibility_is_hidden
+                    || dom
+                        .parent_node(node)
+                        .is_some_and(|parent| visibility_restored_regions.contains(&parent)))
             {
                 invisible.insert(node);
             }
@@ -348,6 +367,33 @@ impl<'a> MarkdownDom<'a> {
         }
         None
     }
+}
+
+fn animation_reveals_content(values: &[String]) -> bool {
+    let named = values.get(14).is_some_and(|names| {
+        names
+            .split(',')
+            .any(|name| !matches!(name.trim(), "" | "none"))
+    });
+    let has_duration = values.get(15).is_some_and(|durations| {
+        durations.split(',').any(|duration| {
+            let duration = duration.trim();
+            duration
+                .strip_suffix("ms")
+                .and_then(|value| value.trim().parse::<f32>().ok())
+                .is_some_and(|value| value > 0.0)
+                || duration
+                    .strip_suffix('s')
+                    .and_then(|value| value.trim().parse::<f32>().ok())
+                    .is_some_and(|value| value > 0.0)
+        })
+    });
+    let retains_final_frame = values.get(16).is_some_and(|modes| {
+        modes
+            .split(',')
+            .any(|mode| matches!(mode.trim(), "forwards" | "both"))
+    });
+    named && has_duration && retains_final_frame
 }
 
 fn target_is_disclosure<D: Dom + ?Sized>(
