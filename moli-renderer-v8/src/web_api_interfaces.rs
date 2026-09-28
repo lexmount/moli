@@ -96,6 +96,8 @@ interfaces! {
     CSSSupportsRule: CSSConditionRule;
     CSSTransition: Animation;
     CSSUnitValue: CSSNumericValue;
+    CSSUnparsedValue: CSSStyleValue;
+    CSSVariableReferenceValue;
     Cache;
     CacheStorage;
     CanvasGradient;

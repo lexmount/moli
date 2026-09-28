@@ -62,6 +62,7 @@ mod css_computed_background;
 mod css_computed_font;
 mod css_computed_map_enumeration;
 mod css_variable_fonts;
+mod css_unparsed;
 mod nested_document_invalidation;
 mod properties_and_selectors;
 mod stylesheet_and_document_lifecycle;
