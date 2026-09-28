@@ -310,7 +310,9 @@ fn coerce_values<'s>(
                 {
                     return Err(CoercionError::UnparsedStorage);
                 }
-            } else if property.starts_with("--") {
+            } else if property.starts_with("--")
+                || (shorthand && web_api_interfaces::CSSMathValue::is_instance(scope, object))
+            {
                 return Err(CoercionError::Invalid);
             } else if let Some(unit) = values::css_unit_value_unit(scope, object) {
                 if shorthand {
