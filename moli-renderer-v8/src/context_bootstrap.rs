@@ -11,6 +11,7 @@ mod crypto;
 mod css_fontface_runtime;
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
+mod dom_quad;
 mod dom_rect;
 mod event_document;
 mod event_legacy;
