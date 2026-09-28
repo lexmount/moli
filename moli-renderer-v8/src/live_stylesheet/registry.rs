@@ -235,6 +235,12 @@ impl LiveStylesheetRegistry {
             LiveStylesheetRuntimeStateKind::IndependentCssom,
         ));
         child.set_origin_clean(origin_clean);
+        child.set_import_options(
+            crate::stylesheet_blocking::StylesheetFetchOptions::for_import(
+                child.base_url().clone(),
+                None,
+            ),
+        );
         self.entries.borrow_mut().insert(id, Rc::downgrade(&child));
         if !parent.install_import_child(edge_id, child.clone(), successful) {
             self.entries.borrow_mut().remove(&id);
@@ -268,12 +274,17 @@ impl LiveStylesheetRegistry {
                 .or_insert(response);
         }
         let mut data_expansions = 0;
-        Some(self.install_import_graph_for_stylesheet(
-            &root,
-            &responses_by_request_identity,
-            &ancestors,
-            &mut data_expansions,
-        ))
+        Some(
+            self.install_import_graph_for_stylesheet(
+                &root,
+                &responses_by_request_identity,
+                &ancestors,
+                &mut data_expansions,
+                root.import_options()
+                    .and_then(|options| options.document_referrer_policy().map(str::to_owned))
+                    .as_deref(),
+            ),
+        )
     }
 
     fn install_import_graph_for_stylesheet(
@@ -282,6 +293,7 @@ impl LiveStylesheetRegistry {
         responses_by_request_identity: &HashMap<url::Url, &LiveStylesheetImportResponse>,
         ancestors: &HashSet<url::Url>,
         data_expansions: &mut usize,
+        document_referrer_policy: Option<&str>,
     ) -> bool {
         enum ImportGraphTraversal {
             Visit {
@@ -358,6 +370,15 @@ impl LiveStylesheetRegistry {
                             css_text,
                             successful: true,
                             origin_clean: true,
+                            import_options: Some(
+                                crate::stylesheet_blocking::StylesheetFetchOptions::for_import(
+                                    request.url.clone(),
+                                    document_referrer_policy.map(str::to_owned),
+                                )
+                                .with_document_referrer_policy(
+                                    document_referrer_policy.map(str::to_owned),
+                                ),
+                            ),
                         },
                         None => LiveStylesheetImportResponse {
                             request_url: request.url.clone(),
@@ -365,6 +386,7 @@ impl LiveStylesheetRegistry {
                             css_text: String::new(),
                             successful: false,
                             origin_clean: true,
+                            import_options: None,
                         },
                     }
                 } else {
@@ -377,21 +399,23 @@ impl LiveStylesheetRegistry {
                             css_text: String::new(),
                             successful: false,
                             origin_clean: false,
+                            import_options: None,
                         })
                 };
                 all_successful &= response.successful;
-                if self
-                    .install_import_response(
-                        parent.id(),
-                        parent.contents_revision(),
-                        request.edge_id,
-                        &response.css_text,
-                        response.response_url.clone(),
-                        response.successful,
-                        response.origin_clean,
-                    )
-                    .is_none()
-                {
+                if let Some(child) = self.install_import_response(
+                    parent.id(),
+                    parent.contents_revision(),
+                    request.edge_id,
+                    &response.css_text,
+                    response.response_url.clone(),
+                    response.successful,
+                    response.origin_clean,
+                ) {
+                    if let Some(options) = response.import_options {
+                        child.set_import_options(options);
+                    }
+                } else {
                     all_successful = false;
                 }
             }
