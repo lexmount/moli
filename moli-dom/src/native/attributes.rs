@@ -2,6 +2,38 @@ use super::NativeDom;
 use super::node::{NativeNodeId, Node};
 
 impl NativeDom {
+    pub fn get_attribute_utf16_units(&self, node_id: NativeNodeId, name: &str) -> Option<Vec<u16>> {
+        let name = self.normalized_attribute_name(node_id, name)?;
+        let element = self.node(node_id)?.as_element()?;
+        let value = element.attribute(&name)?;
+        Some(
+            element
+                .attribute_utf16_units(&name)
+                .map_or_else(|| value.encode_utf16().collect(), <[u16]>::to_vec),
+        )
+    }
+
+    pub fn get_attribute_ns_utf16_units(
+        &self,
+        node_id: NativeNodeId,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) -> Option<Vec<u16>> {
+        let element = self.node(node_id)?.as_element()?;
+        let attribute = element.attributes().iter().find(|attribute| {
+            attribute.namespace() == namespace.unwrap_or_default()
+                && attribute.local_name() == local_name
+        })?;
+        Some(
+            element
+                .attribute_utf16_units(&attribute.name())
+                .map_or_else(
+                    || attribute.value().encode_utf16().collect(),
+                    <[u16]>::to_vec,
+                ),
+        )
+    }
+
     pub fn get_attribute(&self, node_id: NativeNodeId, name: &str) -> Option<String> {
         let normalized_name = self.normalized_attribute_name(node_id, name)?;
         self.node(node_id)
