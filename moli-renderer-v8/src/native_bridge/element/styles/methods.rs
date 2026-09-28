@@ -71,6 +71,17 @@ pub(crate) fn set_style_property_from_object<'s>(
     value: &str,
     priority: bool,
 ) {
+    set_typed_style_property_from_object(scope, style, property, value, priority, None);
+}
+
+pub(crate) fn set_typed_style_property_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+    value: &str,
+    priority: bool,
+    unit: Option<moli_css_parse::CssDeclaredUnitValue>,
+) {
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return;
     };
@@ -91,6 +102,7 @@ pub(crate) fn set_style_property_from_object<'s>(
         &name,
         value,
         priority,
+        unit.as_ref(),
     )
     .is_some()
     {
@@ -195,6 +207,8 @@ pub(crate) fn set_style_property_from_object<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
+        &name,
+        unit,
     );
 }
 
@@ -290,6 +304,23 @@ pub(crate) fn style_property_names_from_object<'s>(
         mode,
         context,
     ))
+}
+
+pub(crate) fn style_typed_unit_value_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<moli_css_parse::CssDeclaredUnitValue> {
+    let (runtime_ptr, handle, StyleMode::Inline) =
+        style_runtime_and_handle_from_object(scope, style).ok()?
+    else {
+        return None;
+    };
+    unsafe { &*runtime_ptr }
+        .element_inline_style_declaration_state(handle)?
+        .block
+        .typed_unit_value(property)
+        .cloned()
 }
 
 /// Typed OM observes computed values, before CSSOM resolves percentages and
@@ -388,8 +419,16 @@ pub(crate) fn style_remove_property_callback<'s>(
         previous
     };
     if name == "all" {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
+        if set_inline_style_property_with_pdb_storage(
+            scope,
+            runtime_ptr,
+            handle,
+            &name,
+            "",
+            false,
+            None,
+        )
+        .is_some()
         {
             if let Some(previous) = v8_string(scope, &previous) {
                 rv.set(previous.into());
@@ -399,8 +438,16 @@ pub(crate) fn style_remove_property_callback<'s>(
             return;
         }
     } else {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
+        if set_inline_style_property_with_pdb_storage(
+            scope,
+            runtime_ptr,
+            handle,
+            &name,
+            "",
+            false,
+            None,
+        )
+        .is_some()
         {
             if let Some(previous) = v8_string(scope, &previous) {
                 rv.set(previous.into());
@@ -434,6 +481,7 @@ pub(crate) fn style_remove_property_callback<'s>(
             handle,
             &entries,
             inline_base_url.as_ref(),
+            &name,
         );
         if let Some(previous) = v8_string(scope, &previous) {
             rv.set(previous.into());
@@ -457,6 +505,7 @@ pub(crate) fn style_remove_property_callback<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
+        &name,
     );
     if let Some(previous) = v8_string(scope, &previous) {
         rv.set(previous.into());
