@@ -404,7 +404,7 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let namespace =
         svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
-    let value = trusted_attribute_value_string(
+    let units = trusted_attribute_value_string16(
         scope,
         Some((runtime_ptr, handle)),
         namespace,
@@ -412,6 +412,9 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
         value,
         TrustedAttributeSetter::SvgAnimatedStringBaseVal,
     )?;
+    let value = String::from_utf16_lossy(&units);
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let namespace =
         svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
     if attribute == "href" {
@@ -430,13 +433,17 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
             &value,
         );
     } else {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            attribute,
-            &value,
-        );
+        crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            let _ = unsafe { &mut *runtime_ptr }
+                .set_attribute_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    attribute,
+                    &value,
+                    units,
+                );
+        });
     }
     Some(value)
 }
