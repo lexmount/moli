@@ -16,8 +16,12 @@ use super::super::{
         css_math_invert_constructor_callback, css_math_max_constructor_callback,
         css_math_min_constructor_callback, css_math_negate_constructor_callback,
         css_math_product_constructor_callback, css_math_sum_constructor_callback,
-        css_unit_value_constructor_callback, css_unparsed_value_constructor_callback,
-        css_variable_reference_value_constructor_callback,
+        css_matrix_component_constructor_callback, css_perspective_constructor_callback,
+        css_rotate_constructor_callback, css_scale_constructor_callback,
+        css_skew_constructor_callback, css_skew_x_constructor_callback,
+        css_skew_y_constructor_callback, css_transform_value_constructor_callback,
+        css_translate_constructor_callback, css_unit_value_constructor_callback,
+        css_unparsed_value_constructor_callback, css_variable_reference_value_constructor_callback,
     },
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     dom_quad::dom_quad_constructor_callback,
@@ -984,6 +988,78 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 css_math_clamp_constructor_callback
             ))
             .length(3)
+            .build(scope)
+        }
+        ConstructorKind::CssTransformValue => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSTransformValue,
+                css_transform_value_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssTranslate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSTranslate,
+                css_translate_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssRotate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSRotate,
+                css_rotate_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssScale => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSScale,
+                css_scale_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssSkew => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkew,
+                css_skew_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssSkewX => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkewX,
+                css_skew_x_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssSkewY => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkewY,
+                css_skew_y_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssPerspective => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSPerspective,
+                css_perspective_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMatrixComponent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMatrixComponent,
+                css_matrix_component_constructor_callback
+            ))
+            .length(1)
             .build(scope)
         }
         ConstructorKind::CssUnparsedValue => {

@@ -12,8 +12,16 @@ mod factories;
 mod map;
 mod math;
 mod parse;
+mod transforms;
 mod unparsed;
 mod values;
+
+pub(in crate::context_bootstrap) use transforms::{
+    css_matrix_component_constructor_callback, css_perspective_constructor_callback,
+    css_rotate_constructor_callback, css_scale_constructor_callback, css_skew_constructor_callback,
+    css_skew_x_constructor_callback, css_skew_y_constructor_callback,
+    css_transform_value_constructor_callback, css_translate_constructor_callback,
+};
 
 pub(super) use factories::install as install_numeric_factories;
 
@@ -43,4 +51,5 @@ pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     map::install_computed_style_map_template_bindings(scope, template, interface_name);
     values::install_typed_value_template_bindings(scope, template, interface_name);
     math::install(scope, template, interface_name, profile);
+    transforms::install(scope, template, interface_name);
 }
