@@ -314,6 +314,39 @@ impl DomHost {
         local_name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
+        self.set_attribute_ns_mutation_outcome_with_utf16_units(
+            handle, namespace, prefix, local_name, value, None,
+        )
+    }
+
+    pub fn set_attribute_ns_utf16_units_mutation_outcome(
+        &mut self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        prefix: Option<&str>,
+        local_name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> DomAttributeMutationOutcome {
+        self.set_attribute_ns_mutation_outcome_with_utf16_units(
+            handle,
+            namespace,
+            prefix,
+            local_name,
+            value,
+            Some(units),
+        )
+    }
+
+    fn set_attribute_ns_mutation_outcome_with_utf16_units(
+        &mut self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        prefix: Option<&str>,
+        local_name: &str,
+        value: &str,
+        units: Option<Vec<u16>>,
+    ) -> DomAttributeMutationOutcome {
         if namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
@@ -321,9 +354,13 @@ impl DomHost {
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
-        let changed = self
-            .dom
-            .set_attribute_ns(handle, namespace, prefix, local_name, value);
+        let changed = if let Some(units) = units {
+            self.dom
+                .set_attribute_ns_utf16_units(handle, namespace, prefix, local_name, value, units)
+        } else {
+            self.dom
+                .set_attribute_ns(handle, namespace, prefix, local_name, value)
+        };
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
             // Namespace-aware calls can still target HTML id/name by local name.

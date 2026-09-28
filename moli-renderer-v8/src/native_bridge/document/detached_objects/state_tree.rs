@@ -964,6 +964,7 @@ pub(crate) fn read_detached_native_attribute_names<'s>(
 pub(crate) struct DetachedNativeAttributeSnapshot {
     pub(crate) name: String,
     pub(in crate::native_bridge::document) value: String,
+    pub(in crate::native_bridge::document) value_utf16_units: Option<Vec<u16>>,
     pub(in crate::native_bridge::document) namespace_uri: Option<String>,
     pub(in crate::native_bridge::document) prefix: Option<String>,
     pub(in crate::native_bridge::document) local_name: String,
@@ -984,6 +985,9 @@ pub(crate) fn read_detached_native_attribute_snapshot<'s>(
             .map(|attribute| DetachedNativeAttributeSnapshot {
                 name: attribute.name(),
                 value: attribute.value().to_owned(),
+                value_utf16_units: element
+                    .attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
+                    .map(<[u16]>::to_vec),
                 namespace_uri: (!attribute.namespace().is_empty())
                     .then(|| attribute.namespace().to_owned()),
                 prefix: attribute.prefix().map(str::to_owned),

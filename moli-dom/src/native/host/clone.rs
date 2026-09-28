@@ -546,12 +546,26 @@ impl DomHost {
             return;
         };
         for attribute in element.attributes() {
-            let _ = clone_element.set_attribute(
-                attribute.local_name().to_owned(),
-                attribute.namespace().to_owned(),
-                attribute.prefix().map(str::to_owned),
-                attribute.value().to_owned(),
-            );
+            // A qualified name can occur in more than one namespace. Preserve
+            // each expanded name and its DOMString instead of merging by name.
+            if let Some(units) =
+                element.attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
+            {
+                clone_element.set_attribute_ns_utf16_units(
+                    attribute.local_name().to_owned(),
+                    attribute.namespace().to_owned(),
+                    attribute.prefix().map(str::to_owned),
+                    attribute.value().to_owned(),
+                    units.to_vec(),
+                );
+            } else {
+                clone_element.set_attribute_ns(
+                    attribute.local_name().to_owned(),
+                    attribute.namespace().to_owned(),
+                    attribute.prefix().map(str::to_owned),
+                    attribute.value().to_owned(),
+                );
+            }
         }
         let _ =
             clone_element.set_cryptographic_nonce(element.cryptographic_nonce().map(str::to_owned));
