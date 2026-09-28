@@ -23,6 +23,7 @@ pub struct StylesheetFetchOptions(Arc<StylesheetFetchOptionsData>);
 struct StylesheetFetchOptionsData {
     cross_origin: Option<String>,
     referrer_policy: Option<String>,
+    document_referrer_policy: Option<String>,
     integrity: Option<String>,
     nonce: Option<String>,
     charset: Option<String>,
@@ -48,6 +49,7 @@ impl StylesheetFetchOptions {
         Self(Arc::new(StylesheetFetchOptionsData {
             cross_origin: normalize_cross_origin(cross_origin),
             referrer_policy: normalize_token(referrer_policy),
+            document_referrer_policy: None,
             integrity: normalize_preserved_value(integrity),
             nonce: normalize_preserved_value(nonce),
             charset: normalize_token(charset),
@@ -67,6 +69,15 @@ impl StylesheetFetchOptions {
 
     pub fn referrer_policy(&self) -> Option<&str> {
         self.0.referrer_policy.as_deref()
+    }
+
+    pub fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
+        Arc::make_mut(&mut self.0).document_referrer_policy = policy;
+        self
+    }
+
+    pub fn document_referrer_policy(&self) -> Option<&str> {
+        self.0.document_referrer_policy.as_deref()
     }
 
     pub fn integrity(&self) -> Option<&str> {
@@ -131,6 +142,7 @@ pub struct StylesheetResourceKey {
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     referrer_policy: Option<String>,
+    document_referrer_policy: Option<String>,
     integrity: Option<String>,
     charset: Option<String>,
     quirks_mode_mime_compatibility: bool,
@@ -145,6 +157,7 @@ impl StylesheetResourceKey {
             request_mode,
             credentials_mode,
             referrer_policy: options.referrer_policy().map(str::to_owned),
+            document_referrer_policy: options.document_referrer_policy().map(str::to_owned),
             integrity: options.integrity().map(str::to_owned),
             charset: options.charset().map(str::to_owned),
             quirks_mode_mime_compatibility: options.quirks_mode_mime_compatibility(),
@@ -365,6 +378,15 @@ impl PreparedStylesheetFetch {
 }
 
 pub trait StylesheetFetcher: Clone + Send + 'static {
+    /// Captures Document defaults before selecting a shared physical resource.
+    /// Owner signatures retain their original element attributes.
+    fn prepare_stylesheet_fetch_options(
+        &self,
+        options: StylesheetFetchOptions,
+    ) -> StylesheetFetchOptions {
+        options
+    }
+
     /// Distinguishes environment-specific responses when a store serves several Documents.
     fn resource_cache_scope(&self) -> u64 {
         0
