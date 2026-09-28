@@ -249,6 +249,7 @@ impl JsContextHost {
                         prepared,
                     ),
                 );
+                self.retain_linked_stylesheet_import_options(owner, terminal);
                 installed_stylesheet_count += 1;
             }
             let Some(response) = ready_response else {

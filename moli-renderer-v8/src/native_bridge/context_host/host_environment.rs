@@ -285,6 +285,21 @@ impl JsContextHost {
         root: crate::document_runtime::ConnectedStyleImportRoot,
         responses: &[crate::live_stylesheet::LiveStylesheetImportResponse],
     ) -> Option<bool> {
+        let document_policy =
+            self.dom_host()
+                .owner_document_handle(root.owner)
+                .and_then(|document| {
+                    crate::context_bootstrap::document_referrer_policy_for_native_document(
+                        self, document,
+                    )
+                });
+        let stylesheet = self.live_stylesheets.get(root.stylesheet_id)?;
+        stylesheet.set_import_options(
+            stylesheet
+                .import_options()
+                .unwrap_or_default()
+                .with_document_referrer_policy(document_policy),
+        );
         self.live_stylesheets.install_import_graph(
             root.stylesheet_id,
             root.contents_revision,
@@ -292,6 +307,29 @@ impl JsContextHost {
             responses,
             root.root_resource_url.as_ref(),
         )
+    }
+
+    pub(crate) fn retain_linked_stylesheet_import_options(
+        &self,
+        owner: DomHandle,
+        terminal: &crate::stylesheet_blocking::StylesheetFetchTerminal,
+    ) {
+        let document_policy = self
+            .dom_host()
+            .owner_document_handle(owner)
+            .and_then(|document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+            });
+        let document_options = crate::stylesheet_blocking::StylesheetFetchOptions::default()
+            .with_document_referrer_policy(document_policy);
+        if let Some(options) =
+            crate::document_runtime::stylesheet_import_options(terminal, &document_options)
+            && let Some(stylesheet) = self.linked_live_stylesheet(owner)
+        {
+            stylesheet.set_import_options(options);
+        }
     }
 
     pub(crate) fn refresh_live_stylesheet_after_import_graph(

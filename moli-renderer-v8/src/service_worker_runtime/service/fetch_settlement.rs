@@ -344,6 +344,7 @@ impl ServiceWorkerRuntimeService {
                             body,
                         );
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
+                        response_url: Some(navigation_response.final_url.clone()),
                         response: Box::new(navigation_response),
                         response_filter,
                         from_network_fallback: true,
@@ -606,8 +607,8 @@ impl ServiceWorkerRuntimeService {
                 }
             }
         }
-        let final_url = response
-            .final_url
+        let response_url = response.final_url.clone();
+        let final_url = response_url
             .clone()
             .unwrap_or_else(|| job.request.url.clone());
         // The inner network fetch already applies ORB. Synthesized bodies belong
@@ -650,6 +651,7 @@ impl ServiceWorkerRuntimeService {
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
                 ServiceWorkerDirectFetchResponse {
+                    response_url,
                     response: Box::new(navigation_response),
                     response_filter,
                     from_network_fallback: false,
