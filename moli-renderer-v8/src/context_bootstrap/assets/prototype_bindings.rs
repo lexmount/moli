@@ -525,7 +525,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     );
     install_svg_template_bindings(scope, template, spec.interface.name());
     install_opfs_constructor_template_bindings(scope, template, spec.interface.name());
-    install_css_typed_om_template_bindings(scope, template, spec.interface.name());
+    install_css_typed_om_template_bindings(scope, template, spec.interface.name(), profile);
     install_css_stylesheet_template_bindings(scope, template, spec.interface.name());
     install_range_template_bindings(scope, template, spec.interface.name());
     install_indexed_db_template_bindings(scope, template, spec.interface.name());

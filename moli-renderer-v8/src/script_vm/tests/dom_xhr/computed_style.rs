@@ -58,6 +58,7 @@ mod advanced_style_values;
 mod computed_style_access;
 mod content_and_invalidation;
 mod cross_document_and_animations;
+mod css_style_value_parse;
 mod css_unparsed;
 mod nested_document_invalidation;
 mod properties_and_selectors;

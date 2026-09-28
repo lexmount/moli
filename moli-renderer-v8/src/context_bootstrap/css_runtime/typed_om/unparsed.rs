@@ -2,8 +2,10 @@ use super::*;
 use crate::web_api_interfaces;
 
 mod indexed;
+mod reification;
 mod serialization;
 
+pub(super) use reification::from_native;
 pub(super) use serialization::serialize;
 
 const SEGMENTS_SLOT: &str = "__moliCssUnparsedSegments";
