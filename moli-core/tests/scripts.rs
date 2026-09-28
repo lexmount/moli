@@ -13,6 +13,9 @@ use moli_core::{
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "scripts/post_parse_async.rs"]
+mod post_parse_async;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

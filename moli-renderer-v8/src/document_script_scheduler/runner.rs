@@ -189,7 +189,8 @@ impl<
         } = self;
         let mut async_tasks = async_fallback_queue.into_async_phase_tasks();
         async_tasks.extend(async_parse_time_queue.into_remaining_async_phase_tasks());
-        async_tasks.sort_by_key(PostParseDocumentScriptTask::position);
+        // Keep the order of already-observed async completions across parser
+        // handoff. Pending sources acquire a ready position when they finish.
         DocumentScriptRunnerPostParsePlan { async_tasks }
     }
 
