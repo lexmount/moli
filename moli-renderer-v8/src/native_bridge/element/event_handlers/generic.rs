@@ -88,6 +88,7 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "oncuechange",
     "onselect",
     "onselectionchange",
+    "onselectstart",
     "onabort",
     "oncancel",
     "onclose",
