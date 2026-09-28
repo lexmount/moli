@@ -12,13 +12,14 @@ async fn keyboard_fixture(control: &str) -> TestContext {
         window.__events = [];
         window.__keypresses = [];
         window.__inputEvents = [];
+        window.__inputPayloads = [];
         window.__cancel = '';
         window.__moveFocus = false;
         for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
             document.addEventListener(type, event => {
                 __events.push(event.type + ':' + event.target.id);
                 if (type === 'beforeinput' || type === 'input') {
-                    __inputEvents.push({type, data: event.data, inputType: event.inputType,
+                    __inputPayloads.push({type, data: event.data, inputType: event.inputType,
                         isComposing: event.isComposing, native: event instanceof InputEvent,
                         ui: event instanceof UIEvent, trusted: event.isTrusted,
                         bubbles: event.bubbles, cancelable: event.cancelable, composed: event.composed});
@@ -528,7 +529,7 @@ fn expected_input_event(
 }
 
 async fn input_events(ctx: &mut TestContext) -> serde_json::Value {
-    serde_json::from_str(&evaluate_string(ctx, "JSON.stringify(__inputEvents)").await)
+    serde_json::from_str(&evaluate_string(ctx, "JSON.stringify(__inputPayloads)").await)
         .expect("input event log must be JSON")
 }
 
@@ -586,7 +587,7 @@ async fn cdp_input_event_data_preserves_utf16_maxlength_edits() {
             ])
         );
 
-        evaluate_string(&mut ctx, "(__inputEvents.length = 0, '')").await;
+        evaluate_string(&mut ctx, "(__inputPayloads.length = 0, '')").await;
         ctx.process_async(json!({
             "id": 902, "method": "Input.insertText", "params": {"text": "z"}
         }))
@@ -630,7 +631,7 @@ async fn cdp_beforeinput_deletion_preserves_utf16_ranges_and_cancellation() {
                 json!([expected_input_event("beforeinput", input_type, json!(null))])
             );
 
-            evaluate_string(&mut ctx, "(__cancel = '', __inputEvents.length = 0, '')").await;
+            evaluate_string(&mut ctx, "(__cancel = '', __inputPayloads.length = 0, '')").await;
             dispatch(&mut ctx, "rawKeyDown", key, key, "").await;
             assert_eq!(field_value(&mut ctx).await, "AB");
             assert_eq!(
