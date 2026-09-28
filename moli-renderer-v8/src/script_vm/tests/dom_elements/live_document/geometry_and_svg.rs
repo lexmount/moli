@@ -2411,6 +2411,16 @@ fn svg_animated_values_follow_native_attribute_mutations() {
 }
 
 #[test]
+fn namespaced_attribute_values_preserve_utf16_and_namespace_identity() {
+    let mut vm = new_parsed_test_vm("https://namespace-utf16.test/", "<body></body>");
+    assert_eq!(
+        vm.eval(include_str!("namespace_attribute_string_values.js"))
+            .expect("namespaced attribute string fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_marker_orient_reflects_the_current_content_attribute() {
     let mut vm = new_storage_test_vm("https://marker-orient.test/");
     let observed = vm

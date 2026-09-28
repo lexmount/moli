@@ -26,7 +26,7 @@ impl NativeDom {
         })?;
         Some(
             element
-                .attribute_utf16_units(&attribute.name())
+                .attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
                 .map_or_else(
                     || attribute.value().encode_utf16().collect(),
                     <[u16]>::to_vec,
@@ -153,6 +153,37 @@ impl NativeDom {
         local_name: &str,
         value: &str,
     ) -> bool {
+        self.set_attribute_ns_with_utf16_units(node_id, namespace, prefix, local_name, value, None)
+    }
+
+    pub fn set_attribute_ns_utf16_units(
+        &mut self,
+        node_id: NativeNodeId,
+        namespace: Option<&str>,
+        prefix: Option<&str>,
+        local_name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_ns_with_utf16_units(
+            node_id,
+            namespace,
+            prefix,
+            local_name,
+            value,
+            Some(units),
+        )
+    }
+
+    fn set_attribute_ns_with_utf16_units(
+        &mut self,
+        node_id: NativeNodeId,
+        namespace: Option<&str>,
+        prefix: Option<&str>,
+        local_name: &str,
+        value: &str,
+        units: Option<Vec<u16>>,
+    ) -> bool {
         #[cfg(any(test, feature = "test-support"))]
         super::serialization_probe::record(super::serialization_probe::Access::Mutation);
         let namespace = namespace.unwrap_or_default();
@@ -162,12 +193,22 @@ impl NativeDom {
             .node_mut(node_id)
             .and_then(|node| node.data_mut().as_element_mut())
             .is_some_and(|element| {
-                element.set_attribute_ns(
-                    local_name.to_owned(),
-                    namespace.to_owned(),
-                    prefix.map(str::to_owned),
-                    value.to_owned(),
-                )
+                if let Some(units) = units {
+                    element.set_attribute_ns_utf16_units(
+                        local_name.to_owned(),
+                        namespace.to_owned(),
+                        prefix.map(str::to_owned),
+                        value.to_owned(),
+                        units,
+                    )
+                } else {
+                    element.set_attribute_ns(
+                        local_name.to_owned(),
+                        namespace.to_owned(),
+                        prefix.map(str::to_owned),
+                        value.to_owned(),
+                    )
+                }
             });
         if changed && let Some(document) = base_document {
             self.process_base_element(document, false);
