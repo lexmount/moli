@@ -60,6 +60,7 @@ mod content_and_invalidation;
 mod cross_document_and_animations;
 mod css_math;
 mod css_numeric_factories;
+mod css_numeric_operations;
 mod css_numeric_serialization;
 mod css_style_property_map;
 mod css_style_value_parse;
