@@ -5,11 +5,11 @@ use style::{
     context::QuirksMode,
     custom_properties::SpecifiedValue,
     properties::{
-        Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
+        CSSWideKeyword, Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
         SourcePropertyDeclaration, parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, CssRuleTypes, Origin, UrlExtraData},
-    typed_om::{KeywordValue, TypedValue, TypedValueList, UnparsedValue},
+    typed_om::{KeywordValue, ToTyped, TypedValue, TypedValueList, UnparsedValue},
 };
 use style_traits::ParsingMode;
 
@@ -73,6 +73,9 @@ pub fn parse_typed_style_value(
             .into_iter()
             .collect(),
         })
+    } else if let Some(keyword) = css_wide_keyword(&block) {
+        // Shorthand expansion stores the same CSS-wide keyword on each longhand.
+        keyword.to_typed_value_list()
     } else {
         block.property_value_to_typed_value_list(&id).ok()?
     };
@@ -125,6 +128,14 @@ fn specified_two_axis_values(
         return None;
     }
     radius.width.to_typed_value_list()
+}
+
+fn css_wide_keyword(block: &PropertyDeclarationBlock) -> Option<CSSWideKeyword> {
+    let mut declarations = block.declaration_importance_iter();
+    let keyword = declarations.next()?.0.get_css_wide_keyword()?;
+    declarations
+        .all(|(declaration, _)| declaration.get_css_wide_keyword() == Some(keyword))
+        .then_some(keyword)
 }
 
 /// Preserve var() references in raw tokens, including inside other functions.
@@ -187,6 +198,72 @@ mod tests {
             let pair = parse_typed_style_value(property, "5% 7px", None).unwrap();
             assert_eq!(pair.css_text, "5% 7px");
             assert!(pair.values.is_none());
+        }
+    }
+
+    #[test]
+    fn css_wide_keywords_reify_across_longhands_and_shorthands() {
+        for property in [
+            "all",
+            "width",
+            "color",
+            "animation-name",
+            "margin",
+            "margin-inline",
+            "background",
+            "background-position",
+            "border",
+        ] {
+            for keyword in ["initial", "inherit", "unset", "revert", "revert-layer"] {
+                let source = format!("/**/{} /**/", keyword.to_ascii_uppercase());
+                let parsed = parse_typed_style_value(property, &source, None)
+                    .unwrap_or_else(|| panic!("{property}: {source}"));
+                let values = parsed
+                    .values
+                    .unwrap_or_else(|| panic!("{property}: opaque"));
+                assert_eq!(values.values.len(), 1, "{property}: {keyword}");
+                assert!(
+                    matches!(&values.values[0], TypedValue::Keyword(value) if value.0 == keyword),
+                    "{property}: {keyword}"
+                );
+            }
+        }
+        for property in ["all", "margin"] {
+            let parsed = parse_typed_style_value(property, r"\69 nherit", None).unwrap();
+            assert!(matches!(
+                &parsed.values.unwrap().values[0], TypedValue::Keyword(value) if value.0 == "inherit"
+            ));
+        }
+        for (property, source) in [
+            ("margin", "initial 1px"),
+            ("margin", "initial, inherit"),
+            ("all", "auto"),
+            ("unknown-property", "initial"),
+        ] {
+            assert!(parse_typed_style_value(property, source, None).is_none());
+        }
+        for (property, source) in [
+            ("margin", "auto"),
+            ("background", "none"),
+            ("font", "medium serif"),
+        ] {
+            assert!(
+                parse_typed_style_value(property, source, None)
+                    .unwrap()
+                    .values
+                    .is_none()
+            );
+        }
+        for (property, source) in [
+            ("all", "var(--x, initial)"),
+            ("margin", "var(--x, initial)"),
+            ("--x", "initial"),
+        ] {
+            let parsed = parse_typed_style_value(property, source, None).unwrap();
+            assert!(matches!(
+                &parsed.values.unwrap().values[0],
+                TypedValue::Unparsed(_)
+            ));
         }
     }
 
