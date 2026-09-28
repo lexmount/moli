@@ -2,6 +2,9 @@ use super::*;
 use crate::web_api_interfaces;
 
 mod array;
+mod conversion;
+mod graph;
+mod operations;
 mod serialization;
 mod types;
 
@@ -121,6 +124,24 @@ math_class!(
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSNumericValue, enumerable, receiver)]
 struct NumericPrototype {
+    #[webapi(method, callback = operations::add_callback, length = 0)]
+    add: (),
+    #[webapi(method, callback = operations::sub_callback, length = 0)]
+    sub: (),
+    #[webapi(method, callback = operations::mul_callback, length = 0)]
+    mul: (),
+    #[webapi(method, callback = operations::div_callback, length = 0)]
+    div: (),
+    #[webapi(method, callback = operations::min_callback, length = 0)]
+    min: (),
+    #[webapi(method, callback = operations::max_callback, length = 0)]
+    max: (),
+    #[webapi(method, callback = operations::equals_callback, length = 0)]
+    equals: (),
+    #[webapi(method, callback = conversion::to_callback, length = 1)]
+    to: (),
+    #[webapi(method = "toSum", callback = conversion::to_sum_callback, length = 0)]
+    to_sum: (),
     #[webapi(method = "type", callback = type_callback, length = 0)]
     numeric_type: (),
 }
@@ -197,6 +218,16 @@ fn numberish<'s>(
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
 ) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
+    let realm = scope.get_current_context();
+    numberish_in_realm(scope, value, context, realm)
+}
+
+fn numberish_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    context: webidl::Context,
+    realm: v8::Local<'s, v8::Context>,
+) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
         && web_api_interfaces::CSSNumericValue::is_instance(scope, object)
     {
@@ -205,6 +236,7 @@ fn numberish<'s>(
     // The union's numeric branch performs ToNumber, including user conversion
     // and its exceptions; an author Proxy does not inherit the target's brand.
     let number = f64::from(webidl::convert::<webidl::Double>(scope, value, context)?);
+    let scope = &mut v8::ContextScope::new(scope, realm);
     Ok(values::unit_value(scope, number, "number".into()))
 }
 
@@ -271,6 +303,45 @@ fn combined_type<'s>(
         };
     }
     Some(result)
+}
+
+fn math_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: Kind,
+    items: &[v8::Local<'s, v8::Object>],
+    realm: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let Some(numeric_type) = combined_type(scope, kind, items) else {
+        throw_type_error(scope, "Incompatible CSS numeric types");
+        return None;
+    };
+    // Validate in the callee realm, then allocate in the receiver realm.
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let numeric_type = type_array(scope, numeric_type);
+    let elements = items.iter().copied().map(Into::into).collect::<Vec<_>>();
+    let values = v8::Array::new_with_elements(scope, &elements);
+    // Bind intrinsic objects in the receiver's realm without calling an
+    // author-replaceable constructor or reparsing the public serialization.
+    let result = match kind {
+        Kind::Sum => SumDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Product => ProductDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Negate => NegateDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Invert => InvertDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Min => MinDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Max => MaxDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+        Kind::Clamp => ClampDeclaration::new(values, kind as u32, numeric_type).bind(scope),
+    };
+    Some(result.expect("CSS math object should bind"))
+}
+
+fn operands<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<Vec<v8::Local<'s, v8::Object>>> {
+    let children = children(scope, object)?;
+    (0..children.length())
+        .map(|index| v8::Local::<v8::Object>::try_from(children.get_index(scope, index)?).ok())
+        .collect()
 }
 
 fn type_array<'s>(
