@@ -316,6 +316,16 @@ fn coerce_values<'s>(
         };
         let mut parsed = moli_css_parse::parse_typed_style_value(property, &text, base_url);
         if let Some(object) = object {
+            if web_api_interfaces::CSSImageValue::is_instance(scope, object)
+                && !parsed
+                    .as_ref()
+                    .and_then(|v| v.values.as_ref())
+                    .is_some_and(|v| {
+                        v.values.len() == 1 && matches!(&v.values[0], TypedValue::Image(_))
+                    })
+            {
+                return Err(CoercionError::Invalid);
+            }
             if values::associated_property(scope, object).is_some_and(|name| name != property) {
                 return Err(CoercionError::Invalid);
             }

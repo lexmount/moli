@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn css_image_values_reify_native_urls_and_preserve_brands_realms_and_writes() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-image-values.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_image_values.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_all_keywords_preserve_native_realms_and_property_independent_values() {
     let mut vm = new_parsed_test_vm(
         "https://css-all-keywords.test/",
