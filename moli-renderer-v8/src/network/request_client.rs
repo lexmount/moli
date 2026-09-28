@@ -790,13 +790,17 @@ impl ResourceRequestClient {
             // Image consumers now retain parkable bodies. Share the transport
             // before adapting its materialized bytes back to that streaming
             // boundary; do not bypass per-consumer preflight/security checks.
-            let observed = self.fetch_image_after_policy(request, cancel_handle).await?;
+            let observed = self
+                .fetch_image_after_policy(request, cancel_handle)
+                .await?;
             let (response, journal) = observed.into_parts_with_observation_journal();
             let (head, body) = response.into_parts();
-            let bytes = body.try_into_materialized_bytes()
+            let bytes = body
+                .try_into_materialized_bytes()
                 .expect("shared image transport materializes exact bytes");
             return Ok(NetworkFetchResult::with_observation_journal(
-                streaming_raw_response_from_head_and_body(head, bytes)?, journal,
+                streaming_raw_response_from_head_and_body(head, bytes)?,
+                journal,
             ));
         }
         self.fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel_handle)
