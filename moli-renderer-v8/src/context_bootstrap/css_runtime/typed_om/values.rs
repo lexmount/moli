@@ -2,11 +2,12 @@ use super::*;
 use style::typed_om::{NumericValue, TypedValue};
 use moli_webapi::css_values::{
     CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration,
-    css_unit_value_number, css_unit_value_unit, css_keyword_value,
+    css_keyword_value,
 };
 pub(super) use moli_webapi::css_values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
     style_value_from_text, unit_value, opaque_style_value, associated_property,
+    css_unit_value_number, css_unit_value_unit, normalize_unit_name,
 };
 
 mod number;

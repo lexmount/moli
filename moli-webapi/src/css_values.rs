@@ -279,7 +279,7 @@ fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
         .ok()
 }
 
-fn normalize_unit_name(unit: &str) -> Option<String> {
+pub fn normalize_unit_name(unit: &str) -> Option<String> {
     let unit = unit.to_ascii_lowercase();
     VALID_UNIT_NAMES.contains(&unit.as_str()).then_some(unit)
 }
