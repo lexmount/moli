@@ -49,8 +49,9 @@ pub(crate) use declaration::{
     style_entries_property_value_with_pdb, style_property_value,
 };
 pub(crate) use methods::{
-    computed_style_property_names_from_object, computed_style_property_value_from_object,
+    clear_inline_style_from_object, set_style_property_from_object, style_declaration_is_computed,
     style_get_property_priority_callback, style_get_property_value_callback, style_item_callback,
+    style_property_names_from_object, style_property_value_from_object,
     style_remove_property_callback, style_set_property_callback,
 };
 pub(crate) use named::{live_style_named_property_value, set_live_style_named_property_value};
@@ -701,7 +702,7 @@ fn style_computation_context_for_document_snapshot(
     handle: DomHandle,
 ) -> Option<DocumentSnapshotStyleComputation> {
     document_snapshot_style_context(host, handle, |handle| {
-        computed_style_target_is_in_flat_tree(host, handle)
+        computed_style_target_is_in_document_flat_tree(host, handle, host.document_handle())
     })
 }
 
@@ -1007,7 +1008,7 @@ pub(in crate::native_bridge) fn node_style_setter_function<'s>(
     let _ = target.set(scope, v8str(scope, "cssText").into(), args.get(0));
 }
 
-fn style_for_element<'s>(
+pub(crate) fn style_for_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

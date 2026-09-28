@@ -47,6 +47,13 @@ struct ComputedStylePropertyMapDeclaration<'s> {
     style: v8::Local<'s, v8::Object>,
 }
 
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::StylePropertyMap)]
+struct StylePropertyMapDeclaration<'s> {
+    #[webapi(slot = STYLE_PROPERTY_MAP_STYLE_SLOT)]
+    style: v8::Local<'s, v8::Object>,
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSKeywordValue, enumerable)]
 struct CssKeywordValuePrototypeDeclaration {
@@ -92,6 +99,15 @@ struct CssUnitValueConstructorArgs {
 struct CssKeywordValueConstructorArgs {
     #[webidl(required)]
     keyword: String,
+}
+
+pub fn new_style_property_map<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    StylePropertyMapDeclaration::new(style)
+        .bind(scope)
+        .expect("native StylePropertyMap should bind")
 }
 
 pub fn new_style_property_map_read_only<'s>(
@@ -413,7 +429,7 @@ pub fn css_unit_value_number<'s>(
         .and_then(|value| value.number_value(scope))
 }
 
-fn css_keyword_value<'s>(
+pub fn css_keyword_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
@@ -428,5 +444,23 @@ pub fn css_unit_value_unit<'s>(
 ) -> Option<String> {
     get_private_value(scope, receiver, CSS_UNIT_VALUE_UNIT_SLOT)
         .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+pub fn associated_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    get_private_value(scope, value, CSS_STYLE_VALUE_PROPERTY_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+pub fn style_value_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    get_private_value(scope, value, CSS_STYLE_VALUE_TEXT_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
         .map(|value| value.to_rust_string_lossy(scope))
 }

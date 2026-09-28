@@ -1,12 +1,12 @@
 use super::*;
 use style::typed_om::{NumericValue, TypedValue};
 use moli_webapi::css_values::{
-    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration, opaque_style_value,
-    css_unit_value_number, css_unit_value_unit,
+    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration,
+    css_unit_value_number, css_unit_value_unit, css_keyword_value,
 };
 pub(super) use moli_webapi::css_values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-    style_value_from_text, unit_value,
+    style_value_from_text, unit_value, opaque_style_value, associated_property,
 };
 
 mod number;
@@ -99,20 +99,24 @@ fn css_style_value_to_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if crate::web_api_interfaces::CSSUnparsedValue::is_instance(scope, args.this()) {
-        if let Some(text) =
-            super::unparsed::serialize(scope, args.this()).and_then(|text| v8_string(scope, &text))
-        {
-            rv.set(text.into());
-        }
-        return;
+    if let Some(text) = serialize(scope, args.this()).and_then(|text| v8_string(scope, &text)) {
+        rv.set(text.into());
     }
-    if let Some(unit) = css_unit_value_unit(scope, args.this()) {
-        let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
+}
+
+/// Serializes genuine CSSStyleValue internal slots, never author-overridable
+/// toString/value/unit properties. Callers must first validate the native brand.
+pub(super) fn serialize<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    if crate::web_api_interfaces::CSSUnparsedValue::is_instance(scope, value) {
+        return super::unparsed::serialize(scope, value);
+    }
+    if let Some(unit) = css_unit_value_unit(scope, value) {
+        let value = css_unit_value_number(scope, value)?;
         let number = moli_css_parse::serialize_css_number(value);
-        let text = if !value.is_finite() {
-            // IDL constructors/setters require finite doubles; values reified
-            // from CSS math may nevertheless carry a non-finite result.
+        return Some(if !value.is_finite() {
             if unit == "number" {
                 format!("calc({number})")
             } else {
@@ -127,11 +131,12 @@ fn css_style_value_to_string_callback<'s>(
                 "percent" => format!("{number}%"),
                 _ => format!("{number}{unit}"),
             }
-        };
-        if let Some(text) = v8_string(scope, &text) {
-            rv.set(text.into());
-        }
-        return;
+        });
     }
-    moli_webapi::css_values::css_style_value_to_string_callback(scope, args, rv);
+    if let Some(keyword) = css_keyword_value(scope, value) {
+        let mut text = String::new();
+        cssparser::serialize_identifier(&keyword, &mut text).ok()?;
+        return Some(text);
+    }
+    moli_webapi::css_values::style_value_text(scope, value)
 }
