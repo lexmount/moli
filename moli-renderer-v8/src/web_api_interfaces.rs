@@ -105,6 +105,16 @@ interfaces! {
     CSSSupportsRule: CSSConditionRule;
     CSSTransition: Animation;
     CSSUnitValue: CSSNumericValue;
+    CSSTransformComponent;
+    CSSTransformValue: CSSStyleValue;
+    CSSTranslate: CSSTransformComponent;
+    CSSRotate: CSSTransformComponent;
+    CSSScale: CSSTransformComponent;
+    CSSSkew: CSSTransformComponent;
+    CSSSkewX: CSSTransformComponent;
+    CSSSkewY: CSSTransformComponent;
+    CSSPerspective: CSSTransformComponent;
+    CSSMatrixComponent: CSSTransformComponent;
     CSSUnparsedValue: CSSStyleValue;
     CSSVariableReferenceValue;
     Cache;
