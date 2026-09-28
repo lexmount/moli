@@ -6,9 +6,11 @@ mod conversion;
 mod graph;
 mod operations;
 mod parsing;
+mod reification;
 mod serialization;
 mod types;
 
+pub(super) use reification::from_native;
 pub(super) use serialization::serialize;
 use types::NumericType;
 
