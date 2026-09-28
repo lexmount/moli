@@ -102,7 +102,7 @@ impl Graph {
 
 /// Compare lazily so an early mismatch does not traverse unrelated subgraphs.
 /// Argument conversion has already finished; only private native slots are read.
-pub(super) fn equals<'s>(
+pub(in crate::context_bootstrap::css_runtime::typed_om) fn equals<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     items: &[v8::Local<'s, v8::Object>],
