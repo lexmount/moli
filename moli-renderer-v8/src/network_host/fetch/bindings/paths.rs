@@ -1,7 +1,7 @@
 use super::super::*;
 use super::request::PreparedWindowFetchRequest;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, RequestCacheMode, ScriptFetchRequestMetadata,
+    BrowserRequestMetadata, FetchCancelHandle, RequestCacheMode, SubresourceRequestMetadata,
     should_request_be_blocked_due_to_bad_port,
 };
 
@@ -217,8 +217,8 @@ pub(super) fn spawn_network_fetch(
     .with_fetch_priority_hint(prepared.priority)
     .with_fetch_referrer(&prepared.referrer)
     .map_err(|error| error.to_string())?;
-    if let Some(metadata) = window_fetch_script_metadata(&prepared) {
-        request = request.with_script_fetch_metadata(metadata);
+    if let Some(metadata) = window_fetch_subresource_metadata(&prepared) {
+        request = request.with_subresource_request_metadata(metadata);
     }
     request = request
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
@@ -304,9 +304,9 @@ fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
     }
 }
 
-fn window_fetch_script_metadata(
+fn window_fetch_subresource_metadata(
     prepared: &PreparedWindowFetchRequest,
-) -> Option<ScriptFetchRequestMetadata> {
+) -> Option<SubresourceRequestMetadata> {
     let referrer_policy =
         (!prepared.referrer_policy.is_empty()).then(|| prepared.referrer_policy.clone());
     let integrity = (!prepared.integrity.is_empty()).then(|| prepared.integrity.clone());
@@ -316,11 +316,10 @@ fn window_fetch_script_metadata(
     {
         return None;
     }
-    Some(ScriptFetchRequestMetadata {
+    Some(SubresourceRequestMetadata {
         referrer_policy,
         document_referrer_policy: prepared.document_referrer_policy.clone(),
         integrity,
-        ..ScriptFetchRequestMetadata::default()
     })
 }
 

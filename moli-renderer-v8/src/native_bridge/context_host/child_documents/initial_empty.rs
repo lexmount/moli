@@ -29,12 +29,8 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> DocumentPolicyContainer {
         let mut policy_container = self
-            .child_browsing_context_parent_handle(handle)
-            .and_then(|parent| {
-                self.child_browsing_contexts
-                    .get(&parent)
-                    .map(|entry| entry.document_policy_container_snapshot())
-            })
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| self.document_policy_container_for_inheritance(owner))
             .unwrap_or_else(|| self.document_policy_container().clone());
         if let Some(parent_document) = self
             .dom_host()

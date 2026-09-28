@@ -10,6 +10,12 @@ use tokio::{
 #[path = "document_referrer_dispatch.rs"]
 mod document_referrer_dispatch;
 
+#[path = "iframe_referrer_policy_inheritance.rs"]
+mod iframe_referrer_policy_inheritance;
+
+#[path = "fetch_client_referrer.rs"]
+mod fetch_client_referrer;
+
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
@@ -143,7 +149,7 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
-        "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
+        "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" | "/cached-client-referrer" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
         "/echo-origin.js"
