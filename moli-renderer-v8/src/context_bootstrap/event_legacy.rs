@@ -176,13 +176,6 @@ struct InitCompositionEventArgs<'s> {
     data: String,
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "KeyboardEvent.getModifierState")]
-struct KeyboardEventGetModifierStateArgs {
-    #[webidl(required)]
-    key_arg: String,
-}
-
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct LegacyUiEventInitDeclaration<'scope> {
@@ -223,10 +216,6 @@ struct LegacyMouseEventBaseInitDeclaration<'scope> {
 struct LegacyMouseEventTailInitDeclaration<'scope> {
     #[webapi(constructor_default = 0)]
     buttons: i32,
-    ctrl_key: bool,
-    alt_key: bool,
-    shift_key: bool,
-    meta_key: bool,
     related_target: v8::Local<'scope, v8::Value>,
 }
 
@@ -242,14 +231,6 @@ struct LegacyKeyboardEventInitDeclaration<'scope> {
     repeat: bool,
     #[webapi(constructor_default = false)]
     is_composing: bool,
-    #[webapi(constructor_default = false)]
-    ctrl_key: bool,
-    #[webapi(constructor_default = false)]
-    shift_key: bool,
-    #[webapi(constructor_default = false)]
-    alt_key: bool,
-    #[webapi(constructor_default = false)]
-    meta_key: bool,
 }
 
 #[derive(WebApiObject)]
@@ -399,15 +380,17 @@ pub(super) fn mouse_event_init_callback<'s>(
     )
     .initialize(scope, event)
     .expect("legacy MouseEvent base init declaration should initialize");
-    LegacyMouseEventTailInitDeclaration::new(
+    super::events::initialize_legacy_event_modifiers(
+        scope,
+        event,
         parsed.ctrl_key,
         parsed.alt_key,
         parsed.shift_key,
         parsed.meta_key,
-        related_target,
-    )
-    .initialize(scope, event)
-    .expect("legacy MouseEvent tail init declaration should initialize");
+    );
+    LegacyMouseEventTailInitDeclaration::new(related_target)
+        .initialize(scope, event)
+        .expect("legacy MouseEvent tail init declaration should initialize");
 }
 
 pub(super) fn keyboard_event_init_callback<'s>(
@@ -432,6 +415,7 @@ pub(super) fn keyboard_event_init_callback<'s>(
     );
     let key = v8_string(scope, &parsed.key).unwrap_or_else(|| v8str(scope, ""));
     let code = v8str(scope, "");
+    super::events::initialize_legacy_event_modifiers(scope, event, false, false, false, false);
     LegacyKeyboardEventInitDeclaration::new(view, key, code, parsed.location, parsed.repeat)
         .initialize(scope, event)
         .expect("legacy KeyboardEvent init declaration should initialize");
@@ -516,39 +500,4 @@ pub(super) fn storage_event_init_callback<'s>(
         &parsed.url,
         parsed.storage_area,
     );
-}
-
-pub(super) fn keyboard_event_get_modifier_state_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<KeyboardEventGetModifierStateArgs>(scope, &args) else {
-        return;
-    };
-    let event = super::events::event_backing(scope, args.this());
-    let key_name = match parsed.key_arg.as_str() {
-        "Alt" | "AltGraph" => "altKey",
-        "Control" => "ctrlKey",
-        "Shift" => "shiftKey",
-        "Meta" => "metaKey",
-        "Accel" => {
-            let ctrl = event
-                .get(scope, v8str(scope, "ctrlKey").into())
-                .is_some_and(|value| value.boolean_value(scope));
-            let meta = event
-                .get(scope, v8str(scope, "metaKey").into())
-                .is_some_and(|value| value.boolean_value(scope));
-            rv.set(v8::Boolean::new(scope, ctrl || meta).into());
-            return;
-        }
-        _ => {
-            rv.set(v8::Boolean::new(scope, false).into());
-            return;
-        }
-    };
-    let value = event
-        .get(scope, v8str(scope, key_name).into())
-        .is_some_and(|value| value.boolean_value(scope));
-    rv.set(v8::Boolean::new(scope, value).into());
 }

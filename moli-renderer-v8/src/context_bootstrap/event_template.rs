@@ -2,9 +2,8 @@ use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
         composition_event_init_callback, custom_event_init_callback, event_init_event_callback,
-        keyboard_event_get_modifier_state_callback, keyboard_event_init_callback,
-        mouse_event_init_callback, storage_event_init_callback, text_event_init_callback,
-        ui_event_init_callback,
+        keyboard_event_init_callback, mouse_event_init_callback, storage_event_init_callback,
+        text_event_init_callback, ui_event_init_callback,
     },
     events::{
         close_event_code_getter_function, close_event_reason_getter_function,
@@ -13,10 +12,11 @@ use super::{
         event_cancelable_getter_function, event_composed_getter_function,
         event_composed_path_callback, event_current_target_getter_function,
         event_default_prevented_getter_function, event_event_phase_getter_function,
-        event_prevent_default_callback, event_return_value_getter_function,
-        event_return_value_setter_function, event_src_element_getter_function,
-        event_stop_immediate_propagation_callback, event_stop_propagation_callback,
-        event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
+        event_get_modifier_state_callback, event_prevent_default_callback,
+        event_return_value_getter_function, event_return_value_setter_function,
+        event_src_element_getter_function, event_stop_immediate_propagation_callback,
+        event_stop_propagation_callback, event_target_getter_function,
+        event_time_stamp_getter_function, event_type_getter_function,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
         submit_event_submitter_getter_function, track_event_track_getter_function,
@@ -231,8 +231,9 @@ struct KeyboardEventTemplateMethodsDeclaration {
 
     #[webapi(
         method = "getModifierState",
-        length = 0,
-        callback = keyboard_event_get_modifier_state_callback
+        length = 1,
+        callback = event_get_modifier_state_callback,
+        receiver = web_api_interfaces::KeyboardEvent::is_instance
     )]
     get_modifier_state: (),
 }
@@ -240,6 +241,14 @@ struct KeyboardEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MouseEvent, enumerable)]
 struct MouseEventTemplateMethodsDeclaration {
+    #[webapi(
+        method = "getModifierState",
+        length = 1,
+        callback = event_get_modifier_state_callback,
+        receiver = web_api_interfaces::MouseEvent::is_instance
+    )]
+    get_modifier_state: (),
+
     #[webapi(
         accessor_property = "relatedTarget",
         getter = mouse_event_related_target_getter_function
