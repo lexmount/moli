@@ -60,9 +60,9 @@
   if (site === 'pixelscan') {
     const cards = Array.from(document.querySelectorAll('[checkervalue]'), text);
     const lower = cards.map(t => t.toLowerCase());
-    report.masking = lower.includes('masking detected') ? true : lower.includes('no masking detected') ? false : null;
-    report.automated = lower.includes('automated behavior detected') ? true
-      : lower.includes('no automated behavior detected') ? false : null;
+    const verdict = (yes, no) => lower.includes(yes) === lower.includes(no) ? null : lower.includes(yes);
+    report.masking = verdict('masking detected', 'no masking detected');
+    report.automated = verdict('automated behavior detected', 'no automated behavior detected');
     report.browser = cards.find(t => /^(Chrome|Chromium|Firefox|Safari|Edge)\b/.test(t))?.slice(0, 100) || null;
     report.valid = location.pathname === '/fingerprint-check' && report.masking !== null && report.automated !== null;
     const selectors = {browser:'pxlscn-browser-integrity', fingerprint:'pxlscn-fingerprint-masking',
@@ -89,7 +89,10 @@
     report.kind = 'report-only';
     report.fields = Object.fromEntries(['userAgent', 'platform', 'hardwareConcurrency', 'webdriver']
       .map(key => [key, text(document.getElementById('js-' + key)).slice(0, 250) || null]));
-    report.valid = Object.values(report.fields).every(v => v !== null);
+    report.valid = /^Mozilla\//.test(report.fields.userAgent || '')
+      && !!report.fields.platform && !/^(loading[.\u2026]*|pending|-+)$/i.test(report.fields.platform)
+      && /^[1-9]\d*$/.test(report.fields.hardwareConcurrency || '')
+      && /^(true|false)$/.test(report.fields.webdriver || '');
     return report;
   }
   if (site === 'browserleaks-webgl') {
@@ -103,9 +106,25 @@
     report.fields = Object.fromEntries(['WebGL Report Hash', 'WebGL Image Hash', 'WebGL Image',
       'Unmasked Vendor', 'Unmasked Renderer', 'Max Texture Size', 'Max Combined Texture Image Units',
       'Max Viewport Dimensions', 'Aliased Point Size Range'].map(key => [key, selected(key)]));
-    report.unavailable = Array.from(document.querySelectorAll('p, .warning, .notice'), text)
-      .some(t => /^(?:WebGL (?:is |seems to be )?(?:disabled or unavailable|not supported)|Your browser (?:does not support|doesn't support) WebGL)\b/i.test(t));
-    report.valid = report.unavailable || report.fields['WebGL Report Hash'] !== null;
+    // The site's webgl.js writes capability outcomes into these cells. The
+    // support/help prose also exists when contexts work, so it is not evidence.
+    const capability = id => {
+      // ico() prepends a decorative span (e.g. ✖). Read the scalar's direct
+      // text, not the icon or any descendant annotations.
+      const value = Array.from(document.getElementById(id)?.childNodes || [])
+        .filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent)
+        .join('').trim().replace(/\s+/g, ' ');
+      if (value === 'True') return 'available';
+      if (value === 'False') return 'unsupported';
+      if (value === 'False (supported, but disabled or unavailable)') return 'unavailable';
+      return null;
+    };
+    report.capabilities = {webgl1: capability('gl1-status'), webgl2: capability('gl2-status')};
+    report.unavailable = Object.values(report.capabilities).every(value => ['unavailable', 'unsupported'].includes(value));
+    const hashText = text(document.getElementById('gl-report-hash'));
+    const reportHash = /^[a-f0-9]{32}$/i.test(hashText) ? hashText : null;
+    report.fields['WebGL Report Hash'] = reportHash;
+    report.valid = report.unavailable || reportHash !== null;
     const canvas = document.getElementById('gl-image-src')?.querySelector('canvas');
     const hash = text(document.getElementById('gl-image-hash'));
     report.imageProbe = {canvasInserted:!!canvas, dimensions:canvas ? [canvas.width, canvas.height] : null,

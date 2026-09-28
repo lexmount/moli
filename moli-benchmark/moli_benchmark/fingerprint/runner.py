@@ -164,6 +164,9 @@ async def run_suite(output: Path, binaries: dict[str, Path], cases: tuple[Case, 
                   "binaries": {engine: {"path": str(path), "sha256": digest(path)} for engine, path in binaries.items()}}
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
     provenance["revision"] = revision.stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO_ROOT,
+                           text=True, capture_output=True, check=True)
+    provenance["worktree_dirty"] = bool(dirty.stdout.strip())
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "manifest.json", provenance)
     rows: list[dict] = []

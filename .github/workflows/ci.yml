@@ -585,7 +585,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: moli-benchmark/uv.lock
       - name: Install dependencies
-        run: uv sync --project moli-benchmark --locked
+        run: uv sync --project moli-benchmark --locked --extra fingerprint
       - name: Run deterministic fetch contracts
         run: >-
           uv run --project moli-benchmark --no-sync moli-benchmark synthetic
@@ -597,6 +597,12 @@ jobs:
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
           --target moli-cdp --gate-target moli-cdp --runs 3
           --output-dir target/benchmark/cdp-session
+      - name: Check fingerprint DOM collectors against local fixtures
+        run: >-
+          uv run --project moli-benchmark --no-sync python
+          moli-benchmark/tests/check_fingerprint_dom.py
+          --binary "$PWD/target/ci-bin/moli-release-head/moli" --engine moli
+          --output target/benchmark/fingerprint-dom
       - name: Upload evidence
         if: ${{ always() }}
         continue-on-error: true
