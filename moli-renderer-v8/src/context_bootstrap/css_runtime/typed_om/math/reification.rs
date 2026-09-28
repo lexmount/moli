@@ -24,11 +24,7 @@ pub(in crate::context_bootstrap::css_runtime::typed_om) fn from_native<'s>(
         })?;
         match next {
             Work::Value(NumericValue::Unit(unit)) => {
-                let name = if unit.unit_str() == "%" {
-                    "percent"
-                } else {
-                    unit.unit_str()
-                };
+                let name = values::native_unit_name(unit.unit_str());
                 objects.push(values::unit_value(
                     scope,
                     f64::from(unit.value),
