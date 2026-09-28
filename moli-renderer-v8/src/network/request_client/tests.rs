@@ -90,11 +90,15 @@ fn loader_clones_share_one_resource_disk_pool() {
     assert_eq!(pool.diagnostics().free_bytes, 6);
 }
 
-#[test]
-fn loader_clones_share_one_parkable_image_manager() {
+#[tokio::test(flavor = "current_thread")]
+async fn loader_clones_share_one_parkable_image_manager() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
     let clone = loader.clone();
-    let runner = crate::network::RendererResourceTaskRunner::for_test();
+    // Keep the scheduler on this thread without yielding during the lifetime
+    // assertions: scanning deadlines temporarily holds strong image handles.
+    // Background scheduling is covered separately in the resource runtime tests.
+    let runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
+        .expect("test runtime should be available");
     let image = loader
         .parkable_image_manager(&runner)
         .from_frozen_bytes(vec![7; 2 * 1024]);

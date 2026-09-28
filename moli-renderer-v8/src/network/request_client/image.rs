@@ -148,6 +148,7 @@ impl Drop for ImageTransport {
 }
 
 impl ResourceRequestClient {
+    #[cfg(test)]
     pub(crate) async fn fetch_image_with_cancel_and_network_metadata(
         &self,
         request: Request,
