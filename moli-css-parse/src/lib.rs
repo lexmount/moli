@@ -78,7 +78,10 @@ pub use stylo_stylesheet::{
 };
 pub use transform::{CssTransformFunction, parse_transform_function_list};
 pub use typed_declaration::{CssDeclarationBlock, CssDeclaredUnitValue, parse_declaration_block};
-pub use typed_om::{ParsedTypedStyleValue, parse_typed_style_value, reify_unparsed_style_value};
+pub use typed_om::{
+    ParsedTypedStyleValue, TypedImageValue, TypedStyleValueList, computed_typed_style_value_list,
+    parse_typed_style_value, reify_unparsed_style_value,
+};
 pub use util::{
     camel_case_style_property_name, camel_to_kebab, canonical_style_property_identifier,
     canonical_style_property_name, decapitalize_ascii_head, escape_top_level_semicolons,

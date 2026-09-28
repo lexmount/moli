@@ -1,6 +1,7 @@
 use super::factories::VALID_UNIT_NAMES;
 use super::*;
 use crate::web_api_interfaces;
+use moli_css_parse::{TypedImageValue, TypedStyleValueList};
 use style::typed_om::{NumericValue, TypedValue};
 
 mod number;
@@ -201,8 +202,12 @@ pub(super) fn from_parsed<'s>(
     source: &str,
     parsed: moli_css_parse::ParsedTypedStyleValue,
 ) -> Vec<v8::Local<'s, v8::Object>> {
-    let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
+    let Some(typed) = parsed.values.filter(|list| !list.is_empty()) else {
         return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    };
+    let typed = match typed {
+        TypedStyleValueList::Native(typed) => typed,
+        TypedStyleValueList::Images(images) => return image_values(scope, images),
     };
     // Stylo determines whether this property is list-valued. Only subdivide
     // its serialization when that projection has multiple items; a shorthand
@@ -279,13 +284,32 @@ fn image_value<'s>(scope: &mut v8::PinScope<'s, '_>, text: &str) -> v8::Local<'s
         .expect("CSSImageValue declaration should bind")
 }
 
+fn image_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    images: Vec<TypedImageValue>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    images
+        .into_iter()
+        .map(|value| match value {
+            TypedImageValue::None => CssKeywordValueObjectDeclaration::new("none".into())
+                .bind(scope)
+                .expect("CSSKeywordValue declaration should bind"),
+            TypedImageValue::Image(text) => image_value(scope, &text),
+        })
+        .collect()
+}
+
 pub(super) fn from_computed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     property: &str,
     parsed: moli_css_parse::ParsedTypedStyleValue,
 ) -> Vec<v8::Local<'s, v8::Object>> {
-    let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
+    let Some(typed) = parsed.values.filter(|list| !list.is_empty()) else {
         return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    };
+    let typed = match typed {
+        TypedStyleValueList::Native(typed) => typed,
+        TypedStyleValueList::Images(images) => return image_values(scope, images),
     };
     let texts = if typed.values.len() == 1 {
         vec![parsed.css_text.clone()]
