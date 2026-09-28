@@ -1212,7 +1212,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     else {
         return;
     };
-    let Some(value) = crate::native_bridge::element::set_svg_animated_string_base_value(
+    let Some(_) = crate::native_bridge::element::set_svg_animated_string_base_value(
         scope,
         owner,
         &attribute,
@@ -1220,7 +1220,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     ) else {
         return;
     };
-    set_svg_animated_string_values(scope, animated, &value);
+    sync_svg_animated_string_from_owner_attribute(scope, animated);
 }
 
 pub(super) fn svg_animated_length_getter<'s>(

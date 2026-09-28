@@ -9,11 +9,11 @@ use moli_webapi_declare::WebApiObject;
     interface = web_api_interfaces::SVGAnimatedString,
     own_to_string_tag = "SVGAnimatedString"
 )]
-struct SvgAnimatedStringObjectDeclaration {
+struct SvgAnimatedStringObjectDeclaration<'s> {
     #[webapi(slot = SVG_ANIMATED_STRING_BASE_VAL_SLOT)]
-    base_val: String,
+    base_val: v8::Local<'s, v8::String>,
     #[webapi(slot = SVG_ANIMATED_STRING_ANIM_VAL_SLOT)]
-    anim_val: String,
+    anim_val: v8::Local<'s, v8::String>,
 }
 
 #[derive(WebApiObject)]
@@ -401,8 +401,8 @@ pub(super) fn build_svg_animated_string_for_attribute<'s>(
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let value = svg_owner_attribute_value(scope, owner, attribute).unwrap_or_default();
-    let object = SvgAnimatedStringObjectDeclaration::new(value.clone(), value)
+    let value = svg_owner_string_attribute_value(scope, owner, attribute);
+    let object = SvgAnimatedStringObjectDeclaration::new(value, value)
         .bind(scope)
         .expect("SVGAnimatedString declaration should bind");
     set_svg_animated_string_owner_attribute(scope, object, owner, attribute);
@@ -3652,16 +3652,7 @@ pub(super) fn sync_svg_animated_string_from_owner_attribute<'s>(
     else {
         return;
     };
-    let value = svg_owner_attribute_value(scope, owner, &attribute).unwrap_or_default();
-    set_svg_animated_string_values(scope, animated, &value);
-}
-
-pub(super) fn set_svg_animated_string_values(
-    scope: &mut v8::PinScope<'_, '_>,
-    animated: v8::Local<'_, v8::Object>,
-    value: &str,
-) {
-    let value = v8_string(scope, value).unwrap_or_else(|| v8str(scope, ""));
+    let value = svg_owner_string_attribute_value(scope, owner, &attribute);
     set_private_value(
         scope,
         animated,
@@ -3954,6 +3945,32 @@ pub(super) fn svg_owner_attribute_value<'s>(
         Some(crate::native_bridge::document::XLINK_NS),
         attribute,
     )
+}
+
+fn svg_owner_string_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> v8::Local<'s, v8::String> {
+    let units = crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+        .ok()
+        .and_then(|(runtime_ptr, handle)| {
+            let dom = unsafe { &*runtime_ptr }.dom_host();
+            if name == "href" {
+                dom.get_attribute_ns_utf16_units(handle, None, name)
+                    .or_else(|| {
+                        dom.get_attribute_ns_utf16_units(
+                            handle,
+                            Some(crate::native_bridge::document::XLINK_NS),
+                            name,
+                        )
+                    })
+            } else {
+                dom.get_attribute_utf16_units(handle, name)
+            }
+        })
+        .unwrap_or_default();
+    crate::util::v8_string_from_utf16_units(scope, &units).unwrap_or_else(|| v8str(scope, ""))
 }
 
 fn set_svg_owner_attribute_value<'s>(
