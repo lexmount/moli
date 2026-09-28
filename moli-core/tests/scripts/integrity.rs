@@ -49,6 +49,8 @@ mod referrer_policy_inheritance;
 #[path = "fetch_client_referrer.rs"]
 mod fetch_client_referrer;
 
+#[path = "css_import_referrer.rs"]
+mod css_import_referrer;
 #[path = "service_worker_referrer.rs"]
 mod service_worker_referrer;
 
@@ -370,6 +372,11 @@ fn fixture_response(
             "200 OK",
             format!("{javascript}Cache-Control: no-store\r\n"),
             include_str!("native_referrer_worker.js").to_owned(),
+        ),
+        "/css-import-referrer-worker.js" => (
+            "200 OK",
+            format!("{javascript}Cache-Control: no-store\r\n"),
+            include_str!("css_import_referrer_worker.js").to_owned(),
         ),
         "/cors.js" | "/cors-null.js" | "/cors-origin.js" => (
             "200 OK",

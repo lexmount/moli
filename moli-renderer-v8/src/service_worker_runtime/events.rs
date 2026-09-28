@@ -711,6 +711,8 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchResponse {
+    /// The worker response's URL before applying the request-URL fallback.
+    pub(crate) response_url: Option<Url>,
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     pub(crate) from_network_fallback: bool,

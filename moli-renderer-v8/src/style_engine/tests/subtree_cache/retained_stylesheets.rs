@@ -513,6 +513,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
     );
     let responses = vec![
         crate::live_stylesheet::LiveStylesheetImportResponse {
+            import_options: None,
             request_url: url::Url::parse("https://example.test/theme/first/imported.css").unwrap(),
             response_url: url::Url::parse("https://example.test/theme/first/imported.css").unwrap(),
             css_text: concat!(
@@ -524,6 +525,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
             origin_clean: true,
         },
         crate::live_stylesheet::LiveStylesheetImportResponse {
+            import_options: None,
             request_url: url::Url::parse("https://example.test/theme/second/imported.css").unwrap(),
             response_url: url::Url::parse("https://example.test/theme/second/imported.css")
                 .unwrap(),
@@ -536,6 +538,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
             origin_clean: true,
         },
         crate::live_stylesheet::LiveStylesheetImportResponse {
+            import_options: None,
             request_url: url::Url::parse("https://example.test/redirect/entry.css").unwrap(),
             response_url: url::Url::parse("https://cdn.example.test/final/entry.css").unwrap(),
             css_text: "@import './nested.css';".to_owned(),
@@ -543,6 +546,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
             origin_clean: true,
         },
         crate::live_stylesheet::LiveStylesheetImportResponse {
+            import_options: None,
             request_url: url::Url::parse("https://cdn.example.test/final/nested.css").unwrap(),
             response_url: url::Url::parse("https://assets.example.test/styles/nested.css").unwrap(),
             css_text: concat!(

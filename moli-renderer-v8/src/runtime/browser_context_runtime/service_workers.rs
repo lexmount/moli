@@ -262,6 +262,11 @@ impl RendererBrowserContextRuntime {
                 .await
                 .map_err(crate::network::preloads::ConsumedPreloadError)?;
             return Ok(Some(ServiceWorkerDirectFetchResponse {
+                response_url: if preload.from_service_worker {
+                    preload.service_worker_response_url
+                } else {
+                    Some(preload.response.final_url.clone())
+                },
                 response: Box::new(preload.response),
                 response_filter: preload.response_filter,
                 from_network_fallback: !preload.from_service_worker,

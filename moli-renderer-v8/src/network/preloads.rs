@@ -16,6 +16,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct DocumentPreloadResponse {
+    pub(crate) service_worker_response_url: Option<Url>,
     pub(crate) response: NavigationResponse,
     pub(crate) from_service_worker: bool,
     pub(crate) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
@@ -266,6 +267,7 @@ mod tests {
 
     fn response() -> DocumentPreloadResponse {
         DocumentPreloadResponse {
+            service_worker_response_url: None,
             response: NavigationResponse::from_text_body(
                 request().url,
                 200,

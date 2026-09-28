@@ -103,6 +103,7 @@ pub(crate) use stylesheet_runtime::{
     ConnectedLoadCompletion, LinkedStylesheetImportGraphCompletion,
     LiveStylesheetImportLoadCompletion, StylesheetImportCompletionAuthority,
     fetch_complete_stylesheet_import_graph, live_stylesheet_import_responses,
+    stylesheet_import_options,
 };
 use stylesheet_runtime::{
     ConnectedLoadOperation, LinkedStylesheetImportGraphs, QueuedConnectedStyleLoad,
@@ -438,6 +439,7 @@ impl ConnectedStyleImportRoot {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectedLoadNetworkResult {
+    pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
     pub(crate) consumed_preload_error: bool,
     /// Exact request Document, independent of an element's current location.
     pub(crate) document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
@@ -2598,6 +2600,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -2647,6 +2650,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(active_load.fetch().clone()),
@@ -2701,6 +2705,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
@@ -2755,6 +2760,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
@@ -3367,6 +3373,7 @@ mod tests {
             operation,
             successful: false,
             network_results: vec![ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3463,6 +3470,7 @@ mod tests {
                 operation: first_a,
                 successful: true,
                 network_results: vec![ConnectedLoadNetworkResult {
+                    import_options: None,
                     consumed_preload_error: false,
                     document_owner: None,
                     stylesheet_fetch: None,
@@ -3537,6 +3545,7 @@ mod tests {
             operation,
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3599,6 +3608,7 @@ mod tests {
             operation: first_a,
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
@@ -3742,6 +3752,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
                 stylesheet_fetch: None,
