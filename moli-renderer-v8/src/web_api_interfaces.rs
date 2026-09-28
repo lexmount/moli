@@ -456,7 +456,6 @@ interfaces! {
     SVGAnimateTransformElement: SVGAnimationElement;
     SVGSetElement: SVGAnimationElement;
     SVGAnimatedEnumeration;
-    SVGUnitTypes;
     SVGAnimatedString;
     SVGAnimatedLength;
     SVGAnimatedLengthList;
