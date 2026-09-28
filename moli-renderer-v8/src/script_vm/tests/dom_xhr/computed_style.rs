@@ -59,6 +59,7 @@ mod computed_style_access;
 mod content_and_invalidation;
 mod cross_document_and_animations;
 mod css_computed_map_enumeration;
+mod css_computed_typed_values;
 mod css_math;
 mod css_numeric_factories;
 mod css_numeric_operations;

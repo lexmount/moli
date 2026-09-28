@@ -256,6 +256,44 @@ pub(super) fn opaque_style_value<'s>(
     object
 }
 
+pub(super) fn from_computed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    property: &str,
+    parsed: moli_css_parse::ParsedTypedStyleValue,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
+        return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    };
+    let texts = if typed.values.len() == 1 {
+        vec![parsed.css_text.clone()]
+    } else {
+        top_level_comma_separated_component_values(&parsed.css_text).unwrap_or_default()
+    };
+    if texts.len() != typed.values.len() {
+        return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    }
+    typed
+        .values
+        .iter()
+        .zip(texts)
+        .map(|(value, text)| {
+            Some(match value {
+                TypedValue::Numeric(value) => math::from_native(scope, value)?,
+                TypedValue::Keyword(keyword) => {
+                    CssKeywordValueObjectDeclaration::new(keyword.0.clone())
+                        .bind(scope)
+                        .expect("CSSKeywordValue declaration should bind")
+                }
+                TypedValue::Unparsed(parts) => unparsed::from_native(scope, parts.clone()),
+                TypedValue::Transform(_) | TypedValue::Image(_) => {
+                    opaque_style_value(scope, property, &text)
+                }
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
 fn parse_single_keyword_value(text: &str) -> Option<String> {
     let mut input = ParserInput::new(text);
     let mut parser = Parser::new(&mut input);
