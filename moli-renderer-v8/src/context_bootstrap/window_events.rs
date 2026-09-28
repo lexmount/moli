@@ -150,6 +150,8 @@ pub(crate) const BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onafterprint",
     "onbeforeprint",
     "onbeforeunload",
+    "ongamepadconnected",
+    "ongamepaddisconnected",
     "onhashchange",
     "onlanguagechange",
     "onmessage",
