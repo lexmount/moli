@@ -1,4 +1,5 @@
 use super::*;
+use crate::stylesheet_blocking::StylesheetFetcher;
 
 #[derive(Debug)]
 pub(crate) struct LinkedStylesheetImportGraphCompletion {
@@ -345,7 +346,7 @@ impl DocumentRuntime {
     ) {
         let fetch = load.fetch().clone();
         let roots = self.linked_stylesheet_import_roots(&fetch);
-        let urls = match super::import_graph::connected_style_import_readiness(urls.clone()) {
+        let urls = match super::import_graph::connected_style_import_readiness(urls) {
             super::import_graph::ConnectedStyleImportReadiness::Ready(graph_successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {
@@ -401,12 +402,22 @@ impl DocumentRuntime {
             .expect("linked stylesheet import requires a bound Page task producer");
         let resource_loader = stylesheet_fetcher.resource_loader().clone();
         let document_url = resource_loader.fetch_context().document_url().clone();
+        let document_options = stylesheet_fetcher.prepare_stylesheet_fetch_options(
+            crate::stylesheet_blocking::StylesheetFetchOptions::default(),
+        );
+        let options = fetch
+            .terminal()
+            .and_then(|terminal| {
+                super::import_graph::stylesheet_import_options(&terminal, &document_options)
+            })
+            .expect("a linked import graph requires a usable root response");
         resource_loader.spawn_resource_task(async move {
             let (graph, network_results) =
                 super::import_graph_projection::fetch_observed_stylesheet_import_graph(
                     stylesheet_fetcher,
                     document_url,
                     urls,
+                    options,
                     Vec::new(),
                 )
                 .await;
