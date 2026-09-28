@@ -64,6 +64,7 @@ interfaces! {
     CSSFontFeatureValuesRule: CSSRule;
     CSSFontPaletteValuesRule: CSSRule;
     CSSGroupingRule: CSSRule;
+    CSSImageValue: CSSStyleValue;
     CSSImportRule: CSSRule;
     CSSKeyframeRule: CSSRule;
     CSSKeyframesRule: CSSRule;

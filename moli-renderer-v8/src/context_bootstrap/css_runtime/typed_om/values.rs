@@ -19,6 +19,13 @@ struct CssStyleValueObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::CSSImageValue)]
+struct CssImageValueObjectDeclaration {
+    #[webapi(slot = CSS_STYLE_VALUE_TEXT_SLOT)]
+    text: String,
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CSSKeywordValue)]
 struct CssKeywordValueObjectDeclaration {
     #[webapi(slot = CSS_KEYWORD_VALUE_VALUE_SLOT)]
@@ -238,9 +245,7 @@ pub(super) fn from_parsed<'s>(
                     sources.get(index).map_or(text.as_str(), String::as_str),
                     &value,
                 )?,
-                // Native image objects remain to be connected. Preserve an
-                // immutable value associated with the validated property.
-                TypedValue::Image(_) => opaque_style_value(scope, property, text.trim()),
+                TypedValue::Image(_) => image_value(scope, text.trim()),
             })
         })
         .collect::<Option<Vec<_>>>()
@@ -263,6 +268,15 @@ pub(super) fn opaque_style_value<'s>(
         property.into(),
     );
     object
+}
+
+fn image_value<'s>(scope: &mut v8::PinScope<'s, '_>, text: &str) -> v8::Local<'s, v8::Object> {
+    // Images have no author-visible fields or constructor. Their immutable
+    // native serialization is reusable across properties accepting images,
+    // unlike property-associated opaque CSSStyleValues.
+    CssImageValueObjectDeclaration::new(text.to_owned())
+        .bind(scope)
+        .expect("CSSImageValue declaration should bind")
 }
 
 pub(super) fn from_computed<'s>(
@@ -295,7 +309,7 @@ pub(super) fn from_computed<'s>(
                 }
                 TypedValue::Unparsed(parts) => unparsed::from_native(scope, parts.clone()),
                 TypedValue::Transform(value) => transforms::from_native(scope, value)?,
-                TypedValue::Image(_) => opaque_style_value(scope, property, &text),
+                TypedValue::Image(_) => image_value(scope, &text),
             })
         })
         .collect::<Option<Vec<_>>>()
