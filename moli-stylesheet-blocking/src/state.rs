@@ -356,6 +356,7 @@ impl StylesheetBlockingState {
     where
         F: StylesheetFetcher,
     {
+        let options = fetcher.prepare_stylesheet_fetch_options(options);
         let resource_cache_scope = fetcher.resource_cache_scope();
         let resource_key = options.resource_key(url.clone());
         let is_link_preload = fetcher.is_document_preload(&url);
@@ -847,6 +848,61 @@ mod tests {
 
     #[derive(Clone)]
     struct PendingStylesheetFetcher;
+
+    #[derive(Clone)]
+    struct ReferrerStylesheetFetcher(&'static str);
+
+    impl StylesheetFetcher for ReferrerStylesheetFetcher {
+        fn prepare_stylesheet_fetch_options(
+            &self,
+            options: StylesheetFetchOptions,
+        ) -> StylesheetFetchOptions {
+            options.with_document_referrer_policy(Some(self.0.to_owned()))
+        }
+
+        fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+            spawn_test_stylesheet_task(task);
+        }
+
+        fn fetch_stylesheet_resource(
+            &self,
+            document_url: Url,
+            url: Url,
+            options: StylesheetFetchOptions,
+        ) -> Pin<Box<dyn Future<Output = StylesheetFetchTerminal> + Send + 'static>> {
+            ImmediateStylesheetFetcher.fetch_stylesheet_resource(document_url, url, options)
+        }
+    }
+
+    #[tokio::test]
+    async fn document_policy_partitions_resources_without_rebinding_existing_owners() {
+        let mut state = StylesheetBlockingState::default();
+        let document = Url::parse("https://example.test/page").unwrap();
+        let url = Url::parse("https://example.test/style.css").unwrap();
+        let mut load = |owner, policy| {
+            state.adopt_or_begin_link_load(
+                &ReferrerStylesheetFetcher(policy),
+                NodeId::new(owner),
+                document.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            )
+        };
+        let original = load(1, "origin");
+        let readmitted = load(1, "no-referrer");
+        assert!(original.ptr_eq(&readmitted));
+        let changed = load(2, "no-referrer");
+        assert!(!original.ptr_eq(&changed));
+        assert!(changed.ptr_eq(&load(3, "no-referrer")));
+        assert_eq!(
+            original.options().document_referrer_policy(),
+            Some("origin")
+        );
+        assert_eq!(
+            changed.options().document_referrer_policy(),
+            Some("no-referrer")
+        );
+    }
 
     impl StylesheetFetcher for PendingStylesheetFetcher {
         fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
