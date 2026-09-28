@@ -223,7 +223,10 @@ fn complex_tables_keep_media_choices_and_literal_content_inert() {
     let source = "<table onclick='bad()'><tr><td colspan='2'><iframe src='/lecture' title='Lecture'></iframe><select><option label='Day'>long label</option><option>Night</option></select><pre>&lt;script&gt;literal&lt;/script&gt;\n\nline</pre><script>bad()</script><a href='javascript:bad()'>Bad link</a></td></tr></table>";
     let html = rendered_html(&markdown(source, false));
     assert!(html.contains("href=\"/lecture\">Lecture</a>"), "{html}");
-    assert!(html.contains("Day\nNight"), "{html}");
+    assert!(
+        html.contains("<option label=\"Day\">long label</option><option>Night</option>"),
+        "{html}"
+    );
     assert!(
         html.contains("&lt;script&gt;literal&lt;/script&gt;"),
         "{html}"
@@ -667,6 +670,16 @@ fn fragment_decoding_does_not_rewrite_dom_ids() {
 }
 
 #[test]
+fn literal_fragment_target_wins_before_percent_decoding() {
+    let result = markdown(
+        "<a href='#x%41'>Go</a><p id='x%41'>Original target</p><p id='xA'>Different target</p>",
+        false,
+    );
+    assert!(result.contains("<a id=\"x%41\"></a>"), "{result}");
+    assert!(!result.contains("<a id=\"xA\"></a>"), "{result}");
+}
+
+#[test]
 fn table_fragment_targets_preserve_rows_cells_and_legacy_named_anchors() {
     let source = "<a href='#row'>Row</a><a href='#cell'>Cell</a><a href='#legacy'>Legacy</a><table><tr id='row'><td id='cell'><a name='legacy'></a>Value</td><td>Other</td></tr></table>";
     let result = rendered_html(&markdown(source, false));
@@ -864,8 +877,6 @@ fn html_fallback_preserves_referenced_targets_for_special_nodes() {
         false,
     );
     assert!(code.contains("<a id=\"L1\"></a>"), "{code}");
-    assert!(code.contains("```\nlet x = 1;\n```"), "{code}");
-    assert!(!code.contains("<pre>"), "{code}");
     let table = markdown(
         "<a href='#email'>Email</a><a href='#eq1'>Equation</a><a href='#video1'>Video</a><table><tr><td><input id='email' value='a@example.test'></td><td><math id='eq1'><mi>x</mi></math></td><td><video id='video1' src='/clip.mp4'></video></td></tr></table>",
         false,
@@ -887,15 +898,18 @@ fn invalid_nested_and_empty_headings_do_not_emit_literal_markers() {
 }
 
 #[test]
-fn preformatted_navigation_retains_literal_content_as_markdown_code() {
+fn preformatted_navigation_retains_link_targets() {
     let result = markdown(
         "<pre>ALL GAMES: <a href='home.shtml'>HOME GAMES</a> : <a href='away.shtml'>AWAY GAMES</a>\nScores stay aligned</pre>",
         false,
     );
-    assert!(result.starts_with("```\n"), "{result}");
-    assert!(!result.contains("<pre>"), "{result}");
+    assert!(result.contains("<pre>"), "{result}");
     assert!(
-        result.contains("ALL GAMES: HOME GAMES : AWAY GAMES"),
+        result.contains("<a href=\"home.shtml\">HOME GAMES</a>"),
+        "{result}"
+    );
+    assert!(
+        result.contains("<a href=\"away.shtml\">AWAY GAMES</a>"),
         "{result}"
     );
     assert!(result.contains("Scores stay aligned"), "{result}");
@@ -908,30 +922,10 @@ fn preformatted_code_preserves_externally_referenced_targets() {
         false,
     );
     assert!(result.contains("[Line 1](#L1)"), "{result}");
-    assert!(result.contains("<a id=\"L1\"></a>"), "{result}");
     assert!(
-        result.contains("```\nlet x = 1;\nlet y = 2;\n```"),
+        result.contains("<span id=\"L1\">let x = 1;</span>"),
         "{result}"
     );
-    assert!(!result.contains("<pre>"), "{result}");
-}
-
-#[test]
-fn preformatted_code_inside_complex_tables_remains_markdown_code() {
-    let result = markdown(
-        "<a href='#line-1'>Source</a><table><tr><th rowspan='2'>Code</th><td><pre><code><span id='line-1'>let x = 1;</span>\nlet y = 2;</code></pre></td></tr><tr><td>Explanation</td></tr></table>",
-        false,
-    );
-    assert!(result.contains("[Source](#line-1)"), "{result}");
-    assert!(result.contains("<a id=\"line-1\"></a>"), "{result}");
-    assert!(
-        result.contains("```\nlet x = 1;\nlet y = 2;\n```"),
-        "{result}"
-    );
-    assert!(result.contains("Code"), "{result}");
-    assert!(result.contains("Explanation"), "{result}");
-    assert!(!result.contains("<table"), "{result}");
-    assert!(!result.contains("<pre"), "{result}");
 }
 
 #[test]

@@ -7,17 +7,38 @@ pub(crate) fn referenced<D: Dom + ?Sized>(
     root: D::NodeId,
     limit: usize,
 ) -> HashSet<String> {
-    let mut ids = HashSet::new();
+    let mut targets = HashSet::new();
     if !dom.may_have_fragment_links() {
-        return ids;
+        return targets;
     }
+    walk(dom, root, limit, |node| {
+        for attribute in ["id", "name"] {
+            if attribute == "name" && dom.node_kind(node) != NodeKind::Element("a") {
+                continue;
+            }
+            if let Some(value) = dom.attribute(node, attribute) {
+                targets.insert(value.to_owned());
+            }
+        }
+        false
+    });
+    let mut ids = HashSet::new();
     walk(dom, root, limit, |node| {
         if let Some(fragment) = dom
             .attribute(node, "href")
             .and_then(|href| href.strip_prefix('#'))
             && !fragment.is_empty()
         {
-            ids.insert(decode_fragment(fragment));
+            // HTML fragment navigation tries the literal fragment first and
+            // only percent-decodes it when no literal target exists.
+            if targets.contains(fragment) {
+                ids.insert(fragment.to_owned());
+            } else {
+                let decoded = decode_fragment(fragment);
+                if targets.contains(&decoded) {
+                    ids.insert(decoded);
+                }
+            }
         }
         false
     });

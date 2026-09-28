@@ -118,7 +118,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         }
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
-                <a href="#" onclick="return show(document.getElementById('history'))">+</a>
+                <button aria-expanded="false" aria-controls="history">+</button>
                 <section id="history" style="display:none">Expandable history</section>
                 <section id="unreferenced" style="display:none">Hidden template</section>`;
         "##).unwrap();
@@ -131,20 +131,28 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="tracking" style="display:none">Hidden telemetry state</section>
                 <button onclick="console.log(&quot;document.getElementById('diagnostic')&quot;)">Log</button>
                 <section id="diagnostic" style="display:none">Hidden diagnostic state</section>
+                <button onclick="console.log(document.getElementById('readonly').textContent)">Read</button>
+                <section id="readonly" style="display:none">Hidden read-only state</section>
+                <button onclick="/* document.getElementById('commented') */ console.log('clicked')">Comment</button>
+                <section id="commented" style="display:none">Hidden commented state</section>
                 <button onclick="document.querySelector('#history').style.display='block'">History</button>
                 <section id="history" style="display:none">Query-selected history</section>`;
         "##).unwrap();
         let related = page.render_page_dump(options(false));
         assert!(!related.contains("Hidden telemetry state"), "{related}");
         assert!(!related.contains("Hidden diagnostic state"), "{related}");
-        assert!(related.contains("Query-selected history"), "{related}");
+        assert!(!related.contains("Hidden read-only state"), "{related}");
+        assert!(!related.contains("Hidden commented state"), "{related}");
+        assert!(!related.contains("Query-selected history"), "{related}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <p style="color:white;background-image:linear-gradient(black,black)">Visible gradient text</p>
+                <div style="color:white;background-image:linear-gradient(black,black)"><p>Visible inherited gradient text</p></div>
                 <div style="color:white;background:white"><img src="/photo.png" alt="Photo"></div>`;
         "#).unwrap();
         let painted = page.render_page_dump(options(false));
         assert!(painted.contains("Visible gradient text"), "{painted}");
+        assert!(painted.contains("Visible inherited gradient text"), "{painted}");
         assert!(painted.contains("![Photo](https://example.test/photo.png)"), "{painted}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `

@@ -42,6 +42,7 @@ impl<'a> MarkdownDom<'a> {
         // has already been seen. Cache the painted ancestor background once;
         // walking ancestors for every node is quadratic on deeply nested pages.
         let mut effective_backgrounds = HashMap::new();
+        let mut non_solid_backgrounds = HashSet::new();
         if styles
             .iter()
             .any(|(_, values)| values.get(11).is_some_and(|value| !value.is_empty()))
@@ -56,6 +57,15 @@ impl<'a> MarkdownDom<'a> {
                     .and_then(|parent| effective_backgrounds.get(&parent).copied());
                 effective_backgrounds
                     .insert(*node, own.or(inherited).unwrap_or((255, 255, 255, 1.0)));
+                let own_image = values
+                    .get(13)
+                    .is_some_and(|image| !image.is_empty() && image != "none");
+                let inherited_image = dom
+                    .parent_node(*node)
+                    .is_some_and(|parent| non_solid_backgrounds.contains(&parent));
+                if own_image || inherited_image {
+                    non_solid_backgrounds.insert(*node);
+                }
             }
         }
         let mut disclosures = HashSet::new();
@@ -75,19 +85,6 @@ impl<'a> MarkdownDom<'a> {
                 && let Some(targets) = Dom::attribute(dom, *node, "aria-controls")
             {
                 disclosures.extend(targets.split_ascii_whitespace());
-            }
-            for attribute_name in dom.get_attribute_names(*node).unwrap_or_default() {
-                if !attribute_name.starts_with("on") {
-                    continue;
-                }
-                let Some(handler) = Dom::attribute(dom, *node, &attribute_name) else {
-                    continue;
-                };
-                for target in inline_disclosure_targets(handler) {
-                    if let Some((&id, _)) = targets.get_key_value(target) {
-                        disclosures.insert(id);
-                    }
-                }
             }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
@@ -193,9 +190,7 @@ impl<'a> MarkdownDom<'a> {
             let foreground = values.get(10).and_then(|value| css_color(value));
             let zero_contrast_leaf = !has_element_child(dom, node)
                 && has_text_child(dom, node)
-                && values
-                    .get(13)
-                    .is_none_or(|image| image.is_empty() || image == "none")
+                && !non_solid_backgrounds.contains(&node)
                 && foreground
                     .filter(|color| color.3 > 0.99)
                     .zip(effective_backgrounds.get(&node).copied())
@@ -331,75 +326,6 @@ impl<'a> MarkdownDom<'a> {
         }
         None
     }
-}
-
-fn inline_disclosure_targets(value: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    for (marker, fragment) in [
-        ("document.getElementById", false),
-        ("document.querySelector", true),
-    ] {
-        for offset in code_marker_offsets(value, marker) {
-            let remaining = &value[offset + marker.len()..];
-            let Some(argument) = remaining
-                .trim_start()
-                .strip_prefix('(')
-                .map(str::trim_start)
-            else {
-                continue;
-            };
-            let Some(quote) = argument
-                .chars()
-                .next()
-                .filter(|quote| matches!(quote, '\'' | '"'))
-            else {
-                continue;
-            };
-            let literal = &argument[quote.len_utf8()..];
-            let Some(end) = literal.find(quote) else {
-                continue;
-            };
-            let literal = &literal[..end];
-            if let Some(target) = literal
-                .strip_prefix('#')
-                .or_else(|| (!fragment).then_some(literal))
-                && !target.is_empty()
-            {
-                result.push(target);
-            }
-        }
-    }
-    result
-}
-
-fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {
-    let mut result = Vec::new();
-    let mut offset = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    while offset < value.len() {
-        let character = value[offset..]
-            .chars()
-            .next()
-            .expect("offset remains on a character boundary");
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-        } else if matches!(character, '\'' | '"' | '`') {
-            quote = Some(character);
-        } else if value[offset..].starts_with(marker) {
-            result.push(offset);
-            offset += marker.len();
-            continue;
-        }
-        offset += character.len_utf8();
-    }
-    result
 }
 
 fn px(value: &str) -> Option<f32> {
