@@ -1,4 +1,4 @@
-use cssparser::{Parser, ParserInput, ToCss, Token, TokenSerializationType};
+use cssparser::{Parser, ParserInput, Token, TokenSerializationType};
 use style::typed_om::{UnparsedSegment, UnparsedValue, VariableReferenceValue};
 
 struct Frame {
@@ -31,20 +31,21 @@ impl Frame {
 
 // Consume raw tokens without cssparser's component parser skipping nested
 // blocks; the input has already passed Stylo's declaration-value validation.
-fn next<'a>(source: &mut &'a str) -> Option<Token<'a>> {
+fn next<'a>(source: &mut &'a str) -> Option<(Token<'a>, &'a str)> {
     let mut input = ParserInput::new(source);
     let mut parser = Parser::new(&mut input);
     let token = parser
         .next_including_whitespace_and_comments()
         .ok()?
         .clone();
-    *source = &source[parser.position().byte_index()..];
-    Some(token)
+    let (consumed, remaining) = source.split_at(parser.position().byte_index());
+    *source = remaining;
+    Some((token, consumed))
 }
 
 fn next_non_whitespace<'a>(source: &mut &'a str) -> Option<Token<'a>> {
     loop {
-        let token = next(source)?;
+        let (token, _) = next(source)?;
         if !matches!(token, Token::WhiteSpace(_) | Token::Comment(_)) {
             return Some(token);
         }
@@ -53,7 +54,7 @@ fn next_non_whitespace<'a>(source: &mut &'a str) -> Option<Token<'a>> {
 
 pub(super) fn reify(mut source: &str) -> Option<UnparsedValue> {
     let mut stack = vec![Frame::new(None)];
-    while let Some(token) = next(&mut source) {
+    while let Some((token, consumed)) = next(&mut source) {
         let frame = stack.last_mut()?;
         if matches!(&token, Token::Function(name) if name.eq_ignore_ascii_case("var")) {
             frame.flush();
@@ -105,7 +106,7 @@ pub(super) fn reify(mut source: &str) -> Option<UnparsedValue> {
         if frame.previous.needs_separator_when_before(kind) {
             frame.text.push_str("/**/");
         }
-        token.to_css(&mut frame.text).ok()?;
+        crate::serialize_css_token(&token, consumed, &mut frame.text).ok()?;
         frame.previous = kind;
     }
     if stack.len() != 1 {
