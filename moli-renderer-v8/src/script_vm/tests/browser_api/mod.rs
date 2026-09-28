@@ -19,6 +19,7 @@ mod crypto_subtle_hmac;
 mod crypto_subtle_jwk;
 mod crypto_subtle_other;
 mod crypto_subtle_x25519;
+mod css_image_worker;
 mod css_unparsed_worker;
 mod date_locale;
 mod details;
