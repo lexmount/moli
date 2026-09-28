@@ -136,6 +136,7 @@ pub fn is_about_blank(url: &Url) -> bool {
     url.scheme() == "about" && url.path().eq_ignore_ascii_case("blank")
 }
 
+/// HTML's "matches about:srcdoc" includes fragments but excludes queries.
 pub fn is_about_srcdoc(url: &Url) -> bool {
     url.scheme() == "about"
         && url.path() == "srcdoc"
