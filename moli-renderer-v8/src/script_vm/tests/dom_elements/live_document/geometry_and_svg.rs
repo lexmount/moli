@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn element_attribute_values_preserve_utf16_across_native_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://attribute-string.test/",
+        "<html><body></body></html>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("attribute_string_values.js"))
+            .expect("attribute string fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_enumeration_constants_have_webidl_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-enumeration-constants.test/");
     let result = vm.eval(r#"
