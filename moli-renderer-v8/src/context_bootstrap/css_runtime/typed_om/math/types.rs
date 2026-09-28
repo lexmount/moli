@@ -29,7 +29,7 @@ impl NumericType {
             "deg" | "grad" | "rad" | "turn" => 1,
             "s" | "ms" => 2,
             "hz" | "khz" => 3,
-            "dpi" | "dpcm" | "dppx" => 4,
+            "dpi" | "dpcm" | "dppx" | "x" => 4,
             "fr" => 5,
             _ if LengthUnit::from_str(unit).is_ok() => 0,
             _ => return None,
