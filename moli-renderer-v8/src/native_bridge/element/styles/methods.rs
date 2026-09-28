@@ -360,7 +360,9 @@ pub(crate) fn computed_typed_style_value_from_object<'s>(
         let declaration = computed.computed_or_resolved_declaration(longhand, Some(&mut context));
         let mut css_text = String::new();
         declaration.to_css(&mut css_text).ok()?;
-        let values = declaration.to_typed_value_list();
+        let values = declaration
+            .to_typed_value_list()
+            .map(moli_css_parse::TypedStyleValueList::Native);
         return Some(moli_css_parse::ParsedTypedStyleValue { css_text, values });
     }
     if let PropertyId::Custom(name) = &id
@@ -381,16 +383,18 @@ pub(crate) fn computed_typed_style_value_from_object<'s>(
         return None;
     }
     let values = if property.starts_with("--") {
-        Some(style::typed_om::TypedValueList {
-            values: [style::typed_om::TypedValue::Unparsed(
-                moli_css_parse::reify_unparsed_style_value(&css_text, None)?,
-            )]
-            .into_iter()
-            .collect(),
-        })
+        Some(moli_css_parse::TypedStyleValueList::Native(
+            style::typed_om::TypedValueList {
+                values: [style::typed_om::TypedValue::Unparsed(
+                    moli_css_parse::reify_unparsed_style_value(&css_text, None)?,
+                )]
+                .into_iter()
+                .collect(),
+            },
+        ))
     } else {
         id.longhand_id()
-            .and_then(|id| computed.property_value_to_typed_value_list(id))
+            .and_then(|id| moli_css_parse::computed_typed_style_value_list(&computed, id))
     };
     Some(moli_css_parse::ParsedTypedStyleValue { css_text, values })
 }

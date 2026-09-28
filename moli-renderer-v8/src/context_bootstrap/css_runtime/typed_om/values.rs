@@ -1,5 +1,7 @@
 use super::*;
-use moli_css_parse::CssDeclaredNumericValue;
+use crate::web_api_interfaces;
+use moli_css_parse::{CssDeclaredNumericValue, TypedImageValue, TypedStyleValueList};
+use style::typed_om::{NumericValue, TypedValue};
 use moli_webapi::css_values::{
     CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration, css_keyword_value, image_value,
 };
@@ -8,7 +10,6 @@ pub(super) use moli_webapi::css_values::{
     css_unit_value_constructor_callback, css_unit_value_number, css_unit_value_unit, keyword_value,
     normalize_unit_name, opaque_style_value, style_value_from_text, unit_value,
 };
-use style::typed_om::{NumericValue, TypedValue};
 
 mod number;
 
@@ -19,8 +20,12 @@ pub(super) fn from_parsed<'s>(
     parsed: moli_css_parse::ParsedTypedStyleValue,
     typed_values: Option<&[Option<CssDeclaredNumericValue>]>,
 ) -> Vec<v8::Local<'s, v8::Object>> {
-    let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
+    let Some(typed) = parsed.values.filter(|list| !list.is_empty()) else {
         return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    };
+    let typed = match typed {
+        TypedStyleValueList::Native(typed) => typed,
+        TypedStyleValueList::Images(images) => return image_values(scope, images),
     };
     // Stylo determines whether this property is list-valued. Only subdivide
     // its serialization when that projection has multiple items; a shorthand
@@ -151,13 +156,33 @@ pub(super) fn serialize<'s>(
     moli_webapi::css_values::style_value_text(scope, value)
 }
 
+
+fn image_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    images: Vec<TypedImageValue>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    images
+        .into_iter()
+        .map(|value| match value {
+            TypedImageValue::None => CssKeywordValueObjectDeclaration::new("none".into())
+                .bind(scope)
+                .expect("CSSKeywordValue declaration should bind"),
+            TypedImageValue::Image(text) => image_value(scope, &text),
+        })
+        .collect()
+}
+
 pub(super) fn from_computed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     property: &str,
     parsed: moli_css_parse::ParsedTypedStyleValue,
 ) -> Vec<v8::Local<'s, v8::Object>> {
-    let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
+    let Some(typed) = parsed.values.filter(|list| !list.is_empty()) else {
         return vec![opaque_style_value(scope, property, &parsed.css_text)];
+    };
+    let typed = match typed {
+        TypedStyleValueList::Native(typed) => typed,
+        TypedStyleValueList::Images(images) => return image_values(scope, images),
     };
     let texts = if typed.values.len() == 1 {
         vec![parsed.css_text.clone()]
