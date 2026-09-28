@@ -9,11 +9,11 @@ use moli_webapi_declare::WebApiObject;
     interface = web_api_interfaces::SVGAnimatedString,
     own_to_string_tag = "SVGAnimatedString"
 )]
-struct SvgAnimatedStringObjectDeclaration {
+struct SvgAnimatedStringObjectDeclaration<'s> {
     #[webapi(slot = SVG_ANIMATED_STRING_BASE_VAL_SLOT)]
-    base_val: String,
+    base_val: v8::Local<'s, v8::String>,
     #[webapi(slot = SVG_ANIMATED_STRING_ANIM_VAL_SLOT)]
-    anim_val: String,
+    anim_val: v8::Local<'s, v8::String>,
 }
 
 #[derive(WebApiObject)]
@@ -401,8 +401,8 @@ pub(super) fn build_svg_animated_string_for_attribute<'s>(
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let value = svg_owner_attribute_value(scope, owner, attribute).unwrap_or_default();
-    let object = SvgAnimatedStringObjectDeclaration::new(value.clone(), value)
+    let value = svg_owner_string_attribute_value(scope, owner, attribute);
+    let object = SvgAnimatedStringObjectDeclaration::new(value, value)
         .bind(scope)
         .expect("SVGAnimatedString declaration should bind");
     set_svg_animated_string_owner_attribute(scope, object, owner, attribute);
@@ -1233,8 +1233,24 @@ pub(super) fn build_svg_animated_length_for_attribute<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let parsed = svg_animated_length_attribute_value(scope, owner, attribute, initial_value);
     let base_val = build_svg_length_from_parsed(scope, parsed);
-    set_svg_length_owner_attribute(scope, base_val, owner, attribute);
     let anim_val = build_svg_length_from_parsed(scope, parsed);
+    for (value, read_only) in [(base_val, false), (anim_val, true)] {
+        set_svg_length_owner_attribute(scope, value, owner, attribute);
+        set_private_value(
+            scope,
+            value,
+            SVG_LENGTH_INITIAL_VALUE_SLOT,
+            v8_string(scope, initial_value)
+                .unwrap_or_else(|| v8str(scope, "0"))
+                .into(),
+        );
+        set_private_value(
+            scope,
+            value,
+            SVG_LENGTH_READ_ONLY_SLOT,
+            v8::Boolean::new(scope, read_only).into(),
+        );
+    }
     SvgAnimatedLengthObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedLength declaration should bind")
@@ -3105,6 +3121,33 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     }
 }
 
+pub(super) fn sync_svg_length_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    length: v8::Local<'s, v8::Object>,
+) {
+    // Only an individual animated attribute has a default. List items retain
+    // their separate list ownership and synchronization rules.
+    let Some(initial) = get_private_value(scope, length, SVG_LENGTH_INITIAL_VALUE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+    else {
+        return;
+    };
+    let Some(owner) = get_private_value(scope, length, SVG_LENGTH_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) = get_private_value(scope, length, SVG_LENGTH_OWNER_ATTRIBUTE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+    else {
+        return;
+    };
+    let parsed = svg_animated_length_attribute_value(scope, owner, &attribute, &initial);
+    set_svg_length_parsed_value(scope, length, parsed);
+}
+
 fn svg_animated_length_attribute_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -3399,16 +3442,7 @@ pub(super) fn sync_svg_animated_string_from_owner_attribute<'s>(
     else {
         return;
     };
-    let value = svg_owner_attribute_value(scope, owner, &attribute).unwrap_or_default();
-    set_svg_animated_string_values(scope, animated, &value);
-}
-
-pub(super) fn set_svg_animated_string_values(
-    scope: &mut v8::PinScope<'_, '_>,
-    animated: v8::Local<'_, v8::Object>,
-    value: &str,
-) {
-    let value = v8_string(scope, value).unwrap_or_else(|| v8str(scope, ""));
+    let value = svg_owner_string_attribute_value(scope, owner, &attribute);
     set_private_value(
         scope,
         animated,
@@ -3673,7 +3707,7 @@ pub(super) fn reflect_svg_length_to_owner_attribute<'s>(
         return;
     };
     let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
     else {
         return;
     };
@@ -3703,6 +3737,32 @@ pub(super) fn svg_owner_attribute_value<'s>(
     )
 }
 
+fn svg_owner_string_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> v8::Local<'s, v8::String> {
+    let units = crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+        .ok()
+        .and_then(|(runtime_ptr, handle)| {
+            let dom = unsafe { &*runtime_ptr }.dom_host();
+            if name == "href" {
+                dom.get_attribute_ns_utf16_units(handle, None, name)
+                    .or_else(|| {
+                        dom.get_attribute_ns_utf16_units(
+                            handle,
+                            Some(crate::native_bridge::document::XLINK_NS),
+                            name,
+                        )
+                    })
+            } else {
+                dom.get_attribute_utf16_units(handle, name)
+            }
+        })
+        .unwrap_or_default();
+    crate::util::v8_string_from_utf16_units(scope, &units).unwrap_or_else(|| v8str(scope, ""))
+}
+
 fn set_svg_owner_attribute_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -3710,7 +3770,7 @@ fn set_svg_owner_attribute_value<'s>(
     value: &str,
 ) {
     let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
     else {
         return;
     };

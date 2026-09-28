@@ -1224,7 +1224,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     else {
         return;
     };
-    let Some(value) = crate::native_bridge::element::set_svg_animated_string_base_value(
+    let Some(_) = crate::native_bridge::element::set_svg_animated_string_base_value(
         scope,
         owner,
         &attribute,
@@ -1232,7 +1232,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     ) else {
         return;
     };
-    set_svg_animated_string_values(scope, animated, &value);
+    sync_svg_animated_string_from_owner_attribute(scope, animated);
 }
 
 pub(super) fn svg_animated_length_getter<'s>(
@@ -1539,6 +1539,7 @@ pub(super) fn svg_length_getter<'s>(
     if !require_svg_receiver(scope, args.this(), "SVGLength", &format!("{name} getter")) {
         return;
     }
+    sync_svg_length_from_owner_attribute(scope, args.this());
     match name {
         "unitType" => {
             let value = svg_length_number_slot(scope, args.this(), SVG_LENGTH_UNIT_TYPE_SLOT)
@@ -1708,6 +1709,10 @@ pub(super) fn svg_length_setter<'s>(
                     return;
                 }
             };
+            if !require_writable_svg_length(scope, args.this()) {
+                return;
+            }
+            sync_svg_length_from_owner_attribute(scope, args.this());
             if name == "value" {
                 set_svg_length_value_in_user_units(scope, args.this(), value);
             } else {
@@ -1728,6 +1733,9 @@ pub(super) fn svg_length_setter<'s>(
                     return;
                 }
             };
+            if !require_writable_svg_length(scope, args.this()) {
+                return;
+            }
             let Some(parsed) = parse_svg_length_value(&string_value) else {
                 throw_dom_exception(scope, "SyntaxError", 12, "Invalid SVG length value.");
                 return;
@@ -1738,6 +1746,24 @@ pub(super) fn svg_length_setter<'s>(
         }
         _ => {}
     }
+}
+
+fn require_writable_svg_length<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    length: v8::Local<'s, v8::Object>,
+) -> bool {
+    if get_private_value(scope, length, SVG_LENGTH_READ_ONLY_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG length is read-only.",
+        );
+        return false;
+    }
+    true
 }
 
 pub(super) fn svg_number_getter<'s>(
@@ -3717,6 +3743,9 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
     else {
         return;
     };
+    if !require_writable_svg_length(scope, args.this()) {
+        return;
+    }
     if !svg_length_unit_type_is_supported(parsed.unit_type as u32) {
         throw_dom_exception(
             scope,
@@ -3778,6 +3807,10 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     else {
         return;
     };
+    if !require_writable_svg_length(scope, args.this()) {
+        return;
+    }
+    sync_svg_length_from_owner_attribute(scope, args.this());
     if !svg_length_unit_type_is_supported(parsed.unit_type as u32) {
         throw_dom_exception(
             scope,

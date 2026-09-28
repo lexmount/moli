@@ -14,6 +14,16 @@ fn element_attribute_values_preserve_utf16_across_native_documents() {
 }
 
 #[test]
+fn svg_animated_values_follow_native_attribute_mutations() {
+    let mut vm = new_parsed_test_vm("https://svg-values.test/", "<html><body></body></html>");
+    assert_eq!(
+        vm.eval(include_str!("svg_animated_values.js"))
+            .expect("SVG animated value fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_enumeration_constants_have_webidl_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-enumeration-constants.test/");
     let result = vm.eval(r#"
