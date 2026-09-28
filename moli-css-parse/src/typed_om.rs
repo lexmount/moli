@@ -5,11 +5,11 @@ use style::{
     context::QuirksMode,
     custom_properties::SpecifiedValue,
     properties::{
-        Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
-        SourcePropertyDeclaration, parse_one_declaration_into,
+        CSSWideKeyword, Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
+        ShorthandId, SourcePropertyDeclaration, parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, CssRuleTypes, Origin, UrlExtraData},
-    typed_om::{TypedValue, TypedValueList, UnparsedValue},
+    typed_om::{ToTyped, TypedValue, TypedValueList, UnparsedValue},
 };
 use style_traits::ParsingMode;
 
@@ -73,6 +73,13 @@ pub fn parse_typed_style_value(
             .into_iter()
             .collect(),
         })
+    } else if matches!(id.as_shorthand(), Ok(ShorthandId::All))
+        && let Some(keyword) = css_wide_keyword(&block)
+    {
+        // Typed OM explicitly reifies `all` as an identifier. Other
+        // shorthands keep their property-specific projection. Read the
+        // parsed keyword instead of guessing from serialized longhands.
+        keyword.to_typed_value_list()
     } else {
         block.property_value_to_typed_value_list(&id).ok()?
     };
@@ -80,6 +87,14 @@ pub fn parse_typed_style_value(
         css_text: serialized,
         values,
     })
+}
+
+fn css_wide_keyword(block: &PropertyDeclarationBlock) -> Option<CSSWideKeyword> {
+    let mut declarations = block.declaration_importance_iter();
+    let keyword = declarations.next()?.0.get_css_wide_keyword()?;
+    declarations
+        .all(|(declaration, _)| declaration.get_css_wide_keyword() == Some(keyword))
+        .then_some(keyword)
 }
 
 /// Preserve var() references in raw tokens, including inside other functions.
@@ -109,6 +124,63 @@ pub fn reify_unparsed_style_value(
 mod tests {
     use super::*;
     use style::typed_om::{NumericValue, UnparsedSegment};
+
+    #[test]
+    fn all_reifies_keywords_without_retyping_ordinary_shorthands() {
+        for property in ["all", "width", "color", "animation-name"] {
+            for keyword in ["initial", "inherit", "unset", "revert", "revert-layer"] {
+                let source = format!("/**/{} /**/", keyword.to_ascii_uppercase());
+                let parsed = parse_typed_style_value(property, &source, None)
+                    .unwrap_or_else(|| panic!("{property}: {source}"));
+                let values = parsed
+                    .values
+                    .unwrap_or_else(|| panic!("{property}: opaque"));
+                assert_eq!(values.values.len(), 1, "{property}: {keyword}");
+                assert!(
+                    matches!(&values.values[0], TypedValue::Keyword(value) if value.0 == keyword),
+                    "{property}: {keyword}"
+                );
+            }
+        }
+        let parsed = parse_typed_style_value("all", r"\69 nherit", None).unwrap();
+        assert!(matches!(
+            &parsed.values.unwrap().values[0], TypedValue::Keyword(value) if value.0 == "inherit"
+        ));
+        for (property, source) in [
+            ("margin", "initial 1px"),
+            ("margin", "initial, inherit"),
+            ("all", "auto"),
+            ("unknown-property", "initial"),
+        ] {
+            assert!(parse_typed_style_value(property, source, None).is_none());
+        }
+        for (property, source) in [
+            ("margin", "initial"),
+            ("background", "inherit"),
+            ("border", "revert-layer"),
+            ("margin", "auto"),
+            ("background", "none"),
+            ("font", "medium serif"),
+        ] {
+            assert!(
+                parse_typed_style_value(property, source, None)
+                    .unwrap()
+                    .values
+                    .is_none()
+            );
+        }
+        for (property, source) in [
+            ("all", "var(--x, initial)"),
+            ("margin", "var(--x, initial)"),
+            ("--x", "initial"),
+        ] {
+            let parsed = parse_typed_style_value(property, source, None).unwrap();
+            assert!(matches!(
+                &parsed.values.unwrap().values[0],
+                TypedValue::Unparsed(_)
+            ));
+        }
+    }
 
     #[test]
     fn typed_property_parsing_uses_grammar_and_property_types() {
