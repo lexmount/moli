@@ -1,14 +1,14 @@
 use super::*;
-use style::typed_om::{NumericValue, TypedValue};
+use moli_css_parse::CssDeclaredNumericValue;
 use moli_webapi::css_values::{
-    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration,
-    css_keyword_value,
+    CssKeywordValueObjectDeclaration, CssUnitValueObjectDeclaration, css_keyword_value,
 };
 pub(super) use moli_webapi::css_values::{
-    css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-    style_value_from_text, unit_value, keyword_value, opaque_style_value, associated_property,
-    css_unit_value_number, css_unit_value_unit, normalize_unit_name,
+    associated_property, css_keyword_value_constructor_callback,
+    css_unit_value_constructor_callback, css_unit_value_number, css_unit_value_unit, keyword_value,
+    normalize_unit_name, opaque_style_value, style_value_from_text, unit_value,
 };
+use style::typed_om::{NumericValue, TypedValue};
 
 mod number;
 
@@ -17,6 +17,7 @@ pub(super) fn from_parsed<'s>(
     property: &str,
     source: &str,
     parsed: moli_css_parse::ParsedTypedStyleValue,
+    typed_values: Option<&[Option<CssDeclaredNumericValue>]>,
 ) -> Vec<v8::Local<'s, v8::Object>> {
     let Some(typed) = parsed.values.filter(|list| !list.values.is_empty()) else {
         return vec![opaque_style_value(scope, property, &parsed.css_text)];
@@ -37,12 +38,16 @@ pub(super) fn from_parsed<'s>(
     } else {
         crate::css_style::top_level_comma_separated_component_sources(source).unwrap_or_default()
     };
+    let typed_values = typed_values.filter(|values| values.len() == typed.values.len());
     typed
         .values
         .into_iter()
         .zip(texts)
         .enumerate()
         .map(|(index, (value, text))| {
+            if let Some(Some(retained)) = typed_values.and_then(|values| values.get(index)) {
+                return math::reify_declared_numeric(scope, retained);
+            }
             Some(match value {
                 TypedValue::Unparsed(parts) => super::unparsed::from_native(scope, parts),
                 TypedValue::Keyword(keyword) => CssKeywordValueObjectDeclaration::new(keyword.0)

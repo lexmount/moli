@@ -1,8 +1,10 @@
 use super::*;
 use crate::web_api_interfaces;
+use moli_css_parse::CssMathOperator as Kind;
 
 mod array;
 mod conversion;
+mod declared;
 mod graph;
 mod operations;
 mod parsing;
@@ -10,6 +12,7 @@ mod reification;
 mod serialization;
 mod types;
 
+pub(super) use declared::{reify_declared_numeric, snapshot_declared_math};
 pub(super) use parsing::from_declared;
 pub(super) use reification::from_native;
 pub(super) use serialization::serialize;
@@ -19,39 +22,6 @@ const VALUES_SLOT: &str = "__moliCssMathValues";
 const KIND_SLOT: &str = "__moliCssMathKind";
 const TYPE_SLOT: &str = "__moliCssNumericType";
 const ARRAY_SLOT: &str = "__moliCssNumericArray";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    Sum,
-    Product,
-    Negate,
-    Invert,
-    Min,
-    Max,
-    Clamp,
-}
-
-impl Kind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Sum => "sum",
-            Self::Product => "product",
-            Self::Negate => "negate",
-            Self::Invert => "invert",
-            Self::Min => "min",
-            Self::Max => "max",
-            Self::Clamp => "clamp",
-        }
-    }
-
-    fn arity(self) -> Option<usize> {
-        match self {
-            Self::Negate | Self::Invert => Some(1),
-            Self::Clamp => Some(3),
-            _ => None,
-        }
-    }
-}
 
 macro_rules! math_class {
     ($object:ident, $interface:ident, $callback:ident, $kind:ident) => {
