@@ -13,6 +13,9 @@ use moli_core::{
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "scripts/child_error_insertion.rs"]
+mod child_error_insertion;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
