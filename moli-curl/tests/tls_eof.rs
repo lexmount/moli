@@ -144,7 +144,12 @@ fn exchange_protocol(
         }
         // Send TCP EOF and drain any in-flight HTTP/2 SETTINGS ACK. Closing
         // a socket with unread data could send RST instead of the intended FIN.
-        stream.sock.shutdown(Shutdown::Write)?;
+        // A client can finish a framed response and close before this shutdown.
+        if let Err(error) = stream.sock.shutdown(Shutdown::Write)
+            && error.kind() != std::io::ErrorKind::NotConnected
+        {
+            return Err(error.into());
+        }
         let mut pending = [0; 4096];
         while matches!(stream.sock.read(&mut pending), Ok(n) if n > 0) {}
         // StreamOwned does not send close_notify on Drop.
