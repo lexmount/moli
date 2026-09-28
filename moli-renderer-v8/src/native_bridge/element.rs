@@ -703,8 +703,8 @@ pub(super) use styles::{
     build_style_wrapper_template, node_style_getter_function, node_style_setter_function,
 };
 pub(crate) use styles::{
-    clear_inline_style_from_object, computed_style_property_names_from_object,
-    computed_style_property_value_from_object, cssom_style_entry_is_pdb_supplemental_side_entry,
+    clear_inline_style_from_object, computed_style_property_is_shorthand,
+    computed_typed_style_value_from_object, cssom_style_entry_is_pdb_supplemental_side_entry,
     cssom_style_property_affected_names_with_pdb, is_live_style_declaration_object,
     live_style_named_property_value, set_live_style_named_property_value,
     set_style_property_from_object, style_css_text_getter_callback, style_css_text_setter_callback,
