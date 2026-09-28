@@ -171,6 +171,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     CssStyleSheet,
     CssKeywordValue,
     CssUnitValue,
+    CssUnparsedValue,
+    CssVariableReferenceValue,
     FontFace,
     FontFaceSet,
     FontFaceSetLoadEvent,

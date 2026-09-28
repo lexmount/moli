@@ -11,7 +11,12 @@ use cssparser::{Parser, ParserInput, Token};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod map;
+mod unparsed;
 mod values;
+
+pub(in crate::context_bootstrap) use unparsed::{
+    css_unparsed_value_constructor_callback, css_variable_reference_value_constructor_callback,
+};
 
 pub(in crate::context_bootstrap) use values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
@@ -22,6 +27,7 @@ pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    unparsed::install_template_bindings(scope, template, interface_name);
     map::install_computed_style_map_template_bindings(scope, template, interface_name);
     values::install_typed_value_template_bindings(scope, template, interface_name);
 }
