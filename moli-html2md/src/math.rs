@@ -11,14 +11,14 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
             } else {
                 (1, "$", true)
             }
-        } else if bytes[index] == b'\\' && !escaped(bytes, index) {
-            match bytes.get(index + 1) {
-                Some(b'(') => (2, "\\)", false),
-                Some(b'[') => (2, "\\]", false),
-                _ => {
-                    index += 1;
-                    continue;
-                }
+        } else if bytes[index] == b'\\'
+            && matches!(bytes.get(index + 1), Some(b'(' | b'['))
+            && !escaped(bytes, index)
+        {
+            if bytes[index + 1] == b'(' {
+                (2, "\\)", false)
+            } else {
+                (2, "\\]", false)
             }
         } else {
             index += 1;
@@ -58,7 +58,8 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
             if bytes[content_start..end].windows(2).any(|pair| {
                 pair[0] == b'<'
                     && (pair[1].is_ascii_alphabetic() || matches!(pair[1], b'/' | b'!' | b'?'))
-            }) {
+            }) || contains_markdown_resource(&text[content_start..end])
+            {
                 break;
             }
             return Some((index, search));
@@ -66,6 +67,10 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
         index = search.max(content_start);
     }
     None
+}
+
+fn contains_markdown_resource(text: &str) -> bool {
+    text.contains("](") || text.contains("][") || text.contains("![[")
 }
 
 fn escaped(bytes: &[u8], index: usize) -> bool {

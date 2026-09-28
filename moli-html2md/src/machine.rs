@@ -42,7 +42,7 @@ struct Machine<'a, D: Dom + ?Sized> {
     raw: String,
     serial: usize,
     in_svg: bool,
-    anchor_targets: HashSet<String>,
+    anchor_targets: crate::anchors::Targets,
     emitted_anchors: HashSet<String>,
 }
 
@@ -220,6 +220,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if nonrendered_serialized_state(self.dom, node) {
             return;
         }
+        if matches!(tag, "p" | "div")
+            && let Some(text) =
+                transparent_math_text(self.dom, node, self.options.max_depth.saturating_sub(depth))
+        {
+            self.writer().text(&text);
+            return;
+        }
         let tooltip = self
             .dom
             .attribute(node, "data-toggle")
@@ -257,16 +264,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 "head" | "script" | "style" | "noscript" | "template" | "title"
             )
         {
-            for attribute in ["id", "name"] {
-                if attribute == "name" && tag != "a" {
-                    continue;
-                }
-                if let Some(id) = self.dom.attribute(node, attribute)
-                    && self.anchor_targets.contains(id)
-                    && self.emitted_anchors.insert(id.to_owned())
-                {
-                    self.writer().inline_html(&crate::anchors::markup(id));
-                }
+            if let Some(id) = self.anchor_targets.target(self.dom, node)
+                && self.emitted_anchors.insert(id.to_owned())
+            {
+                self.writer().inline_html(&crate::anchors::markup(id));
             }
         }
         match tag {
@@ -405,7 +406,18 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let remaining = self.options.max_depth - depth;
                 if !subtree_has_content(self.dom, node, remaining) {
-                    self.writer().boundary(2);
+                    if let Some(label) =
+                        crate::content::fallback_text_within(self.dom, node, remaining)
+                    {
+                        let heading = format!(
+                            "{} {}",
+                            "#".repeat((tag.as_bytes()[1] - b'0') as usize),
+                            label
+                        );
+                        self.writer().block(heading.into(), 2, 2);
+                    } else {
+                        self.writer().boundary(2);
+                    }
                     return;
                 }
                 if subtree_has_nested_heading(self.dom, node, remaining) {
@@ -513,13 +525,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         }
         if let Some(value) = tooltip_fallback {
             self.writer().text(value);
-        } else if self.dom.first_child(node).is_none()
-            && let Some(label) = self
-                .dom
-                .attribute(node, "aria-label")
-                .filter(|label| !label.trim().is_empty())
+        } else if !subtree_has_content(self.dom, node, self.options.max_depth - depth)
+            && let Some(label) = crate::content::fallback_text(self.dom, node)
         {
-            self.writer().text(label);
+            self.writer().text(&label);
             return;
         }
         self.children(node, depth + 1);
@@ -535,7 +544,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             && let Some(poster) = self
                 .dom
                 .attribute(node, "poster")
-                .filter(|src| !src.is_empty())
+                .filter(|src| !src.is_empty() && crate::media::safe_url(src, true))
         {
             self.writer().image("", poster, None);
             self.writer().boundary(1);
@@ -728,40 +737,41 @@ fn quote_container(tag: &str, class: Option<&str>) -> bool {
 }
 
 fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
-    let mut pending = vec![(root, 0)];
+    crate::content::has_readable_content(dom, root, limit)
+}
+
+fn transparent_math_text<D: Dom + ?Sized>(
+    dom: &D,
+    root: D::NodeId,
+    limit: usize,
+) -> Option<String> {
+    let mut pending = vec![(dom.first_child(root), 1)];
+    let mut text = String::new();
+    let mut crossed_wrapper = false;
     while let Some((node, depth)) = pending.pop() {
-        match dom.node_kind(node) {
-            NodeKind::Text(text) if !text.trim_matches(char::is_whitespace).is_empty() => {
-                return true;
-            }
-            NodeKind::Element("img")
-                if crate::media::source(dom, node).is_some()
-                    || dom
-                        .attribute(node, "alt")
-                        .is_some_and(|alt| !alt.trim().is_empty()) =>
-            {
-                return true;
-            }
-            NodeKind::Element(_)
-                if dom.first_child(node).is_none()
-                    && dom
-                        .attribute(node, "aria-label")
-                        .is_some_and(|label| !label.trim().is_empty()) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-        if depth + 1 >= limit {
+        let Some(node) = node else {
             continue;
+        };
+        if depth >= limit {
+            return None;
         }
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
-            pending.push((id, depth + 1));
-            child = dom.next_sibling(id);
+        pending.push((dom.next_sibling(node), depth));
+        match dom.node_kind(node) {
+            NodeKind::Text(value) => text.push_str(value),
+            NodeKind::Other => crossed_wrapper = true,
+            NodeKind::Element("span")
+                if !dom.has_block_layout(node) && !dom.has_text_boundary(node) =>
+            {
+                crossed_wrapper = true;
+                pending.push((dom.first_child(node), depth + 1));
+            }
+            _ => return None,
         }
     }
-    false
+    if !crossed_wrapper {
+        return None;
+    }
+    (crate::math::next_span(&text) == Some((0, text.len()))).then_some(text)
 }
 
 fn subtree_has_nested_heading<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {

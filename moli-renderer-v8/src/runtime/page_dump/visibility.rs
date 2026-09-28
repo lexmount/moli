@@ -17,6 +17,7 @@ pub(super) struct MarkdownDom<'a> {
     superscripts: HashSet<NativeNodeId>,
     subscripts: HashSet<NativeNodeId>,
     resolved_urls: HashMap<NativeNodeId, HashMap<String, String>>,
+    unchecked_controls: HashSet<NativeNodeId>,
     fragment_links: bool,
 }
 
@@ -29,12 +30,6 @@ impl<'a> MarkdownDom<'a> {
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
         let body = dom.body_node_id();
-        let document_visibility_is_hidden = styles.iter().any(|(node, values)| {
-            (Some(*node) == document_element || Some(*node) == body)
-                && values
-                    .get(1)
-                    .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
-        });
         let fragment_links = styles.iter().any(|(node, _)| {
             Dom::attribute(dom, *node, "href").is_some_and(|href| href.starts_with('#'))
         });
@@ -48,10 +43,8 @@ impl<'a> MarkdownDom<'a> {
             .any(|(_, values)| values.get(11).is_some_and(|value| !value.is_empty()))
         {
             for (node, values) in &styles {
-                let own = values
-                    .get(11)
-                    .and_then(|value| css_color(value))
-                    .filter(|color| color.3 > 0.99);
+                let own_color = values.get(11).and_then(|value| css_color(value));
+                let own = own_color.filter(|color| color.3 > 0.99);
                 let inherited = dom
                     .parent_node(*node)
                     .and_then(|parent| effective_backgrounds.get(&parent).copied());
@@ -60,10 +53,12 @@ impl<'a> MarkdownDom<'a> {
                 let own_image = values
                     .get(13)
                     .is_some_and(|image| !image.is_empty() && image != "none");
-                let inherited_image = dom
-                    .parent_node(*node)
-                    .is_some_and(|parent| non_solid_backgrounds.contains(&parent));
-                if own_image || inherited_image {
+                let inherited_image = own.is_none()
+                    && dom
+                        .parent_node(*node)
+                        .is_some_and(|parent| non_solid_backgrounds.contains(&parent));
+                let translucent = own_color.is_some_and(|color| color.3 > 0.0 && color.3 <= 0.99);
+                if own_image || inherited_image || translucent {
                     non_solid_backgrounds.insert(*node);
                 }
             }
@@ -82,9 +77,13 @@ impl<'a> MarkdownDom<'a> {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
                     .is_some_and(|role| role.eq_ignore_ascii_case("tab")))
-                && let Some(targets) = Dom::attribute(dom, *node, "aria-controls")
+                && let Some(controlled) = Dom::attribute(dom, *node, "aria-controls")
             {
-                disclosures.extend(targets.split_ascii_whitespace());
+                disclosures.extend(
+                    controlled
+                        .split_ascii_whitespace()
+                        .filter(|id| target_is_disclosure(dom, &targets, id)),
+                );
             }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
@@ -133,6 +132,18 @@ impl<'a> MarkdownDom<'a> {
                 }
             }
         }
+        let disclosure_roots: HashSet<_> = disclosures
+            .iter()
+            .filter_map(|id| targets.get(id).copied())
+            .collect();
+        let mut disclosure_paths = HashSet::new();
+        for &target in &disclosure_roots {
+            let mut current = Some(target);
+            while let Some(node) = current {
+                disclosure_paths.insert(node);
+                current = dom.parent_node(node);
+            }
+        }
         let mut suppressed = excerpts;
         let mut invisible = HashSet::new();
         let mut blocks = HashSet::new();
@@ -140,8 +151,26 @@ impl<'a> MarkdownDom<'a> {
         let mut superscripts = HashSet::new();
         let mut subscripts = HashSet::new();
         let mut resolved_urls = HashMap::new();
+        let mut unchecked_controls = HashSet::new();
+        let mut disclosure_regions = HashSet::new();
         for (node, values) in styles {
             let role = Dom::attribute(dom, node, "role").unwrap_or_default();
+            if matches!(Dom::node_kind(dom, node), NodeKind::Element("input"))
+                && let Some(element) = dom.node(node).and_then(|node| node.as_element())
+            {
+                resolved_urls
+                    .entry(node)
+                    .or_insert_with(HashMap::new)
+                    .insert("value".to_owned(), element.input_value());
+                if element.checked() {
+                    resolved_urls
+                        .entry(node)
+                        .or_insert_with(HashMap::new)
+                        .insert("checked".to_owned(), String::new());
+                } else {
+                    unchecked_controls.insert(node);
+                }
+            }
             // Lazy media often stays transparent until a scroll/load event.
             // Its declared resource still belongs to the document, unlike
             // transparent numeric placeholders or hidden UI text.
@@ -154,29 +183,24 @@ impl<'a> MarkdownDom<'a> {
                     Dom::attribute(dom, node, attribute)
                         .is_some_and(|value| !value.trim().is_empty())
                 });
-            let disclosure = role.eq_ignore_ascii_case("tabpanel")
+            let disclosure_root = role.eq_ignore_ascii_case("tabpanel")
                 || Dom::attribute(dom, node, "hidden") == Some("until-found")
                 || (!matches!(role, "dialog" | "alertdialog" | "menu")
                     && Dom::attribute(dom, node, "id").is_some_and(|id| disclosures.contains(id)));
-            let aria_hidden = Dom::attribute(dom, node, "aria-hidden")
-                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+            let disclosure = disclosure_root
+                || dom
+                    .parent_node(node)
+                    .is_some_and(|parent| disclosure_regions.contains(&parent));
+            if disclosure {
+                disclosure_regions.insert(node);
+            }
+            let preserves_disclosure = disclosure || disclosure_paths.contains(&node);
             // Angular/Vue remove cloak attributes only after the bound view
             // is ready. If one remains at dump time, its template text is not
             // reader content even when a missing stylesheet fails to hide it.
             let uninitialized_template = ["ng-cloak", "data-ng-cloak", "x-ng-cloak", "v-cloak"]
                 .iter()
                 .any(|name| Dom::attribute(dom, node, name).is_some());
-            let far_offscreen = values
-                .get(3)
-                .is_some_and(|position| matches!(position.as_str(), "absolute" | "fixed"))
-                && values
-                    .get(4)
-                    .and_then(|value| px(value))
-                    .is_some_and(|left| left <= -1000.0)
-                && values
-                    .get(5)
-                    .and_then(|value| px(value))
-                    .is_some_and(|top| top <= -1000.0);
             let tracking_pixel = matches!(Dom::node_kind(dom, node), NodeKind::Element("img"))
                 && Dom::attribute(dom, node, "alt").is_none_or(|alt| alt.trim().is_empty())
                 && values
@@ -191,6 +215,9 @@ impl<'a> MarkdownDom<'a> {
             let zero_contrast_leaf = !has_element_child(dom, node)
                 && has_text_child(dom, node)
                 && !non_solid_backgrounds.contains(&node)
+                && values
+                    .get(12)
+                    .is_none_or(|shadow| shadow.is_empty() || shadow == "none")
                 && foreground
                     .filter(|color| color.3 > 0.99)
                     .zip(effective_backgrounds.get(&node).copied())
@@ -200,25 +227,20 @@ impl<'a> MarkdownDom<'a> {
                                 == (background.0, background.1, background.2)
                     });
             let document_root = Some(node) == document_element || Some(node) == body;
-            let animated = values
-                .get(12)
-                .is_some_and(|name| !name.is_empty() && name != "none");
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
                     && !lazy_media
-                    && !animated
                     && !document_root)
-                && !disclosure)
-                || (aria_hidden && !disclosure)
+                && !preserves_disclosure)
                 || uninitialized_template
-                || far_offscreen
                 || tracking_pixel
-                || zero_contrast_leaf
+                || (zero_contrast_leaf && !preserves_disclosure)
                 || dom
                     .parent_node(node)
                     .is_some_and(|parent| suppressed.contains(&parent))
+                    && !preserves_disclosure
             {
                 suppressed.insert(node);
             }
@@ -298,8 +320,7 @@ impl<'a> MarkdownDom<'a> {
             if values
                 .get(1)
                 .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
-                && !disclosure
-                && !document_visibility_is_hidden
+                && !preserves_disclosure
             {
                 invisible.insert(node);
             }
@@ -313,6 +334,7 @@ impl<'a> MarkdownDom<'a> {
             superscripts,
             subscripts,
             resolved_urls,
+            unchecked_controls,
             fragment_links,
         }
     }
@@ -328,23 +350,45 @@ impl<'a> MarkdownDom<'a> {
     }
 }
 
+fn target_is_disclosure<D: Dom + ?Sized>(
+    dom: &D,
+    targets: &HashMap<&str, D::NodeId>,
+    id: &str,
+) -> bool {
+    targets.get(id).is_some_and(|target| {
+        !Dom::attribute(dom, *target, "role").is_some_and(|role| {
+            ["dialog", "alertdialog", "menu"]
+                .iter()
+                .any(|excluded| role.eq_ignore_ascii_case(excluded))
+        })
+    })
+}
+
 fn px(value: &str) -> Option<f32> {
     value.strip_suffix("px")?.trim().parse().ok()
 }
 
 fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
     let mut resolved = Vec::new();
-    for candidate in value.split(',') {
-        let candidate = candidate.trim();
-        if candidate.is_empty() {
-            continue;
-        }
-        let split = candidate
+    let mut remaining = value.trim();
+    while !remaining.is_empty() {
+        let split = remaining
             .find(char::is_whitespace)
-            .unwrap_or(candidate.len());
-        let (source, descriptor) = candidate.split_at(split);
-        let url = base_url.join(source).ok()?;
-        resolved.push(format!("{}{descriptor}", url));
+            .unwrap_or(remaining.len());
+        let source = &remaining[..split];
+        remaining = remaining[split..].trim_start();
+        let (descriptor, rest) = if let Some(end) = remaining.find(',') {
+            (remaining[..end].trim(), remaining[end + 1..].trim_start())
+        } else {
+            (remaining.trim(), "")
+        };
+        let url = base_url.join(source.trim_end_matches(',')).ok()?;
+        resolved.push(if descriptor.is_empty() {
+            url.to_string()
+        } else {
+            format!("{url} {descriptor}")
+        });
+        remaining = rest;
     }
     (!resolved.is_empty()).then(|| resolved.join(", "))
 }
@@ -480,6 +524,9 @@ impl Dom for MarkdownDom<'_> {
     }
 
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str> {
+        if name == "checked" && self.unchecked_controls.contains(&node) {
+            return None;
+        }
         self.resolved_urls
             .get(&node)
             .and_then(|attributes| attributes.get(name))

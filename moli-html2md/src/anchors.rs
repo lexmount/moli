@@ -2,14 +2,45 @@ use std::collections::HashSet;
 
 use crate::{Dom, NodeKind};
 
-pub(crate) fn referenced<D: Dom + ?Sized>(
-    dom: &D,
-    root: D::NodeId,
-    limit: usize,
-) -> HashSet<String> {
-    let mut targets = HashSet::new();
+pub(crate) struct Targets {
+    referenced: HashSet<String>,
+    ids: HashSet<String>,
+}
+
+impl Targets {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.referenced.is_empty()
+    }
+
+    pub(crate) fn contains(&self, value: &str) -> bool {
+        self.referenced.contains(value)
+    }
+
+    pub(crate) fn target<'a, D: Dom + ?Sized>(
+        &self,
+        dom: &'a D,
+        node: D::NodeId,
+    ) -> Option<&'a str> {
+        if let Some(id) = dom.attribute(node, "id").filter(|id| self.contains(id)) {
+            return Some(id);
+        }
+        if dom.node_kind(node) == NodeKind::Element("a") {
+            return dom
+                .attribute(node, "name")
+                .filter(|name| self.contains(name) && !self.ids.contains(*name));
+        }
+        None
+    }
+}
+
+pub(crate) fn referenced<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> Targets {
+    let mut available = HashSet::new();
+    let mut element_ids = HashSet::new();
     if !dom.may_have_fragment_links() {
-        return targets;
+        return Targets {
+            referenced: available,
+            ids: element_ids,
+        };
     }
     walk(dom, root, limit, |node| {
         for attribute in ["id", "name"] {
@@ -17,12 +48,15 @@ pub(crate) fn referenced<D: Dom + ?Sized>(
                 continue;
             }
             if let Some(value) = dom.attribute(node, attribute) {
-                targets.insert(value.to_owned());
+                available.insert(value.to_owned());
+                if attribute == "id" {
+                    element_ids.insert(value.to_owned());
+                }
             }
         }
         false
     });
-    let mut ids = HashSet::new();
+    let mut referenced = HashSet::new();
     walk(dom, root, limit, |node| {
         if let Some(fragment) = dom
             .attribute(node, "href")
@@ -31,51 +65,44 @@ pub(crate) fn referenced<D: Dom + ?Sized>(
         {
             // HTML fragment navigation tries the literal fragment first and
             // only percent-decodes it when no literal target exists.
-            if targets.contains(fragment) {
-                ids.insert(fragment.to_owned());
+            if available.contains(fragment) {
+                referenced.insert(fragment.to_owned());
             } else {
                 let decoded = decode_fragment(fragment);
-                if targets.contains(&decoded) {
-                    ids.insert(decoded);
+                if available.contains(&decoded) {
+                    referenced.insert(decoded);
                 }
             }
         }
         false
     });
-    ids
+    Targets {
+        referenced,
+        ids: element_ids,
+    }
 }
 
 pub(crate) fn contains<D: Dom + ?Sized>(
     dom: &D,
     root: D::NodeId,
     limit: usize,
-    ids: &HashSet<String>,
+    ids: &Targets,
 ) -> bool {
-    walk(dom, root, limit, |node| {
-        ["id", "name"]
-            .iter()
-            .any(|name| dom.attribute(node, name).is_some_and(|id| ids.contains(id)))
-    })
+    walk(dom, root, limit, |node| ids.target(dom, node).is_some())
 }
 
 pub(crate) fn within<D: Dom + ?Sized>(
     dom: &D,
     root: D::NodeId,
     limit: usize,
-    ids: &HashSet<String>,
+    ids: &Targets,
 ) -> Vec<String> {
     let mut found = Vec::new();
     walk(dom, root, limit, |node| {
-        for attribute in ["id", "name"] {
-            if attribute == "name" && dom.node_kind(node) != NodeKind::Element("a") {
-                continue;
-            }
-            if let Some(id) = dom.attribute(node, attribute)
-                && ids.contains(id)
-                && !found.iter().any(|existing| existing == id)
-            {
-                found.push(id.to_owned());
-            }
+        if let Some(id) = ids.target(dom, node)
+            && !found.iter().any(|existing| existing == id)
+        {
+            found.push(id.to_owned());
         }
         false
     });

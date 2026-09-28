@@ -83,14 +83,14 @@ impl PageVm {
                         "left".to_owned(),
                         "top".to_owned(),
                         "color".to_owned(),
-                        "animation-name".to_owned(),
+                        "text-shadow".to_owned(),
                     ],
                 );
             nodes
                 .into_iter()
                 .zip(values)
                 .map(|(node, mut values)| {
-                    let animation_name = values.pop().unwrap_or_default();
+                    let text_shadow = values.pop().unwrap_or_default();
                     let foreground = values.pop().unwrap_or_default();
                     // Preserve the visibility adapter's stable field layout.
                     let span = spans.get(&node);
@@ -119,7 +119,7 @@ impl PageVm {
                     );
                     values.push(foreground);
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
-                    values.push(animation_name);
+                    values.push(text_shadow);
                     values.push(background_images.get(&node).cloned().unwrap_or_default());
                     (node, values)
                 })

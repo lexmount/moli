@@ -80,6 +80,7 @@ enum Task<Id> {
     Node(Id, usize),
     Siblings(Option<Id>, usize),
     Close(String),
+    Literal(&'static str),
 }
 
 /// A compact HTML block is valid Markdown and preserves the original cell
@@ -90,13 +91,14 @@ pub(crate) fn render<D: Dom + ?Sized>(
     root: D::NodeId,
     depth: usize,
     limit: usize,
-    anchor_targets: &HashSet<String>,
+    anchor_targets: &crate::anchors::Targets,
 ) -> String {
     let mut output = String::new();
     let mut emitted_anchors = HashSet::new();
     let mut tasks = vec![Task::Node(root, depth)];
     while let Some(task) = tasks.pop() {
         match task {
+            Task::Literal(value) => output.push_str(value),
             Task::Close(tag) => {
                 output.push_str("</");
                 output.push_str(&tag);
@@ -111,10 +113,16 @@ pub(crate) fn render<D: Dom + ?Sized>(
                 if depth >= limit {
                     continue;
                 }
-                let anchor = ["id", "name"].iter().find_map(|name| {
-                    dom.attribute(node, name)
-                        .filter(|id| anchor_targets.contains(*id))
-                });
+                if matches!(dom.node_kind(node), NodeKind::Element(_)) {
+                    if dom.has_block_layout(node) {
+                        output.push_str("<div>");
+                        tasks.push(Task::Close("div".to_owned()));
+                    } else if dom.has_text_boundary(node) {
+                        output.push(' ');
+                        tasks.push(Task::Literal(" "));
+                    }
+                }
+                let anchor = anchor_targets.target(dom, node);
                 if let (NodeKind::Element(tag), Some(id)) = (dom.node_kind(node), anchor)
                     && !allowed(tag)
                     && emitted_anchors.insert(id)
@@ -166,36 +174,7 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                 continue;
                             }
                         }
-                        let retained = if allowed(tag) {
-                            Some(tag)
-                        } else if dom.has_block_layout(node) {
-                            Some("div")
-                        } else {
-                            None
-                        };
-                        if dom.has_block_layout(node)
-                            && matches!(
-                                retained,
-                                Some(
-                                    "a" | "span"
-                                        | "strong"
-                                        | "b"
-                                        | "em"
-                                        | "i"
-                                        | "s"
-                                        | "del"
-                                        | "sup"
-                                        | "sub"
-                                        | "code"
-                                        | "img"
-                                        | "select"
-                                        | "button"
-                                )
-                            )
-                        {
-                            output.push_str("<div>");
-                            tasks.push(Task::Close("div".to_owned()));
-                        }
+                        let retained = if allowed(tag) { Some(tag) } else { None };
                         if let Some(tag) = retained {
                             output.push('<');
                             output.push_str(tag);
@@ -241,7 +220,13 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                 limit - depth - relative_depth,
                             ));
                         } else {
-                            tasks.push(Task::Siblings(dom.first_child(node), depth + 1));
+                            if !crate::content::has_readable_content(dom, node, limit - depth)
+                                && let Some(label) = crate::content::fallback_text(dom, node)
+                            {
+                                escape(&label, &mut output);
+                            } else {
+                                tasks.push(Task::Siblings(dom.first_child(node), depth + 1));
+                            }
                         }
                     }
                     NodeKind::Document => {

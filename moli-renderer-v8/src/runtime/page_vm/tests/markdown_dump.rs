@@ -20,7 +20,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
-        page.vm_mut().eval(r#"
+        page.vm_mut().eval(r##"
             document.head.innerHTML = '<style>.off{display:none}.invisible{visibility:hidden}.restored{visibility:visible}#external-override{color:black}</style>';
             document.body.innerHTML = `
                 <h1>Article</h1><p>Visible body</p>
@@ -38,7 +38,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <p>Stylesheet override <font id="external-override" color="white">ALSO VISIBLE</font></p>
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
-                <p style="opacity:0;animation-name:fadeIn">Animated article text</p>
+                <p style="opacity:0;animation-name:spin">Animated hidden text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
                 <p>Mass 2.4 × 10<span style="position:relative;top:-0.5em;line-height:0">−17</span> J; m<span style="position:relative;bottom:-0.25em;line-height:0">n</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
@@ -53,7 +53,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <details><summary>Details</summary>Closed details content</details>
                 <button aria-expanded="false" aria-controls="dialog">Preferences</button>
                 <div role="dialog" id="dialog" class="off">Cookie template</div>`;
-        "#).unwrap();
+        "##).unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('legacy-hidden')).color").unwrap(), "rgb(255, 255, 255)");
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('css-override')).color").unwrap(), "rgb(0, 0, 0)");
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('external-override')).color").unwrap(), "rgb(0, 0, 0)");
@@ -61,7 +61,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -69,7 +69,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Score 3131", "Parser trap", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
         }
@@ -84,9 +84,11 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval(r#"
             document.documentElement.style.opacity = '';
             document.body.style.visibility = 'hidden';
-            document.body.innerHTML = '<article>Font loading veil</article>';
+            document.body.innerHTML = '<article style="visibility:visible">Font loading veil<div style="visibility:hidden">Independent hidden text</div></article>';
         "#).unwrap();
-        assert!(page.render_page_dump(options(false)).contains("Font loading veil"));
+        let root_visibility = page.render_page_dump(options(false));
+        assert!(root_visibility.contains("Font loading veil"), "{root_visibility}");
+        assert!(!root_visibility.contains("Independent hidden text"), "{root_visibility}");
         page.vm_mut().eval("document.body.style.visibility = ''").unwrap();
         page.vm_mut().eval(r#"
             document.head.innerHTML = '<style>.action{display:block}</style>';
@@ -154,13 +156,37 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(painted.contains("Visible gradient text"), "{painted}");
         assert!(painted.contains("Visible inherited gradient text"), "{painted}");
         assert!(painted.contains("![Photo](https://example.test/photo.png)"), "{painted}");
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <p style="color:white;background-color:rgba(0,0,0,0.5)">Visible on grey</p>
+                <p style="color:white;background:white;text-shadow:0 0 2px black">Visible shadow</p>
+                <div style="color:white;background-image:linear-gradient(black,black)"><p style="background:white">Hidden on opaque child</p></div>
+                <article><p>A detailed review... <a href="#complete">Read more</a></p><div hidden><div id="complete" style="display:none">A detailed review includes the full conclusion.</div></div></article>`;
+        "##).unwrap();
+        let composite = page.render_page_dump(options(false));
+        assert!(composite.contains("Visible on grey"), "{composite}");
+        assert!(composite.contains("Visible shadow"), "{composite}");
+        assert!(!composite.contains("Hidden on opaque child"), "{composite}");
+        assert!(composite.contains("full conclusion"), "{composite}");
+        assert!(!composite.contains("A detailed review..."), "{composite}");
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = '<input id="field" value="Initial"><input id="check" type="checkbox">';
+            document.getElementById('field').value = 'Edited';
+            document.getElementById('check').checked = true;
+        "#).unwrap();
+        let controls = page.render_page_dump(options(false));
+        assert!(controls.contains("Edited"), "{controls}");
+        assert!(controls.contains("☑"), "{controls}");
+        assert!(!controls.contains("Initial"), "{controls}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <img srcset="small.png 1x, large.png 2x" alt="Responsive">
+                <img srcset="https://cdn.example/c_fill,w_640/photo.jpg 1x" alt="Comma URL">
                 <img data-srcset="lazy-small.png 1x, lazy-large.png 2x" alt="Lazy responsive">`;
         "#).unwrap();
         let responsive = page.render_page_dump(options(false));
         assert!(responsive.contains("![Responsive](https://example.test/large.png)"), "{responsive}");
+        assert!(responsive.contains("![Comma URL](https://cdn.example/c_fill,w_640/photo.jpg)"), "{responsive}");
         assert!(responsive.contains("![Lazy responsive](https://example.test/lazy-large.png)"), "{responsive}");
         page.vm_mut().eval("document.documentElement.style.display = 'none'").unwrap();
         assert!(page.render_page_dump(options(false)).is_empty());

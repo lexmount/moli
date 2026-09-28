@@ -71,6 +71,32 @@ fn tex_payload_is_usable_by_a_markdown_math_reader() {
 }
 
 #[test]
+fn transparent_inline_wrappers_do_not_change_tex_or_activate_markdown_resources() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for source in [
+        r"<p>$x_i<span> + </span>\alpha$</p>",
+        r"<p>$x_i<!--note--> + \alpha$</p>",
+    ] {
+        let result = markdown(source, false);
+        let payloads: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|event| match event {
+                Event::InlineMath(text) => Some(text.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(payloads, [r"x_i + \alpha"], "{result}");
+    }
+    for source in [
+        "$[download](https://example.org/file)$",
+        "$![diagram](https://example.org/pixel)$",
+    ] {
+        let result = rendered_html(&markdown(&format!("<p>{source}</p>"), false));
+        assert!(!result.contains("<a "), "{result}");
+        assert!(!result.contains("<img "), "{result}");
+    }
+}
+
+#[test]
 fn mathematical_structures_survive_markdown_rendering() {
     let source = "<p>Rate <math><mfrac><mi>dQ</mi><mi>dt</mi></mfrac><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msqrt><mi>y</mi></msqrt></math>.</p>";
     let result = markdown(source, false);
@@ -680,6 +706,24 @@ fn literal_fragment_target_wins_before_percent_decoding() {
 }
 
 #[test]
+fn fragment_targets_prefer_ids_and_only_accept_legacy_anchor_names() {
+    let result = rendered_html(&markdown(
+        "<a href='#target'>Go</a><p><a name='target'>Legacy</a></p><p id='target'>ID target</p>",
+        false,
+    ));
+    assert_eq!(result.matches("id=\"target\"").count(), 1, "{result}");
+    assert!(result.find("ID target").unwrap() > result.find("id=\"target\"").unwrap());
+    assert!(!result.contains("<a id=\"target\"></a>Legacy"), "{result}");
+
+    let result = rendered_html(&markdown(
+        "<a href='#target'>Go</a><table><tr><td colspan='2'><mark name='target'>Wrong</mark><a name='target'>Right</a></td></tr></table>",
+        false,
+    ));
+    assert!(!result.contains("id=\"target\"></a>Wrong"), "{result}");
+    assert!(result.contains("name=\"target\""), "{result}");
+}
+
+#[test]
 fn table_fragment_targets_preserve_rows_cells_and_legacy_named_anchors() {
     let source = "<a href='#row'>Row</a><a href='#cell'>Cell</a><a href='#legacy'>Legacy</a><table><tr id='row'><td id='cell'><a name='legacy'></a>Value</td><td>Other</td></tr></table>";
     let result = rendered_html(&markdown(source, false));
@@ -1033,6 +1077,47 @@ fn embedded_image_references_survive_regardless_of_pixel_content() {
         assert!(markdown(&html, false).contains(src), "{src}");
         let responsive = format!("<picture><source srcset='/status-2x.png 2x'>{html}</picture>");
         assert!(markdown(&responsive, false).contains(src), "{responsive}");
+    }
+}
+
+#[test]
+fn responsive_images_preserve_url_commas_and_use_declared_candidates() {
+    let comma_url = "https://cdn.example/c_fill,w_640,h_480/photo.jpg";
+    for content in [
+        format!("<img alt='Photo' srcset='{comma_url} 1x'>"),
+        format!("<a href='/photo'><img alt='Photo' srcset='{comma_url} 1x'></a>"),
+        format!(
+            "<table><tr><td colspan='2'><img alt='Photo' srcset='{comma_url} 1x'></td></tr></table>"
+        ),
+    ] {
+        let result = markdown(&content, false);
+        assert!(result.contains(comma_url), "{result}");
+    }
+    let result = markdown(
+        "<img alt='Photo' src='/current.jpg' data-original='/old.jpg'>",
+        false,
+    );
+    assert!(result.contains("/current.jpg"), "{result}");
+    assert!(!result.contains("/old.jpg"), "{result}");
+    let result = markdown(
+        "<img alt='Photo' src='/placeholder.gif' data-srcset='/small.jpg 1x, /large.jpg 2x'>",
+        false,
+    );
+    assert!(result.contains("/large.jpg"), "{result}");
+}
+
+#[test]
+fn readable_fallbacks_survive_all_table_representations() {
+    for wrapper in [
+        "<p>{}</p>",
+        "<table><tr><td>{}</td></tr></table>",
+        "<table><tr><td colspan='2'>{}</td></tr></table>",
+    ] {
+        let content = "<a href='/download' aria-label='Download report'> </a><button aria-label='Open panel'><span aria-hidden='true'></span></button><svg><title>Chart title</title></svg>";
+        let result = markdown(&wrapper.replace("{}", content), false);
+        for expected in ["Download report", "Open panel", "Chart title"] {
+            assert!(result.contains(expected), "missing {expected}: {result}");
+        }
     }
 }
 
