@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from moli_benchmark.fingerprint.cases import CASES, select_cases
 from moli_benchmark.fingerprint.observations import Observer, complete_fp_result, is_fp_result, select_fp_result
-from moli_benchmark.fingerprint.runner import build_summary, classify
+from moli_benchmark.fingerprint.runner import build_summary, classify, run_suite
 
 
 class FingerprintContractTests(unittest.TestCase):
@@ -70,6 +74,38 @@ class FakeCDP:
 
 
 class ObservationWindowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_audits_are_bounded(self):
+        observer = Observer(FakeCDP(), lambda: 1)
+        for index in range(100):
+            observer.requested({'requestId': f'r{index}', 'request': {'url': 'https://demo.fingerprint.com/api/event/id'}})
+            observer.requested({'requestId': f's{index}', 'type': 'Script', 'request': {'url': 'https://example.com/script.js'}})
+        frozen = observer.snapshot(2)
+        self.assertEqual(len(frozen['requests']), 60)
+        self.assertTrue(frozen['script_limit_reached'])
+        self.assertTrue(frozen['result_limit_reached'])
+
+    async def test_partial_matrix_is_saved_and_cleanup_failure_stops_the_run(self):
+        async def capture(case, engine, *_args, run, **_kwargs):
+            return {'engine': engine, 'site': case.id, 'run': run, 'report': None,
+                    'status': 'cleanup_error', 'process_cleaned_up': False}
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch('moli_benchmark.fingerprint.runner.workload', return_value={'collector': {}}),
+            patch('moli_benchmark.fingerprint.runner.collector_hashes', return_value={}),
+            patch('moli_benchmark.fingerprint.runner.capture', side_effect=capture) as mocked,
+        ):
+            root = Path(temporary) / 'run'
+            with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                await run_suite(root, {'moli': Path(sys.executable)}, select_cases(['creepjs', 'browserscan-bot']))
+            self.assertEqual(mocked.call_count, 1)
+            report = json.loads((root / 'summary.json').read_text())
+            self.assertFalse(report['matrix_complete'])
+            self.assertTrue(report['inputs_unchanged'])
+            self.assertEqual(report['suites'][0]['coverage']['moli']['planned'], 2)
+            self.assertEqual(report['suites'][0]['coverage']['moli']['attempted'], 1)
+            self.assertTrue((root / 'index.html').is_file())
+
     async def test_headers_before_but_body_after_cutoff_does_not_fill_the_sample(self):
         cdp = FakeCDP()
         now = [1]
