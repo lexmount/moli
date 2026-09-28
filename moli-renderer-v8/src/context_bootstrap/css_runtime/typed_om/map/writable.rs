@@ -272,11 +272,15 @@ struct CoercedValues {
 }
 
 fn is_unparsed(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
-    parsed.values.as_ref().is_some_and(|list| {
-        list.values
-            .iter()
-            .any(|v| matches!(v, TypedValue::Unparsed(_)))
-    })
+    parsed
+        .values
+        .as_ref()
+        .and_then(moli_css_parse::TypedStyleValueList::native)
+        .is_some_and(|list| {
+            list.values
+                .iter()
+                .any(|v| matches!(v, TypedValue::Unparsed(_)))
+        })
 }
 
 fn coerce_values<'s>(
@@ -320,9 +324,7 @@ fn coerce_values<'s>(
                 && !parsed
                     .as_ref()
                     .and_then(|v| v.values.as_ref())
-                    .is_some_and(|v| {
-                        v.values.len() == 1 && matches!(&v.values[0], TypedValue::Image(_))
-                    })
+                    .is_some_and(moli_css_parse::TypedStyleValueList::is_single_image)
             {
                 return Err(CoercionError::Invalid);
             }
@@ -369,6 +371,7 @@ fn coerce_values<'s>(
                 )
                 .and_then(|v| v.values)
                 .ok_or(CoercionError::Invalid)?;
+                let probe = probe.native().ok_or(CoercionError::Invalid)?;
                 if probe.values.len() != 1
                     || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value))
                         if values::native_unit_name(value.unit_str()) == unit
@@ -396,6 +399,7 @@ fn coerce_values<'s>(
                 && !parsed
                     .as_ref()
                     .and_then(|v| v.values.as_ref())
+                    .and_then(moli_css_parse::TypedStyleValueList::native)
                     .is_some_and(|v| {
                         v.values.len() == 1 && matches!(&v.values[0], TypedValue::Keyword(_))
                     })
@@ -425,7 +429,7 @@ fn coerce_values<'s>(
         let doubled = format!("{text}, {text}");
         let repeated = moli_css_parse::parse_typed_style_value(property, &doubled, base_url)
             .and_then(|v| v.values)
-            .is_some_and(|v| v.values.len() >= 2);
+            .is_some_and(|v| v.len() >= 2);
         if !repeated {
             return Err(CoercionError::Invalid);
         }
