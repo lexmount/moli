@@ -10,6 +10,7 @@ mod font_palette;
 mod font_selection;
 mod math;
 mod media;
+mod numeric_serialization;
 mod root_margin;
 mod stylesheet_imports;
 mod stylo_stylesheet;
@@ -46,6 +47,9 @@ pub use media::{
     append_media_query_list_medium, create_media_query_device, delete_media_query_list_medium,
     evaluate_media_query_list, media_query_list_items, normalize_media_query_list,
     parse_media_query_list_with_context, screen_media_query_matches,
+};
+pub use numeric_serialization::{
+    css_numeric_token_value, serialize_css_number, serialize_css_token,
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{

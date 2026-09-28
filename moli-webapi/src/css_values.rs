@@ -84,7 +84,7 @@ struct CssUnitValuePrototypeDeclaration {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSUnitValue")]
 struct CssUnitValueConstructorArgs {
-    #[webidl(required)]
+    #[webidl(required, converter = "double")]
     value: f64,
     #[webidl(required)]
     unit: String,
@@ -261,19 +261,11 @@ fn normalize_unit_name(unit: &str) -> Option<String> {
     VALID_UNIT_NAMES.contains(&unit.as_str()).then_some(unit)
 }
 
-fn css_style_value_to_string_callback<'s>(
+pub fn css_style_value_to_string_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if web_api_interfaces::CSSUnparsedValue::is_instance(scope, args.this()) {
-        if let Some(text) =
-            super::unparsed::serialize(scope, args.this()).and_then(|text| v8_string(scope, &text))
-        {
-            rv.set(text.into());
-        }
-        return;
-    }
     if let Some(unit) = css_unit_value_unit(scope, args.this()) {
         let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
         let number = v8::Number::new(scope, value)
@@ -406,7 +398,7 @@ fn css_unit_value_unit_getter_callback<'s>(
     }
 }
 
-fn css_unit_value_number<'s>(
+pub fn css_unit_value_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<f64> {
@@ -423,7 +415,7 @@ fn css_keyword_value<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-fn css_unit_value_unit<'s>(
+pub fn css_unit_value_unit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
