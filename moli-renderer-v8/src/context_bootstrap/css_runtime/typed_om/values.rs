@@ -238,7 +238,7 @@ pub(super) fn from_parsed<'s>(
         .collect()
 }
 
-fn opaque_style_value<'s>(
+pub(super) fn opaque_style_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     property: &str,
     text: &str,
@@ -305,20 +305,24 @@ fn css_style_value_to_string_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    if web_api_interfaces::CSSUnparsedValue::is_instance(scope, args.this()) {
-        if let Some(text) =
-            super::unparsed::serialize(scope, args.this()).and_then(|text| v8_string(scope, &text))
-        {
-            rv.set(text.into());
-        }
-        return;
+    if let Some(text) = serialize(scope, args.this()).and_then(|text| v8_string(scope, &text)) {
+        rv.set(text.into());
     }
-    if let Some(unit) = css_unit_value_unit(scope, args.this()) {
-        let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
+}
+
+/// Serializes genuine CSSStyleValue internal slots, never author-overridable
+/// toString/value/unit properties. Callers must first validate the native brand.
+pub(super) fn serialize<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    if web_api_interfaces::CSSUnparsedValue::is_instance(scope, value) {
+        return super::unparsed::serialize(scope, value);
+    }
+    if let Some(unit) = css_unit_value_unit(scope, value) {
+        let value = css_unit_value_number(scope, value)?;
         let number = moli_css_parse::serialize_css_number(value);
-        let text = if !value.is_finite() {
-            // IDL constructors/setters require finite doubles; values reified
-            // from CSS math may nevertheless carry a non-finite result.
+        return Some(if !value.is_finite() {
             if unit == "number" {
                 format!("calc({number})")
             } else {
@@ -333,22 +337,25 @@ fn css_style_value_to_string_callback<'s>(
                 "percent" => format!("{number}%"),
                 _ => format!("{number}{unit}"),
             }
-        };
-        if let Some(text) = v8_string(scope, &text) {
-            rv.set(text.into());
-        }
-        return;
+        });
     }
-    if let Some(keyword) = css_keyword_value(scope, args.this()) {
-        if let Some(keyword) = v8_string(scope, &keyword) {
-            rv.set(keyword.into());
-        }
-        return;
+    if let Some(keyword) = css_keyword_value(scope, value) {
+        let mut text = String::new();
+        cssparser::serialize_identifier(&keyword, &mut text).ok()?;
+        return Some(text);
     }
-    let text = get_private_value(scope, args.this(), CSS_STYLE_VALUE_TEXT_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .unwrap_or_else(|| v8::String::empty(scope));
-    rv.set(text.into());
+    get_private_value(scope, value, CSS_STYLE_VALUE_TEXT_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+pub(super) fn associated_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    get_private_value(scope, value, CSS_STYLE_VALUE_PROPERTY_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
 }
 
 fn css_keyword_value_value_getter_callback<'s>(
@@ -479,7 +486,7 @@ fn css_keyword_value<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-fn css_unit_value_unit<'s>(
+pub(super) fn css_unit_value_unit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<String> {

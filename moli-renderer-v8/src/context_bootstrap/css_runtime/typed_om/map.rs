@@ -1,11 +1,14 @@
 use super::*;
-use crate::web_api_interfaces;
+use crate::{detached_css_style, web_api_interfaces};
+
+mod writable;
 use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
 };
 
 const ELEMENT_COMPUTED_STYLE_MAP_SLOT: &str = "__moliElementComputedStyleMap";
+const STYLE_PROPERTY_MAP_ELEMENT_SLOT: &str = "__moliStylePropertyMapElement";
 const STYLE_PROPERTY_MAP_STYLE_SLOT: &str = "__moliStylePropertyMapStyle";
 
 #[derive(WebApiObject)]
@@ -16,7 +19,7 @@ struct ComputedStylePropertyMapDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
 struct ElementComputedStyleMapPrototypeDeclaration {
     #[webapi(
         method = "computedStyleMap",
@@ -27,7 +30,7 @@ struct ElementComputedStyleMapPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly, enumerable)]
+#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly, enumerable, receiver)]
 struct StylePropertyMapReadOnlyPrototypeDeclaration {
     #[webapi(method, callback = style_property_map_get_callback, length = 1)]
     get: (),
@@ -52,7 +55,7 @@ struct StylePropertyMapReadOnlyPrototypeDeclaration {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "StylePropertyMapReadOnly")]
 struct StylePropertyMapPropertyArgs {
-    #[webidl(required)]
+    #[webidl(required, converter = "usv_string")]
     property: String,
 }
 
@@ -61,6 +64,7 @@ pub(super) fn install_computed_style_map_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    writable::install(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
         "Element" => {
@@ -130,7 +134,7 @@ fn style_property_map_get_callback<'s>(
     let Some((style, property)) = map_style_and_property(scope, &args) else {
         return;
     };
-    let values = style_values_for_property(scope, style, &property);
+    let values = style_values_for_property(scope, args.this(), style, &property);
     if let Some(value) = values.first() {
         rv.set((*value).into());
     } else {
@@ -146,7 +150,7 @@ fn style_property_map_get_all_callback<'s>(
     let Some((style, property)) = map_style_and_property(scope, &args) else {
         return;
     };
-    rv.set(style_values_array(scope, style, &property).into());
+    rv.set(style_values_array(scope, args.this(), style, &property).into());
 }
 
 fn style_property_map_has_callback<'s>(
@@ -170,7 +174,7 @@ fn style_property_map_size_getter_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "get size");
         return;
     };
-    let size = computed_style_property_names(scope, style)
+    let size = map_property_names(scope, style)
         .len()
         .min(u32::MAX as usize) as u32;
     rv.set(v8::Integer::new_from_unsigned(scope, size).into());
@@ -185,13 +189,13 @@ fn style_property_map_entries_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "entries");
         return;
     };
-    let entries = computed_style_property_names(scope, style)
+    let entries = map_property_names(scope, style)
         .into_iter()
         .map(|property| {
             let property_value = v8_string(scope, &property)
                 .map(v8::Local::<v8::Value>::from)
                 .unwrap_or_else(|| v8::undefined(scope).into());
-            let values = style_values_array(scope, style, &property);
+            let values = style_values_array(scope, args.this(), style, &property);
             v8::Array::new_with_elements(scope, &[property_value, values.into()])
         })
         .map(v8::Local::<v8::Value>::from)
@@ -209,7 +213,7 @@ fn style_property_map_keys_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "keys");
         return;
     };
-    let keys = computed_style_property_names(scope, style)
+    let keys = map_property_names(scope, style)
         .into_iter()
         .filter_map(|property| v8_string(scope, &property))
         .map(v8::Local::<v8::Value>::from)
@@ -227,9 +231,9 @@ fn style_property_map_values_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "values");
         return;
     };
-    let values = computed_style_property_names(scope, style)
+    let values = map_property_names(scope, style)
         .into_iter()
-        .map(|property| style_values_array(scope, style, &property))
+        .map(|property| style_values_array(scope, args.this(), style, &property))
         .map(v8::Local::<v8::Value>::from)
         .collect::<Vec<_>>();
     let values = v8::Array::new_with_elements(scope, &values);
@@ -253,11 +257,11 @@ fn style_property_map_for_each_callback<'s>(
         return;
     };
     let this_arg = args.get(1);
-    let snapshot = computed_style_property_names(scope, style)
+    let snapshot = map_property_names(scope, style)
         .into_iter()
         .filter_map(|property| {
             let property_value = v8_string(scope, &property)?;
-            let values = style_values_array(scope, style, &property);
+            let values = style_values_array(scope, args.this(), style, &property);
             Some((property_value, values))
         })
         .collect::<Vec<_>>();
@@ -282,15 +286,12 @@ fn map_style_and_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<(v8::Local<'s, v8::Object>, String)> {
-    let style = map_style_object(scope, args.this()).or_else(|| {
-        throw_style_property_map_illegal_invocation(scope, "property lookup");
-        None
-    })?;
     let parsed = webidl::parse_args::<StylePropertyMapPropertyArgs>(scope, args)?;
     let property = canonical_map_property_name(&parsed.property).or_else(|| {
-        throw_type_error(scope, &format!("Invalid propertyName: {}", parsed.property));
+        throw_type_error(scope, "Invalid CSS property");
         None
     })?;
+    let style = map_style_object(scope, args.this())?;
     Some((style, property))
 }
 
@@ -298,6 +299,15 @@ fn map_style_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     map: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(element) = get_private_object(scope, map, STYLE_PROPERTY_MAP_ELEMENT_SLOT) {
+        // Detached compatibility wrappers can gain a live bridge on insertion.
+        // Resolve the owner's actual native declaration on each operation.
+        let context = element
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        return native_bridge::element::style_for_element(scope, element);
+    }
     get_private_object(scope, map, STYLE_PROPERTY_MAP_STYLE_SLOT)
 }
 
@@ -315,10 +325,11 @@ fn canonical_map_property_name(property: &str) -> Option<String> {
 
 fn style_values_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
     property: &str,
 ) -> v8::Local<'s, v8::Array> {
-    let values = style_values_for_property(scope, style, property)
+    let values = style_values_for_property(scope, map, style, property)
         .into_iter()
         .map(v8::Local::<v8::Value>::from)
         .collect::<Vec<_>>();
@@ -327,12 +338,35 @@ fn style_values_array<'s>(
 
 fn style_values_for_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
     property: &str,
 ) -> Vec<v8::Local<'s, v8::Object>> {
+    // CSSStyleValue objects belong to the map's realm, even when a
+    // method from another realm is borrowed. IDL conversion/errors stay in
+    // the callee realm, outside this reification scope.
+    let context = map
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(text) = style_property_text(scope, style, property) else {
         return Vec::new();
     };
+    if !native_bridge::element::style_declaration_is_computed(scope, style) {
+        crate::style_engine::ensure_stylo_browser_compat_prefs();
+        let base_url = parse::base_url(scope);
+        if let Some(parsed) =
+            moli_css_parse::parse_typed_style_value(property, &text, base_url.as_ref())
+        {
+            return values::from_parsed(scope, property, &text, parsed);
+        }
+        if property.starts_with("--")
+            && let Some(parts) = moli_css_parse::reify_unparsed_style_value(&text, None)
+        {
+            return vec![unparsed::from_native(scope, parts)];
+        }
+        return vec![values::opaque_style_value(scope, property, &text)];
+    }
     let components = if property.starts_with("--") {
         vec![text]
     } else {
@@ -351,21 +385,23 @@ fn style_property_text<'s>(
     style: v8::Local<'s, v8::Object>,
     property: &str,
 ) -> Option<String> {
-    let text =
-        native_bridge::element::computed_style_property_value_from_object(scope, style, property)?;
+    let text = detached_css_style::css_declaration_property_value(scope, style, property)?;
     if !text.is_empty() {
         return Some(text);
     }
-    computed_style_property_names(scope, style)
+    map_property_names(scope, style)
         .iter()
         .any(|name| name == property)
         .then_some(text)
 }
 
-fn computed_style_property_names<'s>(
+fn map_property_names<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> Vec<String> {
+    if !native_bridge::element::style_declaration_is_computed(scope, style) {
+        return detached_css_style::css_declaration_property_names(scope, style);
+    }
     // Computed CSSStyleDeclaration and Typed OM enumerate one public property list.
     let mut names = native_bridge::element::computed_style_property_names_from_object(scope, style)
         .unwrap_or_default();
