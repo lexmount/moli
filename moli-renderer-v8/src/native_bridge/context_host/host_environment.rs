@@ -586,6 +586,42 @@ impl JsContextHost {
         Some(context.subresource_environment(base_url, frame_id))
     }
 
+    pub(crate) fn document_client_referrer_source(
+        &self,
+        mut owner: crate::native_bridge::OwnerDispatchScope,
+    ) -> Option<url::Url> {
+        use super::{OwnerDispatchScope, WindowAccessOrigin};
+        if matches!(
+            self.window_access_origin_for_dispatch_scope(owner)?,
+            WindowAccessOrigin::Opaque { .. }
+        ) {
+            return None;
+        }
+        // Referrer Policy follows srcdoc containers, not inherited base URLs.
+        // Keep this separate from the captured origin and cookie initiator.
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let document = match owner {
+                OwnerDispatchScope::Top => self.document_handle(),
+                OwnerDispatchScope::LightweightPopup(popup_id) => {
+                    self.lightweight_popup_document_handle(popup_id)?
+                }
+                OwnerDispatchScope::Child(handle) => {
+                    let document = self.child_browsing_context_document_handle(handle)?;
+                    let url = self.dom_host().document_url_for_handle(document)?;
+                    // A javascript: replacement retains the Document URL even
+                    // though its navigation bootstrap is no longer Srcdoc.
+                    if moli_url::is_about_srcdoc(url) {
+                        owner = self.owner_dispatch_scope_for_node(handle)?;
+                        continue;
+                    }
+                    document
+                }
+            };
+            return self.dom_host().document_url_for_handle(document).cloned();
+        }
+        None
+    }
+
     pub(crate) fn parent_document_resource_loader_for_child_context(
         &self,
         handle: DomHandle,
