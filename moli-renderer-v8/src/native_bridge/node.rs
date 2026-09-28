@@ -4,6 +4,7 @@ use crate::{
     dom::native::{DocumentType, Node, NodeType},
     webidl,
 };
+use anyhow::{Context, bail};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 use super::super::{
@@ -1264,8 +1265,9 @@ pub(crate) fn install_node_template_bindings<'s>(
 pub(crate) fn node_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
-    let (runtime_ptr, handle) = super::bridge_handle_from_object(scope, object)?;
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+    let (runtime_ptr, handle) = super::bridge_handle_from_object(scope, object)
+        .context("failed to resolve Node wrapper")?;
     match handle {
         super::BridgeHandle::Node(handle) => Ok((runtime_ptr, handle)),
         super::BridgeHandle::Window
@@ -1273,7 +1275,7 @@ pub(crate) fn node_runtime_and_handle_from_object(
         | super::BridgeHandle::Dataset(_)
         | super::BridgeHandle::Style(_)
         | super::BridgeHandle::ComputedStyle(_, _) => {
-            Err("wrapper did not contain a node identity".to_owned())
+            bail!("wrapper did not contain a Node identity")
         }
     }
 }
@@ -1289,14 +1291,14 @@ pub(crate) fn object_is_node_wrapper_or_detached<'s>(
 pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     if let Ok(node) = node_runtime_and_handle_from_object(scope, object) {
         return Ok(node);
     }
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)
-        .ok_or_else(|| "missing native bridge host".to_owned())?;
+        .context("current context has no JsContextHost")?;
     let handle = super::document::detached_native_handle_for_runtime(scope, runtime_ptr, object)
-        .ok_or_else(|| "object did not contain a node identity".to_owned())?;
+        .context("object is neither a Node wrapper nor a detached node")?;
     Ok((runtime_ptr, handle))
 }
 
@@ -1316,14 +1318,14 @@ pub(crate) fn current_or_live_delegate_node_arg_handle(
 pub(super) fn node_runtime_and_handle_from_args(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     node_runtime_and_handle_from_object(scope, args.this())
 }
 
 pub(super) fn node_runtime_and_handle_from_args_or_detached(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     let this = v8::Global::new(scope, args.this());
     let this = v8::Local::new(scope, this);
     node_runtime_and_handle_from_object_or_detached(scope, this)

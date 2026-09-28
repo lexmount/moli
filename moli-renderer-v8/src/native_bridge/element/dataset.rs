@@ -9,6 +9,7 @@ use super::{
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
 };
 use crate::{custom_elements, document_runtime::DomHandle, util::v8_string};
+use anyhow::{Context, bail};
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
 pub(in crate::native_bridge) fn build_dom_string_map_wrapper_template<'s, 'i>(
@@ -43,8 +44,9 @@ pub(in crate::native_bridge) fn build_dom_string_map_wrapper_template<'s, 'i>(
 fn dataset_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
-    let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)?;
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+    let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)
+        .context("failed to resolve DOMStringMap wrapper")?;
     match handle {
         BridgeHandle::Dataset(handle) => Ok((runtime_ptr, handle)),
         BridgeHandle::Window
@@ -52,7 +54,7 @@ fn dataset_runtime_and_handle_from_object(
         | BridgeHandle::ClassList(_, _)
         | BridgeHandle::Style(_)
         | BridgeHandle::ComputedStyle(_, _) => {
-            Err("wrapper did not contain a DOMStringMap identity".to_owned())
+            bail!("wrapper did not contain a DOMStringMap identity")
         }
     }
 }

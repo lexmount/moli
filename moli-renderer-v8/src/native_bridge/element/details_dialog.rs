@@ -193,7 +193,7 @@ fn dialog_close_return_value_arg<'s>(
 fn dialog_runtime_and_handle_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     node_runtime_and_handle_from_object_or_detached(scope, object)
 }
 

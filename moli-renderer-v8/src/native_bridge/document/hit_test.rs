@@ -442,7 +442,7 @@ fn build_caret_position_object<'s>(
 fn document_runtime_and_handle_from_args<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     node_runtime_and_handle_from_args(scope, args).or_else(|error| {
         let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return Err(error);
