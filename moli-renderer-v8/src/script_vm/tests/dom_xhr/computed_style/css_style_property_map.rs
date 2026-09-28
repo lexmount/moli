@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn css_style_declarations_commit_before_custom_element_reactions() {
+    let mut vm = new_parsed_test_vm("https://css-style-reactions.test/", "<!doctype html><body>");
+    assert_eq!(
+        vm.eval(include_str!("css_style_reactions.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn css_style_property_maps_retain_declared_units_until_the_declaration_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-declared-units.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_declared_units.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_style_property_maps_accept_percentage_units_without_weakening_type_checks() {
     let mut vm = new_parsed_test_vm(
         "https://css-percentages.test/",
