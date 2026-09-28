@@ -436,7 +436,6 @@ __stopFrame.src = '/one.html';
     );
 }
 
-
 #[tokio::test]
 async fn window_stop_cancels_pending_precommit_before_commit() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

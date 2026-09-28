@@ -1,7 +1,5 @@
 use super::*;
 
-mod main_beforeunload;
-
 #[test]
 fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
     for target in ["", "_sElF", "_ToP", "_PARENT"] {
@@ -1348,7 +1346,7 @@ async fn planned_popup_form_navigation_sends_the_captured_post_request() {
 
 #[tokio::test]
 async fn form_navigation_tasks_preserve_submission_values_and_event_order() {
-    let script = include_str!("../../../../tests/fixtures/form-planned-navigation.js");
+    let script = include_str!("../../../../../tests/fixtures/form-planned-navigation.js");
     for target in ["top", "child", "named", "popup"] {
         for method in ["get", "post"] {
             for scenario in [
@@ -1400,7 +1398,7 @@ async fn form_navigation_tasks_preserve_submission_values_and_event_order() {
 
 #[tokio::test]
 async fn reentrant_navigation_traversals_keep_request_identity_and_event_order() {
-    let script = include_str!("../../../../tests/fixtures/navigation-reentrant-traversal.js");
+    let script = include_str!("../../../../../tests/fixtures/navigation-reentrant-traversal.js");
     for target in ["top", "child", "popup"] {
         for scenario in ["same", "different", "multiple", "same-then-new", "handler"] {
             let requests = usize::from(target != "top");
@@ -1443,7 +1441,7 @@ async fn reentrant_navigation_traversals_keep_request_identity_and_event_order()
 
 #[tokio::test]
 async fn navigation_event_constructors_convert_webidl_dictionaries_before_initialization() {
-    let script = include_str!("../../../../tests/fixtures/navigation-event-init-webidl.js");
+    let script = include_str!("../../../../../tests/fixtures/navigation-event-init-webidl.js");
     for target in ["top", "child"] {
         let server = StaticHttpServer::spawn(1).await;
         let base = server.base_url().origin().ascii_serialization();
@@ -1478,7 +1476,7 @@ async fn navigation_event_constructors_convert_webidl_dictionaries_before_initia
 
 #[tokio::test]
 async fn navigation_destination_uses_native_webidl_receivers_and_live_entry_state() {
-    let script = include_str!("../../../../tests/fixtures/navigation-destination-webidl.js");
+    let script = include_str!("../../../../../tests/fixtures/navigation-destination-webidl.js");
     for target in ["top", "child"] {
         let server = StaticHttpServer::spawn(1).await;
         let base = server.base_url().origin().ascii_serialization();
@@ -1519,7 +1517,7 @@ async fn document_open_preserves_navigation_initialization() {
             "https://navigation-document-open.test/parent",
             &loader,
         );
-        let script = include_str!("../../../../tests/fixtures/navigation-document-open.js");
+        let script = include_str!("../../../../../tests/fixtures/navigation-document-open.js");
         vm.eval(&format!(
             "{script}\nglobalThis.streamResult = 'pending';\n\
              navigationDocumentOpenProbe({kind:?}).then(\n\
@@ -1593,7 +1591,7 @@ async fn navigation_entries_and_events_follow_document_initialness() {
         let loader = static_http_loader([]);
         let mut vm =
             new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
-        let script = include_str!("../../../../tests/fixtures/navigation-initial-document.js");
+        let script = include_str!("../../../../../tests/fixtures/navigation-initial-document.js");
         vm.eval(&format!(
             "{script}\nglobalThis.initialResult = 'pending';\n\
              initialNavigationProbe({mode:?}).then(\n\
