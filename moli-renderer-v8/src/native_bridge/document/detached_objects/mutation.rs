@@ -223,6 +223,9 @@ fn live_native_attribute_snapshot<'s>(
             .map(|attribute| DetachedNativeAttributeSnapshot {
                 name: attribute.name(),
                 value: attribute.value().to_owned(),
+                value_utf16_units: element
+                    .attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
+                    .map(<[u16]>::to_vec),
                 namespace_uri: (!attribute.namespace().is_empty())
                     .then(|| attribute.namespace().to_owned()),
                 prefix: attribute.prefix().map(str::to_owned),

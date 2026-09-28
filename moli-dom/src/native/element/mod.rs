@@ -220,12 +220,18 @@ impl Element {
     }
 
     pub fn attribute_utf16_units(&self, name: &str) -> Option<&[u16]> {
-        let qualified_name = self
+        let attribute = self
             .attributes
             .iter()
-            .find(|attribute| attribute.name_matches(name))
-            .map(Attribute::name)?;
-        self.rare_data.attribute_utf16_units(&qualified_name)
+            .find(|attribute| attribute.name_matches(name))?;
+        self.rare_data.attribute_utf16_units(attribute)
+    }
+
+    pub fn attribute_ns_utf16_units(&self, namespace: &str, local_name: &str) -> Option<&[u16]> {
+        let attribute = self.attributes.iter().find(|attribute| {
+            attribute.namespace() == namespace && attribute.local_name() == local_name
+        })?;
+        self.rare_data.attribute_utf16_units(attribute)
     }
 
     pub fn attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&str> {
@@ -1310,18 +1316,17 @@ impl Element {
             // insertion paths). Once an attribute is matched by its existing qualified name, we
             // preserve its current namespace/prefix and only update the value. Callers that need
             // namespace/local-name replacement semantics must go through `set_attribute_ns()`.
-            let qualified_name = self.attributes[index].name();
             if self.attributes[index].value() == value
                 && self
                     .rare_data
-                    .attribute_utf16_units(&qualified_name)
+                    .attribute_utf16_units(&self.attributes[index])
                     .is_none()
             {
                 return false;
             }
             self.attributes[index].value = value.into_boxed_str();
             self.rare_data
-                .set_attribute_utf16_units(qualified_name, None);
+                .set_attribute_utf16_units(&self.attributes[index], None);
             let attribute_local_name = self.attributes[index].local_name.clone();
             self.sync_control_state_from_attribute(
                 attribute_local_name.as_ref(),
@@ -1358,16 +1363,17 @@ impl Element {
             .iter()
             .position(|attribute| attribute.name_matches(&local_name))
         {
-            let qualified_name = self.attributes[index].name();
             if self.attributes[index].value.as_ref() == value
-                && self.rare_data.attribute_utf16_units(&qualified_name)
+                && self
+                    .rare_data
+                    .attribute_utf16_units(&self.attributes[index])
                     == value_utf16_units.as_deref()
             {
                 return false;
             }
             self.attributes[index].value = value.into_boxed_str();
             self.rare_data
-                .set_attribute_utf16_units(qualified_name, value_utf16_units);
+                .set_attribute_utf16_units(&self.attributes[index], value_utf16_units);
             let attribute_local_name = self.attributes[index].local_name.clone();
             self.sync_control_state_from_attribute(
                 attribute_local_name.as_ref(),
@@ -1383,13 +1389,12 @@ impl Element {
             prefix: prefix.map(Prefix::from),
             value: value.into_boxed_str(),
         });
-        let qualified_name = self
+        let attribute = self
             .attributes
             .last()
-            .expect("new attribute must be present")
-            .name();
+            .expect("new attribute must be present");
         self.rare_data
-            .set_attribute_utf16_units(qualified_name, value_utf16_units);
+            .set_attribute_utf16_units(attribute, value_utf16_units);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }
@@ -1401,23 +1406,46 @@ impl Element {
         prefix: Option<String>,
         value: String,
     ) -> bool {
+        self.set_attribute_ns_with_utf16_units(local_name, namespace, prefix, value, None)
+    }
+
+    pub fn set_attribute_ns_utf16_units(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        value: String,
+        units: Vec<u16>,
+    ) -> bool {
+        let units =
+            utf16_units_contain_unpaired_surrogate(&units).then(|| units.into_boxed_slice());
+        self.set_attribute_ns_with_utf16_units(local_name, namespace, prefix, value, units)
+    }
+
+    fn set_attribute_ns_with_utf16_units(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        value: String,
+        units: Option<Box<[u16]>>,
+    ) -> bool {
         self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         if let Some(index) = self.attributes.iter().position(|attribute| {
             attribute.local_name() == local_name && attribute.namespace() == namespace
         }) {
-            let qualified_name = self.attributes[index].name();
             if self.attributes[index].value() == value
                 && self
                     .rare_data
-                    .attribute_utf16_units(&qualified_name)
-                    .is_none()
+                    .attribute_utf16_units(&self.attributes[index])
+                    == units.as_deref()
             {
                 return false;
             }
             self.attributes[index].value = value.into_boxed_str();
             self.rare_data
-                .set_attribute_utf16_units(qualified_name, None);
+                .set_attribute_utf16_units(&self.attributes[index], units);
             self.sync_control_state_from_attribute(&local_name, Some(&next_value));
             return true;
         }
@@ -1429,6 +1457,11 @@ impl Element {
             prefix: prefix.map(Prefix::from),
             value: value.into_boxed_str(),
         });
+        let attribute = self
+            .attributes
+            .last()
+            .expect("new attribute must be present");
+        self.rare_data.set_attribute_utf16_units(attribute, units);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }
@@ -1443,8 +1476,7 @@ impl Element {
             return false;
         };
         let removed = self.attributes.remove(index);
-        self.rare_data
-            .set_attribute_utf16_units(removed.name(), None);
+        self.rare_data.set_attribute_utf16_units(&removed, None);
         let local_name = removed.local_name;
         self.sync_control_state_from_attribute(local_name.as_ref(), None);
         true
@@ -1458,8 +1490,7 @@ impl Element {
             return false;
         };
         let removed = self.attributes.remove(index);
-        self.rare_data
-            .set_attribute_utf16_units(removed.name(), None);
+        self.rare_data.set_attribute_utf16_units(&removed, None);
         let local_name = removed.local_name;
         self.sync_control_state_from_attribute(local_name.as_ref(), None);
         true

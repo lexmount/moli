@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn namespaced_attribute_values_preserve_utf16_and_namespace_identity() {
+    let mut vm = new_parsed_test_vm("https://namespace-utf16.test/", "<body></body>");
+    assert_eq!(
+        vm.eval(include_str!("namespace_attribute_string_values.js"))
+            .expect("namespaced attribute string fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_switch_and_mpath_use_native_interfaces_and_live_href() {
     let mut vm = new_parsed_test_vm("https://svg-switch-mpath.test/", "<body></body>");
     assert_eq!(
