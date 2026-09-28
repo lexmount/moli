@@ -354,14 +354,15 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             }
             "code" | "pre" => {
                 let remaining = self.options.max_depth - depth;
-                if subtree_has_link(self.dom, node, remaining)
-                    || (!self.anchor_targets.is_empty()
-                        && crate::anchors::contains(
-                            self.dom,
-                            node,
-                            remaining,
-                            &self.anchor_targets,
-                        ))
+                if tag == "code"
+                    && (subtree_has_link(self.dom, node, remaining)
+                        || (!self.anchor_targets.is_empty()
+                            && crate::anchors::contains(
+                                self.dom,
+                                node,
+                                remaining,
+                                &self.anchor_targets,
+                            )))
                 {
                     let html = crate::html_table::render(
                         self.dom,
@@ -370,12 +371,17 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                         self.options.max_depth,
                         &self.anchor_targets,
                     );
-                    if tag == "pre" {
-                        self.writer().block(html.into(), 2, 2);
-                    } else {
-                        self.writer().inline_html(&html);
-                    }
+                    self.writer().inline_html(&html);
                     return;
+                }
+                if tag == "pre" && !self.anchor_targets.is_empty() {
+                    for id in
+                        crate::anchors::within(self.dom, node, remaining, &self.anchor_targets)
+                    {
+                        if self.emitted_anchors.insert(id.clone()) {
+                            self.writer().inline_html(&crate::anchors::markup(&id));
+                        }
+                    }
                 }
                 self.raw.clear();
                 let end = if tag == "pre" {

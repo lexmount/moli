@@ -37,6 +37,30 @@ pub(crate) fn contains<D: Dom + ?Sized>(
     })
 }
 
+pub(crate) fn within<D: Dom + ?Sized>(
+    dom: &D,
+    root: D::NodeId,
+    limit: usize,
+    ids: &HashSet<String>,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    walk(dom, root, limit, |node| {
+        for attribute in ["id", "name"] {
+            if attribute == "name" && dom.node_kind(node) != NodeKind::Element("a") {
+                continue;
+            }
+            if let Some(id) = dom.attribute(node, attribute)
+                && ids.contains(id)
+                && !found.iter().any(|existing| existing == id)
+            {
+                found.push(id.to_owned());
+            }
+        }
+        false
+    });
+    found
+}
+
 fn walk<D: Dom + ?Sized>(
     dom: &D,
     root: D::NodeId,

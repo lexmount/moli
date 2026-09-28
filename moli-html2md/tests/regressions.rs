@@ -867,6 +867,8 @@ fn html_fallback_preserves_referenced_targets_for_special_nodes() {
         false,
     );
     assert!(code.contains("<a id=\"L1\"></a>"), "{code}");
+    assert!(code.contains("```\nlet x = 1;\n```"), "{code}");
+    assert!(!code.contains("<pre>"), "{code}");
     let table = markdown(
         "<a href='#email'>Email</a><a href='#eq1'>Equation</a><a href='#video1'>Video</a><table><tr><td><input id='email' value='a@example.test'></td><td><math id='eq1'><mi>x</mi></math></td><td><video id='video1' src='/clip.mp4'></video></td></tr></table>",
         false,
@@ -888,18 +890,15 @@ fn invalid_nested_and_empty_headings_do_not_emit_literal_markers() {
 }
 
 #[test]
-fn preformatted_navigation_retains_link_targets() {
+fn preformatted_navigation_retains_literal_content_as_markdown_code() {
     let result = markdown(
         "<pre>ALL GAMES: <a href='home.shtml'>HOME GAMES</a> : <a href='away.shtml'>AWAY GAMES</a>\nScores stay aligned</pre>",
         false,
     );
-    assert!(result.contains("<pre>"), "{result}");
+    assert!(result.starts_with("```\n"), "{result}");
+    assert!(!result.contains("<pre>"), "{result}");
     assert!(
-        result.contains("<a href=\"home.shtml\">HOME GAMES</a>"),
-        "{result}"
-    );
-    assert!(
-        result.contains("<a href=\"away.shtml\">AWAY GAMES</a>"),
+        result.contains("ALL GAMES: HOME GAMES : AWAY GAMES"),
         "{result}"
     );
     assert!(result.contains("Scores stay aligned"), "{result}");
@@ -912,10 +911,12 @@ fn preformatted_code_preserves_externally_referenced_targets() {
         false,
     );
     assert!(result.contains("[Line 1](#L1)"), "{result}");
+    assert!(result.contains("<a id=\"L1\"></a>"), "{result}");
     assert!(
-        result.contains("<span id=\"L1\">let x = 1;</span>"),
+        result.contains("```\nlet x = 1;\nlet y = 2;\n```"),
         "{result}"
     );
+    assert!(!result.contains("<pre>"), "{result}");
 }
 
 #[test]
