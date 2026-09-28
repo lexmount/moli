@@ -1,4 +1,52 @@
 use crate::native::{NativeDom, NativeNodeId, Node};
+use parking_lot::RwLock;
+use std::sync::{Arc, OnceLock};
+
+/// A read-only view of a Document's delivered meta policy, retained by local
+/// resources that refer to its environment after the Document is removed.
+#[derive(Clone, Debug)]
+pub struct DocumentMetaReferrerPolicySource(Arc<RwLock<Option<&'static str>>>);
+
+impl DocumentMetaReferrerPolicySource {
+    pub fn get(&self) -> Option<&'static str> {
+        *self.0.read()
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct MetaReferrerPolicy {
+    value: Option<&'static str>,
+    source: OnceLock<DocumentMetaReferrerPolicySource>,
+}
+
+impl Clone for MetaReferrerPolicy {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value,
+            source: OnceLock::new(),
+        }
+    }
+}
+
+impl MetaReferrerPolicy {
+    pub(super) fn get(&self) -> Option<&'static str> {
+        self.value
+    }
+
+    fn set(&mut self, policy: &'static str) {
+        self.value = Some(policy);
+        if let Some(source) = self.source.get() {
+            *source.0.write() = self.value;
+        }
+    }
+
+    pub(super) fn source(&self) -> DocumentMetaReferrerPolicySource {
+        // Ordinary Documents need no allocation or lock for policy reads.
+        self.source
+            .get_or_init(|| DocumentMetaReferrerPolicySource(Arc::new(RwLock::new(self.value))))
+            .clone()
+    }
+}
 
 impl NativeDom {
     pub(crate) fn process_meta_referrer(&mut self, handle: NativeNodeId) {
@@ -25,7 +73,7 @@ impl NativeDom {
             .node_mut(document)
             .and_then(|node| node.data_mut().as_document_mut())
         {
-            document.meta_referrer_policy = Some(policy);
+            document.meta_referrer_policy.set(policy);
         }
     }
 
@@ -121,6 +169,39 @@ mod tests {
         assert_eq!(policy(&host, document), Some("unsafe-url"));
         host.set_attribute(first, "name", "REFERRER");
         assert_eq!(policy(&host, document), Some("origin"));
+    }
+
+    #[test]
+    fn retained_meta_referrer_policy_tracks_its_document_and_not_clones() {
+        let mut host = host();
+        let document = host.document_handle();
+        let head = host.document_head_handle().unwrap();
+        let source = host
+            .node(document)
+            .unwrap()
+            .as_document()
+            .unwrap()
+            .meta_referrer_policy_source();
+        let element = meta(&mut host, "origin");
+        assert_eq!(source.get(), None);
+        host.append_child(head, element);
+        let cloned = host.node(document).unwrap().as_document().unwrap().clone();
+        let cloned_source = cloned.meta_referrer_policy_source();
+        assert_eq!(source.get(), Some("origin"));
+        assert_eq!(cloned_source.get(), Some("origin"));
+        host.set_attribute(element, "content", "no-referrer");
+        host.remove_child(head, element);
+        assert_eq!(source.get(), Some("no-referrer"));
+        assert_eq!(cloned_source.get(), Some("origin"));
+        assert_eq!(
+            cloned
+                .clone_for_new_document()
+                .meta_referrer_policy_source()
+                .get(),
+            None
+        );
+        drop(host);
+        assert_eq!(source.get(), Some("no-referrer"));
     }
 
     #[test]
