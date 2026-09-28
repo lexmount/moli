@@ -13,13 +13,50 @@ use style::{
 };
 use style_traits::ParsingMode;
 
+mod images;
 mod tokens;
+
+pub use images::{TypedImageValue, computed_typed_style_value_list};
+
+/// Stylo's general projection plus image ASTs which its pinned ToTyped
+/// implementation does not yet cover (gradients, image-set and mixed lists).
+pub enum TypedStyleValueList {
+    Native(TypedValueList),
+    Images(Vec<TypedImageValue>),
+}
+
+impl TypedStyleValueList {
+    pub fn native(&self) -> Option<&TypedValueList> {
+        match self {
+            Self::Native(values) => Some(values),
+            Self::Images(_) => None,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Native(values) => values.values.len(),
+            Self::Images(values) => values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_single_image(&self) -> bool {
+        match self {
+            Self::Native(values) => matches!(values.values.as_slice(), [TypedValue::Image(_)]),
+            Self::Images(values) => matches!(values.as_slice(), [TypedImageValue::Image(_)]),
+        }
+    }
+}
 
 pub struct ParsedTypedStyleValue {
     /// CSSOM serialization of the validated declaration (including shorthands).
     pub css_text: String,
     /// None denotes a property-associated value without a specialized projection.
-    pub values: Option<TypedValueList>,
+    pub values: Option<TypedStyleValueList>,
 }
 
 /// Parse exactly one value, never a declaration list or an !important suffix.
@@ -83,6 +120,10 @@ pub fn parse_typed_style_value(
     } else {
         block.property_value_to_typed_value_list(&id).ok()?
     };
+    let values = values.map(TypedStyleValueList::Native).or_else(|| {
+        let (declaration, _) = block.get(id.as_shorthand().err()?)?;
+        images::from_declaration(declaration).map(TypedStyleValueList::Images)
+    });
     Some(ParsedTypedStyleValue {
         css_text: serialized,
         values,
@@ -125,6 +166,13 @@ mod tests {
     use super::*;
     use style::typed_om::{NumericValue, UnparsedSegment};
 
+    fn native_values(parsed: ParsedTypedStyleValue) -> TypedValueList {
+        match parsed.values.expect("typed values") {
+            TypedStyleValueList::Native(values) => values,
+            TypedStyleValueList::Images(_) => panic!("unexpected image projection"),
+        }
+    }
+
     #[test]
     fn all_reifies_keywords_without_retyping_ordinary_shorthands() {
         for property in ["all", "width", "color", "animation-name"] {
@@ -132,9 +180,7 @@ mod tests {
                 let source = format!("/**/{} /**/", keyword.to_ascii_uppercase());
                 let parsed = parse_typed_style_value(property, &source, None)
                     .unwrap_or_else(|| panic!("{property}: {source}"));
-                let values = parsed
-                    .values
-                    .unwrap_or_else(|| panic!("{property}: opaque"));
+                let values = native_values(parsed);
                 assert_eq!(values.values.len(), 1, "{property}: {keyword}");
                 assert!(
                     matches!(&values.values[0], TypedValue::Keyword(value) if value.0 == keyword),
@@ -144,7 +190,7 @@ mod tests {
         }
         let parsed = parse_typed_style_value("all", r"\69 nherit", None).unwrap();
         assert!(matches!(
-            &parsed.values.unwrap().values[0], TypedValue::Keyword(value) if value.0 == "inherit"
+            &native_values(parsed).values[0], TypedValue::Keyword(value) if value.0 == "inherit"
         ));
         for (property, source) in [
             ("margin", "initial 1px"),
@@ -176,7 +222,7 @@ mod tests {
         ] {
             let parsed = parse_typed_style_value(property, source, None).unwrap();
             assert!(matches!(
-                &parsed.values.unwrap().values[0],
+                &native_values(parsed).values[0],
                 TypedValue::Unparsed(_)
             ));
         }
@@ -200,7 +246,7 @@ mod tests {
             );
         }
         let parsed = parse_typed_style_value("width", "0", None).unwrap();
-        let TypedValue::Numeric(NumericValue::Unit(value)) = &parsed.values.unwrap().values[0]
+        let TypedValue::Numeric(NumericValue::Unit(value)) = &native_values(parsed).values[0]
         else {
             panic!("length zero must remain a dimension");
         };
@@ -211,7 +257,6 @@ mod tests {
                 .unwrap()
                 .values
                 .unwrap()
-                .values
                 .len(),
             2
         );
@@ -234,7 +279,7 @@ mod tests {
         let parsed =
             parse_typed_style_value("margin", "calc(1px + var(--x, env(foo, var(--y,))))", None)
                 .unwrap();
-        let TypedValue::Unparsed(parts) = &parsed.values.unwrap().values[0] else {
+        let TypedValue::Unparsed(parts) = &native_values(parsed).values[0] else {
             panic!("unparsed shorthand");
         };
         assert!(matches!(&parts[0], UnparsedSegment::String(text) if text == "calc(1px + "));
