@@ -7,6 +7,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl as webidl;
 
 const CSS_STYLE_VALUE_TEXT_SLOT: &str = "__moliCssStyleValueText";
+const CSS_STYLE_VALUE_PROPERTY_SLOT: &str = "__moliCssStyleValueProperty";
 const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
 const CSS_UNIT_VALUE_VALUE_SLOT: &str = "__moliCssUnitValueValue";
 const CSS_UNIT_VALUE_UNIT_SLOT: &str = "__moliCssUnitValueUnit";
@@ -26,14 +27,14 @@ struct CssStyleValueObjectDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CSSKeywordValue)]
-struct CssKeywordValueObjectDeclaration {
+pub struct CssKeywordValueObjectDeclaration {
     #[webapi(slot = CSS_KEYWORD_VALUE_VALUE_SLOT)]
     value: String,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CSSUnitValue)]
-struct CssUnitValueObjectDeclaration {
+pub struct CssUnitValueObjectDeclaration {
     #[webapi(slot = CSS_UNIT_VALUE_VALUE_SLOT)]
     value: f64,
     #[webapi(slot = CSS_UNIT_VALUE_UNIT_SLOT)]
@@ -200,6 +201,24 @@ pub fn style_value_from_text<'s>(
     CssStyleValueObjectDeclaration::new(text.to_owned())
         .bind(scope)
         .expect("CSSStyleValue declaration should bind")
+}
+
+pub fn opaque_style_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    property: &str,
+    text: &str,
+) -> v8::Local<'s, v8::Object> {
+    let object = CssStyleValueObjectDeclaration::new(text.to_owned())
+        .bind(scope)
+        .expect("CSSStyleValue declaration should bind");
+    let property = v8_string(scope, property).expect("CSS property name");
+    set_private_value(
+        scope,
+        object,
+        CSS_STYLE_VALUE_PROPERTY_SLOT,
+        property.into(),
+    );
+    object
 }
 
 fn parse_single_keyword_value(text: &str) -> Option<String> {

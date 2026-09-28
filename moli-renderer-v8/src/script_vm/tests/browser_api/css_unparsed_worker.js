@@ -1,6 +1,8 @@
 (async () => {
   const url = URL.createObjectURL(new Blob([`
     try {
+      if ('parse' in CSSStyleValue || 'parseAll' in CSSStyleValue)
+        throw new Error('CSSStyleValue parsing is Window-only');
       const fallback = new CSSUnparsedValue(['red']);
       const reference = new CSSVariableReferenceValue('--color', fallback);
       const value = new CSSUnparsedValue([reference]);
