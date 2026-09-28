@@ -1,3 +1,4 @@
+use super::factories::VALID_UNIT_NAMES;
 use super::*;
 use crate::web_api_interfaces;
 use style::typed_om::{NumericValue, TypedValue};
@@ -9,12 +10,6 @@ const CSS_STYLE_VALUE_PROPERTY_SLOT: &str = "__moliCssStyleValueProperty";
 const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
 const CSS_UNIT_VALUE_VALUE_SLOT: &str = "__moliCssUnitValueValue";
 const CSS_UNIT_VALUE_UNIT_SLOT: &str = "__moliCssUnitValueUnit";
-
-const VALID_UNIT_NAMES: &[&str] = &[
-    "number", "percent", "em", "ex", "ch", "ic", "rem", "lh", "rlh", "vw", "vh", "vi", "vb",
-    "vmin", "vmax", "cm", "mm", "q", "in", "pt", "pc", "px", "deg", "grad", "rad", "turn", "s",
-    "ms", "hz", "khz", "dpi", "dpcm", "dppx", "fr",
-];
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CSSStyleValue)]
@@ -162,9 +157,7 @@ pub(super) fn style_value_from_text<'s>(
     allow_keyword: bool,
 ) -> v8::Local<'s, v8::Object> {
     if let Some((value, unit)) = parse_single_unit_value(text) {
-        return CssUnitValueObjectDeclaration::new(value, unit)
-            .bind(scope)
-            .expect("CSSUnitValue declaration should bind");
+        return unit_value(scope, value, unit);
     }
     if allow_keyword && let Some(keyword) = parse_single_keyword_value(text) {
         return CssKeywordValueObjectDeclaration::new(keyword)
@@ -174,6 +167,16 @@ pub(super) fn style_value_from_text<'s>(
     CssStyleValueObjectDeclaration::new(text.to_owned())
         .bind(scope)
         .expect("CSSStyleValue declaration should bind")
+}
+
+pub(super) fn unit_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: f64,
+    unit: String,
+) -> v8::Local<'s, v8::Object> {
+    CssUnitValueObjectDeclaration::new(value, unit)
+        .bind(scope)
+        .expect("CSSUnitValue declaration should bind")
 }
 
 pub(super) fn from_parsed<'s>(
@@ -222,9 +225,7 @@ pub(super) fn from_parsed<'s>(
                         .get(index)
                         .and_then(|text| number::from_literal(text, unit.unit_str()))
                         .unwrap_or_else(|| f64::from(unit.value));
-                    CssUnitValueObjectDeclaration::new(number, name.to_owned())
-                        .bind(scope)
-                        .expect("CSSUnitValue declaration should bind")
+                    unit_value(scope, number, name.to_owned())
                 }
                 // CSSMath*, transforms and images still need their own native DOM
                 // interfaces. Preserve an immutable, property-associated CSS value
