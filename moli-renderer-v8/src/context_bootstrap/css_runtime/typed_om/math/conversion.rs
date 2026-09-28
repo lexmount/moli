@@ -41,7 +41,7 @@ impl Budget {
 // DOM quantities must stay f64. Stylo's NoCalcNumeric/SumValue use f32 and
 // currently omit frequency/resolution/flex; only the fixed CSS ratios live
 // here. Relative units remain independent of layout and of one another.
-fn canonical(unit: &str) -> (&str, f64) {
+pub(super) fn canonical(unit: &str) -> (&str, f64) {
     match unit {
         "in" => ("px", 96.0),
         "cm" => ("px", 96.0 / 2.54),
@@ -56,6 +56,7 @@ fn canonical(unit: &str) -> (&str, f64) {
         "khz" => ("hz", 1000.0),
         "dpi" => ("dppx", 1.0 / 96.0),
         "dpcm" => ("dppx", 2.54 / 96.0),
+        "x" => ("dppx", 1.0),
         _ => (unit, 1.0),
     }
 }

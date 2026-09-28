@@ -42,5 +42,5 @@ pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     unparsed::install_template_bindings(scope, template, interface_name);
     map::install_computed_style_map_template_bindings(scope, template, interface_name);
     values::install_typed_value_template_bindings(scope, template, interface_name);
-    math::install(scope, template, interface_name);
+    math::install(scope, template, interface_name, profile);
 }
