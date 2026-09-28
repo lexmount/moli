@@ -24,6 +24,16 @@ fn svg_animated_values_follow_native_attribute_mutations() {
 }
 
 #[test]
+fn svg_filter_primitives_expose_native_dom_attributes() {
+    let mut vm = new_parsed_test_vm("https://svg-filter-dom.test/", "<html><body></body></html>");
+    assert_eq!(
+        vm.eval(include_str!("svg_filter_primitives.js"))
+            .expect("SVG filter DOM fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_enumeration_constants_have_webidl_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-enumeration-constants.test/");
     let result = vm.eval(r#"

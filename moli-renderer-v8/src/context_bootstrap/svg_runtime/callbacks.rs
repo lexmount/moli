@@ -237,7 +237,7 @@ fn require_svg_fit_to_view_box_receiver<'s>(
                     }
                     "preserveAspectRatio" => matches!(
                         local_name,
-                        "svg" | "symbol" | "marker" | "pattern" | "view" | "image"
+                        "svg" | "symbol" | "marker" | "pattern" | "view" | "image" | "feImage"
                     ),
                     _ => false,
                 })
@@ -381,7 +381,7 @@ fn svg_animated_boolean_attribute_getter<'s>(
     rv.set(value.into());
 }
 
-fn svg_animated_string_attribute_getter<'s>(
+pub(super) fn svg_animated_string_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
