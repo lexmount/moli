@@ -2077,6 +2077,18 @@ fn remove_stylo_style_entry<'s>(
     store_stylo_declaration_block(scope, style, &block);
 }
 
+fn invalidate_stylo_typed_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) {
+    if let Some(mut block) = stored_stylo_declaration_block(scope, style)
+        && block.invalidate_typed_numeric_values_for_property(name)
+    {
+        store_stylo_declaration_block(scope, style, &block);
+    }
+}
+
 fn set_style_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
@@ -2170,6 +2182,7 @@ fn set_style_entry<'s>(
                 &name, value, priority, None,
             )
         {
+            invalidate_stylo_typed_units(scope, style, &name);
             let mut names = style_names(scope, style);
             clear_style_property_names(scope, style, &mut names, &name, &parsed.affected_names);
             for entry in parsed.entries {
@@ -2185,6 +2198,7 @@ fn set_style_entry<'s>(
     let Some(value) = value.as_deref() else {
         return;
     };
+    invalidate_stylo_typed_units(scope, style, &name);
     let mut names = style_names(scope, style);
     if value.is_empty() {
         set_style_property_value(scope, style, &name, "");
@@ -3007,12 +3021,48 @@ pub(crate) fn set_css_declaration_property<'s>(
     name: &str,
     value: &str,
 ) {
+    set_typed_css_declaration_property(scope, style, name, value, None);
+}
+
+pub(crate) fn css_declaration_typed_numeric_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<moli_css_parse::CssDeclaredNumericValues> {
     if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
-        crate::native_bridge::element::set_style_property_from_object(
-            scope, style, name, value, false,
+        return crate::native_bridge::element::style_typed_numeric_values_from_object(
+            scope, style, name,
+        );
+    }
+    stored_stylo_declaration_block(scope, style)?
+        .typed_numeric_values(name)
+        .cloned()
+}
+
+pub(crate) fn set_typed_css_declaration_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: &str,
+    typed_values: Option<moli_css_parse::CssDeclaredNumericValues>,
+) {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        crate::native_bridge::element::set_typed_style_property_from_object(
+            scope,
+            style,
+            name,
+            value,
+            false,
+            typed_values,
         );
     } else if let Some(style) = lightweight_style_receiver(scope, style) {
         set_style_entry(scope, style, name, value, false);
+        if let Some(typed_values) = typed_values
+            && let Some(mut block) = stored_stylo_declaration_block(scope, style)
+            && block.retain_typed_numeric_values(name, typed_values)
+        {
+            store_stylo_declaration_block(scope, style, &block);
+        }
         notify_style_changed(scope, style);
     }
 }

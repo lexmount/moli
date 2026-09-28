@@ -1,4 +1,5 @@
 use super::*;
+use moli_css_parse::{CssDeclaredNumericValue, CssDeclaredNumericValues, CssDeclaredUnitValue};
 use moli_webapi::css_values::new_style_property_map;
 use style::typed_om::{NumericValue, TypedValue};
 
@@ -215,12 +216,12 @@ fn mutate<'s>(
         base_url.as_ref(),
         append,
     )
-    .and_then(|text| {
+    .and_then(|coerced| {
         if !append {
-            return Ok(text);
+            return Ok(coerced);
         }
         let Some(previous) = style_property_text(scope, style, &property) else {
-            return Ok(text);
+            return Ok(coerced);
         };
         let previous =
             moli_css_parse::parse_typed_style_value(&property, &previous, base_url.as_ref())
@@ -228,15 +229,35 @@ fn mutate<'s>(
         if is_unparsed(&previous) {
             return Err(CoercionError::Invalid);
         }
-        let joined = format!("{}, {text}", previous.css_text);
-        moli_css_parse::parse_typed_style_value(&property, &joined, base_url.as_ref())
-            .map(|_| joined)
-            .ok_or(CoercionError::Invalid)
+        let previous_count = typed_value_count(&previous);
+        let joined = format!("{}, {}", previous.css_text, coerced.text);
+        let parsed = moli_css_parse::parse_typed_style_value(&property, &joined, base_url.as_ref())
+            .ok_or(CoercionError::Invalid)?;
+        let mut typed_values =
+            detached_css_style::css_declaration_typed_numeric_values(scope, style, &property)
+                .filter(|values| values.len() == previous_count)
+                .unwrap_or_else(|| vec![None; previous_count]);
+        typed_values.extend(coerced.typed_values);
+        if typed_values.len() != typed_value_count(&parsed) {
+            typed_values.clear();
+        }
+        Ok(CoercedValues {
+            text: joined,
+            typed_values,
+        })
     });
     match result {
-        Ok(text) => {
-            detached_css_style::set_css_declaration_property(scope, style, &property, &text)
-        }
+        Ok(coerced) => detached_css_style::set_typed_css_declaration_property(
+            scope,
+            style,
+            &property,
+            &coerced.text,
+            coerced
+                .typed_values
+                .iter()
+                .any(Option::is_some)
+                .then_some(coerced.typed_values),
+        ),
         Err(CoercionError::Invalid) => throw_type_error(scope, "Invalid CSS value for property"),
         Err(CoercionError::UnparsedStorage) => webidl::throw_dom_exception(
             scope,
@@ -251,6 +272,18 @@ enum CoercionError {
     UnparsedStorage,
 }
 
+struct CoercedValues {
+    text: String,
+    typed_values: CssDeclaredNumericValues,
+}
+
+fn typed_value_count(parsed: &moli_css_parse::ParsedTypedStyleValue) -> usize {
+    parsed
+        .values
+        .as_ref()
+        .map_or(0, |values| values.values.len())
+}
+
 fn is_unparsed(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
     parsed.values.as_ref().is_some_and(|list| {
         list.values
@@ -259,26 +292,49 @@ fn is_unparsed(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
     })
 }
 
+fn is_numeric(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
+    parsed
+        .values
+        .as_ref()
+        .is_some_and(|list| matches!(list.values.as_slice(), [TypedValue::Numeric(_)]))
+}
+
 fn coerce_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     property: &str,
     inputs: Vec<StyleValueOrString<'s>>,
     base_url: Option<&url::Url>,
     append: bool,
-) -> Result<String, CoercionError> {
+) -> Result<CoercedValues, CoercionError> {
     if inputs.is_empty() {
         return Err(CoercionError::Invalid);
     }
     let multiple = inputs.len() > 1;
     let shorthand = native_bridge::element::computed_style_property_is_shorthand(property);
     let mut texts = Vec::with_capacity(inputs.len());
+    let mut typed_values = Vec::new();
+    let mut preserve_unit_text = false;
     for input in inputs {
+        let mut retained = None;
         let (text, object) = match input {
             StyleValueOrString::String(text) => (text, None),
-            StyleValueOrString::Value(object) => (
-                values::serialize(scope, object).ok_or(CoercionError::Invalid)?,
-                Some(object),
-            ),
+            StyleValueOrString::Value(object) => {
+                let text = if let Some(unit) = values::css_unit_value_unit(scope, object) {
+                    let number = values::css_unit_value_number(scope, object)
+                        .ok_or(CoercionError::Invalid)?;
+                    let suffix = match unit.as_str() {
+                        "number" => "",
+                        "percent" => "%",
+                        other => other,
+                    };
+                    // CSSStyleValue's stringifier rounds for display. A native
+                    // declaration write must receive the actual double.
+                    format!("{number}{suffix}")
+                } else {
+                    values::serialize(scope, object).ok_or(CoercionError::Invalid)?
+                };
+                (text, Some(object))
+            }
         };
         let mut parsed = moli_css_parse::parse_typed_style_value(property, &text, base_url);
         if let Some(object) = object {
@@ -326,7 +382,9 @@ fn coerce_values<'s>(
                 .and_then(|v| v.values)
                 .ok_or(CoercionError::Invalid)?;
                 if probe.values.len() != 1
-                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value)) if values::native_unit_name(value.unit_str()) == unit)
+                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value))
+                        if values::native_unit_name(value.unit_str()) == unit
+                            || unit == "percent" && value.unit_str() == "number")
                 {
                     return Err(CoercionError::Invalid);
                 }
@@ -338,7 +396,20 @@ fn coerce_values<'s>(
                         &format!("calc({text})"),
                         base_url,
                     );
+                } else if !multiple {
+                    retained = Some(CssDeclaredNumericValue::Unit(CssDeclaredUnitValue {
+                        value: values::css_unit_value_number(scope, object)
+                            .ok_or(CoercionError::Invalid)?,
+                        unit,
+                    }));
+                    preserve_unit_text = true;
                 }
+            } else if web_api_interfaces::CSSMathValue::is_instance(scope, object)
+                && parsed.as_ref().is_some_and(is_numeric)
+            {
+                retained = Some(
+                    math::snapshot_declared_math(scope, object).ok_or(CoercionError::Invalid)?,
+                );
             } else if web_api_interfaces::CSSKeywordValue::is_instance(scope, object)
                 && !is_css_wide_keyword(&text)
                 && !parsed
@@ -355,7 +426,17 @@ fn coerce_values<'s>(
         if (multiple || append) && is_unparsed(&parsed) {
             return Err(CoercionError::Invalid);
         }
-        texts.push(parsed.css_text);
+        let count = typed_value_count(&parsed);
+        if count == 1 {
+            typed_values.push(retained);
+        } else {
+            typed_values.extend(std::iter::repeat_n(None, count));
+        }
+        texts.push(if preserve_unit_text {
+            text
+        } else {
+            parsed.css_text
+        });
     }
     let text = texts.join(", ");
     let parsed = moli_css_parse::parse_typed_style_value(property, &text, base_url)
@@ -374,7 +455,17 @@ fn coerce_values<'s>(
             return Err(CoercionError::Invalid);
         }
     }
-    Ok(parsed.css_text)
+    if typed_values.len() != typed_value_count(&parsed) {
+        typed_values.clear();
+    }
+    Ok(CoercedValues {
+        text: if preserve_unit_text {
+            text
+        } else {
+            parsed.css_text
+        },
+        typed_values,
+    })
 }
 
 fn is_css_wide_keyword(text: &str) -> bool {

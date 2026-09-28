@@ -15,6 +15,7 @@ mod root_margin;
 mod stylesheet_imports;
 mod stylo_stylesheet;
 mod transform;
+mod typed_declaration;
 mod typed_om;
 mod util;
 mod value;
@@ -53,8 +54,7 @@ pub use numeric_serialization::{
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{
-    CssDeclarationBlock, CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
-    parse_declaration_block,
+    CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
 };
 pub use stylesheet_imports::{
     StylesheetImportPlaceholderLoader, StylesheetImports,
@@ -94,6 +94,10 @@ pub use stylo_stylesheet::{
     refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
 pub use transform::{CssTransformFunction, parse_transform_function_list};
+pub use typed_declaration::{
+    CssDeclarationBlock, CssDeclaredMathNode, CssDeclaredNumericValue, CssDeclaredNumericValues,
+    CssDeclaredUnitValue, CssMathOperator, parse_declaration_block,
+};
 pub use typed_om::{ParsedTypedStyleValue, parse_typed_style_value, reify_unparsed_style_value};
 pub use util::{
     camel_case_style_property_name, camel_to_kebab, canonical_style_property_identifier,

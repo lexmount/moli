@@ -341,6 +341,13 @@ fn style_values_for_property<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let typed_values =
+        detached_css_style::css_declaration_typed_numeric_values(scope, style, property);
+    if let Some([Some(value)]) = typed_values.as_deref() {
+        return math::reify_declared_numeric(scope, value)
+            .into_iter()
+            .collect();
+    }
     if native_bridge::element::style_declaration_is_computed(scope, style)
         && let Some(parsed) =
             native_bridge::element::computed_typed_style_value_from_object(scope, style, property)
@@ -356,7 +363,7 @@ fn style_values_for_property<'s>(
         if let Some(parsed) =
             moli_css_parse::parse_typed_style_value(property, &text, base_url.as_ref())
         {
-            return values::from_parsed(scope, property, &text, parsed);
+            return values::from_parsed(scope, property, &text, parsed, typed_values.as_deref());
         }
         if property.starts_with("--")
             && let Some(parts) = moli_css_parse::reify_unparsed_style_value(&text, None)
