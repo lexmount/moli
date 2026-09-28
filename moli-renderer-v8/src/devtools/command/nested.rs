@@ -6,7 +6,7 @@ use crate::runtime::{RendererPageCommand, RendererScreenshotPurpose};
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
+        use RendererDevToolsMainNestedDispatch::{BeforeUnload, InspectorSession, OwnerOnly, PageAgent};
         match self {
             Self::WebMcp { .. } => OwnerOnly,
             Self::Native(command) => command.operation.nested_dispatch(),
@@ -17,6 +17,9 @@ impl RendererPageCommand {
             }
             Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
+            // beforeunload reuses the Inspector callback's entered V8 scope
+            // while the old document is paused; ordinary Page dispatch cannot.
+            Self::CheckMainDocumentBeforeUnload => BeforeUnload,
             // Printing temporarily switches media and synchronizes document
             // fonts through V8. A regular screenshot only reads native layout.
             Self::CaptureScreenshot(request)
@@ -146,7 +149,6 @@ impl RendererPageCommand {
             | Self::PerformanceMetricSnapshot
             | Self::RuntimeCollectGarbage
             | Self::StopDocumentLifecycle
-            | Self::CheckMainDocumentBeforeUnload
             | Self::UnloadMainDocumentForNavigationCommit
             | Self::SetInlineStyleSheetTextForStyleSheetId { .. }
             | Self::ScrollNodeIntoViewIfNeeded { .. }
