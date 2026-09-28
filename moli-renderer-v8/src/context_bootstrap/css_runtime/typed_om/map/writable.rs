@@ -223,12 +223,12 @@ fn mutate<'s>(
         base_url.as_ref(),
         append,
     )
-    .and_then(|text| {
+    .and_then(|coerced| {
         if !append {
-            return Ok(text);
+            return Ok(coerced);
         }
         let Some(previous) = style_property_text(scope, style, &property) else {
-            return Ok(text);
+            return Ok(coerced);
         };
         let previous =
             moli_css_parse::parse_typed_style_value(&property, &previous, base_url.as_ref())
@@ -236,15 +236,22 @@ fn mutate<'s>(
         if is_unparsed(&previous) {
             return Err(CoercionError::Invalid);
         }
-        let joined = format!("{}, {text}", previous.css_text);
+        let joined = format!("{}, {}", previous.css_text, coerced.text);
         moli_css_parse::parse_typed_style_value(&property, &joined, base_url.as_ref())
-            .map(|_| joined)
+            .map(|_| CoercedValues {
+                text: joined,
+                unit: None,
+            })
             .ok_or(CoercionError::Invalid)
     });
     match result {
-        Ok(text) => {
-            detached_css_style::set_css_declaration_property(scope, style, &property, &text)
-        }
+        Ok(coerced) => detached_css_style::set_typed_css_declaration_property(
+            scope,
+            style,
+            &property,
+            &coerced.text,
+            coerced.unit,
+        ),
         Err(CoercionError::Invalid) => throw_type_error(scope, "Invalid CSS value for property"),
         Err(CoercionError::UnparsedStorage) => webidl::throw_dom_exception(
             scope,
@@ -257,6 +264,11 @@ fn mutate<'s>(
 enum CoercionError {
     Invalid,
     UnparsedStorage,
+}
+
+struct CoercedValues {
+    text: String,
+    unit: Option<moli_css_parse::CssDeclaredUnitValue>,
 }
 
 fn is_unparsed(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
@@ -273,20 +285,34 @@ fn coerce_values<'s>(
     inputs: Vec<StyleValueOrString<'s>>,
     base_url: Option<&url::Url>,
     append: bool,
-) -> Result<String, CoercionError> {
+) -> Result<CoercedValues, CoercionError> {
     if inputs.is_empty() {
         return Err(CoercionError::Invalid);
     }
     let multiple = inputs.len() > 1;
     let shorthand = native_bridge::element::computed_style_property_is_shorthand(property);
     let mut texts = Vec::with_capacity(inputs.len());
+    let mut retained_unit = None;
     for input in inputs {
         let (text, object) = match input {
             StyleValueOrString::String(text) => (text, None),
-            StyleValueOrString::Value(object) => (
-                values::serialize(scope, object).ok_or(CoercionError::Invalid)?,
-                Some(object),
-            ),
+            StyleValueOrString::Value(object) => {
+                let text = if let Some(unit) = values::css_unit_value_unit(scope, object) {
+                    let number = values::css_unit_value_number(scope, object)
+                        .ok_or(CoercionError::Invalid)?;
+                    let suffix = match unit.as_str() {
+                        "number" => "",
+                        "percent" => "%",
+                        other => other,
+                    };
+                    // CSSStyleValue's stringifier rounds for display. A native
+                    // declaration write must receive the actual double.
+                    format!("{number}{suffix}")
+                } else {
+                    values::serialize(scope, object).ok_or(CoercionError::Invalid)?
+                };
+                (text, Some(object))
+            }
         };
         let mut parsed = moli_css_parse::parse_typed_style_value(property, &text, base_url);
         if let Some(object) = object {
@@ -334,7 +360,9 @@ fn coerce_values<'s>(
                 .and_then(|v| v.values)
                 .ok_or(CoercionError::Invalid)?;
                 if probe.values.len() != 1
-                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value)) if values::native_unit_name(value.unit_str()) == unit)
+                    || !matches!(&probe.values[0], TypedValue::Numeric(NumericValue::Unit(value))
+                        if values::native_unit_name(value.unit_str()) == unit
+                            || unit == "percent" && value.unit_str() == "number")
                 {
                     return Err(CoercionError::Invalid);
                 }
@@ -346,6 +374,12 @@ fn coerce_values<'s>(
                         &format!("calc({text})"),
                         base_url,
                     );
+                } else if !multiple {
+                    retained_unit = Some(moli_css_parse::CssDeclaredUnitValue {
+                        value: values::css_unit_value_number(scope, object)
+                            .ok_or(CoercionError::Invalid)?,
+                        unit,
+                    });
                 }
             } else if web_api_interfaces::CSSKeywordValue::is_instance(scope, object)
                 && !is_css_wide_keyword(&text)
@@ -363,7 +397,11 @@ fn coerce_values<'s>(
         if (multiple || append) && is_unparsed(&parsed) {
             return Err(CoercionError::Invalid);
         }
-        texts.push(parsed.css_text);
+        texts.push(if retained_unit.is_some() {
+            text
+        } else {
+            parsed.css_text
+        });
     }
     let text = texts.join(", ");
     let parsed = moli_css_parse::parse_typed_style_value(property, &text, base_url)
@@ -382,7 +420,14 @@ fn coerce_values<'s>(
             return Err(CoercionError::Invalid);
         }
     }
-    Ok(parsed.css_text)
+    Ok(CoercedValues {
+        text: if retained_unit.is_some() {
+            text
+        } else {
+            parsed.css_text
+        },
+        unit: retained_unit,
+    })
 }
 
 fn is_css_wide_keyword(text: &str) -> bool {
