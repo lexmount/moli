@@ -253,6 +253,42 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::CssUnitValue,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CSSMathValue::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSNumericArray::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathSum::DESCRIPTOR,
+        kind: ConstructorKind::CssMathSum,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathProduct::DESCRIPTOR,
+        kind: ConstructorKind::CssMathProduct,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathNegate::DESCRIPTOR,
+        kind: ConstructorKind::CssMathNegate,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathInvert::DESCRIPTOR,
+        kind: ConstructorKind::CssMathInvert,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathMin::DESCRIPTOR,
+        kind: ConstructorKind::CssMathMin,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathMax::DESCRIPTOR,
+        kind: ConstructorKind::CssMathMax,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathClamp::DESCRIPTOR,
+        kind: ConstructorKind::CssMathClamp,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::CSSUnparsedValue::DESCRIPTOR,
         kind: ConstructorKind::CssUnparsedValue,
     },

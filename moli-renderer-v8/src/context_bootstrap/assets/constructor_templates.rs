@@ -12,8 +12,12 @@ use super::super::{
     close_watchers::close_watcher_constructor_callback,
     css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{
-        css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-        css_unparsed_value_constructor_callback, css_variable_reference_value_constructor_callback,
+        css_keyword_value_constructor_callback, css_math_clamp_constructor_callback,
+        css_math_invert_constructor_callback, css_math_max_constructor_callback,
+        css_math_min_constructor_callback, css_math_negate_constructor_callback,
+        css_math_product_constructor_callback, css_math_sum_constructor_callback,
+        css_unit_value_constructor_callback, css_unparsed_value_constructor_callback,
+        css_variable_reference_value_constructor_callback,
     },
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     dom_quad::dom_quad_constructor_callback,
@@ -960,6 +964,62 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 css_unit_value_constructor_callback
             ))
             .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssMathSum => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathSum,
+                css_math_sum_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathProduct => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathProduct,
+                css_math_product_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathNegate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathNegate,
+                css_math_negate_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMathInvert => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathInvert,
+                css_math_invert_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMathMin => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathMin,
+                css_math_min_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathMax => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathMax,
+                css_math_max_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathClamp => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathClamp,
+                css_math_clamp_constructor_callback
+            ))
+            .length(3)
             .build(scope)
         }
         ConstructorKind::CssUnparsedValue => {
