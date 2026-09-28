@@ -1,5 +1,5 @@
 use crate::dom::native::{Element, Node};
-use crate::util::v8_string;
+use crate::util::{v8_string, v8_string_from_utf16_units};
 use crate::webidl;
 
 use super::super::super::{
@@ -9,7 +9,7 @@ use super::super::super::{
         throw_incompatible_method_receiver,
     },
 };
-use super::super::{element_attribute, element_attribute_names, element_has_attribute};
+use super::super::{element_attribute_names, element_has_attribute};
 use super::{AttributeNameArgs, AttributeNamespaceNameArgs};
 
 fn element_method_receiver<'s>(
@@ -125,7 +125,7 @@ pub(in crate::native_bridge) fn node_get_attribute_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "getAttribute") else {
+    let Some((runtime_ptr, _)) = element_method_receiver(scope, &args, "getAttribute") else {
         rv.set_null();
         return;
     };
@@ -137,11 +137,17 @@ pub(in crate::native_bridge) fn node_get_attribute_callback<'s>(
         rv.set_null();
         return;
     };
-    let Some(value) = element_attribute(unsafe { &*runtime_ptr }, handle, &parsed.name) else {
+    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "getAttribute") else {
+        return;
+    };
+    let Some(value) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute_utf16_units(handle, &parsed.name)
+    else {
         rv.set_null();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
         return;
     };
@@ -153,8 +159,7 @@ pub(in crate::native_bridge) fn node_get_attribute_ns_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "getAttributeNS")
-    else {
+    let Some((runtime_ptr, _)) = element_method_receiver(scope, &args, "getAttributeNS") else {
         rv.set_null();
         return;
     };
@@ -166,16 +171,19 @@ pub(in crate::native_bridge) fn node_get_attribute_ns_callback<'s>(
         rv.set_null();
         return;
     };
+    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "getAttributeNS")
+    else {
+        return;
+    };
     let namespace = parsed.namespace.filter(|namespace| !namespace.is_empty());
-    let Some(value) = unsafe { &*runtime_ptr }.dom_host().get_attribute_ns(
-        handle,
-        namespace.as_deref(),
-        &parsed.local_name,
-    ) else {
+    let Some(value) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute_ns_utf16_units(handle, namespace.as_deref(), &parsed.local_name)
+    else {
         rv.set_null();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
         return;
     };

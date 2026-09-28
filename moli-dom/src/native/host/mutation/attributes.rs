@@ -34,6 +34,20 @@ impl DomHost {
         self.dom.get_attribute(handle, name)
     }
 
+    pub fn get_attribute_utf16_units(&self, handle: DomHandle, name: &str) -> Option<Vec<u16>> {
+        self.dom.get_attribute_utf16_units(handle, name)
+    }
+
+    pub fn get_attribute_ns_utf16_units(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) -> Option<Vec<u16>> {
+        self.dom
+            .get_attribute_ns_utf16_units(handle, namespace, local_name)
+    }
+
     pub fn get_attribute_ns(
         &self,
         handle: DomHandle,

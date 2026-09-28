@@ -46,11 +46,15 @@ pub(in crate::native_bridge) fn bridge_detached_get_attribute_callback<'a>(
         return;
     };
     let normalized = detached_attribute_name(scope, element, &name);
-    if let Some(has_attribute) = read_detached_native_has_attribute(scope, element, &normalized) {
-        if has_attribute
-            && let Some(value) = read_detached_native_attribute(scope, element, &normalized)
+    if let Some((runtime_ptr, handle)) =
+        detached_surface_runtime_and_handle(scope, args.this(), element)
+    {
+        if let Some(value) = unsafe { &*runtime_ptr }
+            .dom_host()
+            .get_attribute_utf16_units(handle, &normalized)
+            .and_then(|value| crate::util::v8_string_from_utf16_units(scope, &value))
         {
-            set_string_return_value(scope, &mut rv, &value);
+            rv.set(value.into());
         } else {
             rv.set_null();
         }
@@ -80,14 +84,15 @@ pub(in crate::native_bridge) fn bridge_detached_get_attribute_ns_callback<'a>(
         rv.set_null();
         return;
     };
-    if let Some(has_attribute) =
-        read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+    if let Some((runtime_ptr, handle)) =
+        detached_surface_runtime_and_handle(scope, args.this(), element)
     {
-        if has_attribute
-            && let Some(value) =
-                read_detached_native_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+        if let Some(value) = unsafe { &*runtime_ptr }
+            .dom_host()
+            .get_attribute_ns_utf16_units(handle, namespace.as_deref(), &local_name)
+            .and_then(|value| crate::util::v8_string_from_utf16_units(scope, &value))
         {
-            set_string_return_value(scope, &mut rv, &value);
+            rv.set(value.into());
         } else {
             rv.set_null();
         }
@@ -234,7 +239,7 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_callback<'a>(
         return;
     }
     let runtime_and_handle = detached_surface_runtime_and_handle(scope, args.this(), element);
-    let Some(value) = super::super::super::element::trusted_attribute_value_string(
+    let Some(units) = super::super::super::element::trusted_attribute_value_string16(
         scope,
         runtime_and_handle,
         None,
@@ -244,6 +249,7 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_callback<'a>(
     ) else {
         return;
     };
+    let value = String::from_utf16_lossy(&units);
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {
         if let Some(has_native_attribute) =
             read_detached_native_has_attribute(scope, element, &normalized)
@@ -251,8 +257,15 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_callback<'a>(
             if has_native_attribute {
                 clear_matching_namespace_attr_cache_by_name(scope, element, &normalized);
             }
-            if sync_detached_surface_set_attribute(scope, args.this(), element, &normalized, &value)
-                .unwrap_or(false)
+            if sync_detached_surface_set_attribute(
+                scope,
+                args.this(),
+                element,
+                &normalized,
+                &value,
+                units,
+            )
+            .unwrap_or(false)
             {
                 detached_record_tree_mutation(scope, element);
             }
@@ -262,9 +275,18 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_callback<'a>(
             return;
         };
         detached_remove_namespace_attribute_by_name(scope, args.this(), element, &normalized);
-        detached_map_set(scope, attributes, &normalized, &value);
-        let _ =
-            sync_detached_surface_set_attribute(scope, args.this(), element, &normalized, &value);
+        let Some(js_value) = crate::util::v8_string_from_utf16_units(scope, &units) else {
+            return;
+        };
+        detached_map_set_value(scope, attributes, &normalized, js_value.into());
+        let _ = sync_detached_surface_set_attribute(
+            scope,
+            args.this(),
+            element,
+            &normalized,
+            &value,
+            units,
+        );
         detached_record_tree_mutation(scope, element);
     });
 }
@@ -547,6 +569,7 @@ fn sync_detached_surface_set_attribute<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
     value: &str,
+    units: Vec<u16>,
 ) -> Option<bool> {
     let (runtime_ptr, handle) = detached_surface_runtime_and_handle(scope, bridge, element)?;
     let old_value = unsafe { &*runtime_ptr }
@@ -574,12 +597,13 @@ fn sync_detached_surface_set_attribute<'s>(
         clear_detached_iframe_cached_context(scope, element);
     }
     Some(
-        crate::native_bridge::element::set_live_element_attribute_appending_to_current_reaction_queue(
+        crate::native_bridge::element::set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             name,
             value,
+            units,
         ),
     )
 }
