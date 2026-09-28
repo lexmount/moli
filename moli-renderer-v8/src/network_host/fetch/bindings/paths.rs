@@ -337,9 +337,9 @@ pub(super) fn native_window_fetch_request(
     Ok(request)
 }
 
-fn window_fetch_script_metadata(
+fn window_fetch_subresource_metadata(
     prepared: &PreparedWindowFetchRequest,
-) -> Option<ScriptFetchRequestMetadata> {
+) -> Option<SubresourceRequestMetadata> {
     let referrer_policy =
         (!prepared.referrer_policy.is_empty()).then(|| prepared.referrer_policy.clone());
     let integrity = (!prepared.integrity.is_empty()).then(|| prepared.integrity.clone());
@@ -349,11 +349,10 @@ fn window_fetch_script_metadata(
     {
         return None;
     }
-    Some(ScriptFetchRequestMetadata {
+    Some(SubresourceRequestMetadata {
         referrer_policy,
         document_referrer_policy: prepared.document_referrer_policy.clone(),
         integrity,
-        ..ScriptFetchRequestMetadata::default()
     })
 }
 
