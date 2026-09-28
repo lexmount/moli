@@ -12,6 +12,7 @@ mod math;
 mod root_margin;
 mod stylo_stylesheet;
 mod transform;
+mod typed_om;
 mod util;
 mod value;
 
@@ -76,6 +77,7 @@ pub use stylo_stylesheet::{
     refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
 pub use transform::{CssTransformFunction, parse_transform_function_list};
+pub use typed_om::{ParsedTypedStyleValue, parse_typed_style_value, reify_unparsed_style_value};
 pub use util::{
     camel_case_style_property_name, camel_to_kebab, canonical_style_property_identifier,
     canonical_style_property_name, decapitalize_ascii_head, escape_top_level_semicolons,
