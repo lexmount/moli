@@ -400,6 +400,26 @@ fn set_cloned_native_element_attribute<'s>(
     cloned: v8::Local<'s, v8::Object>,
     attribute: &DetachedNativeAttributeSnapshot,
 ) {
+    if let Some(units) = attribute.value_utf16_units.as_ref()
+        && let Ok((runtime_ptr, handle)) =
+            node_runtime_and_handle_from_object_or_detached(scope, cloned)
+    {
+        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            unsafe { &mut *runtime_ptr }
+                .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    attribute.namespace_uri.as_deref(),
+                    attribute.prefix.as_deref(),
+                    &attribute.local_name,
+                    &attribute.name,
+                    &attribute.value,
+                    units.clone(),
+                );
+        });
+        return;
+    }
     let has_namespace_metadata = attribute.namespace_uri.is_some()
         || attribute
             .prefix
