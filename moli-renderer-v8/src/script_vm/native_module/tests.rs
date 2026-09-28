@@ -388,8 +388,7 @@ fn native_module_instantiate_preserves_caught_v8_type_errors() {
     let script = v8::Script::compile(&scope, source, None).expect("valid script");
     assert!(crate::script_execution::execute_compiled_script(&mut scope, script).is_none());
     let exception = scope.exception().expect("V8 should throw a TypeError");
-    let caught_constructor =
-        super::script_error_constructor_kind_from_value(&mut scope, exception);
+    let caught_constructor = super::script_error_constructor_kind_from_value(&mut scope, exception);
     assert_eq!(
         caught_constructor,
         Some(ScriptErrorConstructorKind::TypeError)
