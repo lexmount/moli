@@ -1,8 +1,10 @@
 use super::*;
 
-#[test]
-fn body_blob_mime_uses_the_shared_header_list_parser() {
-    let mut vm = new_storage_test_vm("https://body-blob-mime.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn body_blob_mime_uses_the_shared_header_list_parser() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://body-blob-mime.test/", &loader);
     vm.eval(r#"
       globalThis.blobMimeResult = null;
       (async () => {
@@ -33,10 +35,13 @@ fn body_blob_mime_uses_the_shared_header_list_parser() {
         return 'passed';
       })().then(value => blobMimeResult = value, error => blobMimeResult = String(error));
     "#).unwrap();
-    for _ in 0..64 {
-        if vm.eval("String(blobMimeResult !== null)").unwrap() == "true" {
-            break;
-        }
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(blobMimeResult !== null)",
+        "true",
+        "Body Blob MIME probe",
+    )
+    .await;
     assert_eq!(vm.eval("blobMimeResult").unwrap(), "passed");
 }

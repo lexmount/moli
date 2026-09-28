@@ -2246,6 +2246,7 @@ mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
 mod intersection_observers;
+mod intersection_target_order;
 mod javascript_url_origin;
 mod joint_history;
 mod lazy_storage;
@@ -2268,6 +2269,7 @@ mod remote_playback_interface;
 mod rendering_observers;
 mod rendering_update;
 mod resize_observer_entries;
+mod response_blob_mime;
 mod retained_child_window;
 mod script_terminal_completion;
 mod streams;
@@ -2286,11 +2288,8 @@ mod window_event_receivers;
 mod window_execution_context;
 mod worklet_interfaces;
 mod payment_response_interfaces;
-
-mod response_blob_mime;
 mod intersection_target_order;
 mod observer_element_arguments;
-
 mod media_device_interfaces;
 mod window_promise_method_receivers;
 mod window_restricted_accessors;
