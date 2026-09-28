@@ -138,6 +138,10 @@ impl PopupWindowSecurityOrigin {
 }
 
 impl WindowSecurityOrigin {
+    pub(crate) fn serialized_origin(&self) -> String {
+        self.current_origin().serialized_origin()
+    }
+
     pub(crate) fn for_context(context: v8::Local<'_, v8::Context>) -> Option<Self> {
         context
             .get_slot::<WindowContextSecurityOrigin>()
