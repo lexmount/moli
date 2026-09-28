@@ -368,17 +368,6 @@ pub(super) struct HtmlOutputElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAElement, enumerable)]
-struct SvgAElementRelListPrototypeDeclaration {
-    #[webapi(
-        accessor_property = "relList",
-        getter = html_rel_list_getter_function,
-        setter = svg_rel_list_setter_function
-    )]
-    rel_list: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLMeterElement, enumerable)]
 pub(super) struct HtmlMeterElementPrototypeDeclaration {
     #[webapi(

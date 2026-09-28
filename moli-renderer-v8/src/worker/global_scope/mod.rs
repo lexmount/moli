@@ -128,7 +128,7 @@ mod xhr;
 use self::service_worker_api::*;
 pub(super) use self::service_worker_api::{
     build_service_worker_client_object, build_service_worker_client_object_from_snapshot,
-    build_service_worker_global_service_worker,
+    build_service_worker_global_service_worker, dispatch_service_worker_registration_update_found,
 };
 pub(crate) use self::service_worker_api::{
     service_worker_runtime_identity, worker_notification_permission_state,

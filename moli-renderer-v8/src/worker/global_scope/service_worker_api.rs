@@ -100,7 +100,7 @@ fn build_service_worker_global_registration<'s>(
     Ok(registration)
 }
 
-fn service_worker_registration_onupdatefound_getter<'s>(
+pub(super) fn service_worker_registration_onupdatefound_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -115,7 +115,7 @@ fn service_worker_registration_onupdatefound_getter<'s>(
     );
 }
 
-fn service_worker_registration_onupdatefound_setter<'s>(
+pub(super) fn service_worker_registration_onupdatefound_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -143,7 +143,7 @@ fn service_worker_registration_onupdatefound_setter<'s>(
     );
 }
 
-pub(super) fn dispatch_service_worker_registration_update_found<'s>(
+pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) {
     let global = scope.get_current_context().global(scope);
@@ -280,7 +280,7 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     Ok(worker)
 }
 
-fn service_worker_registration_update_callback<'s>(
+pub(super) fn service_worker_registration_update_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -327,7 +327,7 @@ fn service_worker_registration_update_callback<'s>(
     let request = {
         let mut state = state.borrow_mut();
         let caller_version_id = match state.global_kind {
-            super::thread::WorkerGlobalKind::Service { version_id, .. } => Some(version_id),
+            crate::worker::thread::WorkerGlobalKind::Service { version_id, .. } => Some(version_id),
             _ => None,
         };
         let Some(document_url) = state.current_script_url.clone() else {
@@ -347,7 +347,7 @@ fn service_worker_registration_update_callback<'s>(
             storage_key: state.storage_key.serialized_storage_key(),
             document_url,
             request_client: state.loader.request_client().clone(),
-            network_policy: super::handle::WorkerNetworkPolicy {
+            network_policy: crate::worker::handle::WorkerNetworkPolicy {
                 secure_context: state.secure_context,
                 permission_overrides: state.permission_overrides.clone(),
                 extra_http_headers: state.extra_http_headers.clone(),
