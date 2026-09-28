@@ -75,6 +75,8 @@
         let conversions = 0;
         value.baseVal = {toString() {conversions++;return 'SourceAlpha';}};
         check(conversions === 1 && element.getAttribute(attribute) === 'SourceAlpha' && value.animVal === 'SourceAlpha', tag + '.' + name + ' native mutation');
+        value.baseVal = 'before\uD800after';
+        check(value.baseVal === 'before\uD800after' && value.animVal === 'before\uD800after' && element.getAttribute(attribute) === 'before\uD800after', tag + '.' + name + ' DOMString preserves UTF-16');
         element.removeAttribute(attribute);
         check(value.baseVal === '' && value.animVal === '', tag + '.' + name + ' string removal');
       }
