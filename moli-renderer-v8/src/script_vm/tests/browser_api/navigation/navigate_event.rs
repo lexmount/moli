@@ -159,21 +159,6 @@ async fn canceled_post_form_navigation_aborts_signal_in_dom_task_without_synthet
     );
 }
 
-fn new_unload_lifecycle_test_vm(url: &str) -> StandaloneScriptVmHarness {
-    let mut vm = new_storage_test_vm(url);
-    let owner = vm.current_main_document_task_owner().unwrap();
-    let interactive = vm.finish_current_main_document_parsing(owner).unwrap();
-    vm.apply_main_document_interactive_lifecycle_action(interactive)
-        .unwrap();
-    vm.dispatch_main_document_domcontentloaded_lifecycle(owner);
-    assert!(
-        vm.dispatch_main_document_window_load_lifecycle(owner)
-            .unwrap()
-            .is_none()
-    );
-    vm
-}
-
 #[test]
 fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer() {
     let mut vm = new_unload_lifecycle_test_vm("https://example.com/base");
@@ -1383,7 +1368,7 @@ async fn navigation_cancellation_uses_dispatch_state_instead_of_author_cancelabi
         let loader = static_http_loader([]);
         let mut vm =
             new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
-        let script = include_str!("../../../../tests/fixtures/navigation-cancellation.js");
+        let script = include_str!("../../../../../tests/fixtures/navigation-cancellation.js");
         vm.eval(&format!(
             "{script}\n\
              globalThis.cancellationResult = 'pending';\n\
@@ -1429,7 +1414,6 @@ async fn navigation_cancellation_uses_dispatch_state_instead_of_author_cancelabi
         assert_eq!(server.finish_targets().await, ["/child"], "{context}");
     }
 }
-
 
 #[tokio::test]
 async fn navigation_retirement_reentry_preserves_successor_window() {

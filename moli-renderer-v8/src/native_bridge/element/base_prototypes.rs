@@ -166,7 +166,7 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "requestFullscreen",
         length = 0,
         enumerable,
-        callback = super::fullscreen::element_request_fullscreen_callback
+        callback = crate::native_bridge::fullscreen::element_request_fullscreen_callback
     )]
     request_fullscreen: (),
     #[webapi(accessor_property = "shadowRoot", enumerable, getter = element_shadow_root_getter_function)]
@@ -970,7 +970,7 @@ pub(super) struct HtmlElementActionPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGElement, receiver)]
-struct SvgElementFocusPrototypeDeclaration {
+pub(super) struct SvgElementFocusPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
     #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]
@@ -979,7 +979,7 @@ struct SvgElementFocusPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MathMLElement, receiver)]
-struct MathMlElementFocusPrototypeDeclaration {
+pub(super) struct MathMlElementFocusPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
     #[webapi(method, length = 0, enumerable, callback = node_blur_callback)]

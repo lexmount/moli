@@ -2663,3 +2663,14 @@ pub(super) const HTML_NAME_REFLECTION_INTERFACES: &[ElementReflectionInterface] 
     ElementReflectionInterface::HtmlSelectElement,
     ElementReflectionInterface::HtmlTextAreaElement,
 ];
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAElement, enumerable)]
+pub(super) struct SvgAElementRelListPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "relList",
+        getter = html_rel_list_getter_function,
+        setter = svg_rel_list_setter_function
+    )]
+    rel_list: (),
+}
