@@ -374,6 +374,75 @@ pub(in crate::native_bridge) fn trusted_attribute_string_value<'s>(
     )
 }
 
+fn svg_animated_string_attribute_namespace(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    attribute: &str,
+) -> Option<&'static str> {
+    (attribute == "href"
+        && !runtime.dom_host().has_attribute_ns(handle, None, attribute)
+        && runtime.dom_host().has_attribute_ns(
+            handle,
+            Some(crate::native_bridge::document::XLINK_NS),
+            attribute,
+        ))
+    .then_some(crate::native_bridge::document::XLINK_NS)
+}
+
+pub(crate) fn set_svg_animated_string_base_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<String> {
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
+    let namespace =
+        svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
+    let units = trusted_attribute_value_string16(
+        scope,
+        Some((runtime_ptr, handle)),
+        namespace,
+        attribute,
+        value,
+        TrustedAttributeSetter::SvgAnimatedStringBaseVal,
+    )?;
+    let value = String::from_utf16_lossy(&units);
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
+    let namespace =
+        svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
+    if attribute == "href" {
+        let _ = unsafe { &mut *runtime_ptr }.set_attribute_ns(
+            scope,
+            runtime_ptr,
+            handle,
+            namespace,
+            namespace.map(|_| "xlink"),
+            attribute,
+            if namespace.is_some() {
+                "xlink:href"
+            } else {
+                attribute
+            },
+            &value,
+        );
+    } else {
+        crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            let _ = unsafe { &mut *runtime_ptr }
+                .set_attribute_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    attribute,
+                    &value,
+                    units,
+                );
+        });
+    }
+    Some(value)
+}
+
 pub(crate) fn prepare_trusted_script_text(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -411,87 +480,3 @@ pub(crate) fn prepare_trusted_script_text(
     Some(source)
 }
 
-fn svg_animated_string_attribute_namespace(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    attribute: &str,
-) -> Option<&'static str> {
-    (attribute == "href"
-        && !runtime.dom_host().has_attribute_ns(handle, None, attribute)
-        && runtime.dom_host().has_attribute_ns(
-            handle,
-            Some(crate::native_bridge::document::XLINK_NS),
-            attribute,
-        ))
-    .then_some(crate::native_bridge::document::XLINK_NS)
-}
-
-pub(crate) fn set_svg_animated_string_base_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-    attribute: &str,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
-    let script_href = {
-        let element = unsafe { &*runtime_ptr }
-            .dom_host()
-            .node(handle)?
-            .as_element()?;
-        element.namespace() == "http://www.w3.org/2000/svg"
-            && element.local_name() == "script"
-            && attribute == "href"
-    };
-    let value = if script_href {
-        let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
-        crate::context_bootstrap::trusted_script_url_string_or_throw(
-            scope,
-            value,
-            requirements,
-            "SVGScriptElement href",
-            "baseVal",
-        )?
-    } else {
-        match crate::webidl::convert::<crate::webidl::DomString>(
-            scope,
-            value,
-            crate::webidl::Context::member("SVGAnimatedString", "baseVal"),
-        ) {
-            Ok(value) => value.0,
-            Err(error) => {
-                crate::webidl::throw_error(scope, &error);
-                return None;
-            }
-        }
-    };
-    let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
-    let namespace =
-        svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
-    if attribute == "href" {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute_ns(
-            scope,
-            runtime_ptr,
-            handle,
-            namespace,
-            namespace.map(|_| "xlink"),
-            attribute,
-            if namespace.is_some() {
-                "xlink:href"
-            } else {
-                attribute
-            },
-            &value,
-        );
-    } else {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            attribute,
-            &value,
-        );
-    }
-    Some(value)
-}

@@ -57,11 +57,11 @@ pub const SVG_STRING_LIST_ITEMS_SLOT: &str = "__moliSvgStringListItems";
     interface = web_api_interfaces::SVGAnimatedString,
     own_to_string_tag = "SVGAnimatedString"
 )]
-pub struct SvgAnimatedStringObjectDeclaration {
+pub struct SvgAnimatedStringObjectDeclaration<'s> {
     #[webapi(slot = SVG_ANIMATED_STRING_BASE_VAL_SLOT)]
-    base_val: String,
+    base_val: v8::Local<'s, v8::String>,
     #[webapi(slot = SVG_ANIMATED_STRING_ANIM_VAL_SLOT)]
-    anim_val: String,
+    anim_val: v8::Local<'s, v8::String>,
 }
 
 #[derive(WebApiObject)]
