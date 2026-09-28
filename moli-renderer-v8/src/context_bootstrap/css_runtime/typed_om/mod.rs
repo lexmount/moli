@@ -7,7 +7,7 @@ use crate::{
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
-mod factories;
+use moli_webapi::css_values::factories;
 mod map;
 mod values;
 mod parse;
