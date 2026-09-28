@@ -10,10 +10,13 @@ use crate::{
 use cssparser::{Parser, ParserInput, Token};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod factories;
 mod map;
 mod parse;
 mod unparsed;
 mod values;
+
+pub(super) use factories::install as install_numeric_factories;
 
 pub(in crate::context_bootstrap) use unparsed::{
     css_unparsed_value_constructor_callback, css_variable_reference_value_constructor_callback,
