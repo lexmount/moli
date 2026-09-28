@@ -1,8 +1,7 @@
 use super::declaration_parser::{
-    canonical_unresolved_legacy_color_function,
-    css_color_value_property_requires_stylo_parser, css_math_value_property_requires_stylo_parser,
-    cssom_style_entry_requires_structured_parser, parse_animation_numeric_property_entries,
-    parse_transition_numeric_property_entries,
+    canonical_unresolved_legacy_color_function, css_color_value_property_requires_stylo_parser,
+    css_math_value_property_requires_stylo_parser, cssom_style_entry_requires_structured_parser,
+    parse_animation_numeric_property_entries, parse_transition_numeric_property_entries,
 };
 use super::inline_state::style_entries_equal;
 use super::*;
