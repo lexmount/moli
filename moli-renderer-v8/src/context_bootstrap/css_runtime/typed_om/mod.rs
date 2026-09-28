@@ -9,6 +9,7 @@ use cssparser::{Parser, ParserInput, Token};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod map;
+mod parse;
 mod unparsed;
 mod values;
 
@@ -24,7 +25,9 @@ pub(in crate::context_bootstrap) fn install_css_typed_om_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
+    profile: crate::context_bootstrap::exposed_interfaces::TemplateBuildProfile,
 ) {
+    parse::install_template_bindings(scope, template, interface_name, profile);
     unparsed::install_template_bindings(scope, template, interface_name);
     map::install_computed_style_map_template_bindings(scope, template, interface_name);
     values::install_typed_value_template_bindings(scope, template, interface_name);
