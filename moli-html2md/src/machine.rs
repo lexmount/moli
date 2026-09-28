@@ -224,16 +224,14 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             .dom
             .attribute(node, "data-toggle")
             .is_some_and(|value| value.eq_ignore_ascii_case("tooltip"));
-        if tooltip
-            && !subtree_has_content(self.dom, node, self.options.max_depth - depth)
-            && let Some(value) = self
-                .dom
-                .attribute(node, "data-original-title")
-                .filter(|value| !value.trim().is_empty())
-        {
-            self.writer().text(value);
-            return;
-        }
+        let tooltip_fallback =
+            if tooltip && !subtree_has_content(self.dom, node, self.options.max_depth - depth) {
+                self.dom
+                    .attribute(node, "data-original-title")
+                    .filter(|value| !value.trim().is_empty())
+            } else {
+                None
+            };
         if tooltip && self.dom.attribute(node, "title").is_some() {
             self.writer().boundary(1);
             self.tasks.push(Task::ChoiceBoundary);
@@ -265,10 +263,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 if let Some(id) = self.dom.attribute(node, attribute)
                     && self.anchor_targets.contains(id)
+                    && self.emitted_anchors.insert(id.to_owned())
                 {
-                    if self.emitted_anchors.insert(id.to_owned()) {
-                        self.writer().inline_html(&crate::anchors::markup(id));
-                    }
+                    self.writer().inline_html(&crate::anchors::markup(id));
                 }
             }
         }
@@ -366,8 +363,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                             &self.anchor_targets,
                         ))
                 {
-                    let html =
-                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    let html = crate::html_table::render(
+                        self.dom,
+                        node,
+                        depth,
+                        self.options.max_depth,
+                        &self.anchor_targets,
+                    );
                     if tag == "pre" {
                         self.writer().block(html.into(), 2, 2);
                     } else {
@@ -404,8 +406,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     return;
                 }
                 if subtree_has_block(self.dom, node, remaining) {
-                    let html =
-                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    let html = crate::html_table::render(
+                        self.dom,
+                        node,
+                        depth,
+                        self.options.max_depth,
+                        &self.anchor_targets,
+                    );
                     self.writer().block(html.into(), 2, 2);
                     return;
                 }
@@ -437,8 +444,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                             &self.anchor_targets,
                         ))
                 {
-                    let html =
-                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    let html = crate::html_table::render(
+                        self.dom,
+                        node,
+                        depth,
+                        self.options.max_depth,
+                        &self.anchor_targets,
+                    );
                     self.writer().block(html.into(), 2, 2);
                     return;
                 }
@@ -456,8 +468,13 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 if !presentation
                     && crate::html_table::has_cells(self.dom, node, depth, self.options.max_depth)
                 {
-                    let html =
-                        crate::html_table::render(self.dom, node, depth, self.options.max_depth);
+                    let html = crate::html_table::render(
+                        self.dom,
+                        node,
+                        depth,
+                        self.options.max_depth,
+                        &self.anchor_targets,
+                    );
                     self.writer().block(html.into(), 2, 2);
                     return;
                 }
@@ -485,7 +502,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             self.writer().inline_html(&markup);
             return;
         }
-        if self.dom.first_child(node).is_none()
+        if let Some(value) = tooltip_fallback {
+            self.writer().text(value);
+        } else if self.dom.first_child(node).is_none()
             && let Some(label) = self
                 .dom
                 .attribute(node, "aria-label")
@@ -706,7 +725,12 @@ fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) 
             NodeKind::Text(text) if !text.trim_matches(char::is_whitespace).is_empty() => {
                 return true;
             }
-            NodeKind::Element("img") if crate::media::source(dom, node).is_some() => {
+            NodeKind::Element("img")
+                if crate::media::source(dom, node).is_some()
+                    || dom
+                        .attribute(node, "alt")
+                        .is_some_and(|alt| !alt.trim().is_empty()) =>
+            {
                 return true;
             }
             NodeKind::Element(_)

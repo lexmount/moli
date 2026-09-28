@@ -83,8 +83,8 @@ impl<'a> MarkdownDom<'a> {
                 let Some(handler) = Dom::attribute(dom, *node, &attribute_name) else {
                     continue;
                 };
-                for literal in quoted_literals(handler) {
-                    if let Some((&id, _)) = targets.get_key_value(literal) {
+                for target in inline_disclosure_targets(handler) {
+                    if let Some((&id, _)) = targets.get_key_value(target) {
                         disclosures.insert(id);
                     }
                 }
@@ -192,6 +192,10 @@ impl<'a> MarkdownDom<'a> {
                     .is_some_and(|height| height <= 1.5);
             let foreground = values.get(10).and_then(|value| css_color(value));
             let zero_contrast_leaf = !has_element_child(dom, node)
+                && has_text_child(dom, node)
+                && values
+                    .get(13)
+                    .is_none_or(|image| image.is_empty() || image == "none")
                 && foreground
                     .filter(|color| color.3 > 0.99)
                     .zip(effective_backgrounds.get(&node).copied())
@@ -329,25 +333,71 @@ impl<'a> MarkdownDom<'a> {
     }
 }
 
-fn quoted_literals(value: &str) -> Vec<&str> {
+fn inline_disclosure_targets(value: &str) -> Vec<&str> {
     let mut result = Vec::new();
+    for (marker, fragment) in [
+        ("document.getElementById", false),
+        ("document.querySelector", true),
+    ] {
+        for offset in code_marker_offsets(value, marker) {
+            let remaining = &value[offset + marker.len()..];
+            let Some(argument) = remaining
+                .trim_start()
+                .strip_prefix('(')
+                .map(str::trim_start)
+            else {
+                continue;
+            };
+            let Some(quote) = argument
+                .chars()
+                .next()
+                .filter(|quote| matches!(quote, '\'' | '"'))
+            else {
+                continue;
+            };
+            let literal = &argument[quote.len_utf8()..];
+            let Some(end) = literal.find(quote) else {
+                continue;
+            };
+            let literal = &literal[..end];
+            if let Some(target) = literal
+                .strip_prefix('#')
+                .or_else(|| (!fragment).then_some(literal))
+                && !target.is_empty()
+            {
+                result.push(target);
+            }
+        }
+    }
+    result
+}
+
+fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {
+    let mut result = Vec::new();
+    let mut offset = 0;
     let mut quote = None;
-    let mut start = 0;
     let mut escaped = false;
-    for (index, character) in value.char_indices() {
+    while offset < value.len() {
+        let character = value[offset..]
+            .chars()
+            .next()
+            .expect("offset remains on a character boundary");
         if let Some(delimiter) = quote {
             if escaped {
                 escaped = false;
             } else if character == '\\' {
                 escaped = true;
             } else if character == delimiter {
-                result.push(&value[start..index]);
                 quote = None;
             }
-        } else if matches!(character, '\'' | '"') {
+        } else if matches!(character, '\'' | '"' | '`') {
             quote = Some(character);
-            start = index + character.len_utf8();
+        } else if value[offset..].starts_with(marker) {
+            result.push(offset);
+            offset += marker.len();
+            continue;
         }
+        offset += character.len_utf8();
     }
     result
 }
@@ -412,6 +462,17 @@ fn has_element_child(dom: &NativeDom, node: NativeNodeId) -> bool {
     let mut child = dom.first_child(node);
     while let Some(id) = child {
         if matches!(Dom::node_kind(dom, id), NodeKind::Element(_)) {
+            return true;
+        }
+        child = dom.next_sibling(id);
+    }
+    false
+}
+
+fn has_text_child(dom: &NativeDom, node: NativeNodeId) -> bool {
+    let mut child = dom.first_child(node);
+    while let Some(id) = child {
+        if matches!(Dom::node_kind(dom, id), NodeKind::Text(text) if !text.trim().is_empty()) {
             return true;
         }
         child = dom.next_sibling(id);

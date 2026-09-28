@@ -45,6 +45,18 @@ impl PageVm {
                 .zip(background_values)
                 .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
                 .collect();
+            let background_image_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &["background-image".to_owned()],
+                );
+            let background_images: HashMap<_, _> = nodes
+                .iter()
+                .copied()
+                .zip(background_image_values)
+                .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
+                .collect();
             let span_values = self
                 .vm()
                 .computed_style_property_values_for_document_snapshot(
@@ -108,6 +120,7 @@ impl PageVm {
                     values.push(foreground);
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
                     values.push(animation_name);
+                    values.push(background_images.get(&node).cloned().unwrap_or_default());
                     (node, values)
                 })
                 .collect::<Vec<_>>()

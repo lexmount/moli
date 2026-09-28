@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{Dom, NodeKind};
 
 /// Markdown has no merged cells, nested tables, or block content inside cells.
@@ -88,8 +90,10 @@ pub(crate) fn render<D: Dom + ?Sized>(
     root: D::NodeId,
     depth: usize,
     limit: usize,
+    anchor_targets: &HashSet<String>,
 ) -> String {
     let mut output = String::new();
+    let mut emitted_anchors = HashSet::new();
     let mut tasks = vec![Task::Node(root, depth)];
     while let Some(task) = tasks.pop() {
         match task {
@@ -106,6 +110,16 @@ pub(crate) fn render<D: Dom + ?Sized>(
             Task::Node(node, depth) => {
                 if depth >= limit {
                     continue;
+                }
+                let anchor = ["id", "name"].iter().find_map(|name| {
+                    dom.attribute(node, name)
+                        .filter(|id| anchor_targets.contains(*id))
+                });
+                if let (NodeKind::Element(tag), Some(id)) = (dom.node_kind(node), anchor)
+                    && !allowed(tag)
+                    && emitted_anchors.insert(id)
+                {
+                    output.push_str(&crate::anchors::markup(id));
                 }
                 match dom.node_kind(node) {
                     NodeKind::Text(text) => escape(text, &mut output),

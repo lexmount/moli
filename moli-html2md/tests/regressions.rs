@@ -818,6 +818,11 @@ fn tooltip_trigger_retains_its_reader_facing_detail() {
         false,
     );
     assert_eq!(fallback, "$100/day");
+    let fallback_link = markdown(
+        "<a href='/download' data-toggle='tooltip' data-original-title='Download'></a>",
+        false,
+    );
+    assert_eq!(fallback_link, "[Download](/download)");
     let metadata = markdown(
         "<span data-toggle='tooltip' title='Published'>January 24, 2018</span><span data-toggle='tooltip' title='Reading Time'>3 mins read</span>",
         false,
@@ -834,6 +839,41 @@ fn resource_only_headings_are_not_dropped() {
     assert!(result.contains("# [![](/logo.svg)](/home)"), "{result}");
     assert!(result.contains("## Accessible title"), "{result}");
     assert!(result.contains("Article"), "{result}");
+    let alternative = markdown(
+        "<h1><img alt='Product manual'></h1><h2><img src='javascript:bad()' alt='Safe title'></h2>",
+        false,
+    );
+    assert!(alternative.contains("# Product manual"), "{alternative}");
+    assert!(alternative.contains("## Safe title"), "{alternative}");
+}
+
+#[test]
+fn responsive_image_falls_back_from_unusable_lazy_candidates() {
+    for lazy in ["", "javascript:bad() 1x"] {
+        let result = markdown(
+            &format!(
+                "<img alt='Chart' data-srcset='{lazy}' srcset='/chart-small.png 1x, /chart.png 2x'>"
+            ),
+            false,
+        );
+        assert_eq!(result, "![Chart](/chart.png)");
+    }
+}
+
+#[test]
+fn html_fallback_preserves_referenced_targets_for_special_nodes() {
+    let code = markdown(
+        "<a href='#L1'>Line 1</a><pre><code><mark id='L1'>let x = 1;</mark></code></pre>",
+        false,
+    );
+    assert!(code.contains("<a id=\"L1\"></a>"), "{code}");
+    let table = markdown(
+        "<a href='#email'>Email</a><a href='#eq1'>Equation</a><a href='#video1'>Video</a><table><tr><td><input id='email' value='a@example.test'></td><td><math id='eq1'><mi>x</mi></math></td><td><video id='video1' src='/clip.mp4'></video></td></tr></table>",
+        false,
+    );
+    for id in ["email", "eq1", "video1"] {
+        assert!(table.contains(&format!("<a id=\"{id}\"></a>")), "{table}");
+    }
 }
 
 #[test]

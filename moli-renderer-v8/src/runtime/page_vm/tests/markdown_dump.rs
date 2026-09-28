@@ -21,7 +21,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/content").unwrap());
         page.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>.off{display:none}.invisible{visibility:hidden}.restored{visibility:visible}</style>';
+            document.head.innerHTML = '<style>.off{display:none}.invisible{visibility:hidden}.restored{visibility:visible}#external-override{color:black}</style>';
             document.body.innerHTML = `
                 <h1>Article</h1><p>Visible body</p>
                 <div class="off" id="waiting">Translation pending</div>
@@ -33,8 +33,9 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div style="opacity:0">Transparent parent <span style="opacity:1">Transparent child</span></div>
                 <div ng-cloak>Buy {{product.name}} for {{product.price | currency}}</div>
                 <div v-cloak>Vue template {{message}}</div>
-                <p>Visible value <font color="white">hidden suffix</font> 8</p>
-                <p>CSS override <font color="white" style="color:black">VISIBLE</font></p>
+                <p>Visible value <font id="legacy-hidden" color="white">hidden suffix</font> 8</p>
+                <p>CSS override <font id="css-override" color="white" style="color:black">VISIBLE</font></p>
+                <p>Stylesheet override <font id="external-override" color="white">ALSO VISIBLE</font></p>
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
                 <p style="opacity:0;animation-name:fadeIn">Animated article text</p>
@@ -53,9 +54,14 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <button aria-expanded="false" aria-controls="dialog">Preferences</button>
                 <div role="dialog" id="dialog" class="off">Cookie template</div>`;
         "#).unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('legacy-hidden')).color").unwrap(), "rgb(255, 255, 255)");
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('css-override')).color").unwrap(), "rgb(0, 0, 0)");
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('external-override')).color").unwrap(), "rgb(0, 0, 0)");
+        assert_eq!(page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','black'); getComputedStyle(document.getElementById('legacy-hidden')).color").unwrap(), "rgb(0, 0, 0)");
+        page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value hidden suffix 8", "CSS override VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -63,7 +69,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Score 3131", "Parser trap", "Transparent parent", "Transparent child", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Score 3131", "Parser trap", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
         }
@@ -119,6 +125,27 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let expanded = page.render_page_dump(options(false));
         assert!(expanded.contains("Expandable history"), "{expanded}");
         assert!(!expanded.contains("Hidden template"), "{expanded}");
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <button onclick="console.log('tracking')">Save</button>
+                <section id="tracking" style="display:none">Hidden telemetry state</section>
+                <button onclick="console.log(&quot;document.getElementById('diagnostic')&quot;)">Log</button>
+                <section id="diagnostic" style="display:none">Hidden diagnostic state</section>
+                <button onclick="document.querySelector('#history').style.display='block'">History</button>
+                <section id="history" style="display:none">Query-selected history</section>`;
+        "##).unwrap();
+        let related = page.render_page_dump(options(false));
+        assert!(!related.contains("Hidden telemetry state"), "{related}");
+        assert!(!related.contains("Hidden diagnostic state"), "{related}");
+        assert!(related.contains("Query-selected history"), "{related}");
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <p style="color:white;background-image:linear-gradient(black,black)">Visible gradient text</p>
+                <div style="color:white;background:white"><img src="/photo.png" alt="Photo"></div>`;
+        "#).unwrap();
+        let painted = page.render_page_dump(options(false));
+        assert!(painted.contains("Visible gradient text"), "{painted}");
+        assert!(painted.contains("![Photo](https://example.test/photo.png)"), "{painted}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <img srcset="small.png 1x, large.png 2x" alt="Responsive">

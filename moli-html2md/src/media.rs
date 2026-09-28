@@ -11,11 +11,12 @@ pub(crate) fn source<'a, D: Dom + ?Sized>(dom: &'a D, node: D::NodeId) -> Option
 
     // A responsive image may intentionally leave `src` empty. Retain the
     // largest declared candidate so the image does not disappear entirely.
-    dom.attribute(node, "data-srcset")
-        .or_else(|| dom.attribute(node, "srcset"))
-        .and_then(largest_srcset_candidate)
-        .filter(|value| safe_url(value, true))
-        .map(|value| Cow::Owned(value.to_owned()))
+    ["data-srcset", "srcset"].into_iter().find_map(|name| {
+        dom.attribute(node, name)
+            .and_then(largest_srcset_candidate)
+            .filter(|value| safe_url(value, true))
+            .map(|value| Cow::Owned(value.to_owned()))
+    })
 }
 
 fn direct_source<D: Dom + ?Sized>(dom: &D, node: D::NodeId) -> Option<&str> {
