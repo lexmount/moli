@@ -43,6 +43,9 @@ mod meta_referrer_policy;
 #[path = "referrer_policy_inheritance.rs"]
 mod referrer_policy_inheritance;
 
+#[path = "fetch_client_referrer.rs"]
+mod fetch_client_referrer;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -347,6 +350,12 @@ fn fixture_response(
             "200 OK",
             format!("{javascript}Cache-Control: max-age=60\r\n"),
             SCRIPT.to_owned(),
+        ),
+        "/cached-client-referrer" => (
+            "200 OK",
+            "Content-Type: application/json\r\nCache-Control: max-age=60\r\nVary: Referer\r\n"
+                .to_owned(),
+            serde_json::to_string(&request.referer).unwrap(),
         ),
         "/cors.js" | "/cors-null.js" | "/cors-origin.js" => (
             "200 OK",
