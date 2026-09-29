@@ -9,6 +9,7 @@ pub(super) struct DocumentFocusChangeState {
     focused_area: Option<DomHandle>,
     sequential_starting_point: Option<SequentialFocusStartingPoint>,
     epoch: u64,
+    last_change_was_removal: bool,
 }
 
 impl PageScriptHost {
@@ -71,13 +72,13 @@ impl PageScriptHost {
                         !self.dom_host().is_connected(*area)
                             || self.dom_host().owner_document_handle(*area) != Some(*document)
                     })
-                    .map(|_| *document)
+                    .map(|area| (*document, area))
             })
             .collect::<Vec<_>>();
-        for document in documents {
+        for (document, area) in documents {
             // A retained iframe handle must not revive its former parent's
             // focus when script inserts the iframe again after removal.
-            self.note_document_focused_area(document, None);
+            self.clear_document_focused_area_on_removal(document, area);
         }
     }
 
@@ -152,6 +153,22 @@ impl PageScriptHost {
             })
     }
 
+    pub(crate) fn clear_document_focused_area_on_removal(
+        &mut self,
+        document: DomHandle,
+        area: DomHandle,
+    ) {
+        if let Some(state) = self.document_focus_changes.get_mut(&document)
+            && state.focused_area == Some(area)
+        {
+            state.focused_area = None;
+            state.epoch = state.epoch.wrapping_add(1);
+            // Removal clears "focus changed during ongoing navigation", even
+            // when an earlier focus() call changed the area during the transition.
+            state.last_change_was_removal = true;
+        }
+    }
+
     pub(crate) fn top_level_document_for_document(
         &self,
         mut document: DomHandle,
@@ -176,6 +193,12 @@ impl PageScriptHost {
             .map_or(0, |state| state.epoch)
     }
 
+    pub(crate) fn focus_changed_since(&self, document: DomHandle, epoch: u64) -> bool {
+        self.document_focus_changes
+            .get(&document)
+            .is_some_and(|state| state.epoch != epoch && !state.last_change_was_removal)
+    }
+
     pub(crate) fn note_document_focused_area(
         &mut self,
         document: DomHandle,
@@ -188,6 +211,7 @@ impl PageScriptHost {
         if state.focused_area != area {
             state.focused_area = area;
             state.epoch = state.epoch.wrapping_add(1);
+            state.last_change_was_removal = false;
         }
     }
 
