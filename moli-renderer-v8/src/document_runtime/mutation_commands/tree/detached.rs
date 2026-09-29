@@ -94,7 +94,10 @@ impl DocumentRuntime {
         new_child: DomHandle,
         old_child: DomHandle,
     ) -> bool {
-        self.replace_child_with_reaction_policy(
+        let insertion_roots = self
+            .fragment_insertion_children(new_child)
+            .unwrap_or_else(|| vec![new_child]);
+        let changed = self.replace_child_with_reaction_policy(
             scope,
             host_ptr,
             parent,
@@ -102,7 +105,15 @@ impl DocumentRuntime {
             old_child,
             TreeReactionDispatchPolicy::AppendToCurrentQueue,
             ConnectedScriptMutationPolicy::DeferToOwner,
-        )
+        );
+        if changed {
+            self.dispatch_detached_native_iframe_load_after_insert(
+                scope,
+                host_ptr,
+                &insertion_roots,
+            );
+        }
+        changed
     }
 
     pub(crate) fn remove_detached_native_child(
