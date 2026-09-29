@@ -235,6 +235,7 @@ pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
     stop_navigation_for_window_and_descendants,
 };
+pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data;
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,
     dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,

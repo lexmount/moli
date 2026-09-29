@@ -209,16 +209,29 @@ async fn assert_lightweight_popup_form_submission(method: &str) {
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn form_wrappers_popup_submission_respects_cancellation_and_closed_documents() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://form-popup-cancellation.test/",
+    let server = StaticHttpServer::spawn(1).await;
+    let loader = static_http_loader([]);
+    let opener_url = server.base_url().join("opener.html").unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(opener_url.as_str(), &loader);
+    vm.eval("globalThis.popup = open('/initial');").unwrap();
+    // Navigation API entries and events are disabled on initial about:blank.
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
         &loader,
+        "String(popup.document.URL.endsWith('/initial') && popup.document.readyState === 'complete')",
+        "true",
+        "popup cancellation target must have a committed document",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("popup.navigation.currentEntry !== null").unwrap(),
+        "true"
     );
-    vm.eval(r#"(() => {
-          globalThis.popup = open();
+    vm.eval(r#"
           const original = popup.document;
+          const originalURL = popup.location.href;
           const form = original.body.appendChild(original.createElement('form'));
           form.action = '/submit';
           form.innerHTML = '<input name="field" value="data">';
@@ -227,36 +240,64 @@ async fn form_wrappers_popup_submission_respects_cancellation_and_closed_documen
             events.push([event.sourceElement === form, event.formData && event.formData.get('field')]);
             event.preventDefault();
           });
-          for (const method of ['get', 'post']) {
-            form.method = method;
-            HTMLFormElement.prototype.submit.call(form);
-            if (popup.document !== original || popup.location.href !== 'about:blank') throw Error('canceled navigation');
-          }
-          globalThis.__submitFromClosedPopup = () => {
-            for (const method of ['get', 'post']) {
-              form.method = method;
-              HTMLFormElement.prototype.submit.call(form);
-            }
-            return JSON.stringify(events);
-          };
-          popup.close();
-        })()"#).unwrap();
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(popup.closed && popup.opener === null)",
-        "true",
-        "popup Document retirement",
+        "#).unwrap();
+    let mut previous_events = "[]";
+    for (method, expected_events) in [
+        ("get", "[[true,null]]"),
+        ("post", "[[true,null],[true,\"data\"]]"),
+    ] {
+        vm.eval(&format!(
+            "form.method = '{method}'; HTMLFormElement.prototype.submit.call(form);"
+        ))
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(events)").unwrap(),
+            previous_events,
+            "navigate waits for the form's DOM-manipulation task"
+        );
+        assert!(
+            vm.run_one_dom_manipulation_body_for_test(
+                crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), expected_events);
+        assert_eq!(
+            vm.eval("popup.document === original && popup.location.href === originalURL")
+                .unwrap(),
+            "true"
+        );
+        assert!(vm.take_pending_location_navigation_with_seed().is_none());
+        assert!(
+            !vm._context_host
+                .borrow()
+                .has_pending_lightweight_popup_document_loads()
+        );
+        previous_events = expected_events;
+    }
+    vm.eval(
+        r#"
+        popup.close();
+        for (const method of ['get', 'post']) {
+          form.method = method;
+          HTMLFormElement.prototype.submit.call(form);
+        }
+    "#,
     )
-    .await;
+    .unwrap();
     assert_eq!(
-        vm.eval("__submitFromClosedPopup()").unwrap(),
-        r#"[[true,null],[true,"data"]]"#
+        vm.eval("JSON.stringify(events)").unwrap(),
+        "[[true,null],[true,\"data\"]]"
     );
+    assert!(!vm.has_ready_dom_manipulation_family_for_test(
+        crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+    ));
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
     assert!(
         !vm._context_host
             .borrow()
             .has_pending_lightweight_popup_document_loads()
     );
+    assert_eq!(server.finish_targets().await, vec!["/initial"]);
 }
