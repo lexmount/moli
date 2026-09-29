@@ -383,8 +383,7 @@ struct MouseEventTemplateMethodsDeclaration {
     #[webapi(
         method = "getModifierState",
         length = 1,
-        callback = event_get_modifier_state_callback,
-        receiver = web_api_interfaces::MouseEvent::is_instance
+        callback = event_get_modifier_state_callback
     )]
     get_modifier_state: (),
 
