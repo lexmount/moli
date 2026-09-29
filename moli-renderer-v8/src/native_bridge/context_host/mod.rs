@@ -41,9 +41,6 @@ use crate::{
             RunningSubresourceFetchState, ScriptNetworkOutputItem, StreamingSubresourceFetchState,
             SubresourceNetworkRequestHandle,
         },
-        util::{
-            string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
-        },
     },
 };
 #[cfg(test)]
@@ -1084,7 +1081,6 @@ pub(crate) struct PageScriptHost {
     pending_child_modulepreload_work_awaiting_realm:
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
     pending_child_parser_preloads: Vec<child_documents::PendingChildParserPreload>,
-    character_data_utf16_overrides: HashMap<DomHandle, U16String>,
     child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshState>,
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,

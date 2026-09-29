@@ -28,15 +28,15 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createTextNode")]
 struct DocumentCreateTextNodeArgs {
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createComment")]
 struct DocumentCreateCommentArgs {
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -44,8 +44,8 @@ struct DocumentCreateCommentArgs {
 struct DocumentCreateProcessingInstructionArgs {
     #[webidl(required)]
     target: String,
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
