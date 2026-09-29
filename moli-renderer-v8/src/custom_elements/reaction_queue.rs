@@ -55,16 +55,6 @@ impl CustomElementReactionCoordinator {
         needs_backup_microtask
     }
 
-    pub(super) fn pending_reactions_end_with(
-        &self,
-        handle: DomHandle,
-        reaction: &CustomElementReaction,
-    ) -> bool {
-        self.element_reactions
-            .get(&handle)
-            .is_some_and(|queue| queue.pending_reactions_end_with(reaction))
-    }
-
     pub(super) fn next_current_element(&mut self) -> Option<DomHandle> {
         self.stack.last_mut()?.next()
     }

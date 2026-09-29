@@ -29,7 +29,6 @@ impl TreeInsertionPostConnectionStep {
 pub(in crate::document_runtime::mutation_commands) struct TreeInsertionPlan<'a> {
     pub(super) parent: DomHandle,
     pub(super) insertion_roots: &'a [DomHandle],
-    pub(super) inserting_fragment_children: bool,
     pub(super) lifecycle_connected_roots_before_insert: Vec<DomHandle>,
     pub(super) adoption: TreeAdoptionPlan,
     pub(super) focus_reset_handle_before_insert: Option<DomHandle>,
@@ -46,20 +45,13 @@ pub(in crate::document_runtime::mutation_commands) struct TreeInsertionPlan<'a> 
 }
 
 #[derive(Clone, Copy)]
-enum TreeInsertionLiveRangeMode {
-    Insert { reference_child: Option<DomHandle> },
-    Replace { old_child: DomHandle },
-}
-
-#[derive(Clone, Copy)]
 pub(super) enum TreeInsertionSelectednessPolicy {
     Skip,
     CaptureAndRestore,
 }
 
 pub(super) struct TreeInsertionPlanOptions {
-    live_range_mode: TreeInsertionLiveRangeMode,
-    inserting_fragment_children: bool,
+    reference_child: Option<DomHandle>,
     selectedness_policy: TreeInsertionSelectednessPolicy,
 }
 
@@ -76,15 +68,6 @@ impl TreeInsertionPlan<'_> {
     }
 }
 
-impl TreeInsertionLiveRangeMode {
-    fn reference_child(self) -> Option<DomHandle> {
-        match self {
-            Self::Insert { reference_child } => reference_child,
-            Self::Replace { old_child } => Some(old_child),
-        }
-    }
-}
-
 impl TreeInsertionSelectednessPolicy {
     fn captures(self) -> bool {
         matches!(self, Self::CaptureAndRestore)
@@ -94,21 +77,11 @@ impl TreeInsertionSelectednessPolicy {
 impl TreeInsertionPlanOptions {
     pub(super) fn insert(
         reference_child: Option<DomHandle>,
-        inserting_fragment_children: bool,
         selectedness_policy: TreeInsertionSelectednessPolicy,
     ) -> Self {
         Self {
-            live_range_mode: TreeInsertionLiveRangeMode::Insert { reference_child },
-            inserting_fragment_children,
+            reference_child,
             selectedness_policy,
-        }
-    }
-
-    pub(super) fn replacement(old_child: DomHandle, inserting_fragment_children: bool) -> Self {
-        Self {
-            live_range_mode: TreeInsertionLiveRangeMode::Replace { old_child },
-            inserting_fragment_children,
-            selectedness_policy: TreeInsertionSelectednessPolicy::CaptureAndRestore,
         }
     }
 }
@@ -121,25 +94,14 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         options: TreeInsertionPlanOptions,
     ) -> TreeInsertionPlan<'a> {
-        let replaced_child = match options.live_range_mode {
-            TreeInsertionLiveRangeMode::Insert { .. } => None,
-            TreeInsertionLiveRangeMode::Replace { old_child } => Some(old_child),
+        let live_range_plan = if unsafe { &mut *host_ptr }
+            .needs_live_tree_boundary_updates(insertion_roots.iter().copied())
+        {
+            Some(self.live_range_pre_insert_plan(parent, insertion_roots, options.reference_child))
+        } else {
+            None
         };
-        let removed_roots = insertion_roots.iter().copied().chain(replaced_child);
-        let live_range_plan =
-            if !unsafe { &mut *host_ptr }.needs_live_tree_boundary_updates(removed_roots) {
-                None
-            } else {
-                match options.live_range_mode {
-                    TreeInsertionLiveRangeMode::Insert { reference_child } => Some(
-                        self.live_range_pre_insert_plan(parent, insertion_roots, reference_child),
-                    ),
-                    TreeInsertionLiveRangeMode::Replace { old_child } => {
-                        self.live_range_replace_plan(parent, insertion_roots, old_child)
-                    }
-                }
-            };
-        let reference_child = options.live_range_mode.reference_child();
+        let reference_child = options.reference_child;
         let node_iterator_plan = if unsafe { &*host_ptr }.node_iterators_is_empty() {
             Vec::new()
         } else {
@@ -178,7 +140,6 @@ impl DocumentRuntime {
         TreeInsertionPlan {
             parent,
             insertion_roots,
-            inserting_fragment_children: options.inserting_fragment_children,
             lifecycle_connected_roots_before_insert,
             adoption,
             focus_reset_handle_before_insert,

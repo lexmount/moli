@@ -534,13 +534,14 @@ globalThis.__blockedInlineStyle.events.length
     );
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
+        2,
+        "text replacement processes removal of the old text and insertion of the new text"
     );
     assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__blockedInlineStyle.events)")
             .expect("second blocked processing error should be observable"),
-        r#"[{"type":"error","target":true,"bubbles":false,"cancelable":false},{"type":"error","target":true,"bubbles":false,"cancelable":false}]"#
+        r#"[{"type":"error","target":true,"bubbles":false,"cancelable":false},{"type":"error","target":true,"bubbles":false,"cancelable":false},{"type":"error","target":true,"bubbles":false,"cancelable":false}]"#
     );
 }
 
