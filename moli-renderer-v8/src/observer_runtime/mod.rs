@@ -347,7 +347,7 @@ enum QueuedMutationRecordKind {
         old_value: Option<String>,
     },
     CharacterData {
-        old_value: Option<String>,
+        old_value: Option<moli_dom::native::DomStringValue>,
     },
     ChildList {
         added_nodes: Arc<[NativeNodeId]>,
@@ -1344,7 +1344,13 @@ fn build_mutation_record_object<'s>(
                 v8::null(scope).into(),
                 old_value
                     .as_ref()
-                    .and_then(|value| v8_string(scope, value))
+                    .and_then(|value| {
+                        v8::String::new_from_two_byte(
+                            scope,
+                            &value.utf16_units(),
+                            v8::NewStringType::Normal,
+                        )
+                    })
                     .map(v8::Local::<v8::Value>::from)
                     .unwrap_or_else(|| v8::null(scope).into()),
                 added_nodes.into(),

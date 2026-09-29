@@ -591,71 +591,11 @@ impl DomHost {
         };
 
         match node_type {
-            NodeType::Text | NodeType::CDataSection => {
-                let textarea = self.parent_node(handle).and_then(|parent| {
-                    self.textarea_value_excluding_children(parent, &[])
-                        .map(|value| (parent, value))
-                });
-                let records_enabled = self.mutation_records_enabled();
-                let old_value = if records_enabled {
-                    self.node(handle)
-                        .and_then(Node::node_value)
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                let changed = match node_type {
-                    NodeType::Text => {
-                        let Some(text) = self
-                            .node_mut(handle)
-                            .and_then(|node| node.data_mut().as_text_mut())
-                        else {
-                            return DomMutationEffects::default();
-                        };
-                        if text.data() == value {
-                            false
-                        } else {
-                            text.set_data(value.to_owned());
-                            true
-                        }
-                    }
-                    NodeType::CDataSection => {
-                        let Some(cdata) = self
-                            .node_mut(handle)
-                            .and_then(|node| node.data_mut().as_cdata_section_mut())
-                        else {
-                            return DomMutationEffects::default();
-                        };
-                        if cdata.data() == value {
-                            false
-                        } else {
-                            cdata.set_data(value.to_owned());
-                            true
-                        }
-                    }
-                    _ => false,
-                };
-                if !changed {
-                    return DomMutationEffects::default();
-                }
-                self.record_mutation(MutationScope::QueryState);
-                let mut effects = self.node_update_effects(handle);
-                effects.mark_style_character_data_mutation(handle);
-                if let Some((parent, before)) = textarea {
-                    effects.record_textarea_value_change(
-                        parent,
-                        Some(&before),
-                        self.textarea_value_excluding_children(parent, &[])
-                            .as_deref(),
-                    );
-                }
-                if let Some(parent) = self.parent_node(handle) {
-                    self.mark_stylesheet_owner_contents_change_for_parent(&mut effects, parent);
-                }
-                if records_enabled {
-                    effects.mark_character_data_mutation(handle, old_value);
-                }
-                effects
+            NodeType::Text
+            | NodeType::CDataSection
+            | NodeType::Comment
+            | NodeType::ProcessingInstruction => {
+                self.set_character_data_value_effects(handle, value.into(), false)
             }
             NodeType::Element | NodeType::DocumentFragment => {
                 let children = self.child_handles(handle).collect::<Vec<_>>();
@@ -690,60 +630,68 @@ impl DomHost {
                 effects
             }
             NodeType::Document => DomMutationEffects::default(),
-            NodeType::Comment => {
-                let records_enabled = self.mutation_records_enabled();
-                let old_value = if records_enabled {
-                    self.node(handle)
-                        .and_then(Node::node_value)
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                let Some(comment) = self
-                    .node_mut(handle)
-                    .and_then(|node| node.data_mut().as_comment_mut())
-                else {
-                    return DomMutationEffects::default();
-                };
-                if comment.data() == value {
-                    return DomMutationEffects::default();
-                }
-                comment.set_data(value.to_owned());
-                self.record_mutation(MutationScope::QueryState);
-                let mut effects = self.node_update_effects(handle);
-                if records_enabled {
-                    effects.mark_character_data_mutation(handle, old_value);
-                }
-                effects
-            }
-            NodeType::ProcessingInstruction => {
-                let records_enabled = self.mutation_records_enabled();
-                let old_value = if records_enabled {
-                    self.node(handle)
-                        .and_then(Node::node_value)
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                let Some(pi) = self
-                    .node_mut(handle)
-                    .and_then(|node| node.data_mut().as_processing_instruction_mut())
-                else {
-                    return DomMutationEffects::default();
-                };
-                if pi.data() == value {
-                    return DomMutationEffects::default();
-                }
-                pi.set_data(value.to_owned());
-                self.record_mutation(MutationScope::QueryState);
-                let mut effects = self.node_update_effects(handle);
-                if records_enabled {
-                    effects.mark_character_data_mutation(handle, old_value);
-                }
-                effects
-            }
             NodeType::DocumentType => DomMutationEffects::default(),
         }
+    }
+
+    /// Replace the native DOMString and collect the same effects for UTF-8 and
+    /// UTF-16 callers. CharacterData edits may queue a record even when equal.
+    pub fn set_character_data_value_effects(
+        &mut self,
+        handle: DomHandle,
+        value: crate::native::DomStringValue,
+        force_mutation_record: bool,
+    ) -> DomMutationEffects {
+        let Some(node) = self.node(handle) else {
+            return DomMutationEffects::default();
+        };
+        let Some(previous) = node.character_data_value() else {
+            return DomMutationEffects::default();
+        };
+        let changed = previous != &value;
+        let should_record = self.mutation_records_enabled() && (changed || force_mutation_record);
+        if !changed && !should_record {
+            return DomMutationEffects::default();
+        }
+        let old_value = should_record.then(|| previous.clone());
+        let is_text = matches!(node.node_type(), NodeType::Text | NodeType::CDataSection);
+        let textarea = if changed && is_text {
+            self.parent_node(handle).and_then(|parent| {
+                self.textarea_value_excluding_children(parent, &[])
+                    .map(|value| (parent, value))
+            })
+        } else {
+            None
+        };
+        let mut effects = if changed {
+            *self
+                .node_mut(handle)
+                .and_then(Node::character_data_value_mut)
+                .unwrap() = value;
+            self.record_mutation(MutationScope::QueryState);
+            let mut effects = self.node_update_effects(handle);
+            if is_text {
+                effects.mark_style_character_data_mutation(handle);
+                if let Some((parent, before)) = textarea {
+                    effects.record_textarea_value_change(
+                        parent,
+                        Some(&before),
+                        self.textarea_value_excluding_children(parent, &[])
+                            .as_deref(),
+                    );
+                }
+                if let Some(parent) = self.parent_node(handle) {
+                    self.mark_stylesheet_owner_contents_change_for_parent(&mut effects, parent);
+                }
+            }
+            effects
+        } else {
+            DomMutationEffects::default()
+        };
+        if should_record {
+            effects.mark_character_data_mutation(handle, old_value);
+        }
+        effects
     }
 
     pub fn normalize_effects(&mut self, handle: DomHandle) -> DomMutationEffects {
@@ -787,9 +735,9 @@ impl DomHost {
             if child_type == NodeType::Text {
                 let current = self
                     .node(child_handle)
-                    .and_then(Node::node_value)
-                    .unwrap_or_default()
-                    .to_owned();
+                    .and_then(Node::character_data_value)
+                    .cloned()
+                    .unwrap_or_default();
                 if current.is_empty() {
                     effects.merge(self.remove_child_effects(handle, child_handle));
                     child = next;
@@ -807,12 +755,16 @@ impl DomHost {
                     }
                     let sibling_data = self
                         .node(sibling_handle)
-                        .and_then(Node::node_value)
-                        .unwrap_or_default()
-                        .to_owned();
+                        .and_then(Node::character_data_value)
+                        .cloned()
+                        .unwrap_or_default();
                     if !sibling_data.is_empty() {
-                        merged.push_str(&sibling_data);
-                        effects.merge(self.set_text_content_effects(child_handle, &merged));
+                        merged.append(&sibling_data);
+                        effects.merge(self.set_character_data_value_effects(
+                            child_handle,
+                            merged.clone(),
+                            false,
+                        ));
                     }
                     effects.merge(self.remove_child_effects(handle, sibling_handle));
                     adjacent = self.node(child_handle).and_then(Node::next_sibling);

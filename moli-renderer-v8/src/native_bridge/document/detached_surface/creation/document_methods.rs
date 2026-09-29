@@ -6,15 +6,15 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createTextNode")]
 struct DetachedDocumentCreateTextNodeArgs {
-    #[webidl(index = 1, required)]
-    data: String,
+    #[webidl(index = 1, required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createComment")]
 struct DetachedDocumentCreateCommentArgs {
-    #[webidl(index = 1, required)]
-    data: String,
+    #[webidl(index = 1, required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -22,22 +22,22 @@ struct DetachedDocumentCreateCommentArgs {
 struct DetachedDocumentCreateProcessingInstructionArgs {
     #[webidl(index = 1, required)]
     target: String,
-    #[webidl(index = 2, required)]
-    data: String,
+    #[webidl(index = 2, required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createCDATASection")]
 struct DocumentCreateCdataSectionArgs {
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createCDATASection")]
 struct DetachedDocumentCreateCdataSectionArgs {
-    #[webidl(index = 1, required)]
-    data: String,
+    #[webidl(index = 1, required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -66,7 +66,11 @@ pub(in crate::native_bridge) fn bridge_detached_create_text_callback<'s>(
     else {
         return;
     };
-    match build_detached_text_object(scope, document, &parsed.data) {
+    match build_detached_text_object(
+        scope,
+        document,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
@@ -84,7 +88,11 @@ pub(in crate::native_bridge) fn bridge_detached_create_comment_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DetachedDocumentCreateCommentArgs>(scope, &args) else {
         return;
     };
-    match build_detached_comment_object(scope, document, &parsed.data) {
+    match build_detached_comment_object(
+        scope,
+        document,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
@@ -128,7 +136,13 @@ pub(in crate::native_bridge) fn bridge_detached_create_processing_instruction_ca
         );
         return;
     }
-    if parsed.data.contains("?>") {
+    if parsed
+        .data
+        .0
+        .as_slice()
+        .windows(2)
+        .any(|units| units == [0x3f, 0x3e])
+    {
         throw_dom_exception(
             scope,
             "InvalidCharacterError",
@@ -141,7 +155,7 @@ pub(in crate::native_bridge) fn bridge_detached_create_processing_instruction_ca
         scope,
         document,
         &parsed.target,
-        &parsed.data,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
     ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
@@ -161,7 +175,13 @@ pub(in crate::native_bridge) fn bridge_detached_create_cdata_section_callback<'s
     else {
         return;
     };
-    if parsed.data.contains("]]>") {
+    if parsed
+        .data
+        .0
+        .as_slice()
+        .windows(3)
+        .any(|units| units == [0x5d, 0x5d, 0x3e])
+    {
         throw_dom_exception(
             scope,
             "InvalidCharacterError",
@@ -170,7 +190,11 @@ pub(in crate::native_bridge) fn bridge_detached_create_cdata_section_callback<'s
         );
         return;
     }
-    match build_detached_cdata_section_object(scope, document, &parsed.data) {
+    match build_detached_cdata_section_object(
+        scope,
+        document,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }

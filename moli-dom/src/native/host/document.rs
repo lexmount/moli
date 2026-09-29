@@ -1771,40 +1771,46 @@ impl DomHost {
             })
     }
 
-    pub fn create_text_node(&mut self, data: &str) -> DomHandle {
+    pub fn create_text_node(
+        &mut self,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> DomHandle {
         self.dom.create_text_node(data)
     }
 
     pub fn create_text_node_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
         self.dom
             .create_text_node_for_document(document_handle, data)
     }
 
-    pub fn create_cdata_section(&mut self, data: &str) -> DomHandle {
+    pub fn create_cdata_section(
+        &mut self,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> DomHandle {
         self.dom.create_cdata_section(data)
     }
 
     pub fn create_cdata_section_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
         self.dom
             .create_cdata_section_for_document(document_handle, data)
     }
 
-    pub fn create_comment(&mut self, data: &str) -> DomHandle {
+    pub fn create_comment(&mut self, data: impl Into<crate::native::DomStringValue>) -> DomHandle {
         self.dom.create_comment(data)
     }
 
     pub fn create_comment_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
         self.dom.create_comment_for_document(document_handle, data)
     }
@@ -1854,7 +1860,7 @@ impl DomHost {
         &mut self,
         document_handle: DomHandle,
         target: &str,
-        data: &str,
+        data: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
         self.dom
             .create_processing_instruction_for_document(document_handle, target, data)
@@ -3193,7 +3199,11 @@ impl DomHost {
             .to_owned()
     }
 
-    pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> DomHandle {
+    pub fn create_processing_instruction(
+        &mut self,
+        target: &str,
+        data: impl Into<crate::native::DomStringValue>,
+    ) -> DomHandle {
         self.dom.create_processing_instruction(target, data)
     }
 }

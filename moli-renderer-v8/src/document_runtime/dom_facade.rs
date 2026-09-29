@@ -475,7 +475,10 @@ impl DocumentRuntime {
         handle
     }
 
-    pub(crate) fn create_text_node(&mut self, data: &str) -> DomHandle {
+    pub(crate) fn create_text_node(
+        &mut self,
+        data: impl Into<moli_dom::native::DomStringValue>,
+    ) -> DomHandle {
         let started = moli_trace::dom_binding_timing_enabled().then(std::time::Instant::now);
         let handle = self.dom_host.create_text_node(data);
         if let Some(started) = started {
@@ -487,7 +490,7 @@ impl DocumentRuntime {
     pub(crate) fn create_text_node_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<moli_dom::native::DomStringValue>,
     ) -> DomHandle {
         let started = moli_trace::dom_binding_timing_enabled().then(std::time::Instant::now);
         let handle = self
@@ -502,7 +505,7 @@ impl DocumentRuntime {
     pub(crate) fn create_cdata_section_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<moli_dom::native::DomStringValue>,
     ) -> DomHandle {
         self.dom_host
             .create_cdata_section_for_document(document_handle, data)
@@ -511,7 +514,7 @@ impl DocumentRuntime {
     pub(crate) fn create_comment_for_document(
         &mut self,
         document_handle: DomHandle,
-        data: &str,
+        data: impl Into<moli_dom::native::DomStringValue>,
     ) -> DomHandle {
         self.dom_host
             .create_comment_for_document(document_handle, data)
@@ -531,7 +534,7 @@ impl DocumentRuntime {
         &mut self,
         document_handle: DomHandle,
         target: &str,
-        data: &str,
+        data: impl Into<moli_dom::native::DomStringValue>,
     ) -> DomHandle {
         self.dom_host
             .create_processing_instruction_for_document(document_handle, target, data)

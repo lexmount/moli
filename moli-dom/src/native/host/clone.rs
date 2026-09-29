@@ -510,11 +510,13 @@ impl DomHost {
             super::NodeData::DocumentType(doctype) => {
                 self.create_document_type(doctype.name(), doctype.public_id(), doctype.system_id())
             }
-            super::NodeData::Text(text) => self.create_text_node(text.data()),
-            super::NodeData::CDataSection(cdata) => self.create_cdata_section(cdata.data()),
-            super::NodeData::Comment(comment) => self.create_comment(comment.data()),
+            super::NodeData::Text(text) => self.create_text_node(text.value().clone()),
+            super::NodeData::CDataSection(cdata) => {
+                self.create_cdata_section(cdata.value().clone())
+            }
+            super::NodeData::Comment(comment) => self.create_comment(comment.value().clone()),
             super::NodeData::ProcessingInstruction(pi) => {
-                self.create_processing_instruction(pi.target(), pi.data())
+                self.create_processing_instruction(pi.target(), pi.value().clone())
             }
             super::NodeData::DocumentFragment(_) => self.create_document_fragment(),
             super::NodeData::Element(element) => {
@@ -626,6 +628,65 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn character_data_clone_and_foreign_import_preserve_utf16_values() {
+        use crate::native::DomStringValue;
+
+        let mut source = test_host();
+        let root = source.create_element("div");
+        let units = [0x61, 0xd800, 0x62];
+        let children = [
+            source.create_text_node(DomStringValue::from_utf16(&units)),
+            source.create_comment(DomStringValue::from_utf16(&units)),
+            source.create_cdata_section(DomStringValue::from_utf16(&units)),
+            source.create_processing_instruction("data", DomStringValue::from_utf16(&units)),
+        ];
+        for child in children {
+            assert!(source.append_child(root, child));
+        }
+        let clone = source.clone_node(root, true).unwrap();
+        assert!(
+            source
+                .node(root)
+                .unwrap()
+                .is_equal_node(source.dom(), source.node(clone).unwrap())
+        );
+
+        let mut target = test_host();
+        let imported = target
+            .import_foreign_node(target.document_handle(), source.dom(), root, true)
+            .unwrap();
+        for host_and_root in [(&source, clone), (&target, imported)] {
+            let (host, root) = host_and_root;
+            let copied = host.child_handles(root).collect::<Vec<_>>();
+            assert_eq!(copied.len(), children.len());
+            for child in copied {
+                assert_eq!(
+                    &*host
+                        .node(child)
+                        .unwrap()
+                        .character_data_value()
+                        .unwrap()
+                        .utf16_units(),
+                    &units
+                );
+            }
+        }
+
+        // These have the same lossy UTF-8 view, but are different DOMStrings.
+        source.set_character_data_value_effects(
+            children[0],
+            DomStringValue::from_utf16(&[0x61, 0xd801, 0x62]),
+            false,
+        );
+        assert!(
+            !source
+                .node(root)
+                .unwrap()
+                .is_equal_node(source.dom(), source.node(clone).unwrap())
+        );
     }
 
     fn append_deep_element_chain(host: &mut DomHost, depth: usize) -> (DomHandle, DomHandle) {

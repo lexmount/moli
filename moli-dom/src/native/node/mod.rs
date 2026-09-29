@@ -306,17 +306,32 @@ impl Node {
     }
 
     pub fn data_value(&self) -> Option<&str> {
+        self.character_data_value()
+            .map(super::DomStringValue::as_str_lossy)
+    }
+
+    pub fn character_data_value(&self) -> Option<&super::DomStringValue> {
         match self.data() {
-            NodeData::Text(text) => Some(text.data()),
-            NodeData::CDataSection(cdata) => Some(cdata.data()),
-            NodeData::Comment(comment) => Some(comment.data()),
+            NodeData::Text(text) => Some(text.value()),
+            NodeData::CDataSection(cdata) => Some(cdata.value()),
+            NodeData::Comment(comment) => Some(comment.value()),
             NodeData::ProcessingInstruction(processing_instruction) => {
-                Some(processing_instruction.data())
+                Some(processing_instruction.value())
             }
             NodeData::Document(_)
             | NodeData::DocumentType(_)
             | NodeData::Element(_)
             | NodeData::DocumentFragment(_) => None,
+        }
+    }
+
+    pub(crate) fn character_data_value_mut(&mut self) -> Option<&mut super::DomStringValue> {
+        match self.data_mut() {
+            NodeData::Text(text) => Some(text.value_mut()),
+            NodeData::CDataSection(cdata) => Some(cdata.value_mut()),
+            NodeData::Comment(comment) => Some(comment.value_mut()),
+            NodeData::ProcessingInstruction(pi) => Some(pi.value_mut()),
+            _ => None,
         }
     }
 
@@ -498,6 +513,28 @@ impl Node {
             }
             NodeData::DocumentType(_) => String::new(),
         }
+    }
+
+    pub fn text_content_utf16_units(&self, dom: &NativeDom) -> Vec<u16> {
+        if let Some(value) = self.character_data_value() {
+            return value.utf16_units().into_owned();
+        }
+        let mut units = Vec::new();
+        let mut stack = dom.child_ids_reversed(self.id()).collect::<Vec<_>>();
+        while let Some(node_id) = stack.pop() {
+            let Some(node) = dom.node(node_id) else {
+                continue;
+            };
+            match node.data() {
+                NodeData::Text(text) => text.value().append_utf16_units_to(&mut units),
+                NodeData::CDataSection(cdata) => cdata.value().append_utf16_units_to(&mut units),
+                NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {
+                    stack.extend(dom.child_ids_reversed(node_id));
+                }
+                _ => {}
+            }
+        }
+        units
     }
 
     pub fn direct_text_content(&self, dom: &NativeDom) -> String {
@@ -702,7 +739,15 @@ fn node_data_is_equal(left: &Node, right: &Node) -> bool {
                 }) else {
                     return false;
                 };
-                if left_attribute.value() != right_attribute.value() {
+                if left_attribute.value() != right_attribute.value()
+                    || left.attribute_ns_utf16_units(
+                        left_attribute.namespace(),
+                        left_attribute.local_name(),
+                    ) != right.attribute_ns_utf16_units(
+                        right_attribute.namespace(),
+                        right_attribute.local_name(),
+                    )
+                {
                     return false;
                 }
             }
@@ -715,9 +760,11 @@ fn node_data_is_equal(left: &Node, right: &Node) -> bool {
         }
         (NodeData::Text(_), NodeData::Text(_))
         | (NodeData::CDataSection(_), NodeData::CDataSection(_))
-        | (NodeData::Comment(_), NodeData::Comment(_)) => left.node_value() == right.node_value(),
+        | (NodeData::Comment(_), NodeData::Comment(_)) => {
+            left.character_data_value() == right.character_data_value()
+        }
         (NodeData::ProcessingInstruction(left), NodeData::ProcessingInstruction(right)) => {
-            left.target() == right.target() && left.data() == right.data()
+            left.target() == right.target() && left.value() == right.value()
         }
         (NodeData::Document(_), NodeData::Document(_))
         | (NodeData::DocumentFragment(_), NodeData::DocumentFragment(_)) => true,

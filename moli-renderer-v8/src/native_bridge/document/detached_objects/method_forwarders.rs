@@ -705,6 +705,14 @@ pub(in crate::native_bridge::document) fn detached_remove_method_callback<'a>(
 }
 
 fn normalize_detached_node<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) {
+    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, node)
+    {
+        if unsafe { &mut *runtime_ptr }.normalize(scope, runtime_ptr, handle) {
+            detached_record_tree_mutation(scope, node);
+        }
+        return;
+    }
+
     if let Some(delegate) = detached_live_delegate_object(scope, node) {
         let _ = call_object_method(scope, delegate, "normalize", &[]);
         return;
