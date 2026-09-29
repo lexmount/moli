@@ -722,14 +722,22 @@ fn attr_clone_node_copies_attribute_metadata_without_owner() {
     ],
     methods: [
       methodShape(Node.prototype, "isSameNode"),
-      methodShape(attr, "cloneNode"),
-      methodShape(attr, "lookupNamespaceURI")
+      methodShape(Node.prototype, "cloneNode"),
+      methodShape(Node.prototype, "lookupNamespaceURI")
     ],
     methodInheritance: [
       Object.hasOwn(attr, "isSameNode"),
       Object.hasOwn(attrClone, "isSameNode"),
       attr.isSameNode === Node.prototype.isSameNode,
-      attrClone.isSameNode === Node.prototype.isSameNode
+      attrClone.isSameNode === Node.prototype.isSameNode,
+      Object.hasOwn(attr, "cloneNode"),
+      Object.hasOwn(attrClone, "cloneNode"),
+      attr.cloneNode === Node.prototype.cloneNode,
+      attrClone.cloneNode === Node.prototype.cloneNode,
+      Object.hasOwn(attr, "lookupNamespaceURI"),
+      Object.hasOwn(attrClone, "lookupNamespaceURI"),
+      attr.lookupNamespaceURI === Node.prototype.lookupNamespaceURI,
+      attrClone.lookupNamespaceURI === Node.prototype.lookupNamespaceURI
     ],
     methodBehavior: [
       attr.isSameNode(attr),
@@ -744,7 +752,7 @@ fn attr_clone_node_copies_attribute_metadata_without_owner() {
 
     assert_eq!(
         result,
-        r#"{"attr":[true,true,"[object Attr]",2,"data-value","data-value","one",true,"function","one"],"namespaced":[true,"lm:flag","flag","lm","urn:moli:test","two",true],"live":[true,"after",true,true,"lm:item","item","lm","urn:moli:live","after"],"methods":["true:function:isSameNode:1:true:true:true","true:function:cloneNode:0:false:true:true","true:function:lookupNamespaceURI:0:false:true:true"],"methodInheritance":[false,false,true,true],"methodBehavior":[true,false,"http://www.w3.org/XML/1998/namespace"]}"#
+        r#"{"attr":[true,true,"[object Attr]",2,"data-value","data-value","one",true,"function","one"],"namespaced":[true,"lm:flag","flag","lm","urn:moli:test","two",true],"live":[true,"after",true,true,"lm:item","item","lm","urn:moli:live","after"],"methods":["true:function:isSameNode:1:true:true:true","true:function:cloneNode:0:true:true:true","true:function:lookupNamespaceURI:1:true:true:true"],"methodInheritance":[false,false,true,true,false,false,true,true,false,false,true,true],"methodBehavior":[true,false,"http://www.w3.org/XML/1998/namespace"]}"#
     );
 }
 #[test]
