@@ -184,13 +184,13 @@ pub(super) fn retained_base_query_plan_for_pending_cause(
         PendingStyleInvalidationCause::FocusChange {
             previous,
             next,
-            previous_focus_within,
+            previous_focus_states,
         } => Some(RetainedBaseQueryPlan::exact(
             retained_stylo_invalidation_queries_for_focus_change(
                 host,
                 *previous,
                 *next,
-                previous_focus_within.as_deref(),
+                previous_focus_states.as_deref(),
             ),
         )),
         PendingStyleInvalidationCause::TargetChange { previous, next } => {
@@ -227,16 +227,20 @@ pub(super) fn retained_stylo_invalidation_queries_for_focus_change(
     host: &DomHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    previous_focus_within: Option<&[DomHandle]>,
+    previous_focus_states: Option<&[moli_selector::StyloStateInvalidationRoot]>,
 ) -> IndexSet<RetainedStyleInvalidationQuery> {
-    let mut queries = stylo_focus_change_invalidation_roots(host, previous, next)
-        .into_iter()
-        .map(|query| RetainedStyleInvalidationQuery::state(query.root(), query.state()))
-        .collect::<IndexSet<_>>();
-    for handle in previous_focus_within.into_iter().flatten().copied() {
+    let mut queries = stylo_focus_change_invalidation_roots(
+        host,
+        previous.filter(|_| previous_focus_states.is_none()),
+        next,
+    )
+    .into_iter()
+    .map(|query| RetainedStyleInvalidationQuery::state(query.root(), query.state()))
+    .collect::<IndexSet<_>>();
+    for old in previous_focus_states.into_iter().flatten() {
         queries.insert(RetainedStyleInvalidationQuery::state(
-            handle,
-            StyloElementState::FOCUS_WITHIN,
+            old.root(),
+            old.state(),
         ));
     }
     queries

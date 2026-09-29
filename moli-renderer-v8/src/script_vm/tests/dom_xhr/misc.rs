@@ -1190,10 +1190,7 @@ fn node_move_before_preserves_focus_without_synchronous_focusout() {
         )
         .expect("moveBefore should preserve focus without synchronous focusout");
 
-    assert_eq!(
-        result,
-        "button.in/true/true/true|true|button.in,button.out,button.in"
-    );
+    assert_eq!(result, "button.in/true/true/true|true|button.in,button.in");
 }
 #[test]
 fn html_canvas_webgl_context_is_cached_and_kind_locked() {

@@ -38,7 +38,7 @@ pub(super) enum PendingStyleInvalidationCause {
     FocusChange {
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        previous_focus_within: Option<Vec<DomHandle>>,
+        previous_focus_states: Option<Vec<moli_selector::StyloStateInvalidationRoot>>,
     },
     TargetChange {
         previous: Option<DomHandle>,
