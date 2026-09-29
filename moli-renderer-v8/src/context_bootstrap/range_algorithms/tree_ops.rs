@@ -143,7 +143,6 @@ pub(in crate::context_bootstrap::range_algorithms) fn split_text_internal_handle
 ) -> Option<DomHandle> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let data = character_data_utf16_units_handle(scope, node)?;
-    let data = crate::util::string_from_utf16_units_lossy(&data);
     unsafe { &mut *host_ptr }.split_text(scope, host_ptr, node, offset as usize, &data)
 }
 

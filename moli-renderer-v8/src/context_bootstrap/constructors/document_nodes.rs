@@ -4,15 +4,15 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Text")]
 struct TextConstructorArgs {
-    #[webidl(default = "")]
-    data: String,
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Comment")]
 struct CommentConstructorArgs {
-    #[webidl(default = "")]
-    data: String,
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    data: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap) fn document_constructor_callback(
@@ -94,7 +94,9 @@ pub(in crate::context_bootstrap) fn text_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(data) = v8_string(scope, &parsed.data).map(Into::into) else {
+    let Some(data) =
+        crate::util::v8_string_from_utf16_units(scope, parsed.data.0.as_slice()).map(Into::into)
+    else {
         rv.set_undefined();
         return;
     };
@@ -124,7 +126,9 @@ pub(in crate::context_bootstrap) fn comment_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(data) = v8_string(scope, &parsed.data).map(Into::into) else {
+    let Some(data) =
+        crate::util::v8_string_from_utf16_units(scope, parsed.data.0.as_slice()).map(Into::into)
+    else {
         rv.set_undefined();
         return;
     };

@@ -373,7 +373,7 @@ enum QueuedMutationRecordKind {
         old_value: Option<String>,
     },
     CharacterData {
-        old_value: Option<String>,
+        old_value: Option<moli_dom::native::DomStringValue>,
     },
     ChildList {
         added_nodes: Arc<[NativeNodeId]>,
