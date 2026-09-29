@@ -35,3 +35,17 @@ pub(in crate::native_bridge) struct NullableNodeArgs<'s> {
     #[webidl(required, nullable, converter = "raw")]
     pub node: Option<NodeReference<'s>>,
 }
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Node")]
+pub(in crate::native_bridge) struct NodeNamespaceArgs {
+    #[webidl(required, nullable)]
+    pub namespace: Option<String>,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "GetRootNodeOptions")]
+pub(in crate::native_bridge) struct GetRootNodeOptions {
+    #[webidl(default = false)]
+    pub composed: bool,
+}

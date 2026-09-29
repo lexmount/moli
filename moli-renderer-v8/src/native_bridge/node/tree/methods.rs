@@ -8,44 +8,29 @@ pub(in crate::native_bridge) fn node_contains_callback<'s>(
     let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
         return;
     };
-    let Some(other) = parsed.node else {
-        rv.set_bool(false);
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "contains") else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "contains");
-        rv.set_bool(false);
-        return;
-    };
-    let Some(other) = node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
-    else {
-        rv.set_bool(false);
-        return;
-    };
-    rv.set_bool(
-        unsafe { &*runtime_ptr }
-            .dom_host()
-            .node(handle)
-            .is_some_and(|node| node.contains(unsafe { &*runtime_ptr }.dom_host().dom(), other)),
-    );
+    let other = parsed
+        .node
+        .and_then(|other| NativeNodeReference::from_object(scope, other.0));
+    rv.set_bool(other.is_some_and(|other| node.contains(scope, &other)));
 }
 
-pub(in crate::native_bridge) fn node_has_child_nodes_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_has_child_nodes_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "hasChildNodes");
-        rv.set_bool(false);
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "hasChildNodes") else {
         return;
     };
-    let has_children = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .is_some_and(Node::has_child_nodes);
+    let has_children = node.tree_node().is_some_and(|node| {
+        unsafe { &*node.runtime_ptr }
+            .dom_host()
+            .node(node.handle)
+            .is_some_and(Node::has_child_nodes)
+    });
     rv.set_bool(has_children);
 }
 
@@ -57,18 +42,13 @@ pub(in crate::native_bridge) fn node_is_same_node_callback<'s>(
     let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
         return;
     };
-    let Some(other) = parsed.node else {
-        rv.set_bool(false);
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "isSameNode") else {
         return;
     };
-    let same = args.this().strict_equals(other.0.into())
-        || node_runtime_and_handle_from_args_or_detached(scope, &args).is_ok_and(
-            |(runtime_ptr, handle)| {
-                node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
-                    == Some(handle)
-            },
-        );
-    rv.set_bool(same);
+    let other = parsed
+        .node
+        .and_then(|other| NativeNodeReference::from_object(scope, other.0));
+    rv.set_bool(other.is_some_and(|other| node.is_same(scope, &other)));
 }
 
 pub(in crate::native_bridge) fn node_is_equal_node_callback<'s>(
@@ -79,31 +59,13 @@ pub(in crate::native_bridge) fn node_is_equal_node_callback<'s>(
     let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
         return;
     };
-    let Some(other) = parsed.node else {
-        rv.set_bool(false);
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "isEqualNode") else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "isEqualNode");
-        rv.set_bool(false);
-        return;
-    };
-    let Some(other_handle) =
-        node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
-    else {
-        rv.set_bool(false);
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let equal = match (
-        runtime.dom_host().node(handle),
-        runtime.dom_host().node(other_handle),
-    ) {
-        (Some(left), Some(right)) => left.is_equal_node(runtime.dom_host().dom(), right),
-        _ => false,
-    };
-    rv.set_bool(equal);
+    let other = parsed
+        .node
+        .and_then(|other| NativeNodeReference::from_object(scope, other.0));
+    rv.set_bool(other.is_some_and(|other| node.is_equal(scope, &other)));
 }
 
 pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
@@ -111,72 +73,19 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    // DOM spec compareDocumentPosition constants (PRECEDING / FOLLOWING are
-    // chosen inside disconnected_order_bit).
-    const DOCUMENT_POSITION_DISCONNECTED: u32 = 0x01;
-    const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: u32 = 0x20;
-
     let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
         return;
     };
-
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "compareDocumentPosition")
     else {
-        throw_incompatible_method_receiver(scope, "Node", "compareDocumentPosition");
-        rv.set(v8::Integer::new_from_unsigned(scope, 0).into());
         return;
     };
-
-    // Fast path: argument is a Node attached to the same runtime tree.
-    if let Some(other_handle) =
-        node_or_existing_detached_arg_handle(scope, runtime_ptr, parsed.node.0.into())
-    {
-        let runtime = unsafe { &*runtime_ptr };
-        let relation = match (
-            runtime.dom_host().node(handle),
-            runtime.dom_host().node(other_handle),
-        ) {
-            (Some(left), Some(_)) => {
-                left.compare_document_position(runtime.dom_host().dom(), other_handle)
-            }
-            _ => 0,
-        };
-        rv.set(v8::Integer::new_from_unsigned(scope, relation as u32).into());
+    let Some(other) = NativeNodeReference::from_object(scope, parsed.node.0) else {
+        throw_type_error(scope, "Node data is unavailable");
         return;
-    }
-
-    // A native Node from another realm or detached document still compares as
-    // disconnected even when this runtime cannot resolve its live tree handle.
-    let order_bit = disconnected_order_bit(args.this(), parsed.node.0);
-    rv.set(
-        v8::Integer::new_from_unsigned(
-            scope,
-            DOCUMENT_POSITION_DISCONNECTED | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | order_bit,
-        )
-        .into(),
-    );
-}
-
-/// Stable PRECEDING/FOLLOWING choice for two disconnected nodes.
-///
-/// V8 identity hashes are i32 values, occasionally negative — promote to
-/// `i64` to keep ordering well-defined. On the rare hash-collision case the
-/// mirror property `(a, b) <-> (b, a)` would not hold; we accept that
-/// trade-off since V8 hashes are 31 bits of entropy and the cross-tree
-/// branch is itself a fallback. Spec only requires *some* consistent answer.
-fn disconnected_order_bit(
-    this: v8::Local<'_, v8::Object>,
-    other: v8::Local<'_, v8::Object>,
-) -> u32 {
-    const DOCUMENT_POSITION_PRECEDING: u32 = 0x02;
-    const DOCUMENT_POSITION_FOLLOWING: u32 = 0x04;
-    let this_hash = this.get_identity_hash().get() as i64;
-    let other_hash = other.get_identity_hash().get() as i64;
-    if other_hash > this_hash {
-        DOCUMENT_POSITION_FOLLOWING
-    } else {
-        DOCUMENT_POSITION_PRECEDING
-    }
+    };
+    let position = node.compare_position(scope, &other);
+    rv.set(v8::Integer::new_from_unsigned(scope, position.into()).into());
 }
 
 // DOM spec "locate a namespace": given a node and a prefix, return the
@@ -186,45 +95,31 @@ fn disconnected_order_bit(
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 
+// Attr is resolved to its owner by NativeNodeReference before reaching here.
+// Both namespace algorithms use the same interface-specific starting element.
+fn namespace_lookup_element(runtime: &JsContextHost, start: DomHandle) -> Option<DomHandle> {
+    let node = runtime.dom_host().node(start)?;
+    match node.node_type() {
+        NodeType::Element => Some(start),
+        NodeType::Document => runtime
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(start),
+        NodeType::DocumentType | NodeType::DocumentFragment => None,
+        _ => {
+            let parent = node.parent_node()?;
+            runtime.dom_host().node(parent)?.as_element()?;
+            Some(parent)
+        }
+    }
+}
+
 fn locate_namespace(
     runtime: &JsContextHost,
     start: DomHandle,
     prefix: Option<&str>,
 ) -> Option<String> {
-    // Resolve the starting node into the first ELEMENT to inspect. Per spec:
-    //   - Element node:           locate on the element itself
-    //   - Document node:          delegate to documentElement (or null)
-    //   - DocumentType/Fragment:  return null directly (no host concept here)
-    //   - Anything else (Text /
-    //     Comment / PI / Attr):   delegate to parentElement (or null)
-    let mut element_handle = {
-        let node = runtime.dom_host().node(start)?;
-        if node.is_element() {
-            start
-        } else if node.is_document() {
-            runtime
-                .dom_host()
-                .dom()
-                .document_element_handle_for_document(start)?
-        } else if node.is_document_fragment() {
-            return None;
-        } else {
-            // Text / Comment / PI / Attribute / DocumentType: find first
-            // ancestor element via parent walk.
-            let mut current = start;
-            loop {
-                let parent = runtime.dom_host().parent_node(current)?;
-                let parent_node = runtime.dom_host().node(parent)?;
-                if parent_node.is_element() {
-                    break parent;
-                }
-                if parent_node.is_document() || parent_node.is_document_fragment() {
-                    return None;
-                }
-                current = parent;
-            }
-        }
-    };
+    let mut element_handle = namespace_lookup_element(runtime, start)?;
 
     // The fixed xml/xmlns namespace bindings only apply once the node can
     // resolve through an element. DocumentFragment, DocumentType, and
@@ -287,121 +182,76 @@ fn non_empty_value(value: &str) -> Option<String> {
     }
 }
 
-pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "lookupNamespaceURI");
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
         return;
     };
-    let raw_prefix = args.get(0);
-    let prefix = if raw_prefix.is_null_or_undefined() {
-        None
-    } else {
-        match raw_prefix.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "lookupNamespaceURI") else {
+        return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    match locate_namespace(runtime, handle, prefix.as_deref()) {
-        Some(ns) => match crate::util::v8_string(scope, &ns) {
-            Some(s) => rv.set(s.into()),
-            None => rv.set_null(),
-        },
+    let prefix = parsed.namespace.filter(|value| !value.is_empty());
+    let namespace = node.tree_or_owner(scope).and_then(|node| {
+        locate_namespace(
+            unsafe { &*node.runtime_ptr },
+            node.handle,
+            prefix.as_deref(),
+        )
+    });
+    match namespace.and_then(|value| v8_string(scope, &value)) {
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }
 
-pub(in crate::native_bridge) fn node_is_default_namespace_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_is_default_namespace_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "isDefaultNamespace");
-        rv.set_bool(false);
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
         return;
     };
-    let raw_namespace = args.get(0);
-    let namespace = if raw_namespace.is_null_or_undefined() {
-        None
-    } else {
-        match raw_namespace.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "isDefaultNamespace") else {
+        return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    let default_namespace = locate_namespace(runtime, handle, None);
-    rv.set_bool(default_namespace.as_deref() == namespace.as_deref());
+    let namespace = parsed.namespace.filter(|value| !value.is_empty());
+    let default_namespace = node
+        .tree_or_owner(scope)
+        .and_then(|node| locate_namespace(unsafe { &*node.runtime_ptr }, node.handle, None));
+    rv.set_bool(default_namespace == namespace);
 }
 
-pub(in crate::native_bridge) fn node_lookup_prefix_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_lookup_prefix_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "lookupPrefix");
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
         return;
     };
-    let raw = args.get(0);
-    let namespace = if raw.is_null_or_undefined() {
-        None
-    } else {
-        match raw.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
-    };
-    let Some(namespace) = namespace else {
-        rv.set_null();
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "lookupPrefix") else {
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    match locate_prefix(runtime, handle, &namespace) {
-        Some(prefix) => match crate::util::v8_string(scope, &prefix) {
-            Some(s) => rv.set(s.into()),
-            None => rv.set_null(),
-        },
+    let prefix = parsed
+        .namespace
+        .filter(|value| !value.is_empty())
+        .and_then(|namespace| {
+            node.tree_or_owner(scope).and_then(|node| {
+                locate_prefix(unsafe { &*node.runtime_ptr }, node.handle, &namespace)
+            })
+        });
+    match prefix.and_then(|value| v8_string(scope, &value)) {
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }
 
 fn locate_prefix(runtime: &JsContextHost, start: DomHandle, namespace: &str) -> Option<String> {
-    // DOM spec "locate a namespace prefix": walk up looking for an element
-    // whose namespace matches and has a prefix; or an xmlns:p attribute whose
-    // value matches. Same element-only-walk semantics as locate_namespace.
-    let mut element_handle = {
-        let node = runtime.dom_host().node(start)?;
-        if node.is_element() {
-            start
-        } else if node.is_document() {
-            runtime
-                .dom_host()
-                .dom()
-                .document_element_handle_for_document(start)?
-        } else {
-            return None;
-        }
-    };
+    let mut element_handle = namespace_lookup_element(runtime, start)?;
 
     loop {
         let node = runtime.dom_host().node(element_handle)?;
@@ -429,38 +279,41 @@ fn locate_prefix(runtime: &JsContextHost, start: DomHandle, namespace: &str) -> 
     }
 }
 
-pub(in crate::native_bridge) fn node_get_root_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_get_root_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "getRootNode");
-        rv.set_null();
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "getRootNode") else {
         return;
     };
-    let this = v8::Global::new(scope, args.this());
-    let this = v8::Local::new(scope, this);
+    let options =
+        webidl::dictionary_arg(&args, 0, webidl::Context::argument("Node.getRootNode", 1))
+            .and_then(|object| {
+                object
+                    .map(|object| {
+                        webidl::parse_dictionary_object::<GetRootNodeOptions>(scope, object)
+                    })
+                    .transpose()
+            });
+    let composed = match options {
+        Ok(options) => options.unwrap_or_default().composed,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let Some(node) = node.tree_node() else {
+        rv.set(args.this().into());
+        return;
+    };
+    let (runtime_ptr, handle) = (node.runtime_ptr, node.handle);
     let receiver_is_detached = crate::native_bridge::document::detached_native_handle_for_runtime(
         scope,
         runtime_ptr,
-        this,
+        args.this(),
     )
     .is_some();
-    let composed = if args.length() > 0 {
-        let options = args.get(0);
-        if !options.is_null_or_undefined() && options.is_object() {
-            options
-                .to_object(scope)
-                .and_then(|options| options.get(scope, v8str(scope, "composed").into()))
-                .is_some_and(|value| value.boolean_value(scope))
-        } else {
-            false
-        }
-    } else {
-        false
-    };
     let runtime = unsafe { &mut *runtime_ptr };
     let Some(mut root_handle) = runtime.dom_host().root_node_handle(handle) else {
         rv.set_null();

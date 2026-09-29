@@ -27,7 +27,10 @@ mod errors;
 mod foreign;
 mod metadata;
 mod mutation;
+pub(in crate::native_bridge) mod reference;
 mod tree;
+
+use reference::NativeNodeReference;
 
 pub(super) use self::arguments::*;
 pub(super) use self::bridge_callbacks::*;
@@ -91,11 +94,11 @@ struct NodePrototypeReflectionDeclaration {
     remove_child: (),
     #[webapi(method, length = 2, callback = node_replace_child_prototype_callback)]
     replace_child: (),
-    #[webapi(method, length = 0, callback = node_clone_node_callback)]
+    #[webapi(method, length = 0, callback = node_clone_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     clone_node: (),
     #[webapi(method, length = 1, callback = node_contains_callback, receiver = web_api_interfaces::Node::is_instance)]
     contains: (),
-    #[webapi(method, length = 0, callback = node_has_child_nodes_callback)]
+    #[webapi(method, length = 0, callback = node_has_child_nodes_callback, receiver = web_api_interfaces::Node::is_instance)]
     has_child_nodes: (),
     #[webapi(method, length = 1, callback = node_is_same_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_same_node: (),
@@ -103,15 +106,15 @@ struct NodePrototypeReflectionDeclaration {
     is_equal_node: (),
     #[webapi(method, length = 1, callback = node_compare_document_position_callback, receiver = web_api_interfaces::Node::is_instance)]
     compare_document_position: (),
-    #[webapi(method, length = 0, callback = node_get_root_node_callback)]
+    #[webapi(method, length = 0, callback = node_get_root_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     get_root_node: (),
-    #[webapi(method, length = 1, callback = node_lookup_prefix_callback)]
+    #[webapi(method, length = 1, callback = node_lookup_prefix_callback, receiver = web_api_interfaces::Node::is_instance)]
     lookup_prefix: (),
-    #[webapi(method = "lookupNamespaceURI", length = 1, callback = node_lookup_namespace_uri_callback)]
+    #[webapi(method = "lookupNamespaceURI", length = 1, callback = node_lookup_namespace_uri_callback, receiver = web_api_interfaces::Node::is_instance)]
     lookup_namespace_uri: (),
-    #[webapi(method, length = 1, callback = node_is_default_namespace_callback)]
+    #[webapi(method, length = 1, callback = node_is_default_namespace_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_default_namespace: (),
-    #[webapi(method, length = 0, callback = node_normalize_callback)]
+    #[webapi(method, length = 0, callback = node_normalize_callback, receiver = web_api_interfaces::Node::is_instance)]
     normalize: (),
 }
 
@@ -1219,6 +1222,20 @@ fn node_remove_child_prototype_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(node) = NativeNodeReference::receiver(scope, args.this(), "removeChild") else {
+        return;
+    };
+    if matches!(node, NativeNodeReference::Attr(_)) {
+        if webidl::parse_args::<RequiredNodeArgs>(scope, &args).is_some() {
+            throw_dom_exception(
+                scope,
+                "NotFoundError",
+                8,
+                "The node to be removed is not a child of this node.",
+            );
+        }
+        return;
+    }
     if node_runtime_and_handle_from_args(scope, &args).is_ok() {
         node_remove_child_callback(scope, args, rv);
     } else if receiver_has_detached_state(scope, args.this()) {
