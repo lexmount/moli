@@ -219,9 +219,6 @@ impl DocumentRuntime {
                             self.pending_parser_post_step_runtime_work
                                 .queue_child_browsing_context_drop(root);
                         }
-                        if let Some(active) = removal_plan.focus_reset_handle_before_remove {
-                            self.queue_parser_post_step_focus_reset(active);
-                        }
                     }
                     TreeMutationSideEffectSource::JsDomApi => {
                         self.drop_child_browsing_context_subtrees(

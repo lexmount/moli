@@ -15,14 +15,11 @@ pub(in crate::native_bridge) fn node_document_active_element_getter_function<'s>
         rv.set_null();
         return;
     }
-    let runtime = unsafe { &mut *runtime_ptr };
+    let runtime = unsafe { &*runtime_ptr };
+    // A Document retains its focused area while another Document is focused.
+    // activeElement exposes that local area, not the global input-routing target.
     let handle = runtime
-        .active_element_handle()
-        .or_else(|| {
-            runtime.focused_viewport_document().and_then(|document| {
-                runtime.child_browsing_context_host_for_document_handle(document)
-            })
-        })
+        .document_focused_area(handle)
         .and_then(|active| retarget_active_element_to_document(runtime, active, handle))
         .or_else(|| {
             runtime

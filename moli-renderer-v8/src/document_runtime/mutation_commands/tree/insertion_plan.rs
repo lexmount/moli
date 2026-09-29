@@ -1,5 +1,6 @@
 use super::{
     adoption::TreeAdoptionPlan,
+    focus::TreeFocusRemovalPlan,
     live_ranges::LiveRangePreInsertPlan,
     node_iterators::NodeIteratorRemovalPlan,
     resources::{ImageRelevantMutationPlan, InsertionSubtreePlan, MediaRelevantMutationPlan},
@@ -31,7 +32,7 @@ pub(in crate::document_runtime::mutation_commands) struct TreeInsertionPlan<'a> 
     pub(super) insertion_roots: &'a [DomHandle],
     pub(super) lifecycle_connected_roots_before_insert: Vec<DomHandle>,
     pub(super) adoption: TreeAdoptionPlan,
-    pub(super) focus_reset_handle_before_insert: Option<DomHandle>,
+    pub(super) focus_removal: TreeFocusRemovalPlan,
     pub(super) live_range_plan: Option<LiveRangePreInsertPlan>,
     pub(super) node_iterator_plan: Vec<NodeIteratorRemovalPlan>,
     pub(super) subtree_plan: InsertionSubtreePlan,
@@ -133,16 +134,13 @@ impl DocumentRuntime {
             .copied()
             .filter(|handle| self.is_custom_element_lifecycle_connected(*handle))
             .collect();
-        let focus_reset_handle_before_insert = self.focus_reset_handle_before_tree_change(
-            insertion_roots,
-            &lifecycle_connected_roots_before_insert,
-        );
+        let focus_removal = self.tree_focus_removal_plan(host_ptr, insertion_roots);
         TreeInsertionPlan {
             parent,
             insertion_roots,
             lifecycle_connected_roots_before_insert,
             adoption,
-            focus_reset_handle_before_insert,
+            focus_removal,
             live_range_plan,
             node_iterator_plan,
             subtree_plan,

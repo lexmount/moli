@@ -204,9 +204,9 @@
       check(events, ['focusin'], 'atomic move preserves focus');
       check(doc.activeElement === button, true, 'atomic active element');
       a.append(button);
-      check(events, ['focusin', 'focusout'], 'ordinary move dispatches focusout through old parent');
+      check(events, ['focusin'], 'ordinary move resets focus without events');
       button.focus(); button.remove();
-      check(events, ['focusin', 'focusout', 'focusin', 'focusout'], 'direct removal dispatches focusout');
+      check(events, ['focusin', 'focusin'], 'direct removal resets focus without events');
       check(doc.activeElement === doc.body, true, 'removal resets active element');
       doc.removeEventListener('focusin', listener); doc.removeEventListener('focusout', listener);
       a.remove(); b.remove();
