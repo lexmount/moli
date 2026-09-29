@@ -2647,6 +2647,7 @@ dependencies = [
  "moli-charset-parser",
  "moli-content-type",
  "moli-header-field",
+ "moli-web-mime",
 ]
 
 [[package]]
