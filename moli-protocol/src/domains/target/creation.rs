@@ -178,7 +178,13 @@ pub(super) fn build_cdp_create_target_command(
     }
     Ok(DevToolsCreateTargetCommand {
         context: cmd.devtools_command_context(None::<&str>, params.browser_context_id.as_deref()),
-        url: params.url,
+        // CDP defines the empty string as about:blank. Normalize before target
+        // creation so URL metadata and the initial history entry agree.
+        url: if params.url.is_empty() {
+            default_blank()
+        } else {
+            params.url
+        },
         browser_context_id: params
             .browser_context_id
             .map(DevToolsBrowserContextId::from),

@@ -1,5 +1,117 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn create_target_empty_url_initializes_blank_document_before_navigation() {
+    for isolated in [false, true] {
+        for disposition in ["initial", "foreground", "background"] {
+            for for_tab in [false, true] {
+                let mut ctx = TestContext::new();
+                let browser_context_id = if isolated {
+                    ctx.process_async(json!({"id": 1, "method": "Target.createBrowserContext"}))
+                        .await;
+                    Some(
+                        take_response_by_id(&mut ctx, 1)["result"]["browserContextId"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    )
+                } else {
+                    None
+                };
+                let mut params = json!({"url": "about:blank"});
+                if let Some(context_id) = browser_context_id {
+                    params["browserContextId"] = json!(context_id);
+                }
+                if disposition != "initial" {
+                    ctx.process_async(
+                        json!({"id": 2, "method": "Target.createTarget", "params": params}),
+                    )
+                    .await;
+                    let anchor = take_response_by_id(&mut ctx, 2);
+                    assert!(anchor["result"]["targetId"].is_string(), "{anchor:?}");
+                }
+                params["url"] = json!("");
+                params["background"] = json!(disposition == "background");
+                params["forTab"] = json!(for_tab);
+                let context = format!("isolated={isolated}, {disposition}, forTab={for_tab}");
+                ctx.process_async(
+                    json!({"id": 3, "method": "Target.createTarget", "params": params}),
+                )
+                .await;
+                let created = take_response_by_id(&mut ctx, 3);
+                let target_id = created["result"]["targetId"].as_str().expect(&context);
+                let page_id = if for_tab {
+                    ctx.conn
+                        .primary_page_target_id_for_tab_target_id(target_id)
+                        .unwrap()
+                } else {
+                    target_id
+                }
+                .to_owned();
+                ctx.process_async(json!({"id": 4, "method": "Target.getTargetInfo",
+                    "params": {"targetId": page_id}}))
+                    .await;
+                let info = take_response_by_id(&mut ctx, 4);
+                assert_eq!(
+                    info["result"]["targetInfo"]["url"], "about:blank",
+                    "{context}"
+                );
+                ctx.process_async(json!({"id": 5, "method": "Target.attachToTarget",
+                    "params": {"targetId": page_id, "flatten": true}}))
+                    .await;
+                let attached = take_response_by_id(&mut ctx, 5);
+                let session_id = attached["result"]["sessionId"].as_str().expect(&context);
+                ctx.process_async(
+                    json!({"id": 6, "method": "Runtime.enable", "sessionId": session_id}),
+                )
+                .await;
+                let enabled = take_response_by_id(&mut ctx, 6);
+                assert!(enabled.get("error").is_none(), "{context}: {enabled:?}");
+                ctx.process_async(json!({"id": 7, "method": "Runtime.evaluate", "sessionId": session_id,
+                    "params": {"expression": "[location.href, document.URL, history.length, document.readyState]", "returnByValue": true}})).await;
+                let initial = take_response_by_id(&mut ctx, 7);
+                assert_eq!(
+                    initial["result"]["result"]["value"],
+                    json!(["about:blank", "about:blank", 1, "complete"]),
+                    "{context}: {initial:?}"
+                );
+                ctx.process_async(json!({"id": 8, "method": "Page.getNavigationHistory", "sessionId": session_id})).await;
+                let history = take_response_by_id(&mut ctx, 8);
+                assert_eq!(
+                    history["result"]["currentIndex"], 0,
+                    "{context}: {history:?}"
+                );
+                let entries = history["result"]["entries"].as_array().unwrap();
+                assert_eq!(entries.len(), 1, "{context}: {history:?}");
+                assert_eq!(entries[0]["url"], "about:blank", "{context}");
+                let url = "data:text/html,<body>navigated</body>";
+                ctx.process_async(
+                    json!({"id": 9, "method": "Page.navigate", "sessionId": session_id,
+                    "params": {"url": url}}),
+                )
+                .await;
+                let navigation = take_response_by_id(&mut ctx, 9);
+                assert!(
+                    navigation.get("error").is_none(),
+                    "{context}: {navigation:?}"
+                );
+                assert!(
+                    navigation["result"].get("errorText").is_none(),
+                    "{context}: {navigation:?}"
+                );
+                ctx.process_async(json!({"id": 10, "method": "Runtime.evaluate", "sessionId": session_id,
+                    "params": {"expression": "[location.href, history.length, document.body.textContent]", "returnByValue": true}})).await;
+                let navigated = take_response_by_id(&mut ctx, 10);
+                assert_eq!(
+                    navigated["result"]["result"]["value"],
+                    json!([url, 2, "navigated"]),
+                    "{context}: {navigated:?}"
+                );
+            }
+        }
+    }
+}
+
 fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
     moli_cookie_jar::StoredCookie {
         name: name.to_owned(),
