@@ -1328,7 +1328,8 @@ impl JsContextHost {
         let mut parser = if is_xml_document {
             DocumentParserSession::start_finite_live_xml_document(document_url, document_handle)
         } else if content_type.is_some_and(moli_web_mime::is_text_document_mime) {
-            let mut parser_owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
+            let mut parser_owner =
+                ContextDocumentParserOwner::new_child(self, scope, document_handle);
             DocumentParserSession::start_finite_live_text_document(
                 document_url,
                 document_handle,

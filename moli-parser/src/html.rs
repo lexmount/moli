@@ -493,8 +493,10 @@ impl HtmlParser {
     /// Start a text document using the HTML tokenizer's plaintext state.
     /// Subsequent chunks remain literal text inside the browser-owned `pre`.
     pub fn start_text_document(&self, final_url: Url, content_type: &str) -> DocumentStream {
-        let stream =
-            DocumentStream::new_text_document(new_parser_stream_html_tree_sink_target(final_url));
+        let stream = DocumentStream::new_text_document(new_parser_stream_html_tree_sink_target(
+            final_url,
+            self.scripting_enabled,
+        ));
         stream.inner.initialize_text_document();
         let mut host = stream.inner.take_parser_stream_dom_host();
         let document_handle = host.document_handle();
@@ -2064,8 +2066,12 @@ mod tests {
     fn text_document_stream_preserves_literal_markup_and_leading_newline() {
         let payload =
             "\u{feff}\n<b>Gülçek</b>&amp;<script>window.executed=1</script></pre>\u{feff}";
-        for content_type in ["text/plain", "application/json", "application/problem+json"] {
-            let stream = HtmlParser::SCRIPTING_ENABLED.start_text_document(
+        for (content_type, scripting_enabled) in
+            ["text/plain", "application/json", "application/problem+json"]
+                .into_iter()
+                .flat_map(|mime| [false, true].map(|scripting| (mime, scripting)))
+        {
+            let stream = HtmlParser::with_scripting_enabled(scripting_enabled).start_text_document(
                 Url::parse("https://example.test/data").unwrap(),
                 content_type,
             );
@@ -2076,6 +2082,10 @@ mod tests {
             let pre = first_element_by_ns(&document, HTML_NS, "pre");
             assert_eq!(document.text_content(pre).as_deref(), Some(payload));
             assert_eq!(document.document().unwrap().content_type(), content_type);
+            assert_eq!(
+                document.document().unwrap().scripting_enabled(),
+                scripting_enabled
+            );
             for tag in ["b", "script"] {
                 assert!(
                     document
