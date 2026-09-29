@@ -609,13 +609,11 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
         .collect()
 }
 
-pub(crate) fn computed_style_own_inherited_property_values_for_document_snapshot(
+pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
     host: &JsContextHost,
     handles: impl IntoIterator<Item = DomHandle>,
-    property: &str,
 ) -> Vec<bool> {
     let mut observation = StyleObservation::new(host);
-    let shared_lock = host.style_engine_author_shared_lock();
     handles
         .into_iter()
         .map(|handle| {
@@ -626,7 +624,7 @@ pub(crate) fn computed_style_own_inherited_property_values_for_document_snapshot
             };
             observation
                 .read(handle)
-                .computed_style_has_own_inherited_longhand_value(property, &shared_lock)
+                .computed_style_has_own_visibility_value()
         })
         .collect()
 }

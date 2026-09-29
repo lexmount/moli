@@ -220,14 +220,12 @@ impl<'a> ComputedStyleRead<'a> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
-    pub(in crate::native_bridge::element) fn computed_style_has_own_inherited_longhand_value(
+    pub(in crate::native_bridge::element) fn computed_style_has_own_visibility_value(
         &self,
-        property: &str,
-        shared_lock: &style::shared_lock::SharedRwLock,
     ) -> bool {
         self.stylo_style
             .as_ref()
-            .is_some_and(|style| style.has_own_inherited_longhand_value(property, shared_lock))
+            .is_some_and(StyloComputedStyleSnapshot::has_own_visibility_value)
     }
 
     pub(crate) fn computed_values(&self) -> Option<ServoArc<ComputedValues>> {

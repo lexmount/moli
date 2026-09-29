@@ -184,15 +184,22 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             document.head.innerHTML = '<style>.reverted{visibility:hidden}.reverted{visibility:revert}@layer base{.layered{visibility:hidden}.layered{visibility:revert-layer}}</style>';
             document.body.innerHTML = `
                 <main>
+                    <p id="variable-hidden" style="--v:hidden;visibility:var(--v)">Independent variable hidden content</p>
+                    <p id="fallback-hidden" style="visibility:var(--missing, hidden)">Hidden fallback content</p>
                     <p style="visibility:var(--missing)">Invalid variable inherits the veil</p>
                     <p style="visibility:var(--missing, inherit)">Variable fallback inherits the veil</p>
                     <p class="reverted">Origin revert inherits the veil</p>
                     <p class="layered">Layer revert inherits the veil</p>
                 </main>`;
         "#).unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('variable-hidden')).visibility").unwrap(), "hidden");
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('fallback-hidden')).visibility").unwrap(), "hidden");
         let inherited_visibility = page.render_page_dump(options(false));
         for text in ["Invalid variable inherits the veil", "Variable fallback inherits the veil", "Origin revert inherits the veil", "Layer revert inherits the veil"] {
             assert!(inherited_visibility.contains(text), "missing {text}: {inherited_visibility}");
+        }
+        for text in ["Independent variable hidden content", "Hidden fallback content"] {
+            assert!(!inherited_visibility.contains(text), "leaked {text}: {inherited_visibility}");
         }
         page.vm_mut().eval(r#"
             document.body.style.visibility = '';
@@ -216,6 +223,28 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let scoped_keyframes = page.render_page_dump(options(false));
         assert!(scoped_keyframes.contains("Scoped count 2"), "{scoped_keyframes}");
         assert!(!scoped_keyframes.contains("Scoped count 992"), "{scoped_keyframes}");
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>@layer low,high;@layer high{@keyframes layered{to{opacity:0}}}@layer low{@keyframes layered{to{opacity:1}}}@keyframes repeated{to{opacity:1}to{opacity:0}}</style>';
+            document.body.innerHTML = '<p>Layered count <span id="layered-count" style="opacity:0;animation:layered 1s forwards">99</span>2</p><p>Repeated count <span id="repeated-count" style="opacity:0;animation:repeated 1s forwards">99</span>2</p>';
+        "#).unwrap();
+        for id in ["layered-count", "repeated-count"] {
+            assert_eq!(page.vm_mut().eval(&format!("getComputedStyle(document.getElementById('{id}')).opacity")).unwrap(), "0");
+        }
+        let keyframe_priority = page.render_page_dump(options(false));
+        assert!(keyframe_priority.contains("Layered count 2"), "{keyframe_priority}");
+        assert!(keyframe_priority.contains("Repeated count 2"), "{keyframe_priority}");
+        assert!(!keyframe_priority.contains("Layered count 992"), "{keyframe_priority}");
+        assert!(!keyframe_priority.contains("Repeated count 992"), "{keyframe_priority}");
+        page.vm_mut().eval(r#"
+            const unrelatedRules = Array.from({length:128}, (_, index) => `@keyframes unused${index}{to{opacity:1}}`).join('');
+            const unrelatedNodes = Array.from({length:128}, (_, index) => `<span style="opacity:0">hidden${index}</span>`).join('');
+            document.head.innerHTML = `<style>${unrelatedRules}@keyframes used{to{opacity:1}}</style>`;
+            document.body.innerHTML = `<p>Scale ${unrelatedNodes}<span style="opacity:0;animation:used 1s forwards">kept</span></p>`;
+        "#).unwrap();
+        crate::style_engine::reset_final_opacity_animation_query_count_for_test();
+        let scaled_keyframes = page.render_page_dump(options(false));
+        assert!(scaled_keyframes.contains("Scale kept"), "{scaled_keyframes}");
+        assert_eq!(crate::style_engine::final_opacity_animation_query_count_for_test(), 1);
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
                 <button onclick="console.log('tracking')">Save</button>

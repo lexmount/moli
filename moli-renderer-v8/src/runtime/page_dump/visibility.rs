@@ -415,10 +415,7 @@ fn has_bounded_final_opacity(
     values: &[String],
     final_opacity_animations: &HashSet<String>,
 ) -> bool {
-    let names: Vec<_> = values
-        .get(14)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
+    let names = parse_animation_names(values.get(14));
     let durations: Vec<_> = values
         .get(15)
         .map(|value| value.split(',').map(str::trim).collect())
@@ -444,7 +441,7 @@ fn has_bounded_final_opacity(
         .map(|value| value.split(',').map(str::trim).collect())
         .unwrap_or_default();
     names.iter().enumerate().any(|(index, name)| {
-        final_opacity_animations.contains(*name)
+        final_opacity_animations.contains(name)
             && !durations.is_empty()
             && animation_duration_is_positive(durations[index % durations.len()])
             && !fill_modes.is_empty()
@@ -459,6 +456,23 @@ fn has_bounded_final_opacity(
             && !play_states.is_empty()
             && play_states[index % play_states.len()] == "running"
     })
+}
+
+pub(super) fn computed_property_animation_names(values: &[String]) -> Vec<String> {
+    parse_animation_names(values.get(8))
+}
+
+fn parse_animation_names(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && *name != "none")
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn animation_duration_is_positive(duration: &str) -> bool {
@@ -477,79 +491,6 @@ fn animation_time_seconds(value: &str) -> Option<f32> {
         })
 }
 
-/// Return only animations whose declared final keyframe paints a nonzero
-/// opacity. The caller still requires a finite, forward, running animation
-/// before using that final authored state for the static document snapshot.
-pub(super) fn final_opacity_animation_names<'a>(
-    stylesheets: impl IntoIterator<Item = &'a str>,
-) -> HashSet<String> {
-    let mut result = HashSet::new();
-    for source in stylesheets {
-        let folded = source.to_ascii_lowercase();
-        for offset in code_marker_offsets(&folded, "@keyframes") {
-            let Some(relative_open) = source[offset..].find('{') else {
-                continue;
-            };
-            let open = offset + relative_open;
-            let Some(close) = matching_delimiter(source, open, '{', '}') else {
-                continue;
-            };
-            let Some(rule) =
-                moli_css_parse::parse_keyframes_rule_view_with_stylo(&source[offset..=close])
-            else {
-                continue;
-            };
-            let Some(canonical_open) = rule.css_text.find('{') else {
-                continue;
-            };
-            let Some(canonical_close) =
-                matching_delimiter(&rule.css_text, canonical_open, '{', '}')
-            else {
-                continue;
-            };
-            let name = rule.name;
-            if final_keyframe_reveals(&rule.css_text[canonical_open + 1..canonical_close]) {
-                result.insert(name);
-            } else {
-                result.remove(&name);
-            }
-        }
-    }
-    result
-}
-
-fn final_keyframe_reveals(body: &str) -> bool {
-    let mut offset = 0;
-    while let Some(relative_open) = body[offset..].find('{') {
-        let open = offset + relative_open;
-        let selector = body[offset..open].trim();
-        let Some(close) = matching_delimiter(body, open, '{', '}') else {
-            return false;
-        };
-        let is_final = selector
-            .split(',')
-            .map(str::trim)
-            .any(|value| matches!(value, "to" | "100%" | "100.0%"));
-        if is_final {
-            for declaration in body[open + 1..close].split(';') {
-                let Some((name, value)) = declaration.split_once(':') else {
-                    continue;
-                };
-                if name.trim().eq_ignore_ascii_case("opacity")
-                    && value
-                        .trim()
-                        .parse::<f32>()
-                        .is_ok_and(|opacity| opacity > 0.0)
-                {
-                    return true;
-                }
-            }
-        }
-        offset = close + 1;
-    }
-    false
-}
-
 fn target_is_disclosure<D: Dom + ?Sized>(
     dom: &D,
     targets: &HashMap<&str, D::NodeId>,
@@ -562,119 +503,6 @@ fn target_is_disclosure<D: Dom + ?Sized>(
                 .any(|excluded| role.eq_ignore_ascii_case(excluded))
         })
     })
-}
-
-fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {
-    let mut result = Vec::new();
-    let mut offset = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    let mut line_comment = false;
-    let mut block_comment = false;
-    while offset < value.len() {
-        let tail = &value[offset..];
-        if line_comment {
-            if tail.starts_with('\n') {
-                line_comment = false;
-            }
-        } else if block_comment {
-            if tail.starts_with("*/") {
-                block_comment = false;
-                offset += 2;
-                continue;
-            }
-        } else if let Some(delimiter) = quote {
-            let character = tail.chars().next().expect("offset is within value");
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-        } else if tail.starts_with("//") {
-            line_comment = true;
-            offset += 2;
-            continue;
-        } else if tail.starts_with("/*") {
-            block_comment = true;
-            offset += 2;
-            continue;
-        } else {
-            let character = tail.chars().next().expect("offset is within value");
-            if matches!(character, '\'' | '"' | '`') {
-                quote = Some(character);
-            } else if tail.starts_with(marker) {
-                result.push(offset);
-                offset += marker.len();
-                continue;
-            }
-        }
-        offset += tail
-            .chars()
-            .next()
-            .expect("offset is within value")
-            .len_utf8();
-    }
-    result
-}
-
-fn matching_delimiter(value: &str, start: usize, open: char, close: char) -> Option<usize> {
-    let mut depth = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    let mut line_comment = false;
-    let mut block_comment = false;
-    let mut offset = start;
-    while offset < value.len() {
-        let tail = &value[offset..];
-        if line_comment {
-            if tail.starts_with('\n') {
-                line_comment = false;
-            }
-        } else if block_comment {
-            if tail.starts_with("*/") {
-                block_comment = false;
-                offset += 2;
-                continue;
-            }
-        } else if let Some(delimiter) = quote {
-            let character = tail.chars().next().expect("offset is within value");
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-        } else if tail.starts_with("//") {
-            line_comment = true;
-            offset += 2;
-            continue;
-        } else if tail.starts_with("/*") {
-            block_comment = true;
-            offset += 2;
-            continue;
-        } else {
-            let character = tail.chars().next().expect("offset is within value");
-            if matches!(character, '\'' | '"' | '`') {
-                quote = Some(character);
-            } else if character == open {
-                depth += 1;
-            } else if character == close {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(offset);
-                }
-            }
-        }
-        offset += tail
-            .chars()
-            .next()
-            .expect("offset is within value")
-            .len_utf8();
-    }
-    None
 }
 
 fn px(value: &str) -> Option<f32> {

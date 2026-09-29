@@ -1517,26 +1517,13 @@ impl JsContextHost {
             .retained_stylesheet_query_snapshot_for_document(document)
     }
 
-    pub(crate) fn style_engine_author_shared_lock(&self) -> style::shared_lock::SharedRwLock {
-        self.style_engine.author_shared_lock()
-    }
-
-    pub(crate) fn effective_keyframe_rule_texts_for_elements(
+    pub(crate) fn final_opacity_animation_names_for_elements(
         &self,
         document: DomHandle,
-        elements: impl IntoIterator<Item = DomHandle>,
-    ) -> (
-        Vec<Option<DomHandle>>,
-        std::collections::HashMap<Option<DomHandle>, Vec<String>>,
-    ) {
-        let tree_scopes: Vec<_> = elements
-            .into_iter()
-            .map(|element| self.dom_host().containing_shadow_root(element))
-            .collect();
-        let rules = self
-            .style_engine
-            .effective_keyframe_rule_texts_for_tree_scopes(document, tree_scopes.iter().copied());
-        (tree_scopes, rules)
+        elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
+    ) -> std::collections::HashMap<DomHandle, std::collections::HashSet<String>> {
+        self.style_engine
+            .final_opacity_animation_names_for_elements(self.dom_host(), document, elements)
     }
 
     #[cfg(test)]

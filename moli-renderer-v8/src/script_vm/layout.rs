@@ -40,16 +40,13 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn effective_keyframe_rule_texts_for_element_snapshots(
+    pub(crate) fn final_opacity_animation_names_for_element_snapshots(
         &self,
-        elements: impl IntoIterator<Item = DomHandle>,
-    ) -> (
-        Vec<Option<DomHandle>>,
-        std::collections::HashMap<Option<DomHandle>, Vec<String>>,
-    ) {
+        elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
+    ) -> std::collections::HashMap<DomHandle, std::collections::HashSet<String>> {
         let host = self._context_host.borrow();
         let document = host.document_handle();
-        host.effective_keyframe_rule_texts_for_elements(document, elements)
+        host.final_opacity_animation_names_for_elements(document, elements)
     }
 
     pub(crate) fn sync_live_document_style_sources(&mut self) {
@@ -71,15 +68,13 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn computed_style_own_inherited_property_values_for_document_snapshot(
+    pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
-        property: &str,
     ) -> Vec<bool> {
-        crate::native_bridge::element::computed_style_own_inherited_property_values_for_document_snapshot(
+        crate::native_bridge::element::computed_style_own_visibility_values_for_document_snapshot(
             &self._context_host.borrow(),
             handles,
-            property,
         )
     }
 

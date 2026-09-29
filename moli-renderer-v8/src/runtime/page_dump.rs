@@ -97,40 +97,20 @@ impl PageVm {
                 );
             let own_visibility_values = self
                 .vm()
-                .computed_style_own_inherited_property_values_for_document_snapshot(
-                    nodes.iter().copied(),
-                    "visibility",
-                );
+                .computed_style_own_visibility_values_for_document_snapshot(nodes.iter().copied());
             let own_visibility: HashMap<_, _> =
                 nodes.iter().copied().zip(own_visibility_values).collect();
-            let (keyframe_scopes, keyframe_rules) = self
-                .vm()
-                .effective_keyframe_rule_texts_for_element_snapshots(nodes.iter().copied());
-            let final_opacity_by_scope: HashMap<_, _> = keyframe_rules
-                .into_iter()
-                .map(|(scope, stylesheet_texts)| {
-                    (
-                        scope,
-                        visibility::final_opacity_animation_names(
-                            stylesheet_texts.iter().map(String::as_str),
-                        ),
-                    )
-                })
-                .collect();
-            let final_opacity_animations: HashMap<_, _> = nodes
+            let animation_candidates = nodes
                 .iter()
                 .copied()
-                .zip(keyframe_scopes)
-                .map(|(node, scope)| {
-                    (
-                        node,
-                        final_opacity_by_scope
-                            .get(&scope)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )
-                })
-                .collect();
+                .zip(values.iter())
+                .filter(|(_, values)| values.get(2).is_some_and(|value| value == "0"))
+                .map(|(node, values)| {
+                    (node, visibility::computed_property_animation_names(values))
+                });
+            let final_opacity_animations = self
+                .vm()
+                .final_opacity_animation_names_for_element_snapshots(animation_candidates);
             let styles = nodes
                 .into_iter()
                 .zip(values)
