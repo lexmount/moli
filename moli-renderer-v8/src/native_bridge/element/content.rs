@@ -1250,16 +1250,15 @@ pub(in crate::native_bridge) fn set_inner_text_in_reaction_scope(
         let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
             return false;
         };
-        let existing_children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
         let Some(fragment) = rendered_text_fragment(runtime, document, value) else {
             return false;
         };
-        runtime.replace_all_children_with_fragment_appending_to_current_reaction_queue(
+        runtime.replace_all_children_with_node_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             fragment,
-            &existing_children,
+            false,
         )
     })
 }

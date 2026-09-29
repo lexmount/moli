@@ -24,6 +24,16 @@ async fn observer_callback_test_vm(url: &str) -> crate::runtime::PageVmTaskExecu
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn parent_node_conversion_preserves_order_and_mutation_boundaries() {
+    let mut vm = observer_callback_test_vm("https://parent-node-conversion.test/").await;
+    assert_eq!(
+        vm.eval(include_str!("parent_node_conversion.js"))
+            .expect("ParentNode conversion must preserve side effects and record boundaries"),
+        "true"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn document_preinsert_validation_precedes_mutation_and_adoption() {
     let mut vm = observer_callback_test_vm("https://document-preinsert.test/").await;
     assert_eq!(

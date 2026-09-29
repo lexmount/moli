@@ -1461,6 +1461,22 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn create_text_node_from_utf16_units(
+        &mut self,
+        document: Option<DomHandle>,
+        value: U16String,
+    ) -> DomHandle {
+        let text = string_from_utf16_units_lossy(value.as_slice());
+        let handle = match document {
+            Some(document) => self.create_text_node_for_document(document, &text),
+            None => self.create_text_node(&text),
+        };
+        if utf16_units_contain_unpaired_surrogate(value.as_slice()) {
+            self.character_data_utf16_overrides.insert(handle, value);
+        }
+        handle
+    }
+
     pub(crate) fn character_data_utf16_units(&self, handle: DomHandle) -> Option<Vec<u16>> {
         self.character_data_utf16_overrides
             .get(&handle)
