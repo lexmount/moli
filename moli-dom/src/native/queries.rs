@@ -335,6 +335,33 @@ impl NativeDom {
             .map(|document| document.scripting_enabled())
     }
 
+    pub(crate) fn light_subtree_handles(
+        &self,
+        root: NativeNodeId,
+        include_root: bool,
+    ) -> impl Iterator<Item = NativeNodeId> + '_ {
+        let first = self.node(root).and_then(|node| {
+            if include_root {
+                Some(root)
+            } else {
+                node.first_child()
+            }
+        });
+        std::iter::successors(first, move |&handle| {
+            if let Some(child) = self.first_child(handle) {
+                return Some(child);
+            }
+            let mut current = handle;
+            while current != root {
+                if let Some(sibling) = self.next_sibling(current) {
+                    return Some(sibling);
+                }
+                current = self.parent_node(current)?;
+            }
+            None
+        })
+    }
+
     fn collect_matching_elements(
         &self,
         root: NativeNodeId,
