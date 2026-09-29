@@ -6,16 +6,54 @@ use crate::native_bridge::document::{
     paired_detached_native_object_for_handle,
 };
 
-fn required_tree_insertion_node_arg_handle(
+#[derive(Clone, Copy)]
+enum TreeInsertionNodeArgument {
+    // Attr implements Node, but attributes are stored outside the tree arena.
+    // Preserve it through argument conversion until insertion type validation.
+    Attribute,
+    TreeNode(DomHandle),
+}
+
+fn require_node_argument<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    message: &'static str,
+) -> bool {
+    if v8::Local::<v8::Object>::try_from(value)
+        .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+    {
+        return true;
+    }
+    throw_type_error(scope, message);
+    false
+}
+
+impl TreeInsertionNodeArgument {
+    fn native_handle(self) -> Option<DomHandle> {
+        match self {
+            Self::Attribute => None,
+            Self::TreeNode(handle) => Some(handle),
+        }
+    }
+
+    fn require_tree_handle(self, scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
+        let Some(handle) = self.native_handle() else {
+            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
+            return None;
+        };
+        Some(handle)
+    }
+}
+
+fn required_tree_insertion_node_arg(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'_, v8::Value>,
     invalid_type_message: &'static str,
-) -> Option<DomHandle> {
+) -> Option<TreeInsertionNodeArgument> {
     if is_attr_node_value(scope, value) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return None;
+        return Some(TreeInsertionNodeArgument::Attribute);
     }
     let Some(handle) =
         node_or_foreign_arg_handle_allow_detached(scope, runtime_ptr, document_handle, value)
@@ -23,7 +61,7 @@ fn required_tree_insertion_node_arg_handle(
         throw_type_error(scope, invalid_type_message);
         return None;
     };
-    Some(handle)
+    Some(TreeInsertionNodeArgument::TreeNode(handle))
 }
 
 fn set_original_node_arg_or_wrapped_handle<'s>(
@@ -92,14 +130,24 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
         rv.set_null();
         return;
     };
+    if !require_node_argument(
+        scope,
+        args.get(0),
+        "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.",
+    ) {
+        return;
+    }
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(child) = required_tree_insertion_node_arg_handle(
+    let Some(child) = required_tree_insertion_node_arg(
         scope,
         runtime_ptr,
         document_handle,
         args.get(0),
         "Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.",
     ) else {
+        return;
+    };
+    let Some(child) = child.require_tree_handle(scope) else {
         return;
     };
     if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, parent, child, None, &[]) {
@@ -135,8 +183,28 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
         rv.set_null();
         return;
     };
+    if args.length() < 2 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'insertBefore' on 'Node': 2 arguments required.",
+        );
+        return;
+    }
+    if !require_node_argument(
+        scope,
+        args.get(0),
+        "Failed to execute 'insertBefore' on 'Node': parameter 1 is not of type 'Node'.",
+    ) || (!args.get(1).is_null_or_undefined()
+        && !require_node_argument(
+            scope,
+            args.get(1),
+            "Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.",
+        ))
+    {
+        return;
+    }
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(child) = required_tree_insertion_node_arg_handle(
+    let Some(child) = required_tree_insertion_node_arg(
         scope,
         runtime_ptr,
         document_handle,
@@ -145,11 +213,8 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
     ) else {
         return;
     };
-    if args.length() < 2 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'insertBefore' on 'Node': 2 arguments required.",
-        );
+    let runtime = unsafe { &*runtime_ptr };
+    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, child.native_handle()) {
         return;
     }
     let reference_child = if args.get(1).is_null_or_undefined() {
@@ -175,10 +240,6 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
             }
         }
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, child) {
-        return;
-    }
     if let Some(reference_child) = reference_child {
         let is_child_of_parent = unsafe { &*runtime_ptr }
             .dom_host()
@@ -195,6 +256,9 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
             return;
         }
     }
+    let Some(child) = child.require_tree_handle(scope) else {
+        return;
+    };
     let runtime = unsafe { &*runtime_ptr };
     if !validate_pre_insert_node_type_and_document(
         scope,
@@ -235,7 +299,7 @@ pub(crate) fn validate_pre_insert_handles(
     reference_child: Option<DomHandle>,
     skipped: &[DomHandle],
 ) -> bool {
-    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, child) {
+    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, Some(child)) {
         return false;
     }
     if let Some(reference_child) = reference_child {
@@ -268,10 +332,11 @@ fn validate_pre_insert_parent_and_ancestor(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: &JsContextHost,
     parent: DomHandle,
-    child: DomHandle,
+    child: Option<DomHandle>,
 ) -> bool {
     if !node_can_contain_children(runtime, parent)
-        || node_is_host_including_inclusive_ancestor(runtime, child, parent)
+        || child
+            .is_some_and(|child| node_is_host_including_inclusive_ancestor(runtime, child, parent))
     {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return false;
@@ -584,17 +649,6 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
         rv.set_null();
         return;
     };
-    let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let new_child_value = args.get(0);
-    let Some(new_child) = required_tree_insertion_node_arg_handle(
-        scope,
-        runtime_ptr,
-        document_handle,
-        new_child_value,
-        "Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.",
-    ) else {
-        return;
-    };
     if args.length() < 2 {
         throw_type_error(
             scope,
@@ -602,11 +656,57 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
         );
         return;
     }
-    let runtime = unsafe { &*runtime_ptr };
-    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, new_child) {
-        return;
+    if let Some(old_child) =
+        replace_node_child(scope, runtime_ptr, parent, args.get(0), args.get(1), false)
+    {
+        set_original_node_arg_or_wrapped_handle(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.get(1),
+            old_child,
+        );
     }
-    let old_child = match existing_node_arg(scope, runtime_ptr, args.get(1)) {
+}
+
+pub(in crate::native_bridge) fn replace_node_child<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    parent: DomHandle,
+    new_child_value: v8::Local<'s, v8::Value>,
+    old_child_value: v8::Local<'s, v8::Value>,
+    detached: bool,
+) -> Option<DomHandle> {
+    // Convert both Node arguments before hierarchy checks or foreign-node
+    // materialization. Native brands reject author objects without reading
+    // their properties and still accept registered native proxies.
+    for (value, message) in [
+        (
+            new_child_value,
+            "Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.",
+        ),
+        (
+            old_child_value,
+            "Failed to execute 'replaceChild' on 'Node': parameter 2 is not of type 'Node'.",
+        ),
+    ] {
+        if !require_node_argument(scope, value, message) {
+            return None;
+        }
+    }
+    let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
+    let new_child = required_tree_insertion_node_arg(
+        scope,
+        runtime_ptr,
+        document_handle,
+        new_child_value,
+        "Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.",
+    )?;
+    let runtime = unsafe { &*runtime_ptr };
+    if !validate_pre_insert_parent_and_ancestor(scope, runtime, parent, new_child.native_handle()) {
+        return None;
+    }
+    let old_child = match existing_node_arg(scope, runtime_ptr, old_child_value) {
         ExistingNodeArgument::Handle(old_child) => old_child,
         ExistingNodeArgument::ForeignNode => {
             throw_dom_exception(
@@ -615,14 +715,14 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
                 8,
                 "The node to be replaced is not a child of this node.",
             );
-            return;
+            return None;
         }
         ExistingNodeArgument::Invalid => {
             throw_type_error(
                 scope,
                 "Failed to execute 'replaceChild' on 'Node': parameter 2 is not of type 'Node'.",
             );
-            return;
+            return None;
         }
     };
     let is_child_of_parent = unsafe { &*runtime_ptr }
@@ -637,8 +737,9 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
             8,
             "The node to be replaced is not a child of this node.",
         );
-        return;
+        return None;
     }
+    let new_child = new_child.require_tree_handle(scope)?;
     let skipped = if new_child == old_child {
         vec![old_child]
     } else {
@@ -653,24 +754,37 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
         Some(old_child),
         &skipped,
     ) {
-        return;
+        return None;
     }
-    let post_insert_event_handles =
-        inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, new_child);
+    let post_insert_event_handles = (!detached)
+        .then(|| inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, new_child));
     let replaced =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            unsafe { &mut *runtime_ptr }.replace_child_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                parent,
-                new_child,
-                old_child,
-            )
+            let runtime = unsafe { &mut *runtime_ptr };
+            if detached {
+                runtime.replace_detached_native_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    new_child,
+                    old_child,
+                )
+            } else {
+                runtime.replace_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    new_child,
+                    old_child,
+                )
+            }
         });
     if !replaced {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return;
+        return None;
     }
-    dispatch_detached_post_insert_events(scope, runtime_ptr, &post_insert_event_handles);
-    set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, args.get(1), old_child);
+    if let Some(handles) = post_insert_event_handles {
+        dispatch_detached_post_insert_events(scope, runtime_ptr, &handles);
+    }
+    Some(old_child)
 }

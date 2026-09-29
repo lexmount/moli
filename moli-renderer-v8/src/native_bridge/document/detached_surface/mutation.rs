@@ -1,6 +1,7 @@
 use super::*;
 use crate::native_bridge::node::{
     ChildNodeMutation, ParentNodeMutation, mutate_child_node, mutate_parent_node,
+    replace_node_child,
 };
 
 fn detached_insert_or_throw<'s>(
@@ -702,6 +703,23 @@ pub(in crate::native_bridge) fn bridge_detached_replace_child_callback<'a>(
         rv.set_null();
         return;
     };
+    if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(parent_handle) = detached_native_handle_for_runtime(scope, runtime_ptr, parent)
+    {
+        if replace_node_child(
+            scope,
+            runtime_ptr,
+            parent_handle,
+            args.get(1),
+            args.get(2),
+            true,
+        )
+        .is_some()
+        {
+            rv.set(args.get(2));
+        }
+        return;
+    }
     let Ok(new_child) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
         throw_dom_exception(
             scope,
@@ -730,19 +748,9 @@ pub(in crate::native_bridge) fn bridge_detached_replace_child_callback<'a>(
         throw_dom_exception(scope, name, code, message);
         return;
     }
-    let old_child_is_child = if detached_has_native_handle(scope, parent) {
-        detached_native_parent_is(scope, old_child, parent).unwrap_or(false)
-            || detached_native_mutation_child_node_objects(scope, parent).is_some_and(|children| {
-                children
-                    .into_iter()
-                    .any(|child| child.strict_equals(old_child.into()))
-            })
-            || detached_document_direct_element_child_matches(scope, parent, old_child)
-    } else {
-        detached_parent_node_object(scope, old_child)
-            .is_some_and(|value| value.strict_equals(parent.into()))
-            || detached_document_direct_element_child_matches(scope, parent, old_child)
-    };
+    let old_child_is_child = detached_parent_node_object(scope, old_child)
+        .is_some_and(|value| value.strict_equals(parent.into()))
+        || detached_document_direct_element_child_matches(scope, parent, old_child);
     if !old_child_is_child {
         throw_dom_exception(
             scope,
@@ -758,20 +766,6 @@ pub(in crate::native_bridge) fn bridge_detached_replace_child_callback<'a>(
         return;
     }
     if new_child.strict_equals(old_child.into()) {
-        rv.set(old_child.into());
-        return;
-    }
-    if detached_has_native_handle(scope, parent) {
-        let replaced = with_detached_tree_reaction_scope(scope, |scope| {
-            let reference_child = detached_sibling_object(scope, old_child, 1);
-            detached_detach_from_parent_appending_to_current_reaction_queue(scope, old_child);
-            detached_insert_or_throw(scope, parent, new_child, reference_child)
-        });
-        if !replaced {
-            let (name, code, message) = detached_pre_insert_hierarchy_error();
-            throw_dom_exception(scope, name, code, message);
-            return;
-        }
         rv.set(old_child.into());
         return;
     }
