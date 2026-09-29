@@ -9,6 +9,7 @@ mod insertion_followups;
 mod insertion_plan;
 mod live_ranges;
 mod node_iterators;
+mod normalization;
 mod parser;
 mod parser_post_step;
 mod policy;

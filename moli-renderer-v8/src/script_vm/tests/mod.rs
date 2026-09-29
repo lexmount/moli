@@ -2278,6 +2278,7 @@ mod native_dom_strings;
 mod native_exception_stack_capture;
 mod navigation_timing_inheritance;
 mod no_cors_header_fill;
+mod node_normalization;
 mod observable;
 mod observer_callbacks;
 mod observer_documents;
