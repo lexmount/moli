@@ -177,6 +177,14 @@ impl DomMutationEffects {
         self.observer_records.records.clear();
     }
 
+    /// Apply the DOM suppress-observers flag to this operation's target. Source
+    /// removals and non-observer mutation effects must remain observable.
+    pub fn suppress_child_list_mutations_for_target(&mut self, target: DomHandle) {
+        self.observer_records.records.retain(|record| {
+            record.target != target || !matches!(record.kind, DomMutationRecordKind::ChildList(_))
+        });
+    }
+
     pub(in crate::native::host::mutation) fn mark_character_data_mutation(
         &mut self,
         target: DomHandle,
