@@ -27,8 +27,8 @@ pub use host::{
     DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
     DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
     DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
-    DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
-    StylesheetCandidateTreeScopeSnapshots,
+    DomTextNormalizationStep, DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger,
+    ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,

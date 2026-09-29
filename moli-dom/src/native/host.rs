@@ -30,8 +30,8 @@ pub use self::mutation::{
     DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind, DomScriptMutationEffects,
     DomSlotAssignmentChange, DomSlotMutationEffects, DomStyleInvalidationInputs,
     DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions,
-    DomStylesheetOwnerTreeScopes, DomTextareaValueChange, DomTreeMutationEffects,
-    ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    DomStylesheetOwnerTreeScopes, DomTextNormalizationStep, DomTextareaValueChange,
+    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
 };
 
 use self::query_index::ElementQueryIndex;
