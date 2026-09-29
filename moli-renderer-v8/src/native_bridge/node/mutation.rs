@@ -14,7 +14,7 @@ pub(in crate::native_bridge) use child_node::{
 pub(crate) use core::validate_pre_insert_handles;
 pub(in crate::native_bridge) use core::{
     node_append_child_callback, node_insert_before_callback, node_move_before_callback,
-    node_remove_child_callback, node_replace_child_callback,
+    node_remove_child_callback, node_replace_child_callback, replace_node_child,
 };
 pub(in crate::native_bridge) use parent_node::{
     ParentNodeMutation, mutate_parent_node, node_append_callback, node_prepend_callback,
