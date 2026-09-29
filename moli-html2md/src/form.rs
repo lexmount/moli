@@ -46,7 +46,5 @@ pub(crate) fn textarea_text<'a, D: Dom + ?Sized>(
     dom: &'a D,
     node: D::NodeId,
 ) -> Option<Cow<'a, str>> {
-    dom.attribute(node, "value")
-        .filter(|value| !value.is_empty())
-        .map(Cow::Borrowed)
+    dom.attribute(node, "value").map(Cow::Borrowed)
 }

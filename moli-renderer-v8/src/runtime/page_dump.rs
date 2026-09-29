@@ -144,6 +144,11 @@ impl PageVm {
                     values.push(animation_iteration_count);
                     values.push(animation_direction);
                     values.push(animation_play_state);
+                    values.push(
+                        Dom::attribute(dom, node, "style")
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
                     (node, values)
                 })
                 .collect::<Vec<_>>();

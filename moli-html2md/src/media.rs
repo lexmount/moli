@@ -78,10 +78,19 @@ fn is_explicit_placeholder(value: &str) -> bool {
     )
 }
 
-fn largest_srcset_candidate(srcset: &str, image: bool) -> Option<Cow<'_, str>> {
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SrcsetCandidate<'a> {
+    pub url: &'a str,
+    pub descriptor: &'a str,
+    pub score: f64,
+}
+
+#[doc(hidden)]
+pub fn parse_srcset(srcset: &str) -> Vec<SrcsetCandidate<'_>> {
     let bytes = srcset.as_bytes();
     let mut offset = 0;
-    let mut best: Option<(&str, f64)> = None;
+    let mut candidates = Vec::new();
     while offset < bytes.len() {
         while offset < bytes.len() && (bytes[offset].is_ascii_whitespace() || bytes[offset] == b',')
         {
@@ -100,55 +109,111 @@ fn largest_srcset_candidate(srcset: &str, image: bool) -> Option<Cow<'_, str>> {
         }
         let url = &srcset[url_start..url_end];
         let ended_with_comma = url_end < offset;
+        if ended_with_comma {
+            if !url.is_empty() {
+                candidates.push(SrcsetCandidate {
+                    url,
+                    descriptor: "",
+                    score: 1.0,
+                });
+            }
+            continue;
+        }
+
         let descriptor_start = offset;
-        if !ended_with_comma {
-            while offset < bytes.len() && bytes[offset] != b',' {
-                offset += 1;
+        let mut parentheses = 0usize;
+        while offset < bytes.len() {
+            match bytes[offset] {
+                b'(' => parentheses += 1,
+                b')' => parentheses = parentheses.saturating_sub(1),
+                b',' if parentheses == 0 => break,
+                _ => {}
             }
+            offset += 1;
         }
-        let descriptors = if ended_with_comma {
-            ""
+        let descriptor = srcset[descriptor_start..offset].trim();
+        let score = if descriptor.is_empty() {
+            Some(1.0)
+        } else if !descriptor.bytes().any(|byte| byte.is_ascii_whitespace()) {
+            descriptor_score(descriptor)
         } else {
-            &srcset[descriptor_start..offset]
-        }
-        .split_ascii_whitespace();
-        let mut score = 1.0;
-        let mut valid = true;
-        let mut seen = false;
-        for descriptor in descriptors {
-            if seen {
-                valid = false;
-                break;
-            }
-            seen = true;
-            score = if let Some(value) = descriptor.strip_suffix('w') {
-                value
-                    .parse::<u32>()
-                    .ok()
-                    .filter(|value| *value > 0)
-                    .map(f64::from)
-            } else if let Some(value) = descriptor.strip_suffix('x') {
-                value
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|value| value.is_finite() && *value > 0.0)
-            } else {
-                None
-            }
-            .unwrap_or_else(|| {
-                valid = false;
-                0.0
+            None
+        };
+        if let Some(score) = score
+            && !url.is_empty()
+        {
+            candidates.push(SrcsetCandidate {
+                url,
+                descriptor,
+                score,
             });
         }
-        if valid
-            && !url.is_empty()
-            && safe_url(url, image)
-            && best.is_none_or(|(_, current)| score >= current)
-        {
-            best = Some((url, score));
+    }
+    candidates
+}
+
+fn descriptor_score(descriptor: &str) -> Option<f64> {
+    if let Some(value) = descriptor.strip_suffix('w') {
+        return valid_positive_integer(value).map(|value| value as f64);
+    }
+    let value = descriptor.strip_suffix('x')?;
+    valid_positive_float(value)
+}
+
+fn valid_positive_integer(value: &str) -> Option<u64> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse::<u64>().ok())
+        .flatten()
+        .filter(|value| *value > 0)
+}
+
+fn valid_positive_float(value: &str) -> Option<f64> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || matches!(bytes[0], b'+' | b'-') {
+        return None;
+    }
+    let mut offset = 0;
+    while offset < bytes.len() && bytes[offset].is_ascii_digit() {
+        offset += 1;
+    }
+    if offset == 0 {
+        return None;
+    }
+    if bytes.get(offset) == Some(&b'.') {
+        offset += 1;
+        let fraction = offset;
+        while offset < bytes.len() && bytes[offset].is_ascii_digit() {
+            offset += 1;
+        }
+        if fraction == offset {
+            return None;
         }
     }
-    best.map(|(url, _)| Cow::Owned(url.to_owned()))
+    if matches!(bytes.get(offset), Some(b'e' | b'E')) {
+        offset += 1;
+        if matches!(bytes.get(offset), Some(b'+' | b'-')) {
+            offset += 1;
+        }
+        let exponent = offset;
+        while offset < bytes.len() && bytes[offset].is_ascii_digit() {
+            offset += 1;
+        }
+        if exponent == offset {
+            return None;
+        }
+    }
+    (offset == bytes.len())
+        .then(|| value.parse::<f64>().ok())
+        .flatten()
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn largest_srcset_candidate(srcset: &str, image: bool) -> Option<Cow<'_, str>> {
+    parse_srcset(srcset)
+        .into_iter()
+        .filter(|candidate| safe_url(candidate.url, image))
+        .max_by(|left, right| left.score.total_cmp(&right.score))
+        .map(|candidate| Cow::Owned(candidate.url.to_owned()))
 }
 
 pub(crate) fn safe_url(value: &str, image: bool) -> bool {

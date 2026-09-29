@@ -28,6 +28,16 @@ pub(crate) fn has_readable_content<D: Dom + ?Sized>(
             NodeKind::Element("input") if crate::form::input_text(dom, node).is_some() => {
                 return true;
             }
+            NodeKind::Element("textarea") => {
+                if let Some(value) = crate::form::textarea_text(dom, node) {
+                    if !value.trim().is_empty() {
+                        return true;
+                    }
+                    // A present live value is authoritative even when the user
+                    // cleared it. Do not inspect serialized default children.
+                    continue;
+                }
+            }
             NodeKind::Element(_) if depth > 0 && fallback_text(dom, node).is_some() => return true,
             _ => {}
         }

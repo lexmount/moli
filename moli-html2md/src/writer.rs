@@ -107,18 +107,18 @@ impl<'a> Writer<'a> {
         }
         self.flush_code();
         let text = std::mem::take(&mut self.pending_text);
-        let mut remaining = text.as_str();
-        while let Some((start, end)) = crate::math::next_span(remaining) {
-            self.plain_text(&remaining[..start]);
-            let math = &remaining[start..end];
+        let mut consumed = 0;
+        for (start, end) in crate::math::spans(&text) {
+            self.plain_text(&text[consumed..start]);
+            let math = &text[start..end];
             self.prepare_inline(math.chars().next().expect("nonempty math span"));
             // TeX commands, indices and alignment characters carry meaning;
             // CommonMark escaping changes that meaning in math-aware readers.
             self.output.push_str(math);
             self.line_digits = None;
-            remaining = &remaining[end..];
+            consumed = end;
         }
-        self.plain_text(remaining);
+        self.plain_text(&text[consumed..]);
     }
 
     pub(crate) fn inline_html(&mut self, markup: &str) {

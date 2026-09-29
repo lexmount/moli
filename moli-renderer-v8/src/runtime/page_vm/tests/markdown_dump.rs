@@ -41,13 +41,16 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <p style="opacity:0;animation-name:spin">Animated hidden text</p>
                 <style>@KEYFRAMES fade-in { from { opacity:0 } to { opacity:1 } }</style>
                 <p style="opacity:0;animation:fade-in 0.25s ease-in forwards">Animated revealed text</p>
+                <style>@keyframes overridden { to { opacity:1 } } @keyframes overridden { from { opacity:0 } to { opacity:0 } }</style>
+                <p style="opacity:0;animation:overridden 1s forwards">Overridden animation text</p>
                 <style>@keyframes spin { from { transform:rotate(0deg) } to { transform:rotate(1turn) } }</style>
                 <p style="opacity:0;animation:spin 1s forwards">Animated rotation text</p>
                 <p style="opacity:0;animation-name:fade-in,spin;animation-duration:0s,1s;animation-fill-mode:forwards">Zero-duration reveal text</p>
                 <p style="opacity:0;animation:fade-in 1s infinite forwards">Repeating reveal text</p>
                 <p style="opacity:0;animation:fade-in 1s reverse forwards">Reverse reveal text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
-                <p>Mass 2.4 × 10<span style="position:relative;top:-0.5em;line-height:0">−17</span> J; m<span style="position:relative;bottom:-0.25em;line-height:0">n</span></p>
+                <p>Mass 2.4 × 10<span style="vertical-align:super">−17</span> J; m<span style="vertical-align:sub">n</span></p>
+                <p>Account <span style="position:relative;top:-2px">settings</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
                 <img style="width:1px;height:1px" src="/status.gif" alt="Upload complete">
                 <img style="opacity:0" data-src="/article.jpg" src="/spacer.gif" alt="Article photo">
@@ -76,9 +79,11 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Animated rotation text", "Zero-duration reveal text", "Repeating reveal text", "Reverse reveal text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Overridden animation text", "Animated rotation text", "Zero-duration reveal text", "Repeating reveal text", "Reverse reveal text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
+            assert!(output.contains("Account settings"), "{output}");
+            assert!(!output.contains("<sup>settings</sup>"), "{output}");
         }
         page.vm_mut().eval("document.getElementById('waiting').className = ''").unwrap();
         assert!(page.render_page_dump(options(false)).contains("Translation pending"));
@@ -150,6 +155,14 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!expanded.contains("Hidden template"), "{expanded}");
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
+                <button aria-expanded="false" aria-controls="nested-panel">Nested panel</button>
+                <section id="nested-panel" style="visibility:hidden">Lead <p><span>Full disclosure body</span></p><div style="visibility:hidden"><span>Nested hidden duplicate</span></div></section>`;
+        "##).unwrap();
+        let nested_visibility = page.render_page_dump(options(false));
+        assert!(nested_visibility.contains("Full disclosure body"), "{nested_visibility}");
+        assert!(!nested_visibility.contains("Nested hidden duplicate"), "{nested_visibility}");
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
                 <button onclick="console.log('tracking')">Save</button>
                 <section id="tracking" style="display:none">Hidden telemetry state</section>
                 <button onclick="console.log(&quot;document.getElementById('diagnostic')&quot;)">Log</button>
@@ -162,6 +175,11 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="history" style="display:none">Query-selected history</section>
                 <button onclick="return revealElement(document.getElementById('records'))">Records</button>
                 <section id="records" style="display:none">Function-revealed records</section>
+                <button onclick="if(false) document.getElementById('unreachable').style.display='block'">Never</button>
+                <section id="unreachable" style="display:none">Unreachable hidden state</section>
+                <button onclick="showNext(document.getElementById('anchor'))">Next</button>
+                <section id="anchor" style="display:none">Hidden anchor metadata</section>
+                <section style="display:none">Actual next disclosure</section>
                 <button onclick="inspectElement(document.getElementById('inspected'))">Inspect</button>
                 <section id="inspected" style="display:none">Function-read hidden state</section>
                 <button onclick="revealUnrelated(document.getElementById('unrelated-target'))">Other</button>
@@ -172,8 +190,11 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!related.contains("Hidden diagnostic state"), "{related}");
         assert!(!related.contains("Hidden read-only state"), "{related}");
         assert!(!related.contains("Hidden commented state"), "{related}");
-        assert!(related.contains("Query-selected history"), "{related}");
-        assert!(related.contains("Function-revealed records"), "{related}");
+        assert!(!related.contains("Query-selected history"), "{related}");
+        assert!(!related.contains("Function-revealed records"), "{related}");
+        assert!(!related.contains("Unreachable hidden state"), "{related}");
+        assert!(!related.contains("Hidden anchor metadata"), "{related}");
+        assert!(!related.contains("Actual next disclosure"), "{related}");
         assert!(!related.contains("Function-read hidden state"), "{related}");
         assert!(!related.contains("Unrelated mutation hidden state"), "{related}");
         page.vm_mut().eval(r#"
@@ -212,15 +233,26 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!controls.contains("Initial"), "{controls}");
         assert!(!controls.contains("Original notes"), "{controls}");
         page.vm_mut().eval(r#"
+            document.body.innerHTML = '<div title="Group"><textarea id="notes">Old default</textarea></div>';
+            document.getElementById('notes').value = '';
+        "#).unwrap();
+        let cleared = page.render_page_dump(options(false));
+        assert!(!cleared.contains("Old default"), "{cleared}");
+        page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <img srcset="small.png 1x, large.png 2x" alt="Responsive">
                 <img srcset="https://cdn.example/c_fill,w_640/photo.jpg 1x" alt="Comma URL">
-                <img data-srcset="lazy-small.png 1x, lazy-large.png 2x" alt="Lazy responsive">`;
+                <img data-srcset="lazy-small.png 1x, lazy-large.png 2x" alt="Lazy responsive">
+                <img srcset="safe.jpg 1x, invalid.jpg +2x" alt="Invalid density">
+                <img srcset="invalid.jpg test(a, phantom.jpg 4x, b), safe-parentheses.jpg 1x" alt="Parentheses">`;
         "#).unwrap();
         let responsive = page.render_page_dump(options(false));
         assert!(responsive.contains("![Responsive](https://example.test/large.png)"), "{responsive}");
         assert!(responsive.contains("![Comma URL](https://cdn.example/c_fill,w_640/photo.jpg)"), "{responsive}");
         assert!(responsive.contains("![Lazy responsive](https://example.test/lazy-large.png)"), "{responsive}");
+        assert!(responsive.contains("![Invalid density](https://example.test/safe.jpg)"), "{responsive}");
+        assert!(responsive.contains("![Parentheses](https://example.test/safe-parentheses.jpg)"), "{responsive}");
+        assert!(!responsive.contains("phantom.jpg"), "{responsive}");
         page.vm_mut().eval("document.documentElement.style.display = 'none'").unwrap();
         assert!(page.render_page_dump(options(false)).is_empty());
     }).await;

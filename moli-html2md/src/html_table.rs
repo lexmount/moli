@@ -126,7 +126,7 @@ pub(crate) fn render<D: Dom + ?Sized>(
                     && !allowed(tag)
                 {
                     for id in anchor_targets.targets(dom, node) {
-                        if emitted_anchors.insert(id) {
+                        if emitted_anchors.insert(id.to_owned()) {
                             output.push_str(&crate::anchors::markup(id));
                         }
                     }
@@ -138,6 +138,11 @@ pub(crate) fn render<D: Dom + ?Sized>(
                     )
                     | NodeKind::Other => {}
                     NodeKind::Element("math") => {
+                        for id in crate::anchors::within(dom, node, limit - depth, anchor_targets) {
+                            if emitted_anchors.insert(id.clone()) {
+                                output.push_str(&crate::anchors::markup(&id));
+                            }
+                        }
                         output.push_str(&crate::mathml::render(dom, node, limit - depth))
                     }
                     NodeKind::Element("input") => {
@@ -223,6 +228,13 @@ pub(crate) fn render<D: Dom + ?Sized>(
                         if let Some((math, relative_depth)) =
                             crate::mathml::primary_alternative(dom, node, limit - depth)
                         {
+                            for id in
+                                crate::anchors::within(dom, node, limit - depth, anchor_targets)
+                            {
+                                if emitted_anchors.insert(id.clone()) {
+                                    output.push_str(&crate::anchors::markup(&id));
+                                }
+                            }
                             output.push_str(&crate::mathml::render(
                                 dom,
                                 math,

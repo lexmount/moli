@@ -21,6 +21,14 @@ pub(super) struct MarkdownDom<'a> {
     fragment_links: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VisibilityMode {
+    Normal,
+    RootVeil,
+    DisclosureVeil,
+    Hidden,
+}
+
 impl<'a> MarkdownDom<'a> {
     pub(super) fn new(
         dom: &'a NativeDom,
@@ -86,7 +94,6 @@ impl<'a> MarkdownDom<'a> {
                     .flatten()
             })
             .collect();
-        let visible_handler_functions = visible_handler_functions(dom);
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
@@ -98,19 +105,6 @@ impl<'a> MarkdownDom<'a> {
                         .split_ascii_whitespace()
                         .filter(|id| target_is_disclosure(dom, &targets, id)),
                 );
-            }
-            for attribute_name in dom.get_attribute_names(*node).unwrap_or_default() {
-                if !attribute_name.starts_with("on") {
-                    continue;
-                }
-                let Some(handler) = Dom::attribute(dom, *node, &attribute_name) else {
-                    continue;
-                };
-                for target in inline_disclosure_targets(handler, &visible_handler_functions) {
-                    if target_is_disclosure(dom, &targets, target) {
-                        disclosures.insert(target);
-                    }
-                }
             }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
@@ -193,7 +187,7 @@ impl<'a> MarkdownDom<'a> {
         let mut subscripts = HashSet::new();
         let mut resolved_urls = HashMap::new();
         let mut unchecked_controls = HashSet::new();
-        let mut visibility_restored_regions = HashSet::new();
+        let mut visibility_modes = HashMap::new();
         for (node, values) in styles {
             let role = Dom::attribute(dom, node, "role").unwrap_or_default();
             if matches!(
@@ -272,12 +266,38 @@ impl<'a> MarkdownDom<'a> {
                                 == (background.0, background.1, background.2)
                     });
             let document_root = Some(node) == document_element || Some(node) == body;
-            let visibility_restored = document_visibility_is_hidden
-                && !document_root
-                && values.get(1).is_some_and(|value| value == "visible");
-            if visibility_restored {
-                visibility_restored_regions.insert(node);
-            }
+            let parent_visibility = dom
+                .parent_node(node)
+                .and_then(|parent| visibility_modes.get(&parent).copied())
+                .unwrap_or(VisibilityMode::Normal);
+            let computed_visibility = values.get(1).map(String::as_str).unwrap_or("visible");
+            let visibility_mode = if document_root
+                && document_visibility_is_hidden
+                && matches!(computed_visibility, "hidden" | "collapse")
+            {
+                VisibilityMode::RootVeil
+            } else if disclosure_root && matches!(computed_visibility, "hidden" | "collapse") {
+                VisibilityMode::DisclosureVeil
+            } else if computed_visibility == "visible" {
+                VisibilityMode::Normal
+            } else if matches!(computed_visibility, "hidden" | "collapse") {
+                match parent_visibility {
+                    VisibilityMode::RootVeil
+                        if !explicit_visibility_hidden(values.get(21).map(String::as_str)) =>
+                    {
+                        VisibilityMode::RootVeil
+                    }
+                    VisibilityMode::DisclosureVeil
+                        if !explicit_visibility_hidden(values.get(21).map(String::as_str)) =>
+                    {
+                        VisibilityMode::DisclosureVeil
+                    }
+                    _ => VisibilityMode::Hidden,
+                }
+            } else {
+                parent_visibility
+            };
+            visibility_modes.insert(node, visibility_mode);
             let has_bounded_final_opacity =
                 has_bounded_final_opacity(&values, &final_opacity_animations);
             if ((values.first().is_some_and(|value| value == "none")
@@ -317,23 +337,12 @@ impl<'a> MarkdownDom<'a> {
                 inline_boundaries.insert(node);
             }
             if matches!(Dom::node_kind(dom, node), NodeKind::Element("span")) {
-                let relative = values.get(3).is_some_and(|position| position == "relative");
                 let vertical_align = values.get(7).map(String::as_str).unwrap_or_default();
-                if vertical_align == "super"
-                    || (relative
-                        && values
-                            .get(5)
-                            .and_then(|value| px(value))
-                            .is_some_and(|top| top < -1.0))
-                {
+                let authored_vertical_align =
+                    explicit_vertical_align(values.get(21).map(String::as_str));
+                if vertical_align == "super" || authored_vertical_align == Some("super") {
                     superscripts.insert(node);
-                } else if vertical_align == "sub"
-                    || (relative
-                        && values
-                            .get(6)
-                            .and_then(|value| px(value))
-                            .is_some_and(|bottom| bottom < -1.0))
-                {
+                } else if vertical_align == "sub" || authored_vertical_align == Some("sub") {
                     subscripts.insert(node);
                 }
             }
@@ -374,16 +383,7 @@ impl<'a> MarkdownDom<'a> {
                     }
                 }
             }
-            if values
-                .get(1)
-                .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
-                && !disclosure_root
-                && !disclosure_path
-                && (!document_visibility_is_hidden
-                    || dom
-                        .parent_node(node)
-                        .is_some_and(|parent| visibility_restored_regions.contains(&parent)))
-            {
+            if visibility_mode == VisibilityMode::Hidden && !disclosure_root && !disclosure_path {
                 invisible.insert(node);
             }
         }
@@ -508,8 +508,11 @@ pub(super) fn final_opacity_animation_names<'a>(
             else {
                 continue;
             };
+            let name = rule.name;
             if final_keyframe_reveals(&rule.css_text[canonical_open + 1..canonical_close]) {
-                result.insert(rule.name);
+                result.insert(name);
+            } else {
+                result.remove(&name);
             }
         }
     }
@@ -562,206 +565,36 @@ fn target_is_disclosure<D: Dom + ?Sized>(
     })
 }
 
-fn inline_disclosure_targets<'a>(
-    value: &'a str,
-    visible_functions: &HashSet<String>,
-) -> Vec<&'a str> {
-    let mut result = Vec::new();
-    for (marker, fragment) in [
-        ("document.getElementById", false),
-        ("document.querySelector", true),
-    ] {
-        for offset in code_marker_offsets(value, marker) {
-            let remaining = &value[offset + marker.len()..];
-            let Some((literal, end)) = quoted_call_argument(remaining) else {
-                continue;
-            };
-            let Some(target) = literal
-                .strip_prefix('#')
-                .or_else(|| (!fragment).then_some(literal))
-                .filter(|target| !target.is_empty())
-            else {
-                continue;
-            };
-            let direct_mutation = sets_display_visible(&remaining[end..], None);
-            let named_mutation = enclosing_function_name(&value[..offset])
-                .is_some_and(|name| visible_functions.contains(name));
-            if direct_mutation || named_mutation {
-                result.push(target);
-            }
-        }
-    }
-    result
+fn explicit_visibility_hidden(style: Option<&str>) -> bool {
+    style.is_some_and(|style| {
+        style.split(';').any(|declaration| {
+            declaration.split_once(':').is_some_and(|(name, value)| {
+                name.trim().eq_ignore_ascii_case("visibility")
+                    && matches!(
+                        value
+                            .split('!')
+                            .next()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_ascii_lowercase()
+                            .as_str(),
+                        "hidden" | "collapse"
+                    )
+            })
+        })
+    })
 }
 
-fn visible_handler_functions(dom: &NativeDom) -> HashSet<String> {
-    let mut result = HashSet::new();
-    let mut pending = vec![dom.document_node_id()];
-    while let Some(node) = pending.pop() {
-        if !matches!(Dom::node_kind(dom, node), NodeKind::Element("script")) {
-            pending.extend(dom.child_ids(node));
-            continue;
-        }
-        let source = descendant_text(dom, node);
-        for offset in code_marker_offsets(&source, "function") {
-            let signature = &source[offset + "function".len()..];
-            let Some((name, parameter, body)) = function_parts(signature) else {
-                continue;
-            };
-            if function_sets_parameter_visible(body, parameter) {
-                result.insert(name.to_owned());
-            }
-        }
-    }
-    result
-}
-
-fn function_parts(source: &str) -> Option<(&str, &str, &str)> {
-    let source = source.trim_start();
-    let name_end = source.find(|character: char| !is_identifier(character))?;
-    let name = &source[..name_end];
-    if name.is_empty() {
-        return None;
-    }
-    let parameters = source[name_end..].trim_start().strip_prefix('(')?;
-    let close = parameters.find(')')?;
-    let parameter = parameters[..close].trim();
-    if parameter.is_empty() || parameter.contains(',') || !parameter.chars().all(is_identifier) {
-        return None;
-    }
-    let rest = parameters[close + 1..].trim_start();
-    let body_start = rest.find('{')?;
-    let body_end = matching_delimiter(rest, body_start, '{', '}')?;
-    Some((name, parameter, &rest[body_start + 1..body_end]))
-}
-
-fn function_sets_parameter_visible(body: &str, parameter: &str) -> bool {
-    for offset in code_marker_offsets(body, ".style.display") {
-        let owner = body[..offset]
-            .trim_end()
-            .rsplit_once(|character: char| !is_identifier(character))
-            .map_or(body[..offset].trim_end(), |(_, owner)| owner);
-        if owner.is_empty()
-            || !sets_display_visible(&body[offset + ".style.display".len()..], Some(""))
-        {
-            continue;
-        }
-        if owner == parameter || alias_depends_on_parameter(&body[..offset], owner, parameter) {
-            return true;
-        }
-    }
-    false
-}
-
-fn alias_depends_on_parameter(prefix: &str, owner: &str, parameter: &str) -> bool {
-    let Some(offset) = code_marker_offsets(prefix, owner)
-        .into_iter()
+fn explicit_vertical_align(style: Option<&str>) -> Option<&str> {
+    style?
+        .split(';')
+        .filter_map(|declaration| declaration.split_once(':'))
         .rev()
-        .find(|offset| {
-            let before = prefix[..*offset].chars().next_back();
-            let after = prefix[*offset + owner.len()..].chars().next();
-            before.is_none_or(|character| !is_identifier(character))
-                && after.is_none_or(|character| !is_identifier(character))
-                && prefix[*offset + owner.len()..]
-                    .trim_start()
-                    .starts_with('=')
+        .find_map(|(name, value)| {
+            name.trim()
+                .eq_ignore_ascii_case("vertical-align")
+                .then(|| value.trim())
         })
-    else {
-        return false;
-    };
-    let assignment = prefix[offset + owner.len()..].trim_start();
-    let Some(right) = assignment.strip_prefix('=') else {
-        return false;
-    };
-    let right = right.split_once(';').map_or(right, |(right, _)| right);
-    contains_identifier(right, parameter)
-}
-
-fn contains_identifier(value: &str, identifier: &str) -> bool {
-    code_marker_offsets(value, identifier)
-        .into_iter()
-        .any(|offset| {
-            let before = value[..offset].chars().next_back();
-            let after = value[offset + identifier.len()..].chars().next();
-            before.is_none_or(|character| !is_identifier(character))
-                && after.is_none_or(|character| !is_identifier(character))
-        })
-}
-
-fn enclosing_function_name(value: &str) -> Option<&str> {
-    let value = value.trim_end();
-    let value = value.strip_suffix('(')?.trim_end();
-    let start = value
-        .rfind(|character: char| !is_identifier(character))
-        .map_or(0, |offset| offset + 1);
-    let name = &value[start..];
-    (!name.is_empty()).then_some(name)
-}
-
-fn quoted_call_argument(value: &str) -> Option<(&str, usize)> {
-    let leading = value.len() - value.trim_start().len();
-    let value = value.trim_start().strip_prefix('(')?;
-    let after_open = value.len() - value.trim_start().len();
-    let value = value.trim_start();
-    let quote = value
-        .chars()
-        .next()
-        .filter(|quote| matches!(quote, '\'' | '"'))?;
-    let literal = &value[quote.len_utf8()..];
-    let end = literal.find(quote)?;
-    let after_literal = literal[end + quote.len_utf8()..].trim_start();
-    if !after_literal.starts_with(')') {
-        return None;
-    }
-    let consumed = leading
-        + 1
-        + after_open
-        + quote.len_utf8()
-        + end
-        + quote.len_utf8()
-        + (literal[end + quote.len_utf8()..].len() - after_literal.len())
-        + 1;
-    Some((&literal[..end], consumed))
-}
-
-fn sets_display_visible(value: &str, display_already_consumed: Option<&str>) -> bool {
-    let value = if display_already_consumed.is_some() {
-        value
-    } else {
-        let Some(value) = value.trim_start().strip_prefix(".style.display") else {
-            return false;
-        };
-        value
-    };
-    let Some(value) = value.trim_start().strip_prefix('=') else {
-        return false;
-    };
-    let value = value.trim_start();
-    let Some(quote) = value
-        .chars()
-        .next()
-        .filter(|quote| matches!(quote, '\'' | '"'))
-    else {
-        return false;
-    };
-    let literal = &value[quote.len_utf8()..];
-    let Some(end) = literal.find(quote) else {
-        return false;
-    };
-    matches!(
-        literal[..end].trim(),
-        "" | "block"
-            | "inline"
-            | "inline-block"
-            | "flex"
-            | "inline-flex"
-            | "grid"
-            | "inline-grid"
-            | "list-item"
-            | "table"
-            | "table-row"
-            | "table-cell"
-    )
 }
 
 fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {
@@ -877,71 +710,22 @@ fn matching_delimiter(value: &str, start: usize, open: char, close: char) -> Opt
     None
 }
 
-fn is_identifier(character: char) -> bool {
-    character == '_' || character == '$' || character.is_ascii_alphanumeric()
-}
-
-fn descendant_text(dom: &NativeDom, root: NativeNodeId) -> String {
-    let mut pending = vec![root];
-    let mut result = String::new();
-    while let Some(node) = pending.pop() {
-        if let NodeKind::Text(value) = Dom::node_kind(dom, node) {
-            result.push_str(value);
-        }
-        let mut children = Vec::new();
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
-            children.push(id);
-            child = dom.next_sibling(id);
-        }
-        pending.extend(children.into_iter().rev());
-    }
-    result
-}
-
 fn px(value: &str) -> Option<f32> {
     value.strip_suffix("px")?.trim().parse().ok()
 }
 
 fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
-    let mut resolved = Vec::new();
-    let bytes = value.as_bytes();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        while offset < bytes.len() && (bytes[offset].is_ascii_whitespace() || bytes[offset] == b',')
-        {
-            offset += 1;
-        }
-        let start = offset;
-        while offset < bytes.len() && !bytes[offset].is_ascii_whitespace() {
-            offset += 1;
-        }
-        if start == offset {
-            break;
-        }
-        let mut end = offset;
-        while end > start && bytes[end - 1] == b',' {
-            end -= 1;
-        }
-        let ended_with_comma = end < offset;
-        let descriptor_start = offset;
-        if !ended_with_comma {
-            while offset < bytes.len() && bytes[offset] != b',' {
-                offset += 1;
-            }
-        }
-        let descriptor = if ended_with_comma {
-            ""
-        } else {
-            value[descriptor_start..offset].trim()
-        };
-        let url = base_url.join(&value[start..end]).ok()?;
-        resolved.push(if descriptor.is_empty() {
-            url.to_string()
-        } else {
-            format!("{url} {descriptor}")
-        });
-    }
+    let resolved: Vec<_> = moli_html2md::parse_srcset(value)
+        .into_iter()
+        .filter_map(|candidate| {
+            let url = base_url.join(candidate.url).ok()?;
+            Some(if candidate.descriptor.is_empty() {
+                url.to_string()
+            } else {
+                format!("{url} {}", candidate.descriptor)
+            })
+        })
+        .collect();
     (!resolved.is_empty()).then(|| resolved.join(", "))
 }
 

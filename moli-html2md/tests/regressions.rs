@@ -1295,3 +1295,61 @@ fn fallback_block_elements_separate_neighboring_words() {
         );
     }
 }
+
+#[test]
+fn live_textarea_value_replaces_or_clears_serialized_default_in_all_paths() {
+    for wrapper in [
+        "<div title='Group'>{}</div>",
+        "<table><tr><td colspan='2'>{}</td></tr></table>",
+    ] {
+        let current = markdown(
+            &wrapper.replace(
+                "{}",
+                "<textarea value='Current user text'>Old default</textarea>",
+            ),
+            false,
+        );
+        assert!(current.contains("Current user text"), "{current}");
+        assert!(!current.contains("Old default"), "{current}");
+
+        let cleared = markdown(
+            &wrapper.replace("{}", "<textarea value=''>Old default</textarea>"),
+            false,
+        );
+        assert!(!cleared.contains("Old default"), "{cleared}");
+    }
+}
+
+#[test]
+fn html_table_math_delegation_preserves_referenced_descendant_targets() {
+    let result = markdown(
+        "<a href='#L1'>Term</a><table><tr><td colspan='2'><math><mrow id='L1'><mi>x</mi></mrow></math></td></tr></table>",
+        false,
+    );
+    assert!(result.contains("<a id=\"L1\"></a>"), "{result}");
+    assert!(result.contains("<math>"), "{result}");
+
+    let alternative = markdown(
+        "<a href='#wrapped'>Term</a><table><tr><td colspan='2'><span id='wrapped'><span><math><mi>x</mi></math></span><span aria-hidden='true'>visual</span></span></td></tr></table>",
+        false,
+    );
+    assert!(
+        alternative.contains("<a id=\"wrapped\"></a>"),
+        "{alternative}"
+    );
+    assert!(alternative.contains("<math>"), "{alternative}");
+}
+
+#[test]
+fn srcset_rejects_invalid_numbers_and_commas_inside_parentheses() {
+    let result = markdown(
+        "<img alt='Density' srcset='/safe.jpg 1x, /invalid.jpg +2x, /also-invalid.jpg 2.x'><img alt='Parentheses' srcset='/invalid.jpg test(a, /phantom.jpg 4x, b), /safe-parentheses.jpg 1x'>",
+        false,
+    );
+    assert!(result.contains("![Density](/safe.jpg)"), "{result}");
+    assert!(
+        result.contains("![Parentheses](/safe-parentheses.jpg)"),
+        "{result}"
+    );
+    assert!(!result.contains("phantom.jpg"), "{result}");
+}
