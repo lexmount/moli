@@ -106,10 +106,14 @@ globalThis.__mutationRecordNodeListResult = "pending";
     check(removed.target === fragment && added.target === host, label + ": record targets");
     checkRecord(removed, [], nodes);
     checkRecord(added, nodes, []);
+    host.replaceChildren();
+    const replacement = observer.takeRecords();
+    check(replacement.length === 1, label + ": one replacement record");
+    checkRecord(replacement[0], [], nodes);
     observer.disconnect();
-    host.removeChild(nodes[0]);
     checkRecord(added, nodes, []);
     checkRecord(removed, [], nodes);
+    checkRecord(replacement[0], [], nodes);
   }
 
   label = "intrinsic prototype";
