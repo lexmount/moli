@@ -132,7 +132,7 @@ struct EventBaseTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable, receiver)]
 struct BeforeUnloadEventTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "returnValue",
@@ -156,7 +156,7 @@ struct CloseEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable, receiver)]
 struct ClipboardEventTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "clipboardData",
@@ -166,7 +166,7 @@ struct ClipboardEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable, receiver)]
 struct ClipboardChangeEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = clipboard_change_event_types_getter_function)]
     types: (),
@@ -204,7 +204,7 @@ struct FormDataEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable, receiver)]
 struct CommandEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = command_event_source_getter_function)]
     source: (),
@@ -214,7 +214,7 @@ struct CommandEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable, receiver)]
 struct ToggleEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
     source: (),
@@ -288,8 +288,7 @@ struct KeyboardEventTemplateMethodsDeclaration {
     #[webapi(
         method = "getModifierState",
         length = 1,
-        callback = event_get_modifier_state_callback,
-        receiver = web_api_interfaces::KeyboardEvent::is_instance
+        callback = event_get_modifier_state_callback
     )]
     get_modifier_state: (),
 }
@@ -300,8 +299,7 @@ struct MouseEventTemplateMethodsDeclaration {
     #[webapi(
         method = "getModifierState",
         length = 1,
-        callback = event_get_modifier_state_callback,
-        receiver = web_api_interfaces::MouseEvent::is_instance
+        callback = event_get_modifier_state_callback
     )]
     get_modifier_state: (),
 
