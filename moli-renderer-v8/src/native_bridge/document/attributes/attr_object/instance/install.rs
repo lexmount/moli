@@ -17,8 +17,6 @@ use moli_webapi_declare::WebApiObject;
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Attr)]
 struct AttrInstanceMethodsDeclaration {
-    #[webapi(method, length = 0, callback = attr_instance_is_same_node_callback)]
-    is_same_node: (),
     #[webapi(method, length = 0, callback = attr_instance_clone_node_callback)]
     clone_node: (),
     #[webapi(
@@ -63,14 +61,6 @@ fn attr_instance_clone_node_callback<'a>(
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
-}
-
-fn attr_instance_is_same_node_callback<'a>(
-    _scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set_bool(args.this().strict_equals(args.get(0)));
 }
 
 fn attr_instance_lookup_namespace_uri_callback<'a>(

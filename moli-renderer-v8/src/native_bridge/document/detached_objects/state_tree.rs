@@ -621,23 +621,6 @@ fn detached_native_element_child_objects<'s>(
     )
 }
 
-fn detached_native_contains<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-    other: v8::Local<'s, v8::Object>,
-) -> Option<bool> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
-    let other_handle = detached_native_handle_for_runtime(scope, runtime_ptr, other)?;
-    Some(
-        handle == other_handle
-            || unsafe { &*runtime_ptr }
-                .dom_host()
-                .dom()
-                .contains(handle, other_handle),
-    )
-}
-
 fn detached_native_is_connected_to_tree_root<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -1381,32 +1364,6 @@ pub(crate) fn detached_is_connected<'s>(
                 })
                 .flatten()
         });
-    }
-    false
-}
-
-pub(in crate::native_bridge::document) fn detached_contains<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-    other: v8::Local<'s, v8::Object>,
-) -> bool {
-    if node.strict_equals(other.into()) {
-        return true;
-    }
-    if let Some(contains) = detached_native_contains(scope, node, other) {
-        return contains;
-    }
-    if let Some(delegate) = detached_live_delegate_object(scope, node) {
-        let candidate = detached_live_delegate_object(scope, other).unwrap_or(other);
-        return call_object_method(scope, delegate, "contains", &[candidate.into()])
-            .is_some_and(|value| value.boolean_value(scope));
-    }
-    let mut current = detached_parent_node_object(scope, other);
-    while let Some(candidate) = current {
-        if candidate.strict_equals(node.into()) {
-            return true;
-        }
-        current = detached_parent_node_object(scope, candidate);
     }
     false
 }

@@ -19,8 +19,7 @@ fn require_node_argument<'s>(
     value: v8::Local<'s, v8::Value>,
     message: &'static str,
 ) -> bool {
-    if v8::Local::<v8::Object>::try_from(value)
-        .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+    if webidl::convert::<NodeReference>(scope, value, webidl::Context::argument("Node", 1)).is_ok()
     {
         return true;
     }
@@ -592,7 +591,10 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
         rv.set_null();
         return;
     };
-    let child = match existing_node_arg(scope, runtime_ptr, args.get(0)) {
+    let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
+        return;
+    };
+    let child = match existing_node_arg(scope, runtime_ptr, parsed.node.0.into()) {
         ExistingNodeArgument::Handle(child) => child,
         ExistingNodeArgument::ForeignNode => {
             throw_dom_exception(

@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn legacy_node_arguments_use_native_brands_and_callee_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://node-arguments.test/",
+        "<!doctype html><body><iframe id=child></iframe></body>",
+    );
+    vm.eval(include_str!("node_arguments.js")).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__nodeArgumentResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn legacy_node_relations_share_native_trees_across_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://node-relations.test/",
+        "<!doctype html><body><iframe id=child></iframe></body>",
+    );
+    vm.eval(include_str!("node_relations.js")).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__nodeArgumentResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
 fn detached_child_window_event_methods_preserve_receiver_identity() {
     let mut vm = new_parsed_test_vm(
         "https://detached-window-event-receiver.test/",

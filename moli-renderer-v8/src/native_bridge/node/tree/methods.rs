@@ -1,18 +1,25 @@
 use super::*;
-use crate::web_api_interfaces;
 
-pub(in crate::native_bridge) fn node_contains_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_contains_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
+        return;
+    };
+    let Some(other) = parsed.node else {
+        rv.set_bool(false);
+        return;
+    };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         throw_incompatible_method_receiver(scope, "Node", "contains");
         rv.set_bool(false);
         return;
     };
-    let Some(other) = node_or_existing_detached_arg_handle(scope, runtime_ptr, args.get(0)) else {
+    let Some(other) = node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
+    else {
         rv.set_bool(false);
         return;
     };
@@ -42,34 +49,48 @@ pub(in crate::native_bridge) fn node_has_child_nodes_callback(
     rv.set_bool(has_children);
 }
 
-pub(in crate::native_bridge) fn node_is_same_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_is_same_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "Node", "isSameNode");
+    let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
+        return;
+    };
+    let Some(other) = parsed.node else {
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(
-        node_or_existing_detached_arg_handle(scope, runtime_ptr, args.get(0)) == Some(handle),
-    );
+    let same = args.this().strict_equals(other.0.into())
+        || node_runtime_and_handle_from_args_or_detached(scope, &args).is_ok_and(
+            |(runtime_ptr, handle)| {
+                node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
+                    == Some(handle)
+            },
+        );
+    rv.set_bool(same);
 }
 
-pub(in crate::native_bridge) fn node_is_equal_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_is_equal_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<NullableNodeArgs>(scope, &args) else {
+        return;
+    };
+    let Some(other) = parsed.node else {
+        rv.set_bool(false);
+        return;
+    };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         throw_incompatible_method_receiver(scope, "Node", "isEqualNode");
         rv.set_bool(false);
         return;
     };
-    let Some(other_handle) = node_or_existing_detached_arg_handle(scope, runtime_ptr, args.get(0))
+    let Some(other_handle) =
+        node_or_existing_detached_arg_handle(scope, runtime_ptr, other.0.into())
     else {
         rv.set_bool(false);
         return;
@@ -95,6 +116,10 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
     const DOCUMENT_POSITION_DISCONNECTED: u32 = 0x01;
     const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: u32 = 0x20;
 
+    let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
+        return;
+    };
+
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         throw_incompatible_method_receiver(scope, "Node", "compareDocumentPosition");
@@ -104,7 +129,7 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
 
     // Fast path: argument is a Node attached to the same runtime tree.
     if let Some(other_handle) =
-        node_or_existing_detached_arg_handle(scope, runtime_ptr, args.get(0))
+        node_or_existing_detached_arg_handle(scope, runtime_ptr, parsed.node.0.into())
     {
         let runtime = unsafe { &*runtime_ptr };
         let relation = match (
@@ -122,29 +147,14 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
 
     // A native Node from another realm or detached document still compares as
     // disconnected even when this runtime cannot resolve its live tree handle.
-    let other_value = args.get(0);
-    if let Ok(other_object) = v8::Local::<v8::Object>::try_from(other_value)
-        && web_api_interfaces::Node::is_instance(scope, other_object)
-    {
-        let order_bit = disconnected_order_bit(args.this(), other_object);
-        rv.set(
-            v8::Integer::new_from_unsigned(
-                scope,
-                DOCUMENT_POSITION_DISCONNECTED
-                    | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
-                    | order_bit,
-            )
-            .into(),
-        );
-        return;
-    }
-
-    // Truly not a Node-like value — throw TypeError per WebIDL.
-    let message = v8str(
-        scope,
-        "Failed to execute 'compareDocumentPosition' on 'Node': parameter 1 is not of type 'Node'.",
+    let order_bit = disconnected_order_bit(args.this(), parsed.node.0);
+    rv.set(
+        v8::Integer::new_from_unsigned(
+            scope,
+            DOCUMENT_POSITION_DISCONNECTED | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | order_bit,
+        )
+        .into(),
     );
-    scope.throw_exception(v8::Exception::type_error(scope, message));
 }
 
 /// Stable PRECEDING/FOLLOWING choice for two disconnected nodes.

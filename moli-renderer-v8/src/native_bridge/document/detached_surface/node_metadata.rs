@@ -142,36 +142,3 @@ pub(in crate::native_bridge) fn bridge_detached_processing_instruction_target_ca
     let target = detached_processing_instruction_target(scope, node).unwrap_or_default();
     set_string_return_value(scope, &mut rv, &target);
 }
-
-pub(in crate::native_bridge) fn bridge_detached_is_same_node_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(left) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
-    let Ok(right) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
-    rv.set(v8::Boolean::new(scope, left == right).into());
-}
-
-pub(in crate::native_bridge) fn bridge_detached_is_equal_node_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(left) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
-    let Ok(right) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
-    let equal = detached_nodes_equal(scope, left, right);
-    rv.set(v8::Boolean::new(scope, equal).into());
-}

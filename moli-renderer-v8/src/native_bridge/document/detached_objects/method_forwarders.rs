@@ -104,10 +104,19 @@ pub(in crate::native_bridge::document) fn detached_move_before_method_callback<'
 ) {
     let _ = detached_method_forward(scope, args, "__detachedMoveBefore");
 }
-detached_bridge_method_forwarder!(
-    detached_remove_child_method_callback,
-    "__detachedRemoveChild"
-);
+pub(in crate::native_bridge) fn detached_remove_child_method_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if webidl::parse_args::<crate::native_bridge::node::RequiredNodeArgs>(scope, &args).is_none() {
+        return;
+    }
+    match detached_method_forward(scope, args, "__detachedRemoveChild") {
+        Some(value) => rv.set(value),
+        None => rv.set_undefined(),
+    }
+}
 detached_bridge_method_forwarder!(
     detached_replace_child_method_callback,
     "__detachedReplaceChild"
@@ -239,15 +248,6 @@ pub(in crate::native_bridge::document) fn detached_lookup_namespace_uri_method_c
         None => rv.set_null(),
     }
 }
-detached_bridge_method_forwarder!(detached_contains_method_callback, "__detachedContains");
-detached_bridge_method_forwarder!(
-    detached_is_same_node_method_callback,
-    "__detachedIsSameNode"
-);
-detached_bridge_method_forwarder!(
-    detached_is_equal_node_method_callback,
-    "__detachedIsEqualNode"
-);
 pub(in crate::native_bridge) fn detached_clone_node_method_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,
@@ -684,74 +684,6 @@ pub(in crate::native_bridge) fn detached_click_method_callback<'s>(
     if let Some(file_chooser) = outcome.pending_file_chooser {
         unsafe { &mut *runtime_ptr }.record_pending_file_chooser_activation(file_chooser);
     }
-}
-
-pub(in crate::native_bridge::document) fn detached_compare_document_position_method_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    const DOCUMENT_POSITION_DISCONNECTED: u32 = 0x01;
-    const DOCUMENT_POSITION_PRECEDING: u32 = 0x02;
-    const DOCUMENT_POSITION_FOLLOWING: u32 = 0x04;
-    const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: u32 = 0x20;
-
-    let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set(v8::Integer::new_from_unsigned(scope, 0).into());
-        return;
-    };
-    let this = args.this();
-    let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, this) else {
-        rv.set(v8::Integer::new_from_unsigned(scope, 0).into());
-        return;
-    };
-    let other_value = args.get(0);
-    let Ok(other) = v8::Local::<v8::Object>::try_from(other_value) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'compareDocumentPosition' on 'Node': parameter 1 is not of type 'Node'.",
-        );
-        return;
-    };
-    if let Some(other_handle) = detached_native_handle_for_runtime(scope, runtime_ptr, other)
-        .or_else(|| {
-            crate::native_bridge::node_runtime_and_handle_from_object(scope, other)
-                .ok()
-                .and_then(|(other_runtime_ptr, other_handle)| {
-                    (other_runtime_ptr == runtime_ptr).then_some(other_handle)
-                })
-        })
-    {
-        let runtime = unsafe { &*runtime_ptr };
-        let relation = runtime
-            .dom_host()
-            .node(handle)
-            .map(|node| node.compare_document_position(runtime.dom_host().dom(), other_handle))
-            .unwrap_or(0);
-        rv.set(v8::Integer::new_from_unsigned(scope, relation as u32).into());
-        return;
-    }
-    if get_private_object(scope, other, DETACHED_STATE_SLOT).is_none() {
-        throw_type_error(
-            scope,
-            "Failed to execute 'compareDocumentPosition' on 'Node': parameter 1 is not of type 'Node'.",
-        );
-        return;
-    }
-    let this_hash = this.get_identity_hash().get() as i64;
-    let other_hash = other.get_identity_hash().get() as i64;
-    let order_bit = if other_hash > this_hash {
-        DOCUMENT_POSITION_FOLLOWING
-    } else {
-        DOCUMENT_POSITION_PRECEDING
-    };
-    rv.set(
-        v8::Integer::new_from_unsigned(
-            scope,
-            DOCUMENT_POSITION_DISCONNECTED | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | order_bit,
-        )
-        .into(),
-    );
 }
 
 pub(in crate::native_bridge::document) fn detached_remove_method_callback<'a>(
