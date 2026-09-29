@@ -706,9 +706,9 @@ b.appendChild(jsTarget);
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["parser-target:connected:parser-move-a","js-target:connected:parser-move-a"],"parserParent":"parser-move-b","jsParent":"parser-move-b"}"#
+                    r#"{"events":["parser-target:connected:parser-move-a","js-target:connected:parser-move-a","js-target:disconnected:parser-move-b","js-target:connected:parser-move-b"],"parserParent":"parser-move-b","jsParent":"parser-move-b"}"#
                 ),
-                "parser reparent should match JS insertBefore and avoid reconnecting an already-connected custom element"
+                "parser reparent should preserve connection while ordinary JS insertion disconnects and reconnects"
             );
         }));
 }
@@ -808,9 +808,9 @@ c.moveBefore(jsMoveTarget, null);
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-move-target:move:parser-atomic-c"],"parserParent":"parser-atomic-b","jsInsertParent":"parser-atomic-b","jsMoveParent":"parser-atomic-c"}"#
+                    r#"{"events":["js-insert-target:disconnected:parser-atomic-b","js-insert-target:connected:parser-atomic-b","js-move-target:move:parser-atomic-c"],"parserParent":"parser-atomic-b","jsInsertParent":"parser-atomic-b","jsMoveParent":"parser-atomic-c"}"#
                 ),
-                "parser reparent should match JS insertBefore and must not dispatch connectedMoveCallback"
+                "parser reparent should queue neither ordinary insertion nor atomic move callbacks"
             );
         }));
 }
@@ -908,9 +908,9 @@ fieldset.appendChild(jsTarget);
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-face-target:form:parser-face-form-b","js-face-target:disabled:true","parser-face-target:form:parser-face-form-b","parser-face-target:disabled:true"],"parserParent":"parser-face-fieldset","jsParent":"parser-face-fieldset"}"#
+                    r#"{"events":["js-face-target:connected:parser-face-fieldset","js-face-target:form:parser-face-form-b","js-face-target:disabled:true","parser-face-target:form:parser-face-form-b","parser-face-target:disabled:true"],"parserParent":"parser-face-fieldset","jsParent":"parser-face-fieldset"}"#
                 ),
-                "parser FACE reparent should match JS insertion form association and disabled callbacks without reconnecting"
+                "parser FACE reparent should retain form-state reactions without the JS insertion connection callback"
             );
         }));
 }
