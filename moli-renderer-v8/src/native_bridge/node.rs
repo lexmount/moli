@@ -517,9 +517,10 @@ fn node_node_value_getter_function<'s>(
         rv.set_null();
         return;
     };
-    match node.node_value() {
+    match node.character_data_value() {
         Some(value) => {
-            let value = v8_string(scope, value).unwrap_or_else(|| v8::String::empty(scope));
+            let value = crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())
+                .unwrap_or_else(|| v8::String::empty(scope));
             rv.set(value.into());
         }
         None => rv.set_null(),
@@ -532,7 +533,8 @@ fn node_node_value_setter_function<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let raw_value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         if !receiver_has_detached_state(scope, args.this()) {
             throw_incompatible_setter_receiver(scope, "Node", "nodeValue");
             return;
@@ -550,9 +552,9 @@ fn node_node_value_setter_function<'s>(
         return;
     }
     let value = if raw_value.is_null_or_undefined() {
-        String::new()
+        Vec::new()
     } else {
-        match webidl::convert::<webidl::DomString>(
+        match webidl::convert::<webidl::DomString16>(
             scope,
             raw_value,
             webidl::Context::member("Node", "nodeValue"),
@@ -568,8 +570,8 @@ fn node_node_value_setter_function<'s>(
     let removed_count = runtime
         .character_data_utf16_units(handle)
         .map(|units| units.len() as u32);
-    let inserted_count = value.encode_utf16().count() as u32;
-    let _ = runtime.set_text_content(scope, runtime_ptr, handle, &value);
+    let inserted_count = value.len() as u32;
+    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &value);
     if let Some(removed_count) = removed_count {
         context_bootstrap::live_ranges_character_data_reset(
             scope,
@@ -841,12 +843,12 @@ pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
     let Some(value) = runtime
         .dom_host()
         .node(handle)
-        .map(|node| node.text_content(runtime.dom_host().dom()))
+        .map(|node| node.text_content_utf16_units(runtime.dom_host().dom()))
     else {
         rv.set_null();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = crate::util::v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
         return;
     };
@@ -859,7 +861,8 @@ fn node_text_content_setter_function<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let raw_value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         if !receiver_has_detached_state(scope, args.this()) {
             throw_incompatible_setter_receiver(scope, "Node", "textContent");
             return;
@@ -875,18 +878,20 @@ fn node_text_content_setter_function<'s>(
         return;
     }
     let value = if raw_value.is_null_or_undefined() {
-        String::new()
+        moli_dom::native::DomStringValue::default()
     } else {
         let Some(value) = raw_value.to_string(scope) else {
             return;
         };
-        value.to_rust_string_lossy(scope)
+        moli_dom::native::DomStringValue::from_utf16(
+            crate::util::v8_string_to_u16_string(scope, value).as_slice(),
+        )
     };
     let removed_count = runtime
         .character_data_utf16_units(handle)
         .map(|units| units.len() as u32);
-    let inserted_count = value.encode_utf16().count() as u32;
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &value);
+    let inserted_count = value.utf16_units().len() as u32;
+    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, value);
     if let Some(removed_count) = removed_count {
         context_bootstrap::live_ranges_character_data_reset(
             scope,

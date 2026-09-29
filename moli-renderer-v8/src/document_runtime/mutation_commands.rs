@@ -3,11 +3,8 @@ use std::time::Instant;
 use dom::ElementState as StyloElementState;
 use tracing::debug;
 
-use crate::{
-    style_engine::{self, StyleAttributeImpact},
-    util::{utf16_split_units_lossy, utf16_units},
-};
-use moli_dom::native::{Element, Node, NodeType};
+use crate::style_engine::{self, StyleAttributeImpact};
+use moli_dom::native::{DomStringValue, Element, Node, NodeType};
 use moli_selector::stylo_flat_tree_heading_descendants;
 
 use super::*;
@@ -250,13 +247,13 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        value: &str,
+        value: impl Into<DomStringValue>,
     ) -> bool {
         self.set_text_content_with_reaction_policy(
             scope,
             host_ptr,
             handle,
-            value,
+            value.into(),
             TextContentReactionPolicy::DispatchNow,
         )
     }
@@ -266,13 +263,13 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        value: &str,
+        value: impl Into<DomStringValue>,
     ) -> bool {
         self.set_text_content_with_reaction_policy(
             scope,
             host_ptr,
             handle,
-            value,
+            value.into(),
             TextContentReactionPolicy::AppendToCurrentQueue,
         )
     }
@@ -282,7 +279,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        value: &str,
+        value: DomStringValue,
         reaction_policy: TextContentReactionPolicy,
     ) -> bool {
         if matches!(reaction_policy, TextContentReactionPolicy::DispatchNow) {
@@ -318,41 +315,53 @@ impl DocumentRuntime {
             record_dom_binding_timing("dom.setTextContent", started);
             return changed;
         }
-        let break_after_character_data_change = unsafe { &*host_ptr }
-            .has_dom_debugger_dom_breakpoints()
-            && node_type.is_some_and(|node_type| {
-                matches!(
-                    node_type,
-                    NodeType::Text
-                        | NodeType::CDataSection
-                        | NodeType::ProcessingInstruction
-                        | NodeType::Comment
-                )
-            })
-            && self.dom_host.node(handle).and_then(Node::node_value) != Some(value);
-        let effects = self.dom_host.set_text_content_effects(handle, value);
-        if break_after_character_data_change && effects.did_change() {
-            unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);
-        }
-        let changed = self.apply_runtime_mutation_effects(
-            scope,
-            host_ptr,
-            effects,
-            RuntimeMutationOptions::js_dom_api(),
+        let changed = self.set_character_data_value_in_current_reaction_queue(
+            scope, host_ptr, handle, value, true,
         );
         record_dom_binding_timing("dom.setTextContent", started);
         changed
     }
 
-    pub(crate) fn queue_character_data_mutation_record(
+    pub(crate) fn set_character_data_value(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        old_value: Option<String>,
+        value: DomStringValue,
+        force_mutation_record: bool,
     ) -> bool {
-        let mut effects = DomMutationEffects::default();
-        effects.queue_character_data_mutation(handle, old_value);
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            self.set_character_data_value_in_current_reaction_queue(
+                scope,
+                host_ptr,
+                handle,
+                value,
+                force_mutation_record,
+            )
+        })
+    }
+
+    fn set_character_data_value_in_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        value: DomStringValue,
+        force_mutation_record: bool,
+    ) -> bool {
+        let break_after_character_data_change = unsafe { &*host_ptr }
+            .has_dom_debugger_dom_breakpoints()
+            && self
+                .dom_host
+                .node(handle)
+                .and_then(Node::character_data_value)
+                .is_some_and(|previous| previous != &value);
+        let effects =
+            self.dom_host
+                .set_character_data_value_effects(handle, value, force_mutation_record);
+        if break_after_character_data_change && effects.did_change() {
+            unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);
+        }
         self.apply_runtime_mutation_effects(
             scope,
             host_ptr,
@@ -367,22 +376,26 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
         offset: usize,
-        original: &str,
+        original: &[u16],
     ) -> Option<DomHandle> {
-        let original_units = utf16_units(original);
-        let original_len = original_units.len();
-        let (left, right) = utf16_split_units_lossy(&original_units, offset);
+        let original_len = original.len();
+        let (left, right) = original.split_at(offset);
         let next_sibling = self.dom_host.node(handle).and_then(Node::next_sibling);
         let parent = self.dom_host.node(handle).and_then(Node::parent_node);
 
         let original_node_type = self.dom_host.node(handle).map(Node::node_type)?;
         let owner_document = self.dom_host.owner_document_handle(handle)?;
-        let _ = self.set_text_content(scope, host_ptr, handle, &left);
+        let _ = self.set_character_data_value(
+            scope,
+            host_ptr,
+            handle,
+            DomStringValue::from_utf16(left),
+            true,
+        );
+        let right = DomStringValue::from_utf16(right);
         let new_text = match original_node_type {
-            NodeType::CDataSection => {
-                self.create_cdata_section_for_document(owner_document, &right)
-            }
-            _ => self.create_text_node_for_document(owner_document, &right),
+            NodeType::CDataSection => self.create_cdata_section_for_document(owner_document, right),
+            _ => self.create_text_node_for_document(owner_document, right),
         };
         if let Some(parent) = parent {
             let _ = self.insert_before(scope, host_ptr, parent, new_text, next_sibling);
@@ -472,9 +485,9 @@ impl DocumentRuntime {
                 let current = self
                     .dom_host
                     .node(child_handle)
-                    .and_then(Node::node_value)
-                    .unwrap_or_default()
-                    .to_owned();
+                    .and_then(Node::character_data_value)
+                    .cloned()
+                    .unwrap_or_default();
                 if current.is_empty() {
                     prepublished_removals.extend(self.break_on_dom_debugger_before_tree_removal(
                         host_ptr,
@@ -496,20 +509,22 @@ impl DocumentRuntime {
                     let sibling_value = self
                         .dom_host
                         .node(sibling_handle)
-                        .and_then(Node::node_value)
-                        .unwrap_or_default()
-                        .to_owned();
+                        .and_then(Node::character_data_value)
+                        .cloned()
+                        .unwrap_or_default();
                     if !sibling_value.is_empty() {
                         let mut merged = self
                             .dom_host
                             .node(child_handle)
-                            .and_then(Node::node_value)
-                            .unwrap_or_default()
-                            .to_owned();
-                        merged.push_str(&sibling_value);
-                        let character_effects = self
-                            .dom_host
-                            .set_text_content_effects(child_handle, &merged);
+                            .and_then(Node::character_data_value)
+                            .cloned()
+                            .unwrap_or_default();
+                        merged.append(&sibling_value);
+                        let character_effects = self.dom_host.set_character_data_value_effects(
+                            child_handle,
+                            merged,
+                            false,
+                        );
                         if character_effects.did_change() {
                             unsafe { &mut *host_ptr }
                                 .break_on_dom_debugger_character_data_modified(child_handle);

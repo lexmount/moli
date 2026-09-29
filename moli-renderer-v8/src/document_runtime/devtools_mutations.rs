@@ -126,7 +126,10 @@ pub(crate) fn capture_devtools_dom_mutation_facts(
                     is_text: dom_host.node(record.target()).is_some_and(|node| {
                         matches!(node.kind(), crate::dom::native::NodeData::Text(_))
                     }),
-                    old_value: old_value.clone().unwrap_or_else(|| value.clone()),
+                    old_value: old_value
+                        .as_ref()
+                        .map(|value| value.as_str_lossy().to_owned())
+                        .unwrap_or_else(|| value.clone()),
                     value,
                     parent,
                     previous_sibling_without_whitespace: previous_non_whitespace_sibling(

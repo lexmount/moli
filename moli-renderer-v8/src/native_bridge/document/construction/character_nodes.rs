@@ -23,7 +23,10 @@ pub(in crate::native_bridge) fn node_create_text_node_callback<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let handle = runtime.create_text_node_for_document(document_handle, &parsed.data);
+    let handle = runtime.create_text_node_for_document(
+        document_handle,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    );
     runtime.capture_node_creation_stack_trace(scope, handle);
     set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
@@ -45,7 +48,10 @@ pub(in crate::native_bridge) fn node_create_comment_callback<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let handle = runtime.create_comment_for_document(document_handle, &parsed.data);
+    let handle = runtime.create_comment_for_document(
+        document_handle,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    );
     runtime.capture_node_creation_stack_trace(scope, handle);
     set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
@@ -95,7 +101,13 @@ pub(in crate::native_bridge) fn node_create_processing_instruction_callback<'s>(
         );
         return;
     }
-    if parsed.data.contains("?>") {
+    if parsed
+        .data
+        .0
+        .as_slice()
+        .windows(2)
+        .any(|units| units == [0x3f, 0x3e])
+    {
         throw_dom_exception(
             scope,
             "InvalidCharacterError",
@@ -108,7 +120,7 @@ pub(in crate::native_bridge) fn node_create_processing_instruction_callback<'s>(
     let handle = runtime.create_processing_instruction_for_document(
         document_handle,
         &parsed.target,
-        &parsed.data,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
     );
     runtime.capture_node_creation_stack_trace(scope, handle);
     set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));

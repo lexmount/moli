@@ -497,7 +497,6 @@ impl JsContextHost {
             pending_child_external_classic_document_scripts: HashMap::new(),
             pending_child_modulepreload_work_awaiting_realm: VecDeque::new(),
             pending_child_parser_preloads: Vec::new(),
-            character_data_utf16_overrides: HashMap::new(),
             child_meta_refresh_navigations: HashMap::new(),
             disconnected_shadow_roots: HashSet::new(),
             live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry::default(),
@@ -1466,27 +1465,18 @@ impl JsContextHost {
         document: Option<DomHandle>,
         value: U16String,
     ) -> DomHandle {
-        let text = string_from_utf16_units_lossy(value.as_slice());
-        let handle = match document {
-            Some(document) => self.create_text_node_for_document(document, &text),
-            None => self.create_text_node(&text),
-        };
-        if utf16_units_contain_unpaired_surrogate(value.as_slice()) {
-            self.character_data_utf16_overrides.insert(handle, value);
+        let value = moli_dom::native::DomStringValue::from_utf16(value.as_slice());
+        match document {
+            Some(document) => self.create_text_node_for_document(document, value),
+            None => self.create_text_node(value),
         }
-        handle
     }
 
     pub(crate) fn character_data_utf16_units(&self, handle: DomHandle) -> Option<Vec<u16>> {
-        self.character_data_utf16_overrides
-            .get(&handle)
-            .map(|value| value.as_slice().to_vec())
-            .or_else(|| {
-                self.dom_host()
-                    .node(handle)
-                    .and_then(moli_dom::native::Node::data_value)
-                    .map(utf16_units)
-            })
+        self.dom_host()
+            .node(handle)?
+            .character_data_value()
+            .map(|value| value.utf16_units().into_owned())
     }
 
     pub(crate) fn set_character_data_utf16_units(
@@ -1517,38 +1507,14 @@ impl JsContextHost {
         units: &[u16],
         force_mutation_record: bool,
     ) -> bool {
-        let old_value = force_mutation_record
-            .then(|| {
-                self.dom_host()
-                    .node(handle)
-                    .and_then(moli_dom::native::Node::node_value)
-                    .map(str::to_owned)
-            })
-            .flatten();
-        let value = string_from_utf16_units_lossy(units);
-        let changed = self.set_text_content(scope, host_ptr, handle, &value);
-        if !changed && force_mutation_record && self.dom_host().mutation_records_enabled() {
-            let runtime: &mut DocumentRuntime = self;
-            let _ =
-                runtime.queue_character_data_mutation_record(scope, host_ptr, handle, old_value);
-        }
-        if utf16_units_contain_unpaired_surrogate(units) {
-            self.character_data_utf16_overrides
-                .insert(handle, U16String::from_vec(units.to_vec()));
-        }
-        changed
-    }
-
-    pub(crate) fn set_text_content(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        handle: DomHandle,
-        value: &str,
-    ) -> bool {
-        self.character_data_utf16_overrides.remove(&handle);
         let runtime: &mut DocumentRuntime = self;
-        runtime.set_text_content(scope, host_ptr, handle, value)
+        runtime.set_character_data_value(
+            scope,
+            host_ptr,
+            handle,
+            moli_dom::native::DomStringValue::from_utf16(units),
+            force_mutation_record,
+        )
     }
 
     pub(crate) fn push_current_inline_script(&mut self, handle: DomHandle) {

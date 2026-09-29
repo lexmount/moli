@@ -537,7 +537,7 @@ fn flush_vtt_cue_text(
     if text.is_empty() {
         return;
     }
-    let text_node = runtime.create_text_node(text);
+    let text_node = runtime.create_text_node(text.as_str());
     let parent = stack
         .last()
         .map(|node| node.handle)
