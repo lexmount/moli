@@ -1,5 +1,6 @@
 use super::super::{dom_binding_timing_started, record_dom_binding_timing};
 use super::{
+    focus::TreeFocusRemovalPlan,
     node_iterators::NodeIteratorRemovalPlan,
     policy::{TreeMutationObserverPolicy, TreeMutationSourceProfile},
     resources::ImageRelevantMutationPlan,
@@ -16,8 +17,7 @@ pub(super) struct TreeRemovalPlan {
     pub(super) parent: DomHandle,
     pub(super) root: DomHandle,
     pub(super) lifecycle_connected_roots_before_remove: Vec<DomHandle>,
-    pub(super) focus_reset_handle_before_remove: Option<DomHandle>,
-    pub(super) focus_within_handles_before_remove: Vec<DomHandle>,
+    pub(super) focus_removal: TreeFocusRemovalPlan,
     pub(super) live_range_removal_index: Option<u32>,
     pub(super) live_range_previous_sibling: Option<DomHandle>,
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
@@ -40,11 +40,7 @@ impl DocumentRuntime {
             .copied()
             .filter(|handle| self.is_custom_element_lifecycle_connected(*handle))
             .collect::<Vec<_>>();
-        let focus_reset_handle_before_remove = self
-            .focus_reset_handle_before_tree_change(roots, &lifecycle_connected_roots_before_remove);
-        let focus_within_handles_before_remove = focus_reset_handle_before_remove
-            .map(|active| self.focus_within_handles_for_active_element_before_tree_change(active))
-            .unwrap_or_default();
+        let focus_removal = self.tree_focus_removal_plan(host_ptr, roots);
         let live_range_removal_index =
             if !unsafe { &mut *host_ptr }.needs_live_tree_boundary_updates(std::iter::once(root)) {
                 None
@@ -71,8 +67,7 @@ impl DocumentRuntime {
             parent,
             root,
             lifecycle_connected_roots_before_remove,
-            focus_reset_handle_before_remove,
-            focus_within_handles_before_remove,
+            focus_removal,
             live_range_removal_index,
             live_range_previous_sibling,
             node_iterator_plan,
@@ -151,15 +146,12 @@ impl DocumentRuntime {
         let mut prepublished_removals = Vec::new();
         for &child in &removed_children {
             let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
-            self.reset_focus_before_tree_removal(
-                scope,
-                host_ptr,
-                &removal_plan,
-                TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue(),
-            );
             prepublished_removals
                 .extend(self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child));
             let effects = self.remove_child_effects_in_structural_scope(parent, child);
+            if effects.did_change() {
+                self.apply_tree_focus_removal_plan(host_ptr, &removal_plan.focus_removal);
+            }
             self.apply_tree_removal_node_iterator_plan_if_changed(
                 host_ptr,
                 &removal_plan,
@@ -274,10 +266,12 @@ impl DocumentRuntime {
         }
         let started = dom_binding_timing_started();
         let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
-        self.reset_focus_before_tree_removal(scope, host_ptr, &removal_plan, source_profile);
         let prepublished_removals =
             self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child);
         let mut effects = self.remove_child_effects_in_structural_scope(parent, child);
+        if effects.did_change() {
+            self.apply_tree_focus_removal_plan(host_ptr, &removal_plan.focus_removal);
+        }
         if source_profile.suppresses_observers() {
             effects.suppress_child_list_mutations_for_target(parent);
         }
