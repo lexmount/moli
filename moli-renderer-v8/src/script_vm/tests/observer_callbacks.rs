@@ -456,6 +456,16 @@ async fn performance_observer_registration_uses_its_own_global_with_a_foreign_ca
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn child_node_conversion_preserves_order_and_mutation_boundaries() {
+    let mut vm = observer_callback_test_vm("https://child-node-conversion.test/").await;
+    assert_eq!(
+        vm.eval(include_str!("child_node_conversion.js"))
+            .expect("ChildNode conversion must preserve side effects and record boundaries"),
+        "true"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn parent_node_conversion_preserves_order_and_mutation_boundaries() {
     let mut vm = observer_callback_test_vm("https://parent-node-conversion.test/").await;
     assert_eq!(

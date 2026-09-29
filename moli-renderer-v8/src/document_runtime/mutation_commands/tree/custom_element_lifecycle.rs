@@ -31,12 +31,15 @@ impl DocumentRuntime {
         enqueued
     }
 
-    pub(super) fn enqueue_adoption_disconnected_callbacks_in_subtrees_unless_pending(
+    pub(super) fn enqueue_custom_element_disconnected_callbacks_in_subtrees_unless_pending(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         roots: &[DomHandle],
     ) -> bool {
+        if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {
+            return false;
+        }
         let mut enqueued = false;
         for &root in roots {
             let mut handles = Vec::new();
@@ -92,13 +95,11 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         roots: &[DomHandle],
-        was_connected: bool,
         upgrade_subtrees: bool,
     ) {
-        if was_connected
-            || !roots
-                .iter()
-                .any(|handle| self.is_custom_element_lifecycle_connected(*handle))
+        if !roots
+            .iter()
+            .any(|handle| self.is_custom_element_lifecycle_connected(*handle))
         {
             return;
         }

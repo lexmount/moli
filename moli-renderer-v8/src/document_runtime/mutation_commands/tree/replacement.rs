@@ -1,6 +1,5 @@
 use super::{
     insertion_plan::{TreeInsertionPlan, TreeInsertionPlanOptions},
-    live_ranges::apply_live_ranges_child_insertion,
     policy::{TreeMutationSourceProfile, TreeNoncePolicy, TreeReactionDispatchPolicy},
     removal::TreeRemovalPlan,
 };
@@ -8,7 +7,7 @@ use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    mutation_coordinator::RuntimeMutationOptions,
+    mutation_coordinator::{ConnectedScriptMutationPolicy, RuntimeMutationOptions},
     native_bridge::JsContextHost,
 };
 
@@ -96,10 +95,11 @@ impl DocumentRuntime {
             new_child,
             old_child,
             TreeReactionDispatchPolicy::AppendToCurrentQueue,
+            ConnectedScriptMutationPolicy::PrepareAndStart,
         )
     }
 
-    fn replace_child_with_reaction_policy(
+    pub(super) fn replace_child_with_reaction_policy(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -107,50 +107,32 @@ impl DocumentRuntime {
         new_child: DomHandle,
         old_child: DomHandle,
         reaction_policy: TreeReactionDispatchPolicy,
+        connected_script_policy: ConnectedScriptMutationPolicy,
     ) -> bool {
+        let mutation_options = RuntimeMutationOptions::js_dom_api()
+            .with_connected_script_policy(connected_script_policy);
         if new_child == old_child {
             if self.dom_host.node(old_child).and_then(Node::parent_node) != Some(parent) {
                 return false;
             }
-            let insertion_roots = [old_child];
-            self.reset_focus_for_non_preserving_connected_move_before_insert(
+            // Replace adopts the input first. For self replacement this is a
+            // removal followed by insertion, including lifecycle and range
+            // effects, not just two synthetic observer records.
+            let reference = self.dom_host.node(old_child).and_then(Node::next_sibling);
+            return self.insert_before_with_nonce_handling(
                 scope,
                 host_ptr,
-                &insertion_roots,
-                self.dom_host.is_connected(old_child),
+                parent,
+                new_child,
+                reference,
+                true,
+                false,
+                connected_script_policy,
+                TreeMutationSourceProfile::js_dom_api_with(
+                    reaction_policy,
+                    TreeNoncePolicy::HideInsertedContentAttributes,
+                ),
             );
-            if self.dom_host.node(old_child).and_then(Node::parent_node) != Some(parent) {
-                return false;
-            }
-            let live_range_plan = if !unsafe { &mut *host_ptr }
-                .needs_live_tree_boundary_updates(insertion_roots.iter().copied())
-            {
-                None
-            } else {
-                self.live_range_replace_plan(parent, &insertion_roots, old_child)
-            };
-            let effects =
-                self.replace_child_with_self_effects_in_structural_scope(parent, old_child);
-            if effects.did_change()
-                && !self.apply_runtime_mutation_effects(
-                    scope,
-                    host_ptr,
-                    effects,
-                    RuntimeMutationOptions::js_dom_api(),
-                )
-            {
-                return false;
-            }
-            if let Some(plan) = live_range_plan.as_ref() {
-                self.apply_live_range_pre_insert_plan(scope, host_ptr, plan);
-                apply_live_ranges_child_insertion(
-                    scope,
-                    parent,
-                    plan.insertion_index,
-                    &insertion_roots,
-                );
-            }
-            return true;
         }
 
         let fragment_children = self.fragment_insertion_children(new_child);
@@ -189,6 +171,7 @@ impl DocumentRuntime {
                     Some(next)
                 }
             });
+        let removed_previous_sibling = self.dom_host.node(old_child).and_then(Node::prev_sibling);
         let lifecycle_connected_before = insertion_plan
             .insertion_roots
             .iter()
@@ -250,14 +233,20 @@ impl DocumentRuntime {
             &mut effects,
         );
         if self.dom_host.mutation_records_enabled() {
+            // An empty replacement has no inserted node from which to read
+            // its boundaries. Retain the removed child's original position.
             let previous_sibling = insertion_plan
                 .insertion_roots
                 .first()
-                .and_then(|handle| self.dom_host.node(*handle).and_then(Node::prev_sibling));
+                .map_or(removed_previous_sibling, |handle| {
+                    self.dom_host.node(*handle).and_then(Node::prev_sibling)
+                });
             let next_sibling = insertion_plan
                 .insertion_roots
                 .last()
-                .and_then(|handle| self.dom_host.node(*handle).and_then(Node::next_sibling));
+                .map_or(reference_child, |handle| {
+                    self.dom_host.node(*handle).and_then(Node::next_sibling)
+                });
             effects.coalesce_child_list_replacement(
                 parent,
                 insertion_plan.insertion_roots,
@@ -271,7 +260,7 @@ impl DocumentRuntime {
             host_ptr,
             &insertion_plan,
             effects,
-            RuntimeMutationOptions::js_dom_api(),
+            mutation_options,
             reaction_policy,
             true,
             prepublished_removals,

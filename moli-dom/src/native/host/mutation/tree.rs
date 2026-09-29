@@ -160,41 +160,6 @@ impl DomHost {
         DomMutationEffects::default()
     }
 
-    pub fn replace_child_with_self_effects(
-        &mut self,
-        parent: DomHandle,
-        child: DomHandle,
-    ) -> DomMutationEffects {
-        if self.node(child).and_then(Node::parent_node) != Some(parent) {
-            return DomMutationEffects::default();
-        }
-        let mut effects = DomMutationEffects::default();
-        let value = self.textarea_value_excluding_children(parent, &[]);
-        let after_removal = self.textarea_value_excluding_children(parent, &[child]);
-        effects.record_textarea_value_change(parent, value.as_deref(), after_removal.as_deref());
-        effects.record_textarea_value_change(parent, after_removal.as_deref(), value.as_deref());
-        if !self.mutation_records_enabled() {
-            return effects;
-        }
-        let previous_sibling = self.node(child).and_then(Node::prev_sibling);
-        let next_sibling = self.node(child).and_then(Node::next_sibling);
-        effects.mark_child_list_mutation(
-            parent,
-            &[],
-            std::slice::from_ref(&child),
-            previous_sibling,
-            next_sibling,
-        );
-        effects.mark_child_list_mutation(
-            parent,
-            std::slice::from_ref(&child),
-            &[],
-            previous_sibling,
-            next_sibling,
-        );
-        effects
-    }
-
     fn clear_popover_open_states(
         &mut self,
         open_popovers: &[DomHandle],
