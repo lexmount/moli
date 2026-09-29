@@ -370,7 +370,7 @@ fn button_commands_validate_targets_and_apply_popover_actions_once() {
 
 #[test]
 fn button_auto_type_state_tracks_commands_form_owner_and_select_parent() {
-    let mut vm = new_storage_test_vm("https://button-auto-type-state.test/");
+    let mut vm = new_storage_html_test_vm("https://button-auto-type-state.test/");
 
     let result = vm
         .eval(
