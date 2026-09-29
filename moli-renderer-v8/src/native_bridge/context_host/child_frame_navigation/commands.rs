@@ -107,27 +107,6 @@ impl JsContextHost {
         self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator)
     }
 
-    pub(crate) fn navigate_child_browsing_context_with_request(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        request: ChildBrowsingContextNavigationRequest,
-    ) -> bool {
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        let replace_initial_empty_document = self.child_current_document_is_initial_empty(handle);
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            if replace_initial_empty_document {
-                entry.replace_navigation_in_entry_seed(&request.url);
-            } else {
-                entry.apply_navigation_to_entry_seed(&request.url);
-            }
-        }
-        self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        self.queue_child_browsing_context_navigation_request(handle, request)
-    }
-
     pub(crate) fn queue_child_browsing_context_navigation_from_existing_seed(
         &mut self,
         handle: DomHandle,
