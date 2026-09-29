@@ -115,20 +115,24 @@ impl DocumentRuntime {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         let effects_started = cpu_profile_enabled.then(std::time::Instant::now);
-        let (effects, prepublished_removals) = match self.tree_insertion_effects_with_dom_debugger(
-            host_ptr,
-            parent,
-            child,
-            insertion_plan.insertion_roots,
-            None,
-            false,
-        ) {
+        let (mut effects, prepublished_removals) = match self
+            .tree_insertion_effects_with_dom_debugger(
+                host_ptr,
+                parent,
+                child,
+                insertion_plan.insertion_roots,
+                None,
+                false,
+            ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
                 self.append_child_effects_in_structural_scope(parent, child),
                 Vec::new(),
             ),
         };
+        if source_profile.suppress_observers {
+            effects.suppress_child_list_mutations_for_target(parent);
+        }
         let effects_us = effects_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -296,7 +300,7 @@ impl DocumentRuntime {
         )
     }
 
-    fn insert_before_with_source_profile(
+    pub(super) fn insert_before_with_source_profile(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
@@ -371,14 +375,15 @@ impl DocumentRuntime {
                 was_connected,
             );
         }
-        let (effects, prepublished_removals) = match self.tree_insertion_effects_with_dom_debugger(
-            host_ptr,
-            parent,
-            child,
-            insertion_plan.insertion_roots,
-            reference_child,
-            is_atomic_move,
-        ) {
+        let (mut effects, prepublished_removals) = match self
+            .tree_insertion_effects_with_dom_debugger(
+                host_ptr,
+                parent,
+                child,
+                insertion_plan.insertion_roots,
+                reference_child,
+                is_atomic_move,
+            ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
                 self.insert_before_effects_in_structural_scope_with_state_preservation(
@@ -390,6 +395,9 @@ impl DocumentRuntime {
                 Vec::new(),
             ),
         };
+        if source_profile.suppress_observers {
+            effects.suppress_child_list_mutations_for_target(parent);
+        }
         if effects.did_change() && source_profile.queue_parser_details_toggle_events {
             for &root in insertion_plan.insertion_roots {
                 crate::native_bridge::element::queue_parser_details_toggle_events_in_subtree(
