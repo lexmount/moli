@@ -3385,7 +3385,7 @@ fn reattaching_iframe_does_not_resurrect_retired_window_relations() {
 
 #[test]
 fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronously() {
-    let mut vm = new_storage_test_vm("https://iframe-explicit-initial-blank.test/page.html");
+    let mut vm = new_storage_html_test_vm("https://iframe-explicit-initial-blank.test/page.html");
 
     let result = vm
         .eval(
