@@ -1,6 +1,7 @@
 use super::super::{dom_binding_timing_started, record_dom_binding_timing};
 use super::{
-    node_iterators::NodeIteratorRemovalPlan, policy::TreeMutationSourceProfile,
+    node_iterators::NodeIteratorRemovalPlan,
+    policy::{TreeMutationObserverPolicy, TreeMutationSourceProfile},
     resources::ImageRelevantMutationPlan,
 };
 use crate::{
@@ -22,6 +23,7 @@ pub(super) struct TreeRemovalPlan {
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
     pub(super) registry_retargets: Vec<custom_elements::RegistryAssociationRetarget>,
     pub(super) image_relevant_mutation_plan: ImageRelevantMutationPlan,
+    pub(super) option_selectedness_before_remove: Vec<(DomHandle, bool)>,
     pub(super) selected_option_owners_before_remove: Vec<(DomHandle, DomHandle)>,
 }
 
@@ -62,6 +64,7 @@ impl DocumentRuntime {
             custom_elements::registry_association_retargets_before_removal(host_ptr, root);
         let image_relevant_mutation_plan =
             self.image_relevant_mutation_plan_before_remove(parent, root);
+        let option_selectedness_before_remove = self.option_selectedness_before_insert(roots);
         let selected_option_owners_before_remove =
             self.selected_option_owners_in_subtrees(std::slice::from_ref(&root));
         TreeRemovalPlan {
@@ -75,6 +78,7 @@ impl DocumentRuntime {
             node_iterator_plan,
             registry_retargets,
             image_relevant_mutation_plan,
+            option_selectedness_before_remove,
             selected_option_owners_before_remove,
         }
     }
@@ -147,6 +151,12 @@ impl DocumentRuntime {
         let mut prepublished_removals = Vec::new();
         for &child in &removed_children {
             let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
+            self.reset_focus_before_tree_removal(
+                scope,
+                host_ptr,
+                &removal_plan,
+                TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue(),
+            );
             prepublished_removals
                 .extend(self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child));
             let effects = self.remove_child_effects_in_structural_scope(parent, child);
@@ -182,6 +192,75 @@ impl DocumentRuntime {
         changed
     }
 
+    /// Removal is observable even when the node will immediately be inserted
+    /// again. Queue its reactions in the caller's scope while its old parent
+    /// and form owner are gone; insertion then builds a fresh, read-only plan.
+    pub(super) fn remove_insertion_roots(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        child: DomHandle,
+        roots: &[DomHandle],
+        profile: TreeMutationSourceProfile,
+    ) -> bool {
+        if profile.preserve_connection {
+            return true;
+        }
+        // Preserve registry identity while the source parent is still known.
+        // Detaching must not make an inherited document registry start using
+        // the destination shadow root's scoped registry on reinsertion.
+        if let Some(document) = roots
+            .first()
+            .and_then(|root| self.dom_host.owner_document_handle(*root))
+        {
+            let registry_plan = custom_elements::adoption_plan_for_roots_before_adoption(
+                host_ptr, roots, document, false,
+            );
+            custom_elements::apply_registry_association_retargets(
+                host_ptr,
+                &registry_plan.registry_retargets,
+            );
+        }
+        let fragment = self
+            .dom_host
+            .node(child)
+            .is_some_and(Node::is_document_fragment);
+        for &root in roots {
+            let Some(old_parent) = self.dom_host.parent_node(root) else {
+                continue;
+            };
+            let removal_profile = TreeMutationSourceProfile {
+                observers: if fragment || (profile.suppresses_observers() && old_parent == parent) {
+                    TreeMutationObserverPolicy::Suppress
+                } else {
+                    TreeMutationObserverPolicy::Queue
+                },
+                ..profile
+            };
+            if !self.remove_child_with_source_profile(
+                scope,
+                host_ptr,
+                old_parent,
+                root,
+                removal_profile,
+            ) {
+                return false;
+            }
+        }
+        if fragment && !roots.is_empty() && self.dom_host.mutation_records_enabled() {
+            let mut effects = DomMutationEffects::default();
+            effects.queue_child_list_mutation(child, &[], roots, None, None);
+            crate::observer_runtime::queue_mutation_records(
+                scope,
+                host_ptr,
+                &self.dom_host,
+                &effects,
+            );
+        }
+        true
+    }
+
     pub(super) fn remove_child_with_source_profile(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -190,12 +269,16 @@ impl DocumentRuntime {
         child: DomHandle,
         source_profile: TreeMutationSourceProfile,
     ) -> bool {
+        if self.dom_host.parent_node(child) != Some(parent) {
+            return false;
+        }
         let started = dom_binding_timing_started();
         let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
+        self.reset_focus_before_tree_removal(scope, host_ptr, &removal_plan, source_profile);
         let prepublished_removals =
             self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child);
         let mut effects = self.remove_child_effects_in_structural_scope(parent, child);
-        if source_profile.suppress_observers {
+        if source_profile.suppresses_observers() {
             effects.suppress_child_list_mutations_for_target(parent);
         }
         self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &effects);

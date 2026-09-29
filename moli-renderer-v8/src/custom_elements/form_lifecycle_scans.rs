@@ -47,17 +47,15 @@ pub(crate) fn enqueue_form_association_callbacks_for_all(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
 ) {
-    let handles = unsafe { &*host_ptr }
-        .dom_host()
-        .nodes()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, _)| {
-            let handle = DomHandle::new(index);
-            is_form_associated_custom_element_handle(unsafe { &*host_ptr }, handle)
-                .then_some(handle)
-        })
+    let host = unsafe { &*host_ptr };
+    // Only upgraded elements can receive reactions. Enumerating their native
+    // stores keeps ID changes independent of unrelated nodes in the DOM arena.
+    let mut handles = host
+        .upgraded_custom_element_handles()
+        .filter(|&handle| is_form_associated_custom_element_handle(host, handle))
         .collect::<Vec<_>>();
+    handles.sort_unstable_by_key(|handle| handle.index());
+    handles.dedup();
     for handle in handles {
         enqueue_form_association_callback_if_needed(scope, host_ptr, handle);
     }

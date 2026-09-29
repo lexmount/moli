@@ -65,6 +65,10 @@ impl CustomElementStore {
             .has_pending_wrapper_for(scope, new_target)
     }
 
+    pub(crate) fn upgraded_handles(&self) -> impl Iterator<Item = DomHandle> + '_ {
+        self.upgraded_handles.iter().copied()
+    }
+
     pub(crate) fn is_upgraded_handle(&self, handle: DomHandle) -> bool {
         self.upgraded_handles.contains(&handle)
     }

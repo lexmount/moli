@@ -21,6 +21,11 @@ impl DocumentRuntime {
         removal_plan: &TreeRemovalPlan,
         profile: TreeMutationSourceProfile,
     ) {
+        self.preserve_selectedness_for_options_removed_from_select(
+            scope,
+            host_ptr,
+            &removal_plan.option_selectedness_before_remove,
+        );
         self.queue_selectedcontent_updates_after_tree_removal(
             scope,
             host_ptr,
@@ -31,19 +36,6 @@ impl DocumentRuntime {
             host_ptr,
             removal_plan,
         );
-        match profile.source {
-            TreeMutationSideEffectSource::JsDomApi => {
-                if let Some(active) = removal_plan.focus_reset_handle_before_remove {
-                    crate::native_bridge::element::reset_focus_from_previous_handle_with_previous_focus_within(
-                        scope,
-                        host_ptr,
-                        active,
-                        removal_plan.focus_within_handles_before_remove.clone(),
-                    );
-                }
-            }
-            TreeMutationSideEffectSource::ParserTreeSink => {}
-        }
         self.dispatch_tree_removal_custom_element_reactions(scope, host_ptr, removal_plan, profile);
         self.queue_image_relevant_mutation_loads(
             scope,
@@ -117,6 +109,18 @@ impl DocumentRuntime {
         let reaction_groups = self.tree_removal_reaction_groups_after_change(removal_plan);
         match profile.reaction_policy {
             TreeReactionDispatchPolicy::DispatchNow => {
+                if removal_plan
+                    .lifecycle_connected_roots_before_remove
+                    .is_empty()
+                {
+                    custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                        self.enqueue_custom_element_form_association_callbacks_in_subtree(
+                            scope,
+                            host_ptr,
+                            removal_plan.root,
+                        );
+                    });
+                }
                 let dispatches_removed_from_lifecycle =
                     !reaction_groups.removed_from_lifecycle_roots.is_empty();
                 if dispatches_removed_from_lifecycle {
@@ -194,6 +198,16 @@ impl DocumentRuntime {
                     host_ptr,
                     &reaction_groups.removed_from_lifecycle_roots,
                 );
+                if removal_plan
+                    .lifecycle_connected_roots_before_remove
+                    .is_empty()
+                {
+                    self.enqueue_custom_element_form_association_callbacks_in_subtree(
+                        scope,
+                        host_ptr,
+                        removal_plan.root,
+                    );
+                }
                 self.enqueue_custom_element_form_association_callbacks_for_form_owner_subtrees(
                     scope,
                     host_ptr,

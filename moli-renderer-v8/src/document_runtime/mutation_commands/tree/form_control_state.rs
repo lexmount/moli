@@ -37,7 +37,7 @@ impl DocumentRuntime {
         element.selected()
     }
 
-    fn preserve_selectedness_for_options_removed_from_select(
+    pub(super) fn preserve_selectedness_for_options_removed_from_select(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

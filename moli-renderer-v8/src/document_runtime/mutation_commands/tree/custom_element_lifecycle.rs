@@ -31,65 +31,6 @@ impl DocumentRuntime {
         enqueued
     }
 
-    pub(super) fn enqueue_custom_element_disconnected_callbacks_in_subtrees_unless_pending(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        roots: &[DomHandle],
-    ) -> bool {
-        if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {
-            return false;
-        }
-        let mut enqueued = false;
-        for &root in roots {
-            let mut handles = Vec::new();
-            self.collect_subtree_handles_preorder(root, &mut handles);
-            for handle in handles {
-                if custom_elements::enqueue_disconnected_callback_unless_pending(
-                    scope, host_ptr, handle,
-                ) {
-                    enqueued = true;
-                }
-            }
-        }
-        enqueued
-    }
-
-    pub(super) fn enqueue_custom_element_disconnected_callbacks_for_moved_roots_if_needed(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        roots: &[DomHandle],
-        was_connected: bool,
-    ) {
-        if !was_connected {
-            return;
-        }
-        let disconnected_roots = roots
-            .iter()
-            .copied()
-            .filter(|root| !self.is_custom_element_lifecycle_connected(*root))
-            .collect::<Vec<_>>();
-        if disconnected_roots.is_empty() {
-            return;
-        }
-        for root in disconnected_roots {
-            unsafe { &mut *host_ptr }.mark_disconnected_shadow_roots_in_subtree(root);
-            unsafe { &mut *host_ptr }
-                .clear_pending_pointer_capture_targets_in_disconnected_subtree(root);
-            let mut handles = Vec::new();
-            self.collect_subtree_handles_preorder(root, &mut handles);
-            for handle in handles {
-                custom_elements::enqueue_disconnected_callback_unless_pending(
-                    scope, host_ptr, handle,
-                );
-            }
-            JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
-                scope, host_ptr, root,
-            );
-        }
-    }
-
     pub(super) fn enqueue_custom_element_connected_callbacks(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -160,6 +101,9 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         root: DomHandle,
     ) -> bool {
+        if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {
+            return false;
+        }
         let mut handles = Vec::new();
         self.collect_subtree_handles_preorder(root, &mut handles);
         let mut enqueued = false;
@@ -181,10 +125,16 @@ impl DocumentRuntime {
         if roots.is_empty() || unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {
             return false;
         }
-        if !roots
-            .iter()
-            .any(|root| self.subtree_contains_html_form(*root))
-        {
+        // An ID on a non-form element can mask an external form= reference.
+        let changes_form_lookup = roots.iter().any(|&root| {
+            let mut handles = Vec::new();
+            self.collect_subtree_handles_preorder(root, &mut handles);
+            handles.into_iter().any(|handle| {
+                self.dom_host.is_html_element_named(handle, "form")
+                    || self.dom_host.get_attribute(handle, "id").is_some()
+            })
+        });
+        if !changes_form_lookup {
             return false;
         }
         custom_elements::enqueue_form_association_callbacks_for_all(scope, host_ptr);

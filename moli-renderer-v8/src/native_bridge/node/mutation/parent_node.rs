@@ -103,11 +103,11 @@ pub(in crate::native_bridge) fn mutate_parent_node<'s>(
         let runtime = unsafe { &mut *runtime_ptr };
         let inserted = match mutation {
             ParentNodeMutation::ReplaceChildren => runtime
-                .replace_all_children_with_node_appending_to_current_reaction_queue(
+                .replace_all_children_appending_to_current_reaction_queue(
                     scope,
                     runtime_ptr,
                     parent,
-                    node,
+                    Some(node),
                     detached,
                 ),
             _ if detached => runtime

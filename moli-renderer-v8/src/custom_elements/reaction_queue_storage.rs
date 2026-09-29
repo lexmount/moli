@@ -61,13 +61,4 @@ impl ElementReactionQueue {
     pub(super) fn is_drained(&self) -> bool {
         self.index >= self.reactions.len()
     }
-
-    pub(super) fn pending_reactions_end_with(&self, reaction: &CustomElementReaction) -> bool {
-        self.reactions
-            .iter()
-            .skip(self.index)
-            .rev()
-            .find_map(Option::as_ref)
-            == Some(reaction)
-    }
 }
