@@ -129,6 +129,30 @@ impl RangeBoundaryPoint {
         }
     }
 
+    pub(crate) fn update_for_text_merge(
+        &mut self,
+        dom_host: &DomHost,
+        target: DomHandle,
+        removed_text: DomHandle,
+        target_length: u32,
+    ) {
+        let offset = if self.container == removed_text {
+            let Some(offset) = self.offset(dom_host) else {
+                return;
+            };
+            target_length.saturating_add(offset)
+        } else if dom_host.parent_node(removed_text) == Some(self.container)
+            && self.child_before_boundary == dom_host.previous_sibling(removed_text)
+        {
+            target_length
+        } else {
+            return;
+        };
+        if let Some(point) = Self::new(dom_host, target, offset) {
+            *self = point;
+        }
+    }
+
     pub(crate) fn set_child_before_boundary(
         &mut self,
         dom_host: &DomHost,

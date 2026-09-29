@@ -256,6 +256,25 @@ impl SelectionRecordRegistry {
         }
     }
 
+    pub(super) fn update_composed_for_text_merge(
+        &mut self,
+        dom: &DomHost,
+        target: DomHandle,
+        removed_text: DomHandle,
+        offset: u32,
+    ) {
+        for record in self.records.values_mut() {
+            for point in [&mut record.composed_start, &mut record.composed_end]
+                .into_iter()
+                .flatten()
+            {
+                point.update_text_boundary(dom, |boundary| {
+                    boundary.update_for_text_merge(dom, target, removed_text, offset);
+                });
+            }
+        }
+    }
+
     pub(super) fn update_for_child_removal(
         &mut self,
         dom: &DomHost,
