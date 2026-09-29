@@ -31,8 +31,8 @@ pub use host::{
     DomMutationEffects, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
     DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
     DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
-    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTextareaValueChange,
-    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTextNormalizationStep,
+    DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
     StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
