@@ -4,8 +4,9 @@ use crate::util::context_host_ptr_from_global_bridge;
 pub(in crate::native_bridge::document) fn build_detached_text_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_document: v8::Local<'s, v8::Object>,
-    data: &str,
+    data: impl Into<moli_dom::native::DomStringValue>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let data = data.into();
     let context = owner_document.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let object = new_detached_node_object(scope, "Text")?;
@@ -23,11 +24,8 @@ pub(in crate::native_bridge::document) fn build_detached_text_object<'s>(
             unsafe { &mut *runtime_ptr }.create_text_node_for_document(owner_document_handle, data);
         define_detached_native_handle(scope, object, handle);
     } else {
-        let _ = state.set(
-            scope,
-            v8str(scope, "data").into(),
-            v8_string(scope, data)?.into(),
-        );
+        let data = crate::util::v8_string_from_utf16_units(scope, &data.utf16_units())?;
+        let _ = state.set(scope, v8str(scope, "data").into(), data.into());
         define_detached_state(scope, object, state);
     }
     install_detached_character_data_instance_properties(scope, object);
@@ -37,8 +35,9 @@ pub(in crate::native_bridge::document) fn build_detached_text_object<'s>(
 pub(in crate::native_bridge::document) fn build_detached_comment_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_document: v8::Local<'s, v8::Object>,
-    data: &str,
+    data: impl Into<moli_dom::native::DomStringValue>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let data = data.into();
     let context = owner_document.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let object = new_detached_node_object(scope, "Comment")?;
@@ -56,11 +55,8 @@ pub(in crate::native_bridge::document) fn build_detached_comment_object<'s>(
             unsafe { &mut *runtime_ptr }.create_comment_for_document(owner_document_handle, data);
         define_detached_native_handle(scope, object, handle);
     } else {
-        let _ = state.set(
-            scope,
-            v8str(scope, "data").into(),
-            v8_string(scope, data)?.into(),
-        );
+        let data = crate::util::v8_string_from_utf16_units(scope, &data.utf16_units())?;
+        let _ = state.set(scope, v8str(scope, "data").into(), data.into());
         define_detached_state(scope, object, state);
     }
     install_detached_character_data_instance_properties(scope, object);
@@ -70,8 +66,9 @@ pub(in crate::native_bridge::document) fn build_detached_comment_object<'s>(
 pub(crate) fn build_detached_cdata_section_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_document: v8::Local<'s, v8::Object>,
-    data: &str,
+    data: impl Into<moli_dom::native::DomStringValue>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let data = data.into();
     let context = owner_document.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let object = new_detached_node_object(scope, "CDATASection")?;
@@ -89,11 +86,8 @@ pub(crate) fn build_detached_cdata_section_object<'s>(
             .create_cdata_section_for_document(owner_document_handle, data);
         define_detached_native_handle(scope, object, handle);
     } else {
-        let _ = state.set(
-            scope,
-            v8str(scope, "data").into(),
-            v8_string(scope, data)?.into(),
-        );
+        let data = crate::util::v8_string_from_utf16_units(scope, &data.utf16_units())?;
+        let _ = state.set(scope, v8str(scope, "data").into(), data.into());
         define_detached_state(scope, object, state);
     }
     install_detached_character_data_instance_properties(scope, object);
@@ -104,8 +98,9 @@ pub(in crate::native_bridge::document) fn build_detached_processing_instruction_
     scope: &mut v8::PinScope<'s, '_>,
     owner_document: v8::Local<'s, v8::Object>,
     target: &str,
-    data: &str,
+    data: impl Into<moli_dom::native::DomStringValue>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let data = data.into();
     let context = owner_document.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let object = new_detached_node_object(scope, "ProcessingInstruction")?;
@@ -131,11 +126,8 @@ pub(in crate::native_bridge::document) fn build_detached_processing_instruction_
         );
         define_detached_native_handle(scope, object, handle);
     } else {
-        let _ = state.set(
-            scope,
-            v8str(scope, "data").into(),
-            v8_string(scope, data)?.into(),
-        );
+        let data = crate::util::v8_string_from_utf16_units(scope, &data.utf16_units())?;
+        let _ = state.set(scope, v8str(scope, "data").into(), data.into());
         define_detached_state(scope, object, state);
     }
     install_detached_processing_instruction_instance_properties(scope, object);

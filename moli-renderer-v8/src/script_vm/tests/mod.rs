@@ -2368,6 +2368,7 @@ mod document_implementation_realm;
 
 mod svg_animated_value_native_receivers;
 
+mod native_dom_strings;
 mod native_exception_stack_capture;
 mod navigation_timing_inheritance;
 mod no_cors_header_fill;
