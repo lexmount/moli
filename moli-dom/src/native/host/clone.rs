@@ -655,9 +655,16 @@ mod tests {
         );
 
         let mut target = test_host();
+        // Foreign node IDs must be interpreted in their own arena.
+        target.create_comment("offset the target arena");
         let imported = target
             .import_foreign_node(target.document_handle(), source.dom(), root, true)
             .unwrap();
+        assert!(source.node(root).unwrap().is_equal_node_in(
+            source.dom(),
+            target.node(imported).unwrap(),
+            target.dom(),
+        ));
         for host_and_root in [(&source, clone), (&target, imported)] {
             let (host, root) = host_and_root;
             let copied = host.child_handles(root).collect::<Vec<_>>();
@@ -681,6 +688,11 @@ mod tests {
             DomStringValue::from_utf16(&[0x61, 0xd801, 0x62]),
             false,
         );
+        assert!(!source.node(root).unwrap().is_equal_node_in(
+            source.dom(),
+            target.node(imported).unwrap(),
+            target.dom(),
+        ));
         assert!(
             !source
                 .node(root)

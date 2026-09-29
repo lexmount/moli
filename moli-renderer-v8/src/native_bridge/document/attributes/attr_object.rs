@@ -4,7 +4,10 @@ pub(super) const ATTR_STATE_SLOT: &str = "__moliAttrState";
 
 mod cache;
 mod instance;
+mod reference;
 mod state;
+
+pub(in crate::native_bridge) use reference::AttrReference;
 
 pub(crate) use cache::live_get_attribute_node_object;
 pub(in crate::native_bridge) use cache::{

@@ -132,7 +132,9 @@ pub(super) fn attr_instance_value_getter<'a>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = attr_current_value(scope, args.holder());
-    set_string_return_value(scope, &mut rv, &value);
+    let value = crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())
+        .unwrap_or_else(|| v8::String::empty(scope));
+    rv.set(value.into());
 }
 
 pub(super) fn attr_instance_value_setter<'a>(

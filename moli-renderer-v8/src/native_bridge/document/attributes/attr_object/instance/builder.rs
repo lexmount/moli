@@ -1,3 +1,4 @@
+use super::super::reference::native_owner_document;
 use super::install::install_attr_instance_properties;
 use super::*;
 use crate::util::set_null_prototype;
@@ -27,22 +28,21 @@ struct AttrObjectDeclaration<'scope> {
 pub(crate) fn new_attr_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
-    value: &str,
+    value: impl Into<crate::dom::native::DomStringValue>,
     owner_element: Option<v8::Local<'s, v8::Object>>,
     owner_document: Option<v8::Local<'s, v8::Object>>,
     namespace_uri: Option<&str>,
     prefix: Option<&str>,
     local_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let value = value.into();
     let owner_document = owner_document
+        .or_else(|| owner_element.and_then(|owner| native_owner_document(scope, owner)))
         .map(v8::Local::<v8::Value>::from)
-        .or_else(|| {
-            owner_element.and_then(|owner| owner.get(scope, v8str(scope, "ownerDocument").into()))
-        })
         .unwrap_or_else(|| v8::null(scope).into());
     let state = AttrStateDeclaration {
         name: v8_string(scope, name)?,
-        value: v8_string(scope, value)?,
+        value: crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())?,
         owner_element: owner_element
             .map(v8::Local::<v8::Value>::from)
             .unwrap_or_else(|| v8::null(scope).into()),
