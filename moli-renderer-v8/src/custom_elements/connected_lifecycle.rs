@@ -57,20 +57,6 @@ pub(crate) fn enqueue_disconnected_callback(
     )
 }
 
-pub(crate) fn enqueue_disconnected_callback_unless_pending(
-    scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) -> bool {
-    if unsafe { &*host_ptr }
-        .custom_element_reactions()
-        .pending_reactions_end_with(handle, &CustomElementReaction::Disconnected)
-    {
-        return false;
-    }
-    enqueue_disconnected_callback(scope, host_ptr, handle)
-}
-
 pub(crate) fn enqueue_connected_move_callback(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,

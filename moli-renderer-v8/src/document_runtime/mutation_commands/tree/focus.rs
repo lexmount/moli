@@ -1,3 +1,7 @@
+use super::{
+    policy::{TreeMutationSideEffectSource, TreeMutationSourceProfile},
+    removal::TreeRemovalPlan,
+};
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     native_bridge::JsContextHost,
@@ -56,21 +60,26 @@ impl DocumentRuntime {
         handles
     }
 
-    pub(super) fn reset_focus_for_non_preserving_connected_move_before_insert(
+    pub(super) fn reset_focus_before_tree_removal(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        insertion_roots: &[DomHandle],
-        was_connected: bool,
+        removal_plan: &TreeRemovalPlan,
+        profile: TreeMutationSourceProfile,
     ) {
-        if !was_connected {
-            return;
-        }
-        let Some(active) = self.active_element_handle() else {
-            return;
-        };
-        if self.focus_is_in_changing_subtrees(insertion_roots, active) {
-            crate::native_bridge::element::update_focus(scope, host_ptr, None);
+        // Focus events must still propagate through the old parent chain.
+        match profile.source {
+            TreeMutationSideEffectSource::JsDomApi => {
+                if let Some(active) = removal_plan.focus_reset_handle_before_remove {
+                    crate::native_bridge::element::reset_focus_from_previous_handle_with_previous_focus_within(
+                        scope,
+                        host_ptr,
+                        active,
+                        removal_plan.focus_within_handles_before_remove.clone(),
+                    );
+                }
+            }
+            TreeMutationSideEffectSource::ParserTreeSink => {}
         }
     }
 }

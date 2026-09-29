@@ -1,3 +1,5 @@
+use crate::{document_runtime::DomHandle, dom::native::DomMutationEffects};
+
 #[derive(Clone, Copy)]
 pub(super) enum TreeMutationSideEffectSource {
     JsDomApi,
@@ -17,6 +19,17 @@ pub(super) enum TreeNoncePolicy {
 }
 
 #[derive(Clone, Copy)]
+pub(super) enum TreeMutationObserverPolicy {
+    Queue,
+    Suppress,
+    ReplaceChild {
+        removed: DomHandle,
+        previous_sibling: Option<DomHandle>,
+        next_sibling: Option<DomHandle>,
+    },
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct TreeMutationSourceProfile {
     pub(super) source: TreeMutationSideEffectSource,
     pub(super) reaction_policy: TreeReactionDispatchPolicy,
@@ -25,7 +38,7 @@ pub(super) struct TreeMutationSourceProfile {
     pub(super) upgrade_connected_subtrees: bool,
     pub(super) queue_parser_details_toggle_events: bool,
     pub(super) queue_resource_followups: bool,
-    pub(super) suppress_observers: bool,
+    pub(super) observers: TreeMutationObserverPolicy,
 }
 
 impl TreeNoncePolicy {
@@ -60,7 +73,7 @@ impl TreeMutationSourceProfile {
             upgrade_connected_subtrees: true,
             queue_parser_details_toggle_events: false,
             queue_resource_followups: true,
-            suppress_observers: false,
+            observers: TreeMutationObserverPolicy::Queue,
         }
     }
 
@@ -80,7 +93,7 @@ impl TreeMutationSourceProfile {
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
             queue_resource_followups: true,
-            suppress_observers: false,
+            observers: TreeMutationObserverPolicy::Queue,
         }
     }
 
@@ -110,12 +123,65 @@ impl TreeMutationSourceProfile {
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
             queue_resource_followups: true,
-            suppress_observers: false,
+            observers: TreeMutationObserverPolicy::Queue,
         }
     }
 
-    pub(super) fn suppressing_observers(mut self) -> Self {
-        self.suppress_observers = true;
-        self
+    pub(super) fn suppressing_observers(self) -> Self {
+        Self {
+            observers: TreeMutationObserverPolicy::Suppress,
+            ..self
+        }
+    }
+
+    pub(super) fn suppresses_observers(self) -> bool {
+        !matches!(self.observers, TreeMutationObserverPolicy::Queue)
+    }
+
+    pub(super) fn replacing_child(
+        self,
+        removed: DomHandle,
+        previous_sibling: Option<DomHandle>,
+        next_sibling: Option<DomHandle>,
+    ) -> Self {
+        Self {
+            observers: TreeMutationObserverPolicy::ReplaceChild {
+                removed,
+                previous_sibling,
+                next_sibling,
+            },
+            ..self
+        }
+    }
+
+    pub(super) fn apply_insertion_observer_policy(
+        self,
+        effects: &mut DomMutationEffects,
+        parent: DomHandle,
+        roots: &[DomHandle],
+        records_enabled: bool,
+    ) {
+        if self.suppresses_observers() {
+            effects.suppress_child_list_mutations_for_target(parent);
+        }
+        if effects.did_change()
+            && records_enabled
+            && let TreeMutationObserverPolicy::ReplaceChild {
+                removed,
+                previous_sibling,
+                next_sibling,
+            } = self.observers
+        {
+            // replaceChild's combined record precedes insertion's script and
+            // selectedcontent post-connection steps. Replace-all queues its
+            // record only after insertion returns, using Suppress instead.
+            effects.queue_child_list_mutation(
+                parent,
+                roots,
+                &[removed],
+                previous_sibling,
+                next_sibling,
+            );
+        }
     }
 }

@@ -3107,8 +3107,8 @@ fn svg_style_uses_the_shared_owner_live_stylesheet_pipeline() {
     assert_eq!(mutated, "true|true|true|2|17px|19px");
     assert_eq!(
         crate::live_stylesheet::live_stylesheet_parse_count_for_test(),
-        1,
-        "changing SVG style text should parse one replacement live stylesheet"
+        2,
+        "SVG style processes the empty contents after removal and the inserted replacement text"
     );
     assert_eq!(
         crate::live_stylesheet::live_stylesheet_css_text_projection_count_for_test(),

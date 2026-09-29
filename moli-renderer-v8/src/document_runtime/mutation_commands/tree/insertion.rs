@@ -3,9 +3,10 @@ use super::super::{
 };
 use super::{
     insertion_plan::{TreeInsertionPlanOptions, TreeInsertionSelectednessPolicy},
-    policy::TreeMutationSourceProfile,
+    policy::{TreeMutationSourceProfile, TreeReactionDispatchPolicy},
 };
 use crate::{
+    custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
     mutation_coordinator::{ConnectedScriptMutationPolicy, RuntimeMutationOptions},
@@ -70,6 +71,23 @@ impl DocumentRuntime {
         child: DomHandle,
         source_profile: TreeMutationSourceProfile,
     ) -> bool {
+        if matches!(
+            source_profile.reaction_policy,
+            TreeReactionDispatchPolicy::DispatchNow
+        ) {
+            return custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                self.append_child_with_source_profile(
+                    scope,
+                    host_ptr,
+                    parent,
+                    child,
+                    TreeMutationSourceProfile {
+                        reaction_policy: TreeReactionDispatchPolicy::AppendToCurrentQueue,
+                        ..source_profile
+                    },
+                )
+            });
+        }
         let cpu_profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = cpu_profile_enabled.then(std::time::Instant::now);
         let started = dom_binding_timing_started();
@@ -88,6 +106,20 @@ impl DocumentRuntime {
         let fragment_us = fragment_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
+        let removal_started = cpu_profile_enabled.then(std::time::Instant::now);
+        if !self.remove_insertion_roots(
+            scope,
+            host_ptr,
+            parent,
+            child,
+            insertion_roots,
+            source_profile,
+        ) {
+            return false;
+        }
+        let removal_us = removal_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
         let plan_started = cpu_profile_enabled.then(std::time::Instant::now);
         let insertion_plan = self.tree_insertion_plan(
             parent,
@@ -95,7 +127,6 @@ impl DocumentRuntime {
             host_ptr,
             TreeInsertionPlanOptions::insert(
                 None,
-                fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
                 TreeInsertionSelectednessPolicy::CaptureAndRestore,
             ),
         );
@@ -103,35 +134,26 @@ impl DocumentRuntime {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         let subtree_node_count = insertion_plan.subtree_plan.node_count;
-        let was_connected = insertion_plan.was_lifecycle_connected_before_insert();
-        let focus_started = cpu_profile_enabled.then(std::time::Instant::now);
-        self.reset_focus_for_non_preserving_connected_move_before_insert(
-            scope,
-            host_ptr,
-            insertion_plan.insertion_roots,
-            was_connected,
-        );
-        let focus_us = focus_started
-            .map(|started| started.elapsed().as_micros())
-            .unwrap_or_default();
         let effects_started = cpu_profile_enabled.then(std::time::Instant::now);
-        let (mut effects, prepublished_removals) = match self
-            .tree_insertion_effects_with_dom_debugger(
-                host_ptr,
-                parent,
-                child,
-                insertion_plan.insertion_roots,
-                None,
-            ) {
+        let (mut effects, prepublished_removals) = match self.tree_insertion_effects_for_roots(
+            host_ptr,
+            parent,
+            child,
+            insertion_plan.insertion_roots,
+            None,
+        ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
                 self.append_child_effects_in_structural_scope(parent, child),
                 Vec::new(),
             ),
         };
-        if source_profile.suppress_observers {
-            effects.suppress_child_list_mutations_for_target(parent);
-        }
+        source_profile.apply_insertion_observer_policy(
+            &mut effects,
+            parent,
+            insertion_plan.insertion_roots,
+            self.dom_host.mutation_records_enabled(),
+        );
         let effects_us = effects_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -195,7 +217,7 @@ impl DocumentRuntime {
                     parent_connected = self.dom_host.is_connected(parent),
                     fragment_us,
                     plan_us,
-                    focus_us,
+                    removal_us,
                     effects_us,
                     iterator_us,
                     mutation_us,
@@ -334,6 +356,27 @@ impl DocumentRuntime {
         connected_script_policy: ConnectedScriptMutationPolicy,
         source_profile: TreeMutationSourceProfile,
     ) -> bool {
+        if matches!(
+            source_profile.reaction_policy,
+            TreeReactionDispatchPolicy::DispatchNow
+        ) {
+            return custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                self.insert_before_with_nonce_handling(
+                    scope,
+                    host_ptr,
+                    parent,
+                    child,
+                    reference_child,
+                    hide_nonce_content_attributes,
+                    dispatch_atomic_move_callbacks,
+                    connected_script_policy,
+                    TreeMutationSourceProfile {
+                        reaction_policy: TreeReactionDispatchPolicy::AppendToCurrentQueue,
+                        ..source_profile
+                    },
+                )
+            });
+        }
         let mutation_options = RuntimeMutationOptions::js_dom_api()
             .with_connected_script_policy(connected_script_policy)
             .with_nonce_hiding(hide_nonce_content_attributes)
@@ -354,42 +397,45 @@ impl DocumentRuntime {
             Some(handles) => handles,
             None => std::slice::from_ref(&child),
         };
+        if !self.remove_insertion_roots(
+            scope,
+            host_ptr,
+            parent,
+            child,
+            insertion_roots,
+            source_profile,
+        ) {
+            return false;
+        }
         let insertion_plan = self.tree_insertion_plan(
             parent,
             insertion_roots,
             host_ptr,
             TreeInsertionPlanOptions::insert(
                 reference_child,
-                fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
                 TreeInsertionSelectednessPolicy::CaptureAndRestore,
             ),
         );
         let was_connected = insertion_plan.was_lifecycle_connected_before_insert();
-        if !dispatch_atomic_move_callbacks {
-            self.reset_focus_for_non_preserving_connected_move_before_insert(
-                scope,
-                host_ptr,
-                insertion_plan.insertion_roots,
-                was_connected,
-            );
-        }
-        let (mut effects, prepublished_removals) = match self
-            .tree_insertion_effects_with_dom_debugger(
-                host_ptr,
-                parent,
-                child,
-                insertion_plan.insertion_roots,
-                reference_child,
-            ) {
+        let (mut effects, prepublished_removals) = match self.tree_insertion_effects_for_roots(
+            host_ptr,
+            parent,
+            child,
+            insertion_plan.insertion_roots,
+            reference_child,
+        ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
                 self.insert_before_effects_in_structural_scope(parent, child, reference_child),
                 Vec::new(),
             ),
         };
-        if source_profile.suppress_observers {
-            effects.suppress_child_list_mutations_for_target(parent);
-        }
+        source_profile.apply_insertion_observer_policy(
+            &mut effects,
+            parent,
+            insertion_plan.insertion_roots,
+            self.dom_host.mutation_records_enabled(),
+        );
         if effects.did_change() && source_profile.queue_parser_details_toggle_events {
             for &root in insertion_plan.insertion_roots {
                 crate::native_bridge::element::queue_parser_details_toggle_events_in_subtree(
