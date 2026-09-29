@@ -2373,6 +2373,7 @@ mod native_exception_stack_capture;
 mod navigation_timing_inheritance;
 mod no_cors_header_fill;
 mod node_event_worlds;
+mod node_normalization;
 mod node_root_dictionary;
 
 mod document_traversal_factory_realms;
