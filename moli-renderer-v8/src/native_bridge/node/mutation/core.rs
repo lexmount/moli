@@ -19,8 +19,16 @@ fn require_node_argument<'s>(
     value: v8::Local<'s, v8::Value>,
     message: &'static str,
 ) -> bool {
-    if v8::Local::<v8::Object>::try_from(value)
-        .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+    if webidl::convert_with_options::<webidl::InterfaceObject>(
+        scope,
+        value,
+        webidl::Context::argument("Node", 1),
+        &webidl::InterfaceOptions {
+            name: web_api_interfaces::Node::NAME,
+            brand_check: web_api_interfaces::Node::is_instance,
+        },
+    )
+    .is_ok()
     {
         return true;
     }
