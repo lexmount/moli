@@ -1,60 +1,35 @@
-use super::core::{
-    node_can_contain_children, node_is_host_including_inclusive_ancestor, node_type_is_insertable,
-    pre_insert_validation_handles,
-};
-use super::fragment::{
-    build_insertion_fragment_from_handles, insert_fragment_with_validation,
-    validate_document_sequence, value_to_inserted_handle,
-};
 use super::*;
-use crate::custom_elements;
+use crate::{custom_elements, util::v8_value_to_dom_string_u16};
+use widestring::U16String;
+
+#[derive(Clone, Copy)]
+pub(in crate::native_bridge) enum ParentNodeMutation {
+    Append,
+    Prepend,
+    ReplaceChildren,
+}
+
+impl ParentNodeMutation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::Prepend => "prepend",
+            Self::ReplaceChildren => "replaceChildren",
+        }
+    }
+}
+
+enum NodeOrString<'s> {
+    Node(v8::Local<'s, v8::Value>),
+    String(U16String),
+}
 
 pub(in crate::native_bridge) fn node_append_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "ParentNode", "append");
-        return;
-    };
-    if !require_parent_node_receiver(scope, unsafe { &*runtime_ptr }, parent, "append", true) {
-        return;
-    }
-    let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(inserted) = parent_node_insertion_handles(scope, runtime_ptr, document_handle, &args)
-    else {
-        return;
-    };
-    if !validate_parent_node_insertion(scope, unsafe { &*runtime_ptr }, parent, None, &inserted) {
-        return;
-    }
-    let Some(appended) =
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let fragment = build_insertion_fragment_from_handles(
-                scope,
-                runtime_ptr,
-                document_handle,
-                &inserted,
-            )?;
-            Some(insert_fragment_with_validation(
-                scope,
-                runtime_ptr,
-                parent,
-                None,
-                &[],
-                fragment,
-                &inserted,
-            ))
-        })
-    else {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return;
-    };
-    if !appended {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-    }
+    parent_node_callback(scope, &args, ParentNodeMutation::Append);
 }
 
 pub(in crate::native_bridge) fn node_prepend_callback<'s>(
@@ -62,123 +37,7 @@ pub(in crate::native_bridge) fn node_prepend_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        throw_incompatible_method_receiver(scope, "ParentNode", "prepend");
-        return;
-    };
-    if !require_parent_node_receiver(scope, unsafe { &*runtime_ptr }, parent, "prepend", true) {
-        return;
-    }
-    let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(inserted) = parent_node_insertion_handles(scope, runtime_ptr, document_handle, &args)
-    else {
-        return;
-    };
-    // Converting the arguments into a node moves existing children into the
-    // temporary fragment before the pre-insert step. The reference is thus
-    // the first child that is not itself among the converted arguments.
-    let reference_child = {
-        let runtime = unsafe { &*runtime_ptr };
-        runtime.dom_host().node(parent).and_then(|node| {
-            node.child_ids(runtime.dom_host().dom())
-                .find(|child| !inserted.contains(child))
-        })
-    };
-    if !validate_parent_node_insertion(
-        scope,
-        unsafe { &*runtime_ptr },
-        parent,
-        reference_child,
-        &inserted,
-    ) {
-        return;
-    }
-    let Some(prepended) =
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let fragment = build_insertion_fragment_from_handles(
-                scope,
-                runtime_ptr,
-                document_handle,
-                &inserted,
-            )?;
-            Some(insert_fragment_with_validation(
-                scope,
-                runtime_ptr,
-                parent,
-                reference_child,
-                &[],
-                fragment,
-                &inserted,
-            ))
-        })
-    else {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return;
-    };
-    if !prepended {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-    }
-}
-
-fn parent_node_insertion_handles(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document_handle: Option<DomHandle>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Option<Vec<DomHandle>> {
-    let mut inserted = Vec::new();
-    for index in 0..args.length() {
-        let handle =
-            value_to_inserted_handle(scope, runtime_ptr, document_handle, args.get(index))?;
-        inserted.push(handle);
-    }
-    Some(inserted)
-}
-
-fn validate_parent_node_insertion(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
-    parent: DomHandle,
-    reference_child: Option<DomHandle>,
-    inserted: &[DomHandle],
-) -> bool {
-    if !node_can_contain_children(runtime, parent) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return false;
-    }
-    for child in inserted {
-        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
-        }
-        let Some(child_node_type) = runtime.dom_host().node(*child).map(Node::node_type) else {
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
-        };
-        if !node_type_is_insertable(child_node_type)
-            || (child_node_type == NodeType::Text && node_is_document(runtime, parent))
-            || (child_node_type == NodeType::DocumentType && !node_is_document(runtime, parent))
-        {
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
-        }
-    }
-    let document_inserted = inserted
-        .iter()
-        .flat_map(|handle| pre_insert_validation_handles(runtime, *handle))
-        .collect::<Vec<_>>();
-    if !validate_document_sequence(
-        runtime,
-        parent,
-        reference_child,
-        &document_inserted,
-        inserted,
-    ) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return false;
-    }
-    true
+    parent_node_callback(scope, &args, ParentNodeMutation::Prepend);
 }
 
 pub(in crate::native_bridge) fn node_replace_children_callback<'s>(
@@ -186,99 +45,162 @@ pub(in crate::native_bridge) fn node_replace_children_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    parent_node_callback(scope, &args, ParentNodeMutation::ReplaceChildren);
+}
+
+fn parent_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    mutation: ParentNodeMutation,
+) {
+    let Ok((runtime_ptr, parent)) = node_runtime_and_handle_from_args_or_detached(scope, args)
     else {
-        throw_incompatible_method_receiver(scope, "ParentNode", "replaceChildren");
+        throw_incompatible_method_receiver(scope, "ParentNode", mutation.name());
         return;
     };
+    let values = (0..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    mutate_parent_node(scope, runtime_ptr, parent, mutation, &values, false);
+}
+
+pub(in crate::native_bridge) fn mutate_parent_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    parent: DomHandle,
+    mutation: ParentNodeMutation,
+    values: &[v8::Local<'s, v8::Value>],
+    detached: bool,
+) {
     if !require_parent_node_receiver(
         scope,
         unsafe { &*runtime_ptr },
         parent,
-        "replaceChildren",
+        mutation.name(),
         true,
     ) {
         return;
     }
-    let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let mut inserted = Vec::new();
-    for index in 0..args.length() {
-        let Some(handle) =
-            value_to_inserted_handle(scope, runtime_ptr, document_handle, args.get(index))
-        else {
+    // Web IDL converts every (Node or DOMString) argument before the DOM
+    // algorithm runs, including strings after a node that will fail insertion.
+    let mut inputs = Vec::with_capacity(values.len());
+    for &value in values {
+        if v8::Local::<v8::Object>::try_from(value)
+            .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+        {
+            inputs.push(NodeOrString::Node(value));
+        } else {
+            let Some(value) = v8_value_to_dom_string_u16(scope, value, false) else {
+                return;
+            };
+            inputs.push(NodeOrString::String(value));
+        }
+    }
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let document = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
+        let Some(node) = convert_nodes_into_node(scope, runtime_ptr, document, inputs) else {
             return;
         };
-        inserted.push(handle);
-    }
-    let existing_children = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(parent)
-        .map(|node| {
-            node.child_ids(unsafe { &*runtime_ptr }.dom_host().dom())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if !validate_parent_node_replace_children(scope, unsafe { &*runtime_ptr }, parent, &inserted) {
-        return;
-    }
-    let Some(()) =
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let fragment = build_insertion_fragment_from_handles(
-                scope,
-                runtime_ptr,
-                document_handle,
-                &inserted,
-            )?;
-            let runtime = unsafe { &mut *runtime_ptr };
-            runtime.replace_all_children_with_fragment_appending_to_current_reaction_queue(
+        // Conversion can move existing children. Read the reference and the
+        // children excluded by replaceChildren only after conversion completes.
+        let runtime = unsafe { &*runtime_ptr };
+        let reference = match mutation {
+            ParentNodeMutation::Prepend => runtime.dom_host().child_handles(parent).next(),
+            _ => None,
+        };
+        let excluded = match mutation {
+            ParentNodeMutation::ReplaceChildren => {
+                runtime.dom_host().child_handles(parent).collect()
+            }
+            _ => Vec::new(),
+        };
+        if !validate_pre_insert_handles(scope, runtime, parent, node, reference, &excluded) {
+            return;
+        }
+        let runtime = unsafe { &mut *runtime_ptr };
+        let inserted = match mutation {
+            ParentNodeMutation::ReplaceChildren => runtime
+                .replace_all_children_with_node_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    node,
+                    detached,
+                ),
+            _ if detached => runtime
+                .insert_detached_native_child_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    parent,
+                    node,
+                    reference,
+                ),
+            _ => runtime.insert_before_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
-                fragment,
-                &existing_children,
-            );
-            Some(())
-        })
-    else {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return;
-    };
+                node,
+                reference,
+            ),
+        };
+        if !inserted {
+            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
+        }
+    });
 }
 
-fn validate_parent_node_replace_children(
+fn converted_input_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
-    parent: DomHandle,
-    inserted: &[DomHandle],
-) -> bool {
-    if !node_can_contain_children(runtime, parent) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return false;
-    }
-    for child in inserted {
-        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
+    runtime_ptr: *mut JsContextHost,
+    document: Option<DomHandle>,
+    input: NodeOrString<'_>,
+) -> Option<DomHandle> {
+    match input {
+        NodeOrString::Node(value) => {
+            if !crate::native_bridge::document::is_attr_node_value(scope, value)
+                && let Some(handle) =
+                    node_or_foreign_arg_handle_allow_detached(scope, runtime_ptr, document, value)
+            {
+                return Some(handle);
+            }
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
+            None
         }
-        let Some(child_node_type) = runtime.dom_host().node(*child).map(Node::node_type) else {
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
-        };
-        if !node_type_is_insertable(child_node_type)
-            || (child_node_type == NodeType::Text && node_is_document(runtime, parent))
-            || (child_node_type == NodeType::DocumentType && !node_is_document(runtime, parent))
+        NodeOrString::String(value) => {
+            Some(unsafe { &mut *runtime_ptr }.create_text_node_from_utf16_units(document, value))
+        }
+    }
+}
+
+fn convert_nodes_into_node(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: Option<DomHandle>,
+    mut inputs: Vec<NodeOrString<'_>>,
+) -> Option<DomHandle> {
+    if inputs.len() == 1 {
+        return converted_input_handle(scope, runtime_ptr, document, inputs.pop()?);
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    let fragment = match document {
+        Some(document) => runtime.create_document_fragment_for_document(document),
+        None => runtime.create_document_fragment(),
+    };
+    for input in inputs {
+        let child = converted_input_handle(scope, runtime_ptr, document, input)?;
+        if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, fragment, child, None, &[])
         {
+            return None;
+        }
+        if !unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            fragment,
+            child,
+        ) {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return false;
+            return None;
         }
     }
-    let document_inserted = inserted
-        .iter()
-        .flat_map(|handle| pre_insert_validation_handles(runtime, *handle))
-        .collect::<Vec<_>>();
-    if !validate_document_sequence(runtime, parent, None, &document_inserted, inserted) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return false;
-    }
-    true
+    Some(fragment)
 }
