@@ -4375,8 +4375,8 @@ import "./c.mjs";
                         }
                         ModuleKind::Json => "non-JSON module response",
                         ModuleKind::Css => "non-CSS module response",
-                        ModuleKind::ModulePreloadText => {
-                            unreachable!("text preloads do not enforce a response MIME type")
+                        ModuleKind::Text => {
+                            unreachable!("text modules do not enforce a response MIME type")
                         }
                     };
                     assert!(error.to_string().contains(expected), "{error:#}");
