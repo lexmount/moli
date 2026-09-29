@@ -1,6 +1,7 @@
 mod support;
 
-use moli_html2md::{Converter, Options};
+use moli_html2md::{Converter, Dom, NodeKind, Options};
+use std::cell::Cell;
 use support::{Tree, rendered_html};
 
 fn markdown(html: &str, preformatted_code: bool) -> String {
@@ -94,6 +95,32 @@ fn transparent_inline_wrappers_do_not_change_tex_or_activate_markdown_resources(
         assert!(!result.contains("<a "), "{result}");
         assert!(!result.contains("<img "), "{result}");
     }
+}
+
+#[test]
+fn math_streams_across_transparent_wrappers_in_every_inline_container() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for source in [
+        r"<p>Model $x_i<span> + </span>\alpha$.</p>",
+        r"<h2>Model $x_i<span> + </span>\alpha$.</h2>",
+        r"<ul><li>Model $x_i<span> + </span>\alpha$.</li></ul>",
+        r"<table><tr><td>Model $x_i<span> + </span>\alpha$.</td></tr></table>",
+    ] {
+        let result = markdown(source, false);
+        let payloads: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|event| match event {
+                Event::InlineMath(text) => Some(text.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(payloads, [r"x_i + \alpha"], "{source}: {result}");
+    }
+    let result = markdown(
+        r"<a href='#equation'>Equation</a><p id='equation'>$x<span> + </span>y$</p><p>$z<span> + </span>1$</p>",
+        false,
+    );
+    assert!(result.contains("<a id=\"equation\"></a>"), "{result}");
+    assert!(result.contains("$x + y$\n\n$z + 1$"), "{result}");
 }
 
 #[test]
@@ -902,6 +929,20 @@ fn resource_only_headings_are_not_dropped() {
 }
 
 #[test]
+fn fallback_labels_preserve_all_children_and_remain_literal_text() {
+    let result = markdown(
+        "<div title='Tools'><button aria-label='Save'></button><button aria-label='Delete'></button></div><h1><a href='/one' aria-label='One'></a><a href='/two' aria-label='Two'></a></h1><h2 aria-label='[Open](/unintended)'></h2>",
+        false,
+    );
+    assert!(result.contains("Save"), "{result}");
+    assert!(result.contains("Delete"), "{result}");
+    assert!(result.contains("# [One](/one)[Two](/two)"), "{result}");
+    let rendered = rendered_html(&result);
+    assert!(!rendered.contains("href=\"/unintended\""), "{rendered}");
+    assert!(rendered.contains("[Open](/unintended)"), "{rendered}");
+}
+
+#[test]
 fn responsive_image_falls_back_from_unusable_lazy_candidates() {
     for lazy in ["", "javascript:bad() 1x"] {
         let result = markdown(
@@ -1104,6 +1145,81 @@ fn responsive_images_preserve_url_commas_and_use_declared_candidates() {
         false,
     );
     assert!(result.contains("/large.jpg"), "{result}");
+    for source in [
+        "<img alt='Photo' src='/current.jpg' data-srcset='/old.jpg 2x'>",
+        "<img alt='Photo' src='data:image/gif;base64,R0lGODdhAQABAIEAAP8AAAAAAAAAAAAAACwAAAAAAQABAAAIBAABBAQAOw==' data-src='/old.jpg'>",
+    ] {
+        let result = markdown(source, false);
+        assert!(!result.contains("/old.jpg"), "{result}");
+    }
+    let defaults = markdown(
+        "<img alt='Photo' srcset='/small.jpg, /large.jpg 2x'><img alt='Safe' srcset='/safe.jpg 1x, javascript:bad() 2x'>",
+        false,
+    );
+    assert!(defaults.contains("![Photo](/large.jpg)"), "{defaults}");
+    assert!(defaults.contains("![Safe](/safe.jpg)"), "{defaults}");
+}
+
+#[test]
+fn fragment_targets_keep_all_aliases_and_delegated_math_descendants() {
+    let result = markdown(
+        "<a href='#modern'>Modern</a><a href='#legacy'>Legacy</a><a href='#eq'>Equation</a><a id='modern' name='legacy'>Target</a><math><mrow id='eq'><mi>x</mi></mrow></math>",
+        false,
+    );
+    for id in ["modern", "legacy", "eq"] {
+        assert!(result.contains(&format!("<a id=\"{id}\"></a>")), "{result}");
+    }
+}
+
+struct CountingDom<'a> {
+    tree: &'a Tree,
+    calls: Cell<usize>,
+}
+
+impl Dom for CountingDom<'_> {
+    type NodeId = usize;
+
+    fn node_kind(&self, node: usize) -> NodeKind<'_> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.node_kind(node)
+    }
+    fn first_child(&self, node: usize) -> Option<usize> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.first_child(node)
+    }
+    fn next_sibling(&self, node: usize) -> Option<usize> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.next_sibling(node)
+    }
+    fn attribute(&self, node: usize, name: &str) -> Option<&str> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.attribute(node, name)
+    }
+}
+
+#[test]
+fn transparent_depth_keeps_dom_queries_linear() {
+    let measure = |depth: usize| {
+        let html = format!(
+            "{}content{}",
+            "<span>".repeat(depth),
+            "</span>".repeat(depth)
+        );
+        let tree = Tree::parse(&html);
+        let dom = CountingDom {
+            tree: &tree,
+            calls: Cell::new(0),
+        };
+        let result = Converter::default().convert(&dom, tree.root);
+        assert_eq!(result, "content");
+        dom.calls.get()
+    };
+    let shallow = measure(64);
+    let deep = measure(128);
+    assert!(
+        deep < shallow * 3,
+        "query growth was not linear: {shallow} -> {deep}"
+    );
 }
 
 #[test]

@@ -28,6 +28,7 @@ pub(crate) fn has_readable_content<D: Dom + ?Sized>(
             NodeKind::Element("input") if crate::form::input_text(dom, node).is_some() => {
                 return true;
             }
+            NodeKind::Element(_) if depth > 0 && fallback_text(dom, node).is_some() => return true,
             _ => {}
         }
         if depth + 1 >= limit {
@@ -40,30 +41,6 @@ pub(crate) fn has_readable_content<D: Dom + ?Sized>(
         }
     }
     false
-}
-
-pub(crate) fn fallback_text_within<D: Dom + ?Sized>(
-    dom: &D,
-    root: D::NodeId,
-    limit: usize,
-) -> Option<String> {
-    let mut pending = vec![(root, 0)];
-    while let Some((node, depth)) = pending.pop() {
-        if let Some(text) = fallback_text(dom, node) {
-            return Some(text);
-        }
-        if depth + 1 >= limit {
-            continue;
-        }
-        let mut children = Vec::new();
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
-            children.push(id);
-            child = dom.next_sibling(id);
-        }
-        pending.extend(children.into_iter().rev().map(|id| (id, depth + 1)));
-    }
-    None
 }
 
 pub(crate) fn fallback_text<D: Dom + ?Sized>(dom: &D, node: D::NodeId) -> Option<String> {

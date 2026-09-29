@@ -16,20 +16,20 @@ impl Targets {
         self.referenced.contains(value)
     }
 
-    pub(crate) fn target<'a, D: Dom + ?Sized>(
-        &self,
-        dom: &'a D,
-        node: D::NodeId,
-    ) -> Option<&'a str> {
+    pub(crate) fn targets<'a, D: Dom + ?Sized>(&self, dom: &'a D, node: D::NodeId) -> Vec<&'a str> {
+        let mut targets = Vec::with_capacity(2);
         if let Some(id) = dom.attribute(node, "id").filter(|id| self.contains(id)) {
-            return Some(id);
+            targets.push(id);
         }
-        if dom.node_kind(node) == NodeKind::Element("a") {
-            return dom
+        if dom.node_kind(node) == NodeKind::Element("a")
+            && let Some(name) = dom
                 .attribute(node, "name")
-                .filter(|name| self.contains(name) && !self.ids.contains(*name));
+                .filter(|name| self.contains(name) && !self.ids.contains(*name))
+            && !targets.contains(&name)
+        {
+            targets.push(name);
         }
-        None
+        targets
     }
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn contains<D: Dom + ?Sized>(
     limit: usize,
     ids: &Targets,
 ) -> bool {
-    walk(dom, root, limit, |node| ids.target(dom, node).is_some())
+    walk(dom, root, limit, |node| !ids.targets(dom, node).is_empty())
 }
 
 pub(crate) fn within<D: Dom + ?Sized>(
@@ -99,10 +99,10 @@ pub(crate) fn within<D: Dom + ?Sized>(
 ) -> Vec<String> {
     let mut found = Vec::new();
     walk(dom, root, limit, |node| {
-        if let Some(id) = ids.target(dom, node)
-            && !found.iter().any(|existing| existing == id)
-        {
-            found.push(id.to_owned());
+        for id in ids.targets(dom, node) {
+            if !found.iter().any(|existing| existing == id) {
+                found.push(id.to_owned());
+            }
         }
         false
     });

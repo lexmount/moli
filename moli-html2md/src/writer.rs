@@ -34,6 +34,10 @@ pub(crate) struct Writer<'a> {
     space: bool,
     preserved_spaces: String,
     breaks: usize,
+    // Text nodes separated only by transparent inline DOM wrappers still form
+    // one author text stream. Delay escaping until a real formatting boundary
+    // so TeX delimiters can span those wrappers without changing semantics.
+    pending_text: String,
     code: Option<String>,
     // End of the last emitted Markdown code span in the local output. Only
     // actual output after this position separates it from another code span.
@@ -70,17 +74,20 @@ impl<'a> Writer<'a> {
         {
             return false;
         }
+        self.flush_pending_text();
         self.flush_code();
         self.desired.push(style);
         true
     }
 
     pub(crate) fn pop_style(&mut self) {
+        self.flush_pending_text();
         self.flush_code();
         self.desired.pop();
     }
 
     pub(crate) fn end_link(&mut self, serial: usize) {
+        self.flush_pending_text();
         self.flush_code();
         if self.last_link < serial {
             // Empty anchors still carry a destination. Materialize the link
@@ -91,8 +98,16 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn text(&mut self, text: &str) {
+        self.pending_text.push_str(text);
+    }
+
+    fn flush_pending_text(&mut self) {
+        if self.pending_text.is_empty() {
+            return;
+        }
         self.flush_code();
-        let mut remaining = text;
+        let text = std::mem::take(&mut self.pending_text);
+        let mut remaining = text.as_str();
         while let Some((start, end)) = crate::math::next_span(remaining) {
             self.plain_text(&remaining[..start]);
             let math = &remaining[start..end];
@@ -107,6 +122,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn inline_html(&mut self, markup: &str) {
+        self.flush_pending_text();
         self.flush_code();
         self.prepare_inline('<');
         self.output.push_str(markup);
@@ -163,6 +179,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code(&mut self, text: &str) {
+        self.flush_pending_text();
         if text.starts_with(is_space) {
             self.flush_code();
             self.space = true;
@@ -190,6 +207,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code_with_edges(&mut self, text: &str, preformatted: bool) {
+        self.flush_pending_text();
         // An empty element has no visible edge. Keep the pending code until
         // the next visible text or element decides whether it needs a gap.
         if text.is_empty() {
@@ -219,6 +237,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn image(&mut self, alt: &str, src: &str, title: Option<&str>) {
+        self.flush_pending_text();
         self.flush_code();
         self.prepare_inline('!');
         self.output.push_str("![");
@@ -242,6 +261,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn boundary(&mut self, lines: usize) {
+        self.flush_pending_text();
         self.has_blocks |= lines > 1;
         self.flush_code();
         self.close_to(0, None);
@@ -251,6 +271,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn hard_break(&mut self) {
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -278,6 +299,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn finish(mut self) -> Output {
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -285,6 +307,11 @@ impl<'a> Writer<'a> {
         self.output.truncate(end);
         self.prefix.push_text(self.output.into());
         self.prefix
+    }
+
+    pub(crate) fn materialize_pending(&mut self) {
+        self.flush_pending_text();
+        self.flush_code();
     }
 
     fn is_empty(&self) -> bool {

@@ -73,8 +73,14 @@ impl<'a> MarkdownDom<'a> {
         let mut excerpts = HashSet::new();
         let targets: HashMap<_, _> = styles
             .iter()
+            .filter_map(|(node, _)| Dom::attribute(dom, *node, "id").map(|id| (id, *node)))
+            .collect();
+        let hidden_targets: HashMap<_, _> = styles
+            .iter()
             .filter_map(|(node, values)| {
-                (values.first().is_some_and(|value| value == "none"))
+                values
+                    .first()
+                    .is_some_and(|value| value == "none")
                     .then(|| Dom::attribute(dom, *node, "id").map(|id| (id, *node)))
                     .flatten()
             })
@@ -100,7 +106,7 @@ impl<'a> MarkdownDom<'a> {
                 else {
                     continue;
                 };
-                let Some(&target) = targets.get(id) else {
+                let Some(&target) = hidden_targets.get(id) else {
                     continue;
                 };
                 if Dom::attribute(dom, target, "role").is_some_and(|role| {
@@ -142,12 +148,26 @@ impl<'a> MarkdownDom<'a> {
             .iter()
             .filter_map(|id| targets.get(id).copied())
             .collect();
+        let hidden_nodes: HashSet<_> = styles
+            .iter()
+            .filter_map(|(node, values)| {
+                (values.first().is_some_and(|value| value == "none")
+                    || values
+                        .get(1)
+                        .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse")))
+                .then_some(*node)
+            })
+            .collect();
         let mut disclosure_paths = HashSet::new();
         for &target in &disclosure_roots {
-            let mut current = Some(target);
+            let mut chain = Vec::new();
+            let mut current = dom.parent_node(target);
             while let Some(node) = current {
-                disclosure_paths.insert(node);
+                chain.push(node);
                 current = dom.parent_node(node);
+            }
+            if let Some(last_hidden) = chain.iter().rposition(|node| hidden_nodes.contains(node)) {
+                disclosure_paths.extend(chain.into_iter().take(last_hidden + 1));
             }
         }
         let mut suppressed = excerpts;
@@ -158,7 +178,6 @@ impl<'a> MarkdownDom<'a> {
         let mut subscripts = HashSet::new();
         let mut resolved_urls = HashMap::new();
         let mut unchecked_controls = HashSet::new();
-        let mut disclosure_regions = HashSet::new();
         let mut visibility_restored_regions = HashSet::new();
         for (node, values) in styles {
             let role = Dom::attribute(dom, node, "role").unwrap_or_default();
@@ -190,18 +209,18 @@ impl<'a> MarkdownDom<'a> {
                     Dom::attribute(dom, node, attribute)
                         .is_some_and(|value| !value.trim().is_empty())
                 });
-            let disclosure_root = role.eq_ignore_ascii_case("tabpanel")
+            let disclosure_root = disclosure_roots.contains(&node)
+                || role.eq_ignore_ascii_case("tabpanel")
                 || Dom::attribute(dom, node, "hidden") == Some("until-found")
                 || (!matches!(role, "dialog" | "alertdialog" | "menu")
                     && Dom::attribute(dom, node, "id").is_some_and(|id| disclosures.contains(id)));
-            let disclosure = disclosure_root
-                || dom
-                    .parent_node(node)
-                    .is_some_and(|parent| disclosure_regions.contains(&parent));
-            if disclosure {
-                disclosure_regions.insert(node);
+            let disclosure_path = disclosure_paths.contains(&node);
+            let parent_is_disclosure_path = dom
+                .parent_node(node)
+                .is_some_and(|parent| disclosure_paths.contains(&parent));
+            if disclosure_path {
+                invisible.insert(node);
             }
-            let preserves_disclosure = disclosure || disclosure_paths.contains(&node);
             // Angular/Vue remove cloak attributes only after the bound view
             // is ready. If one remains at dump time, its template text is not
             // reader content even when a missing stylesheet fails to hide it.
@@ -240,22 +259,23 @@ impl<'a> MarkdownDom<'a> {
             if visibility_restored {
                 visibility_restored_regions.insert(node);
             }
-            let opacity_revealed_by_animation = animation_reveals_content(&values);
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
                     && !lazy_media
-                    && !opacity_revealed_by_animation
                     && !document_root)
-                && !preserves_disclosure)
+                && !disclosure_root
+                && !disclosure_path)
                 || uninitialized_template
                 || tracking_pixel
-                || (zero_contrast_leaf && !preserves_disclosure)
+                || (zero_contrast_leaf && !disclosure_root && !disclosure_path)
+                || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
                 || dom
                     .parent_node(node)
                     .is_some_and(|parent| suppressed.contains(&parent))
-                    && !preserves_disclosure
+                    && !disclosure_root
+                    && !disclosure_path
             {
                 suppressed.insert(node);
             }
@@ -335,7 +355,8 @@ impl<'a> MarkdownDom<'a> {
             if values
                 .get(1)
                 .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
-                && !preserves_disclosure
+                && !disclosure_root
+                && !disclosure_path
                 && (!document_visibility_is_hidden
                     || dom
                         .parent_node(node)
@@ -369,33 +390,6 @@ impl<'a> MarkdownDom<'a> {
     }
 }
 
-fn animation_reveals_content(values: &[String]) -> bool {
-    let named = values.get(14).is_some_and(|names| {
-        names
-            .split(',')
-            .any(|name| !matches!(name.trim(), "" | "none"))
-    });
-    let has_duration = values.get(15).is_some_and(|durations| {
-        durations.split(',').any(|duration| {
-            let duration = duration.trim();
-            duration
-                .strip_suffix("ms")
-                .and_then(|value| value.trim().parse::<f32>().ok())
-                .is_some_and(|value| value > 0.0)
-                || duration
-                    .strip_suffix('s')
-                    .and_then(|value| value.trim().parse::<f32>().ok())
-                    .is_some_and(|value| value > 0.0)
-        })
-    });
-    let retains_final_frame = values.get(16).is_some_and(|modes| {
-        modes
-            .split(',')
-            .any(|mode| matches!(mode.trim(), "forwards" | "both"))
-    });
-    named && has_duration && retains_final_frame
-}
-
 fn target_is_disclosure<D: Dom + ?Sized>(
     dom: &D,
     targets: &HashMap<&str, D::NodeId>,
@@ -416,25 +410,42 @@ fn px(value: &str) -> Option<f32> {
 
 fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
     let mut resolved = Vec::new();
-    let mut remaining = value.trim();
-    while !remaining.is_empty() {
-        let split = remaining
-            .find(char::is_whitespace)
-            .unwrap_or(remaining.len());
-        let source = &remaining[..split];
-        remaining = remaining[split..].trim_start();
-        let (descriptor, rest) = if let Some(end) = remaining.find(',') {
-            (remaining[..end].trim(), remaining[end + 1..].trim_start())
+    let bytes = value.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        while offset < bytes.len() && (bytes[offset].is_ascii_whitespace() || bytes[offset] == b',')
+        {
+            offset += 1;
+        }
+        let start = offset;
+        while offset < bytes.len() && !bytes[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        if start == offset {
+            break;
+        }
+        let mut end = offset;
+        while end > start && bytes[end - 1] == b',' {
+            end -= 1;
+        }
+        let ended_with_comma = end < offset;
+        let descriptor_start = offset;
+        if !ended_with_comma {
+            while offset < bytes.len() && bytes[offset] != b',' {
+                offset += 1;
+            }
+        }
+        let descriptor = if ended_with_comma {
+            ""
         } else {
-            (remaining.trim(), "")
+            value[descriptor_start..offset].trim()
         };
-        let url = base_url.join(source.trim_end_matches(',')).ok()?;
+        let url = base_url.join(&value[start..end]).ok()?;
         resolved.push(if descriptor.is_empty() {
             url.to_string()
         } else {
             format!("{url} {descriptor}")
         });
-        remaining = rest;
     }
     (!resolved.is_empty()).then(|| resolved.join(", "))
 }

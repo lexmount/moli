@@ -8,43 +8,58 @@ pub(crate) fn source<'a, D: Dom + ?Sized>(dom: &'a D, node: D::NodeId) -> Option
     // A responsive declaration determines the rendered resource even when a
     // fallback `src` is present. Private lazy-load attributes remain fallback
     // inputs and never override a valid standard declaration.
-    if let Some(value) = ["srcset", "data-srcset"].into_iter().find_map(|name| {
-        dom.attribute(node, name)
-            .and_then(largest_srcset_candidate)
-            .filter(|value| safe_url(value, true))
-            .map(|value| Cow::Owned(value.to_owned()))
-    }) {
+    if let Some(value) = dom
+        .attribute(node, "srcset")
+        .and_then(|value| largest_srcset_candidate(value, true))
+    {
         return Some(value);
     }
-    direct_source(dom, node, true).map(Cow::Borrowed)
+    let src = direct_attribute(dom, node, "src", true);
+    if src.is_some_and(|value| !is_explicit_placeholder(value)) {
+        return src.map(Cow::Borrowed);
+    }
+    if let Some(value) = dom
+        .attribute(node, "data-srcset")
+        .and_then(|value| largest_srcset_candidate(value, true))
+    {
+        return Some(value);
+    }
+    ["data-src", "data-lazy-src", "data-original"]
+        .into_iter()
+        .find_map(|name| direct_attribute(dom, node, name, true))
+        .or(src)
+        .map(Cow::Borrowed)
 }
 
 fn direct_source<D: Dom + ?Sized>(dom: &D, node: D::NodeId, image: bool) -> Option<&str> {
-    let usable = |value: &&str| {
+    let src = direct_attribute(dom, node, "src", image);
+    if src.is_some_and(is_explicit_placeholder) {
+        return direct_attribute(dom, node, "data-src", image)
+            .or_else(|| direct_attribute(dom, node, "data-lazy-src", image))
+            .or_else(|| direct_attribute(dom, node, "data-original", image))
+            .or(src);
+    }
+    src.or_else(|| direct_attribute(dom, node, "data-src", image))
+        .or_else(|| direct_attribute(dom, node, "data-lazy-src", image))
+        .or_else(|| direct_attribute(dom, node, "data-original", image))
+}
+
+fn direct_attribute<'a, D: Dom + ?Sized>(
+    dom: &'a D,
+    node: D::NodeId,
+    name: &str,
+    image: bool,
+) -> Option<&'a str> {
+    dom.attribute(node, name).map(str::trim).filter(|value| {
         !value.is_empty()
             && !value.starts_with('#')
             && *value != "about:blank"
             && safe_url(value, image)
-    };
-    let attr = |name| dom.attribute(node, name).map(str::trim).filter(usable);
-
-    let src = attr("src");
-    if src.is_some_and(is_explicit_placeholder) {
-        return attr("data-src")
-            .or_else(|| attr("data-lazy-src"))
-            .or_else(|| attr("data-original"))
-            .or(src);
-    }
-    src.or_else(|| attr("data-src"))
-        .or_else(|| attr("data-lazy-src"))
-        .or_else(|| attr("data-original"))
+    })
 }
 
 fn is_explicit_placeholder(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    if lower.starts_with("data:image/") {
-        return true;
-    }
     let path = lower
         .split(['?', '#'])
         .next()
@@ -63,7 +78,7 @@ fn is_explicit_placeholder(value: &str) -> bool {
     )
 }
 
-fn largest_srcset_candidate(srcset: &str) -> Option<&str> {
+fn largest_srcset_candidate(srcset: &str, image: bool) -> Option<Cow<'_, str>> {
     let bytes = srcset.as_bytes();
     let mut offset = 0;
     let mut best: Option<(&str, f64)> = None;
@@ -84,11 +99,19 @@ fn largest_srcset_candidate(srcset: &str) -> Option<&str> {
             url_end -= 1;
         }
         let url = &srcset[url_start..url_end];
+        let ended_with_comma = url_end < offset;
         let descriptor_start = offset;
-        while offset < bytes.len() && bytes[offset] != b',' {
-            offset += 1;
+        if !ended_with_comma {
+            while offset < bytes.len() && bytes[offset] != b',' {
+                offset += 1;
+            }
         }
-        let descriptors = srcset[descriptor_start..offset].split_ascii_whitespace();
+        let descriptors = if ended_with_comma {
+            ""
+        } else {
+            &srcset[descriptor_start..offset]
+        }
+        .split_ascii_whitespace();
         let mut score = 1.0;
         let mut valid = true;
         let mut seen = false;
@@ -117,11 +140,15 @@ fn largest_srcset_candidate(srcset: &str) -> Option<&str> {
                 0.0
             });
         }
-        if valid && !url.is_empty() && best.is_none_or(|(_, current)| score >= current) {
+        if valid
+            && !url.is_empty()
+            && safe_url(url, image)
+            && best.is_none_or(|(_, current)| score >= current)
+        {
             best = Some((url, score));
         }
     }
-    best.map(|(url, _)| url)
+    best.map(|(url, _)| Cow::Owned(url.to_owned()))
 }
 
 pub(crate) fn safe_url(value: &str, image: bool) -> bool {

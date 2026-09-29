@@ -122,12 +122,14 @@ pub(crate) fn render<D: Dom + ?Sized>(
                         tasks.push(Task::Literal(" "));
                     }
                 }
-                let anchor = anchor_targets.target(dom, node);
-                if let (NodeKind::Element(tag), Some(id)) = (dom.node_kind(node), anchor)
+                if let NodeKind::Element(tag) = dom.node_kind(node)
                     && !allowed(tag)
-                    && emitted_anchors.insert(id)
                 {
-                    output.push_str(&crate::anchors::markup(id));
+                    for id in anchor_targets.targets(dom, node) {
+                        if emitted_anchors.insert(id) {
+                            output.push_str(&crate::anchors::markup(id));
+                        }
+                    }
                 }
                 match dom.node_kind(node) {
                     NodeKind::Text(text) => escape(text, &mut output),
@@ -220,8 +222,8 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                 limit - depth - relative_depth,
                             ));
                         } else {
-                            if !crate::content::has_readable_content(dom, node, limit - depth)
-                                && let Some(label) = crate::content::fallback_text(dom, node)
+                            if let Some(label) = crate::content::fallback_text(dom, node)
+                                && !crate::content::has_readable_content(dom, node, limit - depth)
                             {
                                 escape(&label, &mut output);
                             } else {

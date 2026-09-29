@@ -41,6 +41,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <p style="opacity:0;animation-name:spin">Animated hidden text</p>
                 <style>@keyframes reveal { from { opacity:0 } to { opacity:1 } }</style>
                 <p style="opacity:0;animation:reveal 0.25s ease-in forwards">Animated revealed text</p>
+                <p style="opacity:0;animation:spin 1s forwards">Animated rotation text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
                 <p>Mass 2.4 × 10<span style="position:relative;top:-0.5em;line-height:0">−17</span> J; m<span style="position:relative;bottom:-0.25em;line-height:0">n</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
@@ -63,7 +64,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Animated revealed text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -71,7 +72,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Animated revealed text", "Animated rotation text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
         }
@@ -123,11 +124,17 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
                 <button aria-expanded="false" aria-controls="history">+</button>
-                <section id="history" style="display:none">Expandable history</section>
+                <div style="display:none">Hidden unrelated sibling<div><section id="history">Expandable history<div style="display:none">Nested hidden template</div><div role="dialog" style="display:none">Nested dialog template</div></section></div></div>
+                <button aria-expanded="false" aria-controls="visibility-panel">Visibility panel</button>
+                <section id="visibility-panel" style="visibility:hidden">Visibility disclosure</section>
                 <section id="unreferenced" style="display:none">Hidden template</section>`;
         "##).unwrap();
         let expanded = page.render_page_dump(options(false));
         assert!(expanded.contains("Expandable history"), "{expanded}");
+        assert!(expanded.contains("Visibility disclosure"), "{expanded}");
+        assert!(!expanded.contains("Hidden unrelated sibling"), "{expanded}");
+        assert!(!expanded.contains("Nested hidden template"), "{expanded}");
+        assert!(!expanded.contains("Nested dialog template"), "{expanded}");
         assert!(!expanded.contains("Hidden template"), "{expanded}");
         page.vm_mut().eval(r##"
             document.body.innerHTML = `

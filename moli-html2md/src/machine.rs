@@ -174,7 +174,8 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
     }
 
     fn take_writer(&mut self) -> Output {
-        let writer = self.writers.pop().expect("capture has an output");
+        let mut writer = self.writers.pop().expect("capture has an output");
+        writer.materialize_pending();
         if let Some(parent) = self.writers.last_mut() {
             parent.last_link = parent.last_link.max(writer.last_link);
         }
@@ -220,13 +221,6 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if nonrendered_serialized_state(self.dom, node) {
             return;
         }
-        if matches!(tag, "p" | "div")
-            && let Some(text) =
-                transparent_math_text(self.dom, node, self.options.max_depth.saturating_sub(depth))
-        {
-            self.writer().text(&text);
-            return;
-        }
         let tooltip = self
             .dom
             .attribute(node, "data-toggle")
@@ -263,13 +257,16 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 tag,
                 "head" | "script" | "style" | "noscript" | "template" | "title"
             )
-            && let Some(id) = self.anchor_targets.target(self.dom, node)
-            && self.emitted_anchors.insert(id.to_owned())
         {
-            self.writer().inline_html(&crate::anchors::markup(id));
+            for id in self.anchor_targets.targets(self.dom, node) {
+                if self.emitted_anchors.insert(id.to_owned()) {
+                    self.writer().inline_html(&crate::anchors::markup(id));
+                }
+            }
         }
         match tag {
             "math" => {
+                self.emit_anchors_within(node, self.options.max_depth - depth);
                 let markup = crate::mathml::render(self.dom, node, self.options.max_depth - depth);
                 self.writer().inline_html(&markup);
                 return;
@@ -403,21 +400,6 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let remaining = self.options.max_depth - depth;
-                if !subtree_has_content(self.dom, node, remaining) {
-                    if let Some(label) =
-                        crate::content::fallback_text_within(self.dom, node, remaining)
-                    {
-                        let heading = format!(
-                            "{} {}",
-                            "#".repeat((tag.as_bytes()[1] - b'0') as usize),
-                            label
-                        );
-                        self.writer().block(heading.into(), 2, 2);
-                    } else {
-                        self.writer().boundary(2);
-                    }
-                    return;
-                }
                 if subtree_has_nested_heading(self.dom, node, remaining) {
                     self.writer().boundary(2);
                     self.tasks.push(Task::Boundary);
@@ -513,6 +495,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if let Some((math, relative_depth)) =
             crate::mathml::primary_alternative(self.dom, node, self.options.max_depth - depth)
         {
+            self.emit_anchors_within(node, self.options.max_depth - depth);
             let markup = crate::mathml::render(
                 self.dom,
                 math,
@@ -523,13 +506,21 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         }
         if let Some(value) = tooltip_fallback {
             self.writer().text(value);
-        } else if !subtree_has_content(self.dom, node, self.options.max_depth - depth)
-            && let Some(label) = crate::content::fallback_text(self.dom, node)
+        } else if let Some(label) = crate::content::fallback_text(self.dom, node)
+            && !subtree_has_content(self.dom, node, self.options.max_depth - depth)
         {
             self.writer().text(&label);
             return;
         }
         self.children(node, depth + 1);
+    }
+
+    fn emit_anchors_within(&mut self, node: D::NodeId, remaining: usize) {
+        for id in crate::anchors::within(self.dom, node, remaining, &self.anchor_targets) {
+            if self.emitted_anchors.insert(id.clone()) {
+                self.writer().inline_html(&crate::anchors::markup(&id));
+            }
+        }
     }
 
     fn media(&mut self, node: D::NodeId, tag: &str, depth: usize) -> bool {
@@ -736,40 +727,6 @@ fn quote_container(tag: &str, class: Option<&str>) -> bool {
 
 fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
     crate::content::has_readable_content(dom, root, limit)
-}
-
-fn transparent_math_text<D: Dom + ?Sized>(
-    dom: &D,
-    root: D::NodeId,
-    limit: usize,
-) -> Option<String> {
-    let mut pending = vec![(dom.first_child(root), 1)];
-    let mut text = String::new();
-    let mut crossed_wrapper = false;
-    while let Some((node, depth)) = pending.pop() {
-        let Some(node) = node else {
-            continue;
-        };
-        if depth >= limit {
-            return None;
-        }
-        pending.push((dom.next_sibling(node), depth));
-        match dom.node_kind(node) {
-            NodeKind::Text(value) => text.push_str(value),
-            NodeKind::Other => crossed_wrapper = true,
-            NodeKind::Element("span")
-                if !dom.has_block_layout(node) && !dom.has_text_boundary(node) =>
-            {
-                crossed_wrapper = true;
-                pending.push((dom.first_child(node), depth + 1));
-            }
-            _ => return None,
-        }
-    }
-    if !crossed_wrapper {
-        return None;
-    }
-    (crate::math::next_span(&text) == Some((0, text.len()))).then_some(text)
 }
 
 fn subtree_has_nested_heading<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
