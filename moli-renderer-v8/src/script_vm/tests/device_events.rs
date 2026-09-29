@@ -65,9 +65,9 @@ fn device_event_exposure_and_legacy_creation_use_native_realm_metadata() {
         assert_eq!(
             result,
             if exposed {
-                r#"["[object Event]:","[object Event]:","[object TextEvent]:","[object DeviceMotionEvent]:","[object DeviceOrientationEvent]:"]"#
+                r#"["[object Event]:","[object BeforeUnloadEvent]:","[object TextEvent]:","[object DeviceMotionEvent]:","[object DeviceOrientationEvent]:"]"#
             } else {
-                r#"["[object Event]:","[object Event]:","[object TextEvent]:","NotSupportedError","NotSupportedError"]"#
+                r#"["[object Event]:","[object BeforeUnloadEvent]:","[object TextEvent]:","NotSupportedError","NotSupportedError"]"#
             },
             "{url}"
         );

@@ -3,7 +3,6 @@ mod content;
 mod document_tree_scan;
 mod form_association;
 mod iframe_content_cache;
-mod node_text_content;
 mod shadow;
 
 pub(in crate::native_bridge) use self::content::set_detached_text_replacement_value;
