@@ -10,7 +10,6 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct ParserPostStepRuntimeWorkForTest {
     custom_element_reaction_queue_flush_requested: bool,
-    focus_resets: Vec<DomHandle>,
     child_browsing_context_drops: Vec<DomHandle>,
 }
 
@@ -21,25 +20,17 @@ pub(in crate::document_runtime) struct ParserPostStepRuntimeWork {
     // runtime-owned CE queue; this queue only records work that must run after
     // the parser step exits and the default V8 context can be entered safely.
     custom_element_reaction_queue_flush_requested: bool,
-    focus_resets: Vec<DomHandle>,
     child_browsing_context_drops: Vec<DomHandle>,
 }
 
 impl ParserPostStepRuntimeWork {
     pub(super) fn is_empty(&self) -> bool {
         !self.custom_element_reaction_queue_flush_requested
-            && self.focus_resets.is_empty()
             && self.child_browsing_context_drops.is_empty()
     }
 
     fn request_custom_element_reaction_queue_flush(&mut self) {
         self.custom_element_reaction_queue_flush_requested = true;
-    }
-
-    fn queue_focus_reset(&mut self, handle: DomHandle) {
-        if !self.focus_resets.contains(&handle) {
-            self.focus_resets.push(handle);
-        }
     }
 
     pub(super) fn queue_child_browsing_context_drop(&mut self, handle: DomHandle) {
@@ -56,9 +47,6 @@ impl ParserPostStepRuntimeWork {
     fn extend(&mut self, other: Self) {
         self.custom_element_reaction_queue_flush_requested |=
             other.custom_element_reaction_queue_flush_requested;
-        for handle in other.focus_resets {
-            self.queue_focus_reset(handle);
-        }
         for handle in other.child_browsing_context_drops {
             self.queue_child_browsing_context_drop(handle);
         }
@@ -66,14 +54,10 @@ impl ParserPostStepRuntimeWork {
 
     #[cfg(test)]
     fn from_test(work: ParserPostStepRuntimeWorkForTest) -> Self {
-        let (
-            custom_element_reaction_queue_flush_requested,
-            focus_resets,
-            child_browsing_context_drops,
-        ) = work.into_pending_parts();
+        let (custom_element_reaction_queue_flush_requested, child_browsing_context_drops) =
+            work.into_pending_parts();
         Self {
             custom_element_reaction_queue_flush_requested,
-            focus_resets,
             child_browsing_context_drops,
         }
     }
@@ -82,7 +66,6 @@ impl ParserPostStepRuntimeWork {
     fn into_test(self) -> ParserPostStepRuntimeWorkForTest {
         ParserPostStepRuntimeWorkForTest::from_pending_parts(
             self.custom_element_reaction_queue_flush_requested,
-            self.focus_resets,
             self.child_browsing_context_drops,
         )
     }
@@ -92,18 +75,15 @@ impl ParserPostStepRuntimeWork {
 impl ParserPostStepRuntimeWorkForTest {
     pub(crate) fn is_empty(&self) -> bool {
         !self.custom_element_reaction_queue_flush_requested
-            && self.focus_resets.is_empty()
             && self.child_browsing_context_drops.is_empty()
     }
 
     pub(crate) fn merge_for_test(work_items: impl IntoIterator<Item = Self>) -> Self {
         let mut custom_element_reaction_queue_flush_requested = false;
-        let mut focus_resets = Vec::new();
         let mut child_browsing_context_drops = Vec::new();
         for work in work_items {
             custom_element_reaction_queue_flush_requested |=
                 work.custom_element_reaction_queue_flush_requested;
-            focus_resets.extend(work.focus_resets);
             for handle in work.child_browsing_context_drops {
                 if !child_browsing_context_drops.contains(&handle) {
                     child_browsing_context_drops.push(handle);
@@ -112,38 +92,29 @@ impl ParserPostStepRuntimeWorkForTest {
         }
         Self {
             custom_element_reaction_queue_flush_requested,
-            focus_resets,
             child_browsing_context_drops,
         }
     }
 
     fn from_pending_parts(
         custom_element_reaction_queue_flush_requested: bool,
-        focus_resets: Vec<DomHandle>,
         child_browsing_context_drops: Vec<DomHandle>,
     ) -> Self {
         Self {
             custom_element_reaction_queue_flush_requested,
-            focus_resets,
             child_browsing_context_drops,
         }
     }
 
-    fn into_pending_parts(self) -> (bool, Vec<DomHandle>, Vec<DomHandle>) {
+    fn into_pending_parts(self) -> (bool, Vec<DomHandle>) {
         (
             self.custom_element_reaction_queue_flush_requested,
-            self.focus_resets,
             self.child_browsing_context_drops,
         )
     }
 }
 
 impl DocumentRuntime {
-    pub(super) fn queue_parser_post_step_focus_reset(&mut self, handle: DomHandle) {
-        self.pending_parser_post_step_runtime_work
-            .queue_focus_reset(handle);
-    }
-
     pub(crate) fn ensure_parser_custom_element_reaction_queue(
         &mut self,
         host_ptr: *mut JsContextHost,
@@ -196,7 +167,6 @@ impl DocumentRuntime {
         if followups.is_empty() {
             return;
         }
-        self.dispatch_parser_focus_resets(scope, host_ptr, &followups.focus_resets);
         if followups.custom_element_reaction_queue_flush_requested {
             crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(
                 scope,
@@ -209,30 +179,6 @@ impl DocumentRuntime {
             host_ptr,
             &followups.child_browsing_context_drops,
         );
-    }
-
-    fn dispatch_parser_focus_resets(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        handles: &[DomHandle],
-    ) {
-        if handles.is_empty() {
-            return;
-        }
-        let mut visited = HashSet::new();
-        for &handle in handles {
-            if !visited.insert(handle) {
-                continue;
-            }
-            if self.active_element_handle() == Some(handle) {
-                crate::native_bridge::element::update_focus(scope, host_ptr, None);
-            } else if self.document.active_element() == Some(handle) {
-                crate::native_bridge::element::reset_focus_from_previous_handle(
-                    scope, host_ptr, handle,
-                );
-            }
-        }
     }
 
     pub(super) fn enqueue_parser_adoption_custom_element_reactions(

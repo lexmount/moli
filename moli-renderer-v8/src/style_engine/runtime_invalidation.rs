@@ -366,7 +366,7 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
-        self.invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+        self.invalidate_for_focus_change_with_previous_focus_states_and_viewport(
             host,
             previous,
             next,
@@ -376,17 +376,17 @@ impl MoliStyleEngine {
         );
     }
 
-    pub(crate) fn invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+    pub(crate) fn invalidate_for_focus_change_with_previous_focus_states_and_viewport(
         &mut self,
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        previous_focus_within: Option<Vec<DomHandle>>,
+        previous_focus_states: Option<&[moli_selector::StyloStateInvalidationRoot]>,
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
         let document_scopes =
-            focus_change_document_scopes(host, previous, next, previous_focus_within.as_deref());
+            focus_change_document_scopes(host, previous, next, previous_focus_states);
         if document_scopes.is_empty() {
             return;
         }
@@ -405,7 +405,8 @@ impl MoliStyleEngine {
                 PendingStyleInvalidationCause::FocusChange {
                     previous: document_scope.previous,
                     next: document_scope.next,
-                    previous_focus_within: non_empty_vec(document_scope.previous_focus_within),
+                    previous_focus_states: (!document_scope.previous_focus_states.is_empty())
+                        .then_some(document_scope.previous_focus_states),
                 },
             );
         }
@@ -808,7 +809,7 @@ struct FocusChangeDocumentScope {
     document: DomHandle,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    previous_focus_within: Vec<DomHandle>,
+    previous_focus_states: Vec<moli_selector::StyloStateInvalidationRoot>,
     source_handles: Vec<DomHandle>,
 }
 
@@ -823,7 +824,7 @@ fn focus_change_document_scopes(
     host: &DomHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    previous_focus_within: Option<&[DomHandle]>,
+    previous_focus_states: Option<&[moli_selector::StyloStateInvalidationRoot]>,
 ) -> Vec<FocusChangeDocumentScope> {
     let mut scopes = Vec::new();
     if let Some(previous) = previous {
@@ -842,13 +843,13 @@ fn focus_change_document_scopes(
         scope.next = Some(next);
         push_unique_handle(&mut scope.source_handles, next);
     }
-    for handle in previous_focus_within.into_iter().flatten().copied() {
-        let Some(document) = owner_document_for_handle(host, handle) else {
+    for old in previous_focus_states.into_iter().flatten() {
+        let Some(document) = owner_document_for_handle(host, old.root()) else {
             continue;
         };
         let scope = focus_change_scope_for_document(&mut scopes, document);
-        push_unique_handle(&mut scope.previous_focus_within, handle);
-        push_unique_handle(&mut scope.source_handles, handle);
+        scope.previous_focus_states.push(*old);
+        push_unique_handle(&mut scope.source_handles, old.root());
     }
     scopes
 }
@@ -889,7 +890,7 @@ fn focus_change_scope_for_document(
         document,
         previous: None,
         next: None,
-        previous_focus_within: Vec::new(),
+        previous_focus_states: Vec::new(),
         source_handles: Vec::new(),
     });
     scopes
@@ -918,14 +919,6 @@ fn target_change_scope_for_document(
 fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
     if !handles.contains(&handle) {
         handles.push(handle);
-    }
-}
-
-fn non_empty_vec(handles: Vec<DomHandle>) -> Option<Vec<DomHandle>> {
-    if handles.is_empty() {
-        None
-    } else {
-        Some(handles)
     }
 }
 

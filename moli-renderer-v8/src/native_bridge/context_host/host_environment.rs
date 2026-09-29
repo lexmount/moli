@@ -1971,21 +1971,21 @@ impl JsContextHost {
         );
     }
 
-    pub(crate) fn note_focus_style_activity_with_previous_focus_within(
+    pub(crate) fn note_focus_style_activity_with_previous_states(
         &mut self,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        previous_focus_within: Option<Vec<DomHandle>>,
+        previous_focus_states: &[moli_selector::StyloStateInvalidationRoot],
     ) {
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
         self.style_engine
-            .invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+            .invalidate_for_focus_change_with_previous_focus_states_and_viewport(
                 unsafe { &*dom_host },
                 previous,
                 next,
-                previous_focus_within,
+                Some(previous_focus_states),
                 &emulated_media,
                 viewport,
             );

@@ -709,7 +709,11 @@ pub(in crate::native_bridge) fn shadow_root_active_element_getter_function<'s>(
         return;
     }
     let runtime = unsafe { &mut *runtime_ptr };
-    let Some(active_handle) = runtime.active_element_handle() else {
+    let Some(active_handle) = runtime
+        .dom_host()
+        .owner_document_handle(handle)
+        .and_then(|document| runtime.document_focused_area(document))
+    else {
         if !is_live_receiver
             && let Some(value) = detached_shadow_root_active_element_value(scope, args.this())
         {

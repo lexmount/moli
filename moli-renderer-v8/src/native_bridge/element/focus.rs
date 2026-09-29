@@ -509,12 +509,11 @@ pub(crate) fn reset_document_navigation_focus(
             PendingWindowMessageEndpoint::ChildWindow(container) => Some(container),
             _ => None,
         };
-        update_focus_from_previous_with_previous_focus_within(
+        update_focus_with_selection_behavior(
             scope,
             runtime_ptr,
             previous,
             viewport,
-            None,
             Some(document),
             SelectionBehaviorOnFocus::Restore,
         );
@@ -713,47 +712,13 @@ pub(crate) fn focus_text_control_preserving_selection(
         return;
     }
     let previous = runtime.active_element_handle();
-    update_focus_from_previous_with_previous_focus_within(
+    update_focus_with_selection_behavior(
         scope,
         runtime_ptr,
         previous,
         Some(target),
         None,
-        None,
         SelectionBehaviorOnFocus::Preserve,
-    );
-}
-
-pub(crate) fn reset_focus_from_previous_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    previous: DomHandle,
-) {
-    update_focus_from_previous_with_previous_focus_within(
-        scope,
-        runtime_ptr,
-        Some(previous),
-        None,
-        None,
-        None,
-        SelectionBehaviorOnFocus::Restore,
-    );
-}
-
-pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    previous: DomHandle,
-    previous_focus_within: Vec<DomHandle>,
-) {
-    update_focus_from_previous_with_previous_focus_within(
-        scope,
-        runtime_ptr,
-        Some(previous),
-        None,
-        Some(previous_focus_within),
-        None,
-        SelectionBehaviorOnFocus::Restore,
     );
 }
 
@@ -763,23 +728,21 @@ fn update_focus_from_previous(
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
 ) {
-    update_focus_from_previous_with_previous_focus_within(
+    update_focus_with_selection_behavior(
         scope,
         runtime_ptr,
         previous,
         next,
         None,
-        None,
         SelectionBehaviorOnFocus::Restore,
     );
 }
 
-fn update_focus_from_previous_with_previous_focus_within(
+fn update_focus_with_selection_behavior(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    previous_focus_within: Option<Vec<DomHandle>>,
     viewport_document: Option<DomHandle>,
     selection_behavior: SelectionBehaviorOnFocus,
 ) {
@@ -834,15 +797,7 @@ fn update_focus_from_previous_with_previous_focus_within(
     {
         runtime.mark_focus_changed(previous, None);
     }
-    if let Some(previous_focus_within) = previous_focus_within {
-        runtime.note_focus_style_activity_with_previous_focus_within(
-            previous,
-            None,
-            Some(previous_focus_within),
-        );
-    } else {
-        runtime.note_focus_style_activity(previous, None);
-    }
+    runtime.note_focus_style_activity(previous, None);
     let mut redirected = false;
     if let Some(previous_handle) = previous {
         dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, previous_handle);

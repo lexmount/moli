@@ -281,7 +281,7 @@ pub(super) fn reset_navigation_focus_if_unchanged<'s>(
     else {
         return;
     };
-    if unsafe { &*host_ptr }.focus_change_epoch(document) != expected_epoch {
+    if unsafe { &*host_ptr }.focus_changed_since(document, expected_epoch) {
         return;
     }
     reset_document_navigation_focus(scope, host_ptr, document, user_initiated);

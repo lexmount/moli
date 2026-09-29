@@ -164,6 +164,7 @@ impl DocumentRuntime {
         source_profile: TreeMutationSourceProfile,
     ) {
         if effects.did_change() {
+            self.apply_tree_focus_removal_plan(host_ptr, &insertion_plan.focus_removal);
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
             self.discard_child_contexts_before_reinsertion_followups(
                 scope,
@@ -338,9 +339,6 @@ impl DocumentRuntime {
             self.pending_parser_post_step_runtime_work
                 .queue_child_browsing_context_drop(root);
         }
-        if let Some(active) = insertion_plan.focus_reset_handle_before_insert {
-            self.queue_parser_post_step_focus_reset(active);
-        }
     }
 
     fn apply_parser_remove_child_to_live_dom_host(
@@ -354,6 +352,9 @@ impl DocumentRuntime {
     ) {
         let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
         let effects = self.parser_remove_child_effects_in_structural_scope(parent, child);
+        if effects.did_change() {
+            self.apply_tree_focus_removal_plan(host_ptr, &removal_plan.focus_removal);
+        }
         self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &effects);
         self.assert_active_parser_document_incarnation();
         let changed_text_controls =
