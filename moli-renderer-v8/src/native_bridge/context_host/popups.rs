@@ -3,6 +3,7 @@ mod renderer_owned;
 use super::{
     JsContextHost, NavigationHistoryEntrySeed, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
+use crate::document_response_decoder::decode_document_response;
 use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
@@ -56,7 +57,6 @@ use crate::{
 };
 use anyhow::Result;
 use moli_crypto::sha256_hex;
-use crate::document_response_decoder::decode_document_response;
 use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
