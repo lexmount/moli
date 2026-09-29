@@ -103,6 +103,34 @@ impl PageVm {
                 );
             let own_visibility: HashMap<_, _> =
                 nodes.iter().copied().zip(own_visibility_values).collect();
+            let (keyframe_scopes, keyframe_rules) = self
+                .vm()
+                .effective_keyframe_rule_texts_for_element_snapshots(nodes.iter().copied());
+            let final_opacity_by_scope: HashMap<_, _> = keyframe_rules
+                .into_iter()
+                .map(|(scope, stylesheet_texts)| {
+                    (
+                        scope,
+                        visibility::final_opacity_animation_names(
+                            stylesheet_texts.iter().map(String::as_str),
+                        ),
+                    )
+                })
+                .collect();
+            let final_opacity_animations: HashMap<_, _> = nodes
+                .iter()
+                .copied()
+                .zip(keyframe_scopes)
+                .map(|(node, scope)| {
+                    (
+                        node,
+                        final_opacity_by_scope
+                            .get(&scope)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
             let styles = nodes
                 .into_iter()
                 .zip(values)
@@ -162,15 +190,9 @@ impl PageVm {
                     (node, values)
                 })
                 .collect::<Vec<_>>();
-            let stylesheet_texts = self
-                .vm()
-                .effective_keyframe_rule_texts_for_document_snapshot();
-            let final_opacity_animations = visibility::final_opacity_animation_names(
-                stylesheet_texts.iter().map(String::as_str),
-            );
             (styles, final_opacity_animations)
         } else {
-            (Vec::new(), HashSet::new())
+            (Vec::new(), HashMap::new())
         };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
@@ -357,14 +379,14 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
 
 #[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
-    render_markdown_document_with_styles(dom, Vec::new(), None, HashSet::new())
+    render_markdown_document_with_styles(dom, Vec::new(), None, HashMap::new())
 }
 
 fn render_markdown_document_with_styles(
     dom: &NativeDom,
     styles: Vec<(NativeNodeId, Vec<String>)>,
     base_url: Option<&url::Url>,
-    final_opacity_animations: HashSet<String>,
+    final_opacity_animations: HashMap<NativeNodeId, HashSet<String>>,
 ) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
     let visible = visibility::MarkdownDom::new(dom, styles, base_url, final_opacity_animations);

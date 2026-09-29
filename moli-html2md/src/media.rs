@@ -134,10 +134,8 @@ pub fn parse_srcset(srcset: &str) -> Vec<SrcsetCandidate<'_>> {
         let descriptor = srcset[descriptor_start..offset].trim();
         let score = if descriptor.is_empty() {
             Some(1.0)
-        } else if !descriptor.bytes().any(|byte| byte.is_ascii_whitespace()) {
-            descriptor_score(descriptor)
         } else {
-            None
+            descriptor_score(descriptor)
         };
         if let Some(score) = score
             && !url.is_empty()
@@ -153,11 +151,34 @@ pub fn parse_srcset(srcset: &str) -> Vec<SrcsetCandidate<'_>> {
 }
 
 fn descriptor_score(descriptor: &str) -> Option<f64> {
-    if let Some(value) = descriptor.strip_suffix('w') {
-        return valid_positive_integer(value).map(|value| value as f64);
+    let mut width = None;
+    let mut height = None;
+    let mut density = None;
+    for token in descriptor.split_ascii_whitespace() {
+        if let Some(value) = token.strip_suffix('w') {
+            if width.is_some() {
+                return None;
+            }
+            width = Some(valid_positive_integer(value)?);
+        } else if let Some(value) = token.strip_suffix('h') {
+            if height.is_some() {
+                return None;
+            }
+            height = Some(valid_positive_integer(value)?);
+        } else if let Some(value) = token.strip_suffix('x') {
+            if density.is_some() {
+                return None;
+            }
+            density = Some(valid_positive_float(value)?);
+        } else {
+            return None;
+        }
     }
-    let value = descriptor.strip_suffix('x')?;
-    valid_positive_float(value)
+    match (width, height, density) {
+        (Some(width), _, None) => Some(width as f64),
+        (None, None, Some(density)) => Some(density),
+        _ => None,
+    }
 }
 
 fn valid_positive_integer(value: &str) -> Option<u64> {

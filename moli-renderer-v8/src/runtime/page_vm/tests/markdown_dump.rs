@@ -181,6 +181,20 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(cascaded_root_visibility.contains("Root veil text"), "{cascaded_root_visibility}");
         assert!(!cascaded_root_visibility.contains("Root stylesheet hidden duplicate"), "{cascaded_root_visibility}");
         page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>.reverted{visibility:hidden}.reverted{visibility:revert}@layer base{.layered{visibility:hidden}.layered{visibility:revert-layer}}</style>';
+            document.body.innerHTML = `
+                <main>
+                    <p style="visibility:var(--missing)">Invalid variable inherits the veil</p>
+                    <p style="visibility:var(--missing, inherit)">Variable fallback inherits the veil</p>
+                    <p class="reverted">Origin revert inherits the veil</p>
+                    <p class="layered">Layer revert inherits the veil</p>
+                </main>`;
+        "#).unwrap();
+        let inherited_visibility = page.render_page_dump(options(false));
+        for text in ["Invalid variable inherits the veil", "Variable fallback inherits the veil", "Origin revert inherits the veil", "Layer revert inherits the veil"] {
+            assert!(inherited_visibility.contains(text), "missing {text}: {inherited_visibility}");
+        }
+        page.vm_mut().eval(r#"
             document.body.style.visibility = '';
             document.head.innerHTML = '<style>@keyframes state{to{opacity:0}}@media (min-width:999999px){@keyframes state{to{opacity:1}}}</style>';
             document.body.innerHTML = '<p>Count <span style="opacity:0;animation:state 1s forwards">99</span>2</p>';
@@ -193,6 +207,15 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         "#).unwrap();
         let active_keyframes = page.render_page_dump(options(false));
         assert!(active_keyframes.contains("Count 992"), "{active_keyframes}");
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>@keyframes same{to{opacity:0}}</style>';
+            document.body.innerHTML = '<div id="shadow-host"></div><p>Scoped count <span id="scoped-count" style="opacity:0;animation:same 1s forwards">99</span>2</p>';
+            document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML = '<style>@keyframes same{to{opacity:1}}</style>';
+        "#).unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('scoped-count')).opacity").unwrap(), "0");
+        let scoped_keyframes = page.render_page_dump(options(false));
+        assert!(scoped_keyframes.contains("Scoped count 2"), "{scoped_keyframes}");
+        assert!(!scoped_keyframes.contains("Scoped count 992"), "{scoped_keyframes}");
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
                 <button onclick="console.log('tracking')">Save</button>
@@ -205,9 +228,10 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="commented" style="display:none">Hidden commented state</section>
                 <button onclick="document.querySelector('#history').style.display='block'">History</button>
                 <section id="history" style="display:none">Query-selected history</section>
-                <button onclick="return revealElement(document.getElementById('records'))">Records</button>
+                <button onclick="document.getElementById('records').style.display='block';return false">Records</button>
                 <section id="records" style="display:none">Function-revealed records</section>
-                <span class="hovl"><a href="#" onclick="return showPageElement(document.getElementById('results'))">+</a> <a href="#" onclick="return hidePageElement(document.getElementById('results'))">-</a></span><span id="results" style="display:none">Paired expandable results</span>
+                <span class="hovl"><a href="#" onclick="document.getElementById('results').style.display='inline';return false">+</a> <a href="#" onclick="document.getElementById('results').style.display='none';return false">-</a></span><span id="results" style="display:none">Paired expandable results</span>
+                <span><button onclick="console.log('analytics')">+</button><button onclick="console.log('analytics')">-</button></span><section id="analytics" style="display:none">Hidden analytics metadata</section>
                 <button onclick="if(false) document.getElementById('unreachable').style.display='block'">Never</button>
                 <section id="unreachable" style="display:none">Unreachable hidden state</section>
                 <button onclick="showNext(document.getElementById('anchor'))">Next</button>
@@ -225,12 +249,23 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!related.contains("Hidden commented state"), "{related}");
         assert!(!related.contains("Query-selected history"), "{related}");
         assert!(!related.contains("Function-revealed records"), "{related}");
-        assert!(related.contains("Paired expandable results"), "{related}");
+        assert!(!related.contains("Paired expandable results"), "{related}");
+        assert!(!related.contains("Hidden analytics metadata"), "{related}");
         assert!(!related.contains("Unreachable hidden state"), "{related}");
         assert!(!related.contains("Hidden anchor metadata"), "{related}");
         assert!(!related.contains("Actual next disclosure"), "{related}");
         assert!(!related.contains("Function-read hidden state"), "{related}");
         assert!(!related.contains("Unrelated mutation hidden state"), "{related}");
+        page.vm_mut().eval("document.querySelector('.hovl a').click()").unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('results')).display").unwrap(), "inline");
+        let shown_pair = page.render_page_dump(options(false));
+        assert!(shown_pair.contains("Paired expandable results"), "{shown_pair}");
+        page.vm_mut().eval("document.querySelectorAll('.hovl a')[1].click()").unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('results')).display").unwrap(), "none");
+        assert!(!page.render_page_dump(options(false)).contains("Paired expandable results"));
+        page.vm_mut().eval("document.querySelector('button[onclick*=records]').click()").unwrap();
+        assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('records')).display").unwrap(), "block");
+        assert!(page.render_page_dump(options(false)).contains("Function-revealed records"));
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <p style="color:white;background-image:linear-gradient(black,black)">Visible gradient text</p>

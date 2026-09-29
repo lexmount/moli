@@ -4,6 +4,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    applicable_declarations::{CascadePriority, RevertKind},
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -11,7 +12,7 @@ use style::{
     data::ElementStyles,
     dom::{TElement, TNode},
     properties::{
-        CSSWideKeyword, ComputedValues, PropertyDeclarationId, PropertyId,
+        CSSWideKeyword, ComputedValues, PropertyDeclaration, PropertyDeclarationId, PropertyId,
         longhands::{
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
@@ -304,7 +305,14 @@ impl StyloComputedStyleSnapshot {
         };
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
+        let mut reverted: Option<(CascadePriority, RevertKind)> = None;
         for node in self.primary.rules().self_and_ancestors() {
+            let priority = node.cascade_priority();
+            if reverted.is_some_and(|(reverted_priority, kind)| {
+                !reverted_priority.allows_when_reverted(&priority, kind)
+            }) {
+                continue;
+            }
             let Some(source) = node.style_source() else {
                 continue;
             };
@@ -320,13 +328,18 @@ impl StyloComputedStyleSnapshot {
                 }
                 match declaration.get_css_wide_keyword() {
                     Some(CSSWideKeyword::Inherit | CSSWideKeyword::Unset) => return false,
-                    Some(
-                        CSSWideKeyword::Revert
-                        | CSSWideKeyword::RevertLayer
-                        | CSSWideKeyword::RevertRule,
-                    ) => continue,
-                    _ => return true,
+                    Some(keyword) if keyword.revert_kind().is_some() => {
+                        reverted = Some((priority, keyword.revert_kind().unwrap()));
+                        continue;
+                    }
+                    _ => {}
                 }
+                // Variable substitution happens inside Stylo's cascade. A raw
+                // `WithVariables` declaration cannot establish an independent
+                // hidden boundary here: it may be invalid at computed-value
+                // time or resolve to `inherit`. Treat it conservatively as
+                // inherited instead of recreating the substitution engine.
+                return !matches!(declaration, PropertyDeclaration::WithVariables(_));
             }
         }
         false

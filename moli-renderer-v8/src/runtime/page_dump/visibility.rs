@@ -34,7 +34,7 @@ impl<'a> MarkdownDom<'a> {
         dom: &'a NativeDom,
         styles: impl IntoIterator<Item = (NativeNodeId, Vec<String>)>,
         base_url: Option<&Url>,
-        final_opacity_animations: HashSet<String>,
+        final_opacity_animations: HashMap<NativeNodeId, HashSet<String>>,
     ) -> Self {
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
@@ -94,11 +94,6 @@ impl<'a> MarkdownDom<'a> {
                     .flatten()
             })
             .collect();
-        for (&id, &target) in &hidden_targets {
-            if paired_adjacent_disclosure(dom, target, id) {
-                disclosures.insert(id);
-            }
-        }
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
@@ -303,8 +298,9 @@ impl<'a> MarkdownDom<'a> {
                 parent_visibility
             };
             visibility_modes.insert(node, visibility_mode);
-            let has_bounded_final_opacity =
-                has_bounded_final_opacity(&values, &final_opacity_animations);
+            let has_bounded_final_opacity = final_opacity_animations
+                .get(&node)
+                .is_some_and(|names| has_bounded_final_opacity(&values, names));
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
@@ -566,46 +562,6 @@ fn target_is_disclosure<D: Dom + ?Sized>(
                 .any(|excluded| role.eq_ignore_ascii_case(excluded))
         })
     })
-}
-
-fn paired_adjacent_disclosure(dom: &NativeDom, target: NativeNodeId, id: &str) -> bool {
-    let mut sibling = dom.previous_sibling(target);
-    while sibling.is_some_and(|node| {
-        matches!(Dom::node_kind(dom, node), NodeKind::Text(value) if value.trim().is_empty())
-            || matches!(Dom::node_kind(dom, node), NodeKind::Other)
-    }) {
-        sibling = sibling.and_then(|node| dom.previous_sibling(node));
-    }
-    let Some(control_region) = sibling else {
-        return false;
-    };
-    if !matches!(Dom::node_kind(dom, control_region), NodeKind::Element(_)) {
-        return false;
-    }
-
-    let mut show = false;
-    let mut hide = false;
-    let mut pending = vec![control_region];
-    while let Some(node) = pending.pop() {
-        if matches!(Dom::node_kind(dom, node), NodeKind::Element("a" | "button"))
-            && Dom::attribute(dom, node, "onclick")
-                .is_some_and(|handler| handler_references_id(handler, id))
-        {
-            match text(dom, node, None).trim().to_ascii_lowercase().as_str() {
-                "+" | "show" | "expand" | "more" => show = true,
-                "-" | "hide" | "collapse" | "less" => hide = true,
-                _ => {}
-            }
-        }
-        pending.extend(dom.child_ids(node));
-    }
-    show && hide
-}
-
-fn handler_references_id(handler: &str, id: &str) -> bool {
-    [format!("'{id}'"), format!("\"{id}\"")]
-        .iter()
-        .any(|quoted| handler.contains(quoted))
 }
 
 fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {

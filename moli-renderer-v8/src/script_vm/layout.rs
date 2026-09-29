@@ -40,10 +40,16 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn effective_keyframe_rule_texts_for_document_snapshot(&self) -> Vec<String> {
+    pub(crate) fn effective_keyframe_rule_texts_for_element_snapshots(
+        &self,
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> (
+        Vec<Option<DomHandle>>,
+        std::collections::HashMap<Option<DomHandle>, Vec<String>>,
+    ) {
         let host = self._context_host.borrow();
         let document = host.document_handle();
-        host.effective_keyframe_rule_texts_for_document(document)
+        host.effective_keyframe_rule_texts_for_elements(document, elements)
     }
 
     pub(crate) fn sync_live_document_style_sources(&mut self) {

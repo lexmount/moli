@@ -1,7 +1,11 @@
 #[cfg(test)]
 use std::sync::Arc as StdArc;
 use std::sync::Once;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
@@ -323,40 +327,56 @@ impl MoliStyleEngine {
             })
     }
 
-    pub(crate) fn effective_keyframe_rule_texts_for_document(
+    pub(crate) fn effective_keyframe_rule_texts_for_tree_scopes(
         &self,
         document: DomHandle,
-    ) -> Vec<String> {
+        tree_scopes: impl IntoIterator<Item = Option<DomHandle>>,
+    ) -> HashMap<Option<DomHandle>, Vec<String>> {
         let Some(world) = self.document_worlds.active_world(document) else {
-            return Vec::new();
+            return HashMap::new();
         };
         world
             .document_state
             .try_with_retained_style_system(|retained| {
                 let device = retained.stylist.device();
-                let mut result = Vec::new();
+                let mut document_rules = Vec::new();
                 let document_custom_media = retained
                     .stylist
                     .cascade_data()
                     .borrow_for_origin(style::stylesheets::Origin::Author)
                     .custom_media_map();
                 for entry in retained.document_stylesheets.entries() {
-                    result.extend(stylesheet::native_effective_keyframe_rule_texts(
+                    document_rules.extend(stylesheet::native_effective_keyframe_rule_texts(
                         entry.stylesheet(),
                         device,
                         document_custom_media,
                     ));
                 }
+                let mut shadow_rules = HashMap::new();
                 for scope in &retained.shadow_scopes {
+                    let rules = shadow_rules.entry(scope.root()).or_insert_with(Vec::new);
                     for entry in scope.active_stylesheets().entries() {
-                        result.extend(stylesheet::native_effective_keyframe_rule_texts(
+                        rules.extend(stylesheet::native_effective_keyframe_rule_texts(
                             entry.stylesheet(),
                             device,
                             scope.author_styles().data.custom_media_map(),
                         ));
                     }
                 }
-                result
+                tree_scopes
+                    .into_iter()
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .map(|tree_scope| {
+                        let mut rules = document_rules.clone();
+                        if let Some(tree_scope) = tree_scope
+                            && let Some(scoped_rules) = shadow_rules.get(&tree_scope)
+                        {
+                            rules.extend(scoped_rules.iter().cloned());
+                        }
+                        (tree_scope, rules)
+                    })
+                    .collect()
             })
             .unwrap_or_default()
     }

@@ -1,6 +1,6 @@
 mod support;
 
-use moli_html2md::{Converter, Dom, NodeKind, Options};
+use moli_html2md::{Converter, Dom, NodeKind, Options, parse_srcset};
 use std::cell::Cell;
 use support::{Tree, rendered_html};
 
@@ -1370,5 +1370,22 @@ fn srcset_density_uses_the_html_floating_point_grammar() {
     }
     for rejected in ["invalid-plus.jpg", "invalid-dot.jpg", "negative.jpg"] {
         assert!(!result.contains(rejected), "accepted {rejected}: {result}");
+    }
+}
+
+#[test]
+fn srcset_recovers_only_the_future_compatible_width_height_pair() {
+    let paired = parse_srcset("/photo.jpg 640w 480h");
+    assert_eq!(paired.len(), 1);
+    assert_eq!(paired[0].url, "/photo.jpg");
+    assert_eq!(paired[0].score, 640.0);
+
+    for invalid in [
+        "/height-only.jpg 480h",
+        "/duplicate-width.jpg 640w 800w",
+        "/duplicate-height.jpg 640w 480h 720h",
+        "/density-height.jpg 2x 480h",
+    ] {
+        assert!(parse_srcset(invalid).is_empty(), "accepted {invalid}");
     }
 }
