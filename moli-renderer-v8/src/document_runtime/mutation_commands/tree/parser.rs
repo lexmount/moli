@@ -91,11 +91,7 @@ impl DocumentRuntime {
             parent,
             insertion_roots,
             host_ptr,
-            TreeInsertionPlanOptions::insert(
-                None,
-                fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
-                TreeInsertionSelectednessPolicy::Skip,
-            ),
+            TreeInsertionPlanOptions::insert(None, TreeInsertionSelectednessPolicy::Skip),
         );
         let effects = self.parser_append_child_effects_in_structural_scope(parent, child);
         if effects.did_change() {
@@ -136,7 +132,6 @@ impl DocumentRuntime {
             host_ptr,
             TreeInsertionPlanOptions::insert(
                 reference_child,
-                fragment_children.is_some() && !self.dom_host.is_shadow_root(child),
                 TreeInsertionSelectednessPolicy::Skip,
             ),
         );
