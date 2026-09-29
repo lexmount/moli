@@ -1,82 +1,86 @@
 use super::*;
+use crate::util::v8_value_to_dom_string_u16;
+use widestring::U16String;
 
-pub(super) fn value_to_inserted_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document_handle: Option<DomHandle>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<DomHandle> {
-    if crate::native_bridge::document::is_attr_node_value(scope, value) {
-        throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-        return None;
-    }
-    if let Some(handle) =
-        node_or_foreign_arg_handle_allow_detached(scope, runtime_ptr, document_handle, value)
-    {
-        return Some(handle);
-    }
-    let text = value.to_string(scope)?.to_rust_string_lossy(scope);
-    let runtime = unsafe { &mut *runtime_ptr };
-    Some(match document_handle {
-        Some(document_handle) => runtime.create_text_node_for_document(document_handle, &text),
-        None => runtime.create_text_node(&text),
-    })
+pub(super) enum NodeOrString<'s> {
+    Node(v8::Local<'s, v8::Value>),
+    String(U16String),
 }
 
-pub(super) fn build_insertion_fragment_from_handles(
+pub(super) fn convert_node_or_string_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: &[v8::Local<'s, v8::Value>],
+) -> Option<Vec<NodeOrString<'s>>> {
+    // Web IDL converts every (Node or DOMString) argument before the DOM
+    // algorithm runs, including strings after a node that will fail insertion.
+    let mut inputs = Vec::with_capacity(values.len());
+    for &value in values {
+        if v8::Local::<v8::Object>::try_from(value)
+            .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+        {
+            inputs.push(NodeOrString::Node(value));
+        } else {
+            let value = v8_value_to_dom_string_u16(scope, value, false)?;
+            inputs.push(NodeOrString::String(value));
+        }
+    }
+    Some(inputs)
+}
+
+fn converted_input_handle(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    document_handle: Option<DomHandle>,
-    handles: &[DomHandle],
+    document: Option<DomHandle>,
+    input: NodeOrString<'_>,
 ) -> Option<DomHandle> {
-    blur_focused_inserted_handles(scope, runtime_ptr, handles);
+    match input {
+        NodeOrString::Node(value) => {
+            if !crate::native_bridge::document::is_attr_node_value(scope, value)
+                && let Some(handle) =
+                    node_or_foreign_arg_handle_allow_detached(scope, runtime_ptr, document, value)
+            {
+                return Some(handle);
+            }
+            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
+            None
+        }
+        NodeOrString::String(value) => {
+            Some(unsafe { &mut *runtime_ptr }.create_text_node_from_utf16_units(document, value))
+        }
+    }
+}
+
+pub(super) fn convert_nodes_into_node(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: Option<DomHandle>,
+    mut inputs: Vec<NodeOrString<'_>>,
+) -> Option<DomHandle> {
+    if inputs.len() == 1 {
+        return converted_input_handle(scope, runtime_ptr, document, inputs.pop()?);
+    }
     let runtime = unsafe { &mut *runtime_ptr };
-    let fragment = match document_handle {
-        Some(document_handle) => runtime.create_document_fragment_for_document(document_handle),
+    let fragment = match document {
+        Some(document) => runtime.create_document_fragment_for_document(document),
         None => runtime.create_document_fragment(),
     };
-    for handle in handles {
-        if !runtime.append_child_appending_to_current_reaction_queue(
+    for input in inputs {
+        let child = converted_input_handle(scope, runtime_ptr, document, input)?;
+        if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, fragment, child, None, &[])
+        {
+            return None;
+        }
+        if !unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             fragment,
-            *handle,
+            child,
         ) {
+            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return None;
         }
     }
     Some(fragment)
-}
-
-fn blur_focused_inserted_handles(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handles: &[DomHandle],
-) {
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(active) = runtime.active_element_handle() else {
-        return;
-    };
-    if handles
-        .iter()
-        .any(|handle| *handle == active || handle_contains(runtime, *handle, active))
-    {
-        crate::native_bridge::element::update_focus(scope, runtime_ptr, None);
-    }
-}
-
-fn handle_contains(runtime: &JsContextHost, root: DomHandle, handle: DomHandle) -> bool {
-    let mut current = Some(handle);
-    while let Some(candidate) = current {
-        if candidate == root {
-            return true;
-        }
-        current = runtime
-            .dom_host()
-            .node(candidate)
-            .and_then(Node::parent_node);
-    }
-    false
 }
 
 pub(super) fn validate_document_sequence(
@@ -135,27 +139,4 @@ pub(super) fn validate_document_sequence(
         }
     }
     true
-}
-
-pub(super) fn insert_fragment_with_validation(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    parent: DomHandle,
-    reference_child: Option<DomHandle>,
-    skipped: &[DomHandle],
-    fragment: DomHandle,
-    inserted: &[DomHandle],
-) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    if !validate_document_sequence(runtime, parent, reference_child, inserted, skipped) {
-        return false;
-    }
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.insert_before_appending_to_current_reaction_queue(
-        scope,
-        runtime_ptr,
-        parent,
-        fragment,
-        reference_child,
-    )
 }
