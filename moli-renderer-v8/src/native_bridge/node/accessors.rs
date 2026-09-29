@@ -56,8 +56,10 @@ pub(super) fn node_node_value_getter_function<'s>(
     let value = match node {
         NativeNodeReference::Attr(attr) => Some(attr.value(scope)),
         NativeNodeReference::Tree { node, .. } => unsafe { &*node.runtime_ptr }
-            .character_data_utf16_units(node.handle)
-            .map(|units| DomStringValue::from_utf16(&units)),
+            .dom_host()
+            .node(node.handle)
+            .and_then(Node::character_data_value)
+            .cloned(),
     };
     match value.and_then(|value| v8_string_from_utf16_units(scope, &value.utf16_units())) {
         Some(value) => rv.set(value.into()),
@@ -324,13 +326,7 @@ pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
                 .dom_host()
                 .node(node.handle)
                 .filter(|node| !node.is_document() && node.as_document_type().is_none())
-                .map(|native| {
-                    runtime
-                        .character_data_utf16_units(node.handle)
-                        .unwrap_or_else(|| {
-                            native.text_content_utf16_units(runtime.dom_host().dom())
-                        })
-                })
+                .map(|node| node.text_content_utf16_units(runtime.dom_host().dom()))
         }
     };
     match units.and_then(|units| v8_string_from_utf16_units(scope, &units)) {
