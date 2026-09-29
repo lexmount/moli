@@ -27,7 +27,8 @@ use super::super::{
     dom_quad::dom_quad_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
-        build_value_event_template, event_constructor_callback,
+        build_value_event_template, device_motion_event_constructor,
+        device_orientation_event_constructor, event_constructor_callback,
     },
     exposed_interfaces::{TemplateBuildProfile, install_interface_template_metadata},
     file_api::{
