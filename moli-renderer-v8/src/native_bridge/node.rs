@@ -20,6 +20,7 @@ use super::{
     throw_dom_exception,
 };
 
+mod accessors;
 mod arguments;
 mod bridge_callbacks;
 mod character_data;
@@ -30,6 +31,8 @@ mod mutation;
 pub(in crate::native_bridge) mod reference;
 mod tree;
 
+pub(in crate::native_bridge) use accessors::node_text_content_getter_function;
+use accessors::*;
 use reference::NativeNodeReference;
 
 pub(super) use self::arguments::*;
@@ -45,7 +48,7 @@ pub(super) use self::mutation::*;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Node, enumerable)]
+#[webapi(interface = web_api_interfaces::Node, enumerable, receiver)]
 struct NodePrototypeReflectionDeclaration {
     #[webapi(accessor_property = "nodeType", getter = node_node_type_getter_function)]
     node_type: (),
@@ -90,31 +93,31 @@ struct NodePrototypeReflectionDeclaration {
     append_child: (),
     #[webapi(method, length = 2, callback = node_insert_before_prototype_callback)]
     insert_before: (),
-    #[webapi(method, length = 1, callback = node_remove_child_prototype_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_remove_child_prototype_callback)]
     remove_child: (),
     #[webapi(method, length = 2, callback = node_replace_child_prototype_callback)]
     replace_child: (),
-    #[webapi(method, length = 0, callback = node_clone_node_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 0, callback = node_clone_node_callback)]
     clone_node: (),
-    #[webapi(method, length = 1, callback = node_contains_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_contains_callback)]
     contains: (),
-    #[webapi(method, length = 0, callback = node_has_child_nodes_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 0, callback = node_has_child_nodes_callback)]
     has_child_nodes: (),
-    #[webapi(method, length = 1, callback = node_is_same_node_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_is_same_node_callback)]
     is_same_node: (),
-    #[webapi(method, length = 1, callback = node_is_equal_node_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_is_equal_node_callback)]
     is_equal_node: (),
-    #[webapi(method, length = 1, callback = node_compare_document_position_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_compare_document_position_callback)]
     compare_document_position: (),
-    #[webapi(method, length = 0, callback = node_get_root_node_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 0, callback = node_get_root_node_callback)]
     get_root_node: (),
-    #[webapi(method, length = 1, callback = node_lookup_prefix_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_lookup_prefix_callback)]
     lookup_prefix: (),
-    #[webapi(method = "lookupNamespaceURI", length = 1, callback = node_lookup_namespace_uri_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method = "lookupNamespaceURI", length = 1, callback = node_lookup_namespace_uri_callback)]
     lookup_namespace_uri: (),
-    #[webapi(method, length = 1, callback = node_is_default_namespace_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 1, callback = node_is_default_namespace_callback)]
     is_default_namespace: (),
-    #[webapi(method, length = 0, callback = node_normalize_callback, receiver = web_api_interfaces::Node::is_instance)]
+    #[webapi(method, length = 0, callback = node_normalize_callback)]
     normalize: (),
 }
 
@@ -440,521 +443,6 @@ fn document_type_system_id_getter_function<'s>(
         live_document_type_value(scope, &args, "systemId", DocumentType::system_id).ok()
     });
     set_document_type_string_value(scope, value, rv);
-}
-
-fn node_node_type_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedNodeType")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "nodeType");
-        rv.set_null();
-        return;
-    };
-    let Some(node) = unsafe { &*runtime_ptr }.dom_host().node(handle) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(v8::Integer::new(scope, i32::from(node.node_type() as u8)).into());
-}
-
-fn node_node_name_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedNodeName")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "nodeName");
-        rv.set_null();
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(node) = runtime.dom_host().node(handle) else {
-        rv.set_null();
-        return;
-    };
-    let name = element_name_for_owner_document(runtime, handle).unwrap_or_else(|| node.node_name());
-    let Some(value) = v8_string(scope, &name) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
-}
-
-fn node_node_value_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedNodeValue")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "nodeValue");
-        rv.set_null();
-        return;
-    };
-    let Some(node) = unsafe { &*runtime_ptr }.dom_host().node(handle) else {
-        rv.set_null();
-        return;
-    };
-    match node.character_data_value() {
-        Some(value) => {
-            let value = crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())
-                .unwrap_or_else(|| v8::String::empty(scope));
-            rv.set(value.into());
-        }
-        None => rv.set_null(),
-    }
-}
-
-fn node_node_value_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let raw_value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        if !receiver_has_detached_state(scope, args.this()) {
-            throw_incompatible_setter_receiver(scope, "Node", "nodeValue");
-            return;
-        }
-        let node = args.this();
-        let _ =
-            call_global_bridge_method(scope, "__setDetachedNodeValue", &[node.into(), raw_value]);
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(node) = runtime.dom_host().node(handle) else {
-        return;
-    };
-    if node.node_value().is_none() {
-        return;
-    }
-    let value = if raw_value.is_null_or_undefined() {
-        Vec::new()
-    } else {
-        match webidl::convert::<webidl::DomString16>(
-            scope,
-            raw_value,
-            webidl::Context::member("Node", "nodeValue"),
-        ) {
-            Ok(value) => value.0,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return;
-            }
-        }
-    };
-    let runtime = unsafe { &mut *runtime_ptr };
-    let removed_count = runtime
-        .character_data_utf16_units(handle)
-        .map(|units| units.len() as u32);
-    let inserted_count = value.len() as u32;
-    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &value);
-    if let Some(removed_count) = removed_count {
-        context_bootstrap::live_ranges_character_data_reset(
-            scope,
-            handle,
-            removed_count,
-            inserted_count,
-        );
-    }
-}
-
-fn node_is_connected_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedIsConnected")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "isConnected");
-        rv.set_bool(false);
-        return;
-    };
-    let connected = unsafe { &*runtime_ptr }.node_is_connected_for_web_api(handle);
-    rv.set(v8::Boolean::new(scope, connected).into());
-}
-
-fn node_owner_document_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedOwnerDocument")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "ownerDocument");
-        rv.set_null();
-        return;
-    };
-    let owner = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::owner_document);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), owner);
-}
-
-fn node_base_uri_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        throw_incompatible_getter_receiver(scope, "Node", "baseURI");
-        rv.set_undefined();
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let document_handle = if node_is_document(runtime, handle) {
-        Some(handle)
-    } else {
-        runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::owner_document)
-    };
-    let Some(document_handle) = document_handle else {
-        rv.set_undefined();
-        return;
-    };
-    let url = if document_handle == runtime.dom_host().document_handle() {
-        runtime
-            .dom_host()
-            .document_base_url()
-            .unwrap_or_else(|| runtime.host_document().url().clone())
-    } else if let Some(child_handle) =
-        runtime.child_browsing_context_host_for_document_handle(document_handle)
-        && let Some(base_url) = runtime.child_browsing_context_base_url(child_handle)
-    {
-        base_url
-    } else {
-        runtime
-            .dom_host()
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .map(|document| document.base_url().clone())
-            .unwrap_or_else(|| runtime.host_document().url().clone())
-    };
-    let Some(value) = v8_string(scope, url.as_str()) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
-}
-
-fn node_parent_node_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedParentNode")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "parentNode");
-        rv.set_null();
-        return;
-    };
-    let parent = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::parent_node);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
-}
-
-fn node_parent_element_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedParentElement")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "parentElement");
-        rv.set_null();
-        return;
-    };
-    let parent = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::parent_node)
-        .filter(|parent| node_is_element(unsafe { &*runtime_ptr }, *parent));
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
-}
-
-fn node_child_nodes_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedChildNodes")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "childNodes");
-        rv.set_null();
-        return;
-    };
-    let Some(context) = args.this().get_creation_context(scope) else {
-        rv.set_null();
-        return;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let collection = super::collections::build_live_collection_for_node(
-        scope,
-        runtime_ptr,
-        handle,
-        CollectionKind::NodeList,
-        LiveCollectionQueryKind::ChildNodes,
-        None,
-        false,
-    );
-    rv.set(collection.into());
-}
-
-fn node_first_child_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedFirstChild")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "firstChild");
-        rv.set_null();
-        return;
-    };
-    let child = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::first_child);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
-}
-
-fn node_last_child_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedLastChild")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "lastChild");
-        rv.set_null();
-        return;
-    };
-    let child = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::last_child);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
-}
-
-fn node_previous_sibling_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedPreviousSibling")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "previousSibling");
-        rv.set_null();
-        return;
-    };
-    let sibling = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::prev_sibling);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
-}
-
-fn node_next_sibling_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedNextSibling")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "nextSibling");
-        rv.set_null();
-        return;
-    };
-    let sibling = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::next_sibling);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
-}
-
-pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedTextContent")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "textContent");
-        rv.set_null();
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(node) = runtime.dom_host().node(handle) else {
-        rv.set_null();
-        return;
-    };
-    if node.is_document() || node.as_document_type().is_some() {
-        rv.set_null();
-        return;
-    }
-    let Some(value) = runtime
-        .dom_host()
-        .node(handle)
-        .map(|node| node.text_content_utf16_units(runtime.dom_host().dom()))
-    else {
-        rv.set_null();
-        return;
-    };
-    let Some(value) = crate::util::v8_string_from_utf16_units(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
-}
-
-fn node_text_content_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let raw_value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
-    else {
-        if !receiver_has_detached_state(scope, args.this()) {
-            throw_incompatible_setter_receiver(scope, "Node", "textContent");
-            return;
-        }
-        super::document::set_detached_node_text_content(scope, args.this(), raw_value);
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(node) = runtime.dom_host().node(handle) else {
-        return;
-    };
-    if node.is_document() || node.as_document_type().is_some() {
-        return;
-    }
-    let value = if raw_value.is_null_or_undefined() {
-        moli_dom::native::DomStringValue::default()
-    } else {
-        let Some(value) = raw_value.to_string(scope) else {
-            return;
-        };
-        moli_dom::native::DomStringValue::from_utf16(
-            crate::util::v8_string_to_u16_string(scope, value).as_slice(),
-        )
-    };
-    let removed_count = runtime
-        .character_data_utf16_units(handle)
-        .map(|units| units.len() as u32);
-    let inserted_count = value.utf16_units().len() as u32;
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, value);
-    if let Some(removed_count) = removed_count {
-        context_bootstrap::live_ranges_character_data_reset(
-            scope,
-            handle,
-            removed_count,
-            inserted_count,
-        );
-    }
 }
 
 pub(super) fn element_name_for_owner_document(

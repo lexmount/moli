@@ -13,7 +13,7 @@ pub(crate) use accessors::detached_iframe_current_content_document_handle;
 pub(in crate::native_bridge) use accessors::{
     clear_detached_iframe_cached_context, clear_detached_iframe_cached_context_for_handle,
     detached_form_owner_object, detached_iframe_content_document, detached_iframe_content_window,
-    detached_label_control_object, detached_shadow_root_for_host, set_detached_node_text_content,
+    detached_label_control_object, detached_shadow_root_for_host,
     set_detached_text_replacement_value,
 };
 pub(in crate::native_bridge) use bridge_methods::install_detached_bridge_methods;

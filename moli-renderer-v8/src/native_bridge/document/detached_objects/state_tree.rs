@@ -770,8 +770,9 @@ pub(crate) fn write_detached_native_attribute_appending_to_current_reaction_queu
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
     name: &str,
-    value: &str,
+    value: impl Into<crate::dom::native::DomStringValue>,
 ) -> bool {
+    let value = value.into();
     let Some((runtime_ptr, handle)) = detached_native_element_runtime_and_handle(scope, element)
     else {
         return false;
@@ -782,15 +783,16 @@ pub(crate) fn write_detached_native_attribute_appending_to_current_reaction_queu
         element,
         handle,
         name,
-        Some(value),
+        Some(value.as_str_lossy()),
     );
     let changed =
-        crate::native_bridge::element::set_live_element_attribute_appending_to_current_reaction_queue(
+        crate::native_bridge::element::set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             name,
-            value,
+            value.as_str_lossy(),
+            value.utf16_units().into_owned(),
         );
     if changed {
         detached_record_tree_mutation(scope, element);
@@ -805,13 +807,14 @@ pub(crate) fn write_detached_native_attribute_ns_appending_to_current_reaction_q
     prefix: Option<&str>,
     qualified_name: &str,
     local_name: &str,
-    value: &str,
+    value: impl Into<crate::dom::native::DomStringValue>,
 ) -> bool {
+    let value = value.into();
     let Some((runtime_ptr, handle)) = detached_native_element_runtime_and_handle(scope, element)
     else {
         return false;
     };
-    let changed = crate::native_bridge::element::set_live_element_attribute_ns_appending_to_current_reaction_queue(
+    let changed = crate::native_bridge::element::set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
         scope,
         runtime_ptr,
         handle,
@@ -819,7 +822,8 @@ pub(crate) fn write_detached_native_attribute_ns_appending_to_current_reaction_q
         prefix,
         local_name,
         qualified_name,
-        value,
+        value.as_str_lossy(),
+        value.utf16_units().into_owned(),
     );
     if changed {
         detached_record_tree_mutation(scope, element);
