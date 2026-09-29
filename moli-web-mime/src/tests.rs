@@ -987,6 +987,7 @@ fn json_mime_group_includes_text_json_and_valid_suffixes() {
     for mime in [
         "text/plain",
         "application/javascript",
+        "text/javascript",
         "application/jsonp",
         "text/jsonp",
         "application/json+xml",
