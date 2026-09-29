@@ -85,6 +85,7 @@ impl<'a> MarkdownDom<'a> {
                     .flatten()
             })
             .collect();
+        let visible_handler_functions = visible_handler_functions(dom);
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
@@ -96,6 +97,19 @@ impl<'a> MarkdownDom<'a> {
                         .split_ascii_whitespace()
                         .filter(|id| target_is_disclosure(dom, &targets, id)),
                 );
+            }
+            for attribute_name in dom.get_attribute_names(*node).unwrap_or_default() {
+                if !attribute_name.starts_with("on") {
+                    continue;
+                }
+                let Some(handler) = Dom::attribute(dom, *node, &attribute_name) else {
+                    continue;
+                };
+                for target in inline_disclosure_targets(handler, &visible_handler_functions) {
+                    if target_is_disclosure(dom, &targets, target) {
+                        disclosures.insert(target);
+                    }
+                }
             }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
@@ -181,19 +195,23 @@ impl<'a> MarkdownDom<'a> {
         let mut visibility_restored_regions = HashSet::new();
         for (node, values) in styles {
             let role = Dom::attribute(dom, node, "role").unwrap_or_default();
-            if matches!(Dom::node_kind(dom, node), NodeKind::Element("input"))
-                && let Some(element) = dom.node(node).and_then(|node| node.as_element())
+            if matches!(
+                Dom::node_kind(dom, node),
+                NodeKind::Element("input" | "textarea")
+            ) && let Some(element) = dom.node(node).and_then(|node| node.as_element())
             {
                 resolved_urls
                     .entry(node)
                     .or_insert_with(HashMap::new)
                     .insert("value".to_owned(), element.input_value());
-                if element.checked() {
+                if matches!(Dom::node_kind(dom, node), NodeKind::Element("input"))
+                    && element.checked()
+                {
                     resolved_urls
                         .entry(node)
                         .or_insert_with(HashMap::new)
                         .insert("checked".to_owned(), String::new());
-                } else {
+                } else if matches!(Dom::node_kind(dom, node), NodeKind::Element("input")) {
                     unchecked_controls.insert(node);
                 }
             }
@@ -402,6 +420,343 @@ fn target_is_disclosure<D: Dom + ?Sized>(
                 .any(|excluded| role.eq_ignore_ascii_case(excluded))
         })
     })
+}
+
+fn inline_disclosure_targets<'a>(
+    value: &'a str,
+    visible_functions: &HashSet<String>,
+) -> Vec<&'a str> {
+    let mut result = Vec::new();
+    for (marker, fragment) in [
+        ("document.getElementById", false),
+        ("document.querySelector", true),
+    ] {
+        for offset in code_marker_offsets(value, marker) {
+            let remaining = &value[offset + marker.len()..];
+            let Some((literal, end)) = quoted_call_argument(remaining) else {
+                continue;
+            };
+            let Some(target) = literal
+                .strip_prefix('#')
+                .or_else(|| (!fragment).then_some(literal))
+                .filter(|target| !target.is_empty())
+            else {
+                continue;
+            };
+            let direct_mutation = sets_display_visible(&remaining[end..], None);
+            let named_mutation = enclosing_function_name(&value[..offset])
+                .is_some_and(|name| visible_functions.contains(name));
+            if direct_mutation || named_mutation {
+                result.push(target);
+            }
+        }
+    }
+    result
+}
+
+fn visible_handler_functions(dom: &NativeDom) -> HashSet<String> {
+    let mut result = HashSet::new();
+    let mut pending = vec![dom.document_node_id()];
+    while let Some(node) = pending.pop() {
+        if !matches!(Dom::node_kind(dom, node), NodeKind::Element("script")) {
+            pending.extend(dom.child_ids(node));
+            continue;
+        }
+        let source = descendant_text(dom, node);
+        for offset in code_marker_offsets(&source, "function") {
+            let signature = &source[offset + "function".len()..];
+            let Some((name, parameter, body)) = function_parts(signature) else {
+                continue;
+            };
+            if function_sets_parameter_visible(body, parameter) {
+                result.insert(name.to_owned());
+            }
+        }
+    }
+    result
+}
+
+fn function_parts(source: &str) -> Option<(&str, &str, &str)> {
+    let source = source.trim_start();
+    let name_end = source.find(|character: char| !is_identifier(character))?;
+    let name = &source[..name_end];
+    if name.is_empty() {
+        return None;
+    }
+    let parameters = source[name_end..].trim_start().strip_prefix('(')?;
+    let close = parameters.find(')')?;
+    let parameter = parameters[..close].trim();
+    if parameter.is_empty() || parameter.contains(',') || !parameter.chars().all(is_identifier) {
+        return None;
+    }
+    let rest = parameters[close + 1..].trim_start();
+    let body_start = rest.find('{')?;
+    let body_end = matching_delimiter(rest, body_start, '{', '}')?;
+    Some((name, parameter, &rest[body_start + 1..body_end]))
+}
+
+fn function_sets_parameter_visible(body: &str, parameter: &str) -> bool {
+    for offset in code_marker_offsets(body, ".style.display") {
+        let owner = body[..offset]
+            .trim_end()
+            .rsplit_once(|character: char| !is_identifier(character))
+            .map_or(body[..offset].trim_end(), |(_, owner)| owner);
+        if owner.is_empty()
+            || !sets_display_visible(&body[offset + ".style.display".len()..], Some(""))
+        {
+            continue;
+        }
+        if owner == parameter || alias_depends_on_parameter(&body[..offset], owner, parameter) {
+            return true;
+        }
+    }
+    false
+}
+
+fn alias_depends_on_parameter(prefix: &str, owner: &str, parameter: &str) -> bool {
+    let Some(offset) = code_marker_offsets(prefix, owner)
+        .into_iter()
+        .rev()
+        .find(|offset| {
+            let before = prefix[..*offset].chars().next_back();
+            let after = prefix[*offset + owner.len()..].chars().next();
+            before.is_none_or(|character| !is_identifier(character))
+                && after.is_none_or(|character| !is_identifier(character))
+                && prefix[*offset + owner.len()..]
+                    .trim_start()
+                    .starts_with('=')
+        })
+    else {
+        return false;
+    };
+    let assignment = prefix[offset + owner.len()..].trim_start();
+    let Some(right) = assignment.strip_prefix('=') else {
+        return false;
+    };
+    let right = right.split_once(';').map_or(right, |(right, _)| right);
+    contains_identifier(right, parameter)
+}
+
+fn contains_identifier(value: &str, identifier: &str) -> bool {
+    code_marker_offsets(value, identifier)
+        .into_iter()
+        .any(|offset| {
+            let before = value[..offset].chars().next_back();
+            let after = value[offset + identifier.len()..].chars().next();
+            before.is_none_or(|character| !is_identifier(character))
+                && after.is_none_or(|character| !is_identifier(character))
+        })
+}
+
+fn enclosing_function_name(value: &str) -> Option<&str> {
+    let value = value.trim_end();
+    let value = value.strip_suffix('(')?.trim_end();
+    let start = value
+        .rfind(|character: char| !is_identifier(character))
+        .map_or(0, |offset| offset + 1);
+    let name = &value[start..];
+    (!name.is_empty()).then_some(name)
+}
+
+fn quoted_call_argument(value: &str) -> Option<(&str, usize)> {
+    let leading = value.len() - value.trim_start().len();
+    let value = value.trim_start().strip_prefix('(')?;
+    let after_open = value.len() - value.trim_start().len();
+    let value = value.trim_start();
+    let quote = value
+        .chars()
+        .next()
+        .filter(|quote| matches!(quote, '\'' | '"'))?;
+    let literal = &value[quote.len_utf8()..];
+    let end = literal.find(quote)?;
+    let after_literal = literal[end + quote.len_utf8()..].trim_start();
+    if !after_literal.starts_with(')') {
+        return None;
+    }
+    let consumed = leading
+        + 1
+        + after_open
+        + quote.len_utf8()
+        + end
+        + quote.len_utf8()
+        + (literal[end + quote.len_utf8()..].len() - after_literal.len())
+        + 1;
+    Some((&literal[..end], consumed))
+}
+
+fn sets_display_visible(value: &str, display_already_consumed: Option<&str>) -> bool {
+    let value = if display_already_consumed.is_some() {
+        value
+    } else {
+        let Some(value) = value.trim_start().strip_prefix(".style.display") else {
+            return false;
+        };
+        value
+    };
+    let Some(value) = value.trim_start().strip_prefix('=') else {
+        return false;
+    };
+    let value = value.trim_start();
+    let Some(quote) = value
+        .chars()
+        .next()
+        .filter(|quote| matches!(quote, '\'' | '"'))
+    else {
+        return false;
+    };
+    let literal = &value[quote.len_utf8()..];
+    let Some(end) = literal.find(quote) else {
+        return false;
+    };
+    matches!(
+        literal[..end].trim(),
+        "" | "block"
+            | "inline"
+            | "inline-block"
+            | "flex"
+            | "inline-flex"
+            | "grid"
+            | "inline-grid"
+            | "list-item"
+            | "table"
+            | "table-row"
+            | "table-cell"
+    )
+}
+
+fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {
+    let mut result = Vec::new();
+    let mut offset = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while offset < value.len() {
+        let tail = &value[offset..];
+        if line_comment {
+            if tail.starts_with('\n') {
+                line_comment = false;
+            }
+        } else if block_comment {
+            if tail.starts_with("*/") {
+                block_comment = false;
+                offset += 2;
+                continue;
+            }
+        } else if let Some(delimiter) = quote {
+            let character = tail.chars().next().expect("offset is within value");
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+        } else if tail.starts_with("//") {
+            line_comment = true;
+            offset += 2;
+            continue;
+        } else if tail.starts_with("/*") {
+            block_comment = true;
+            offset += 2;
+            continue;
+        } else {
+            let character = tail.chars().next().expect("offset is within value");
+            if matches!(character, '\'' | '"' | '`') {
+                quote = Some(character);
+            } else if tail.starts_with(marker) {
+                result.push(offset);
+                offset += marker.len();
+                continue;
+            }
+        }
+        offset += tail
+            .chars()
+            .next()
+            .expect("offset is within value")
+            .len_utf8();
+    }
+    result
+}
+
+fn matching_delimiter(value: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    let mut offset = start;
+    while offset < value.len() {
+        let tail = &value[offset..];
+        if line_comment {
+            if tail.starts_with('\n') {
+                line_comment = false;
+            }
+        } else if block_comment {
+            if tail.starts_with("*/") {
+                block_comment = false;
+                offset += 2;
+                continue;
+            }
+        } else if let Some(delimiter) = quote {
+            let character = tail.chars().next().expect("offset is within value");
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+        } else if tail.starts_with("//") {
+            line_comment = true;
+            offset += 2;
+            continue;
+        } else if tail.starts_with("/*") {
+            block_comment = true;
+            offset += 2;
+            continue;
+        } else {
+            let character = tail.chars().next().expect("offset is within value");
+            if matches!(character, '\'' | '"' | '`') {
+                quote = Some(character);
+            } else if character == open {
+                depth += 1;
+            } else if character == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+        }
+        offset += tail
+            .chars()
+            .next()
+            .expect("offset is within value")
+            .len_utf8();
+    }
+    None
+}
+
+fn is_identifier(character: char) -> bool {
+    character == '_' || character == '$' || character.is_ascii_alphanumeric()
+}
+
+fn descendant_text(dom: &NativeDom, root: NativeNodeId) -> String {
+    let mut pending = vec![root];
+    let mut result = String::new();
+    while let Some(node) = pending.pop() {
+        if let NodeKind::Text(value) = Dom::node_kind(dom, node) {
+            result.push_str(value);
+        }
+        let mut children = Vec::new();
+        let mut child = dom.first_child(node);
+        while let Some(id) = child {
+            children.push(id);
+            child = dom.next_sibling(id);
+        }
+        pending.extend(children.into_iter().rev());
+    }
+    result
 }
 
 fn px(value: &str) -> Option<f32> {

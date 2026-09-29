@@ -339,6 +339,12 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 return;
             }
+            "textarea" => {
+                if let Some(value) = crate::form::textarea_text(self.dom, node) {
+                    self.writer().text(&value);
+                    return;
+                }
+            }
             "iframe" | "video" | "audio" => {
                 if self.media(node, tag, depth) {
                     return;

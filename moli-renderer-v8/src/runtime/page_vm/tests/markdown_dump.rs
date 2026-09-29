@@ -100,6 +100,14 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let actions = page.render_page_dump(options(false));
         assert!(actions.contains("[Accept](https://example.test/accept)\n\n[Reject](https://example.test/reject)"), "{actions}");
         page.vm_mut().eval(r##"
+            document.head.innerHTML = `<script>
+                function revealElement(what) {
+                    const target = typeof what === 'object' ? what : document.getElementById(what);
+                    target.style.display = 'block';
+                }
+                function inspectElement(what) { console.log(what.textContent); }
+                function revealUnrelated(what) { sidebar.style.display = 'block'; console.log(what); }
+            </script>`;
             document.body.innerHTML = `
                 <article><p>A detailed review starts... <a data-src="#complete" href="javascript:;">Read more</a></p>
                 <div id="complete" style="display:none">A detailed review starts here and retains the final conclusion.</div></article>
@@ -147,14 +155,23 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <button onclick="/* document.getElementById('commented') */ console.log('clicked')">Comment</button>
                 <section id="commented" style="display:none">Hidden commented state</section>
                 <button onclick="document.querySelector('#history').style.display='block'">History</button>
-                <section id="history" style="display:none">Query-selected history</section>`;
+                <section id="history" style="display:none">Query-selected history</section>
+                <button onclick="return revealElement(document.getElementById('records'))">Records</button>
+                <section id="records" style="display:none">Function-revealed records</section>
+                <button onclick="inspectElement(document.getElementById('inspected'))">Inspect</button>
+                <section id="inspected" style="display:none">Function-read hidden state</section>
+                <button onclick="revealUnrelated(document.getElementById('unrelated-target'))">Other</button>
+                <section id="unrelated-target" style="display:none">Unrelated mutation hidden state</section>`;
         "##).unwrap();
         let related = page.render_page_dump(options(false));
         assert!(!related.contains("Hidden telemetry state"), "{related}");
         assert!(!related.contains("Hidden diagnostic state"), "{related}");
         assert!(!related.contains("Hidden read-only state"), "{related}");
         assert!(!related.contains("Hidden commented state"), "{related}");
-        assert!(!related.contains("Query-selected history"), "{related}");
+        assert!(related.contains("Query-selected history"), "{related}");
+        assert!(related.contains("Function-revealed records"), "{related}");
+        assert!(!related.contains("Function-read hidden state"), "{related}");
+        assert!(!related.contains("Unrelated mutation hidden state"), "{related}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <p style="color:white;background-image:linear-gradient(black,black)">Visible gradient text</p>
@@ -179,14 +196,17 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(composite.contains("full conclusion"), "{composite}");
         assert!(!composite.contains("A detailed review..."), "{composite}");
         page.vm_mut().eval(r#"
-            document.body.innerHTML = '<input id="field" value="Initial"><input id="check" type="checkbox">';
+            document.body.innerHTML = '<input id="field" value="Initial"><input id="check" type="checkbox"><textarea id="notes">Original notes</textarea>';
             document.getElementById('field').value = 'Edited';
             document.getElementById('check').checked = true;
+            document.getElementById('notes').value = 'Edited notes';
         "#).unwrap();
         let controls = page.render_page_dump(options(false));
         assert!(controls.contains("Edited"), "{controls}");
         assert!(controls.contains("☑"), "{controls}");
+        assert!(controls.contains("Edited notes"), "{controls}");
         assert!(!controls.contains("Initial"), "{controls}");
+        assert!(!controls.contains("Original notes"), "{controls}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <img srcset="small.png 1x, large.png 2x" alt="Responsive">

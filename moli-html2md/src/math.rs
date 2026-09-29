@@ -2,15 +2,22 @@
 /// Dollar boundaries follow the usual non-space/non-digit rules, so prices do
 /// not consume the prose between two currency amounts.
 pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
+    let mut steps = 0;
+    next_span_counted(text, &mut steps)
+}
+
+fn next_span_counted(text: &str, steps: &mut usize) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut index = 0;
+    let mut backslashes = 0;
     let mut dollar = None;
     let mut double_dollar = None;
     let mut paren = None;
     let mut bracket = None;
     let mut candidate = None;
     while index < bytes.len() {
-        if bytes[index] == b'$' && !escaped(bytes, index) {
+        *steps += 1;
+        if bytes[index] == b'$' && backslashes % 2 == 0 {
             if bytes.get(index + 1) == Some(&b'$') {
                 if let Some(start) = double_dollar.take() {
                     accept_candidate(text, start, index + 2, 2, false, &mut candidate);
@@ -18,6 +25,7 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
                     double_dollar = Some(index);
                 }
                 index += 2;
+                backslashes = 0;
                 if let Some(ready) =
                     ready_candidate(candidate, [dollar, double_dollar, paren, bracket])
                 {
@@ -35,13 +43,14 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
                 dollar = Some(index);
             }
             index += 1;
+            backslashes = 0;
             if let Some(ready) = ready_candidate(candidate, [dollar, double_dollar, paren, bracket])
             {
                 return Some(ready);
             }
             continue;
         }
-        if bytes[index] == b'\\' && !escaped(bytes, index) {
+        if bytes[index] == b'\\' && backslashes % 2 == 0 {
             match bytes.get(index + 1) {
                 Some(b'(') => {
                     paren.get_or_insert(index);
@@ -63,6 +72,7 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
             }
             if matches!(bytes.get(index + 1), Some(b'(' | b'[' | b')' | b']')) {
                 index += 2;
+                backslashes = 0;
                 if let Some(ready) =
                     ready_candidate(candidate, [dollar, double_dollar, paren, bracket])
                 {
@@ -70,6 +80,11 @@ pub(crate) fn next_span(text: &str) -> Option<(usize, usize)> {
                 }
                 continue;
             }
+        }
+        if bytes[index] == b'\\' {
+            backslashes += 1;
+        } else {
+            backslashes = 0;
         }
         index += 1;
     }
@@ -124,12 +139,20 @@ fn contains_markdown_resource(text: &str) -> bool {
     text.contains("](") || text.contains("][") || text.contains("![[")
 }
 
-fn escaped(bytes: &[u8], index: usize) -> bool {
-    bytes[..index]
-        .iter()
-        .rev()
-        .take_while(|&&ch| ch == b'\\')
-        .count()
-        % 2
-        == 1
+#[cfg(test)]
+mod tests {
+    use super::next_span_counted;
+
+    #[test]
+    fn math_scan_work_is_linear_for_backslashes_and_unclosed_delimiters() {
+        for text in ["\\\\".repeat(8_192), "\\(x ".repeat(4_096)] {
+            let mut steps = 0;
+            let _ = next_span_counted(&text, &mut steps);
+            assert!(
+                steps <= text.len(),
+                "{steps} steps for {} bytes",
+                text.len()
+            );
+        }
+    }
 }

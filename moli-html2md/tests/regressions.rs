@@ -1064,7 +1064,7 @@ fn block_content_inside_heading_keeps_its_own_boundary() {
 
 #[test]
 fn form_values_preserve_current_readable_state_without_secrets() {
-    let source = "<table><tr><th>Period</th><th>Mon</th><th>Sun</th></tr><tr><td>Morning</td><td><input type=checkbox checked disabled></td><td><input type=checkbox disabled></td></tr></table><p><input value='Search term'><input type=email value='' placeholder='Your Email'><input type=submit value='Search'><input type=image alt='Map button'><input type=password value='secret' aria-label='Password'><input type=hidden value='token'><input type=file value='private.pdf'></p>";
+    let source = "<table><tr><th>Period</th><th>Mon</th><th>Sun</th></tr><tr><td>Morning</td><td><input type=checkbox checked disabled></td><td><input type=checkbox disabled></td></tr></table><p><input value='Search term'><input type=email value='' placeholder='Your Email'><input type=submit value='Search'><input type=image alt='Map button'><input type=password value='secret' aria-label='Password'><input type=hidden value='token'><input type=file value='private.pdf'><textarea>Notes</textarea></p>";
     let result = rendered_html(&markdown(source, false));
     for value in [
         "Morning",
@@ -1075,6 +1075,7 @@ fn form_values_preserve_current_readable_state_without_secrets() {
         "Search",
         "Map button",
         "Password",
+        "Notes",
     ] {
         assert!(result.contains(value), "missing {value}: {result}");
     }
@@ -1094,6 +1095,20 @@ fn unsafe_resource_urls_keep_labels_without_emitting_active_links() {
         "{result}"
     );
     assert!(!result.contains("javascript:"), "{result}");
+}
+
+#[test]
+fn embedded_media_uses_the_same_url_policy_in_all_output_paths() {
+    let media = "<video src='/clip.mp4' poster='javascript:alert(1)'></video><iframe src='data:image/png;base64,AAAA' title='Frame'></iframe><audio src='data:image/png;base64,BBBB' title='Audio'></audio>";
+    for source in [
+        media.to_owned(),
+        format!("<table><tr><td colspan='2'>{media}</td></tr></table>"),
+    ] {
+        let result = markdown(&source, false);
+        assert!(result.contains("/clip.mp4"), "{result}");
+        assert!(!result.contains("javascript:"), "{result}");
+        assert!(!result.contains("data:image"), "{result}");
+    }
 }
 
 #[test]

@@ -145,6 +145,13 @@ pub(crate) fn render<D: Dom + ?Sized>(
                             escape(&value, &mut output);
                         }
                     }
+                    NodeKind::Element("textarea") => {
+                        if let Some(value) = crate::form::textarea_text(dom, node) {
+                            escape(&value, &mut output);
+                        } else {
+                            tasks.push(Task::Siblings(dom.first_child(node), depth + 1));
+                        }
+                    }
                     NodeKind::Element(tag) => {
                         if crate::visibility::nonrendered_serialized_state(dom, node) {
                             continue;
@@ -256,6 +263,7 @@ fn allowed(tag: &str) -> bool {
             | "optgroup"
             | "option"
             | "button"
+            | "textarea"
             | "p"
             | "div"
             | "span"
