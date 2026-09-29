@@ -4608,16 +4608,6 @@ pub(crate) fn worker_allows_trusted_type_policy_name_by_csp(
     )
 }
 
-pub(crate) fn worker_requires_trusted_types_for_script(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<bool> {
-    Some(
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &get_worker_state(scope)?.borrow().content_security_policies,
-        ),
-    )
-}
-
 pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>) -> Option<bool> {
     Some(
         crate::content_security_policy::content_security_policy_allows_trusted_types_eval(
