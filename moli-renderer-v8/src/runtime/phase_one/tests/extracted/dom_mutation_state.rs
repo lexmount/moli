@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn parser_reparent_focused_subtree_resets_focus_after_parser_step() {
+fn parser_reparent_focused_subtree_resets_focus_without_deferring_events() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -54,7 +54,7 @@ parserTarget.focus();
                 )
             };
 
-            let focus_reset_roots = {
+            let pending_work = {
                 apply_parser_dom_mutation_for_test(
                     &mut page_vm,
                     ParserDomMutation::InsertBefore {
@@ -66,12 +66,16 @@ parserTarget.focus();
                 )
             };
             assert!(
-                !focus_reset_roots.is_empty(),
-                "moving a focused connected subtree should defer focus reset until the parser step returns"
+                pending_work.is_empty(),
+                "a focus reset without events does not need deferred parser work"
+            );
+            assert!(
+                page_vm.vm().document_runtime.active_element_handle().is_none(),
+                "removal must clear focus during the structural parser step"
             );
             page_vm
                 .vm_mut()
-                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(focus_reset_roots)
+                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(pending_work)
                 .expect("parser focused reparent followups should dispatch");
 
             let result = page_vm
@@ -87,7 +91,7 @@ parserTarget.focus();
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-focus-target:blur:false","js-focus-target:focusout:false","parser-focus-target:blur:false","parser-focus-target:focusout:false"],"parserParent":"parser-focus-move-b","jsParent":"parser-focus-move-b","parserFocused":false}"#
+                    r#"{"events":[],"parserParent":"parser-focus-move-b","jsParent":"parser-focus-move-b","parserFocused":false}"#
                 ),
                 "parser reparent should match JS insertBefore focus reset for focused moved subtrees"
             );
@@ -161,7 +165,7 @@ parserTarget.focus();
                 (detached_parent, target)
             };
 
-            let focus_reset_roots = apply_parser_dom_mutation_for_test(
+            let pending_work = apply_parser_dom_mutation_for_test(
                 &mut page_vm,
                 ParserDomMutation::AppendChild {
                     parent: detached_parent,
@@ -170,12 +174,16 @@ parserTarget.focus();
                 "parser focused append-to-detached mutation should apply",
             );
             assert!(
-                !focus_reset_roots.is_empty(),
-                "parser AppendChild moving a focused connected subtree to a disconnected parent should defer focus reset"
+                !pending_work.is_empty(),
+                "parser disconnection retains deferred child-context cleanup"
+            );
+            assert!(
+                page_vm.vm().document_runtime.active_element_handle().is_none(),
+                "removal must clear focus during the structural parser step"
             );
             page_vm
                 .vm_mut()
-                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(focus_reset_roots)
+                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(pending_work)
                 .expect("parser focused append-to-detached followups should dispatch");
 
             {
@@ -199,7 +207,7 @@ parserTarget.focus();
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-focus-append-detach-target:blur:false","js-focus-append-detach-target:focusout:false","parser-focus-append-detach-target:blur:false","parser-focus-append-detach-target:focusout:false"],"jsFocused":false,"parserFocused":false}"#
+                    r#"{"events":[],"jsFocused":false,"parserFocused":false}"#
                 ),
                 "parser AppendChild to a disconnected parent should match JS appendChild focus reset for focused moved subtrees"
             );
@@ -273,7 +281,7 @@ JSON.stringify({
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-focus-append-target:blur:false","js-focus-append-target:focusout:false","js-focus-replace-target:blur:false","js-focus-replace-target:focusout:false"],"appendFocused":false,"replaceFocused":false,"appendParent":"js-focus-append-dest","replaceParent":"js-focus-replace-dest"}"#
+                    r#"{"events":[],"appendFocused":false,"replaceFocused":false,"appendParent":"js-focus-append-dest","replaceParent":"js-focus-replace-dest"}"#
                 ),
                 "appendChild and replaceChild should reset focused moved subtrees like insertBefore"
             );
@@ -342,7 +350,7 @@ parserTarget.focus();
                 )
             };
 
-            let focus_reset_roots = {
+            let pending_work = {
                 apply_parser_dom_mutation_for_test(
                     &mut page_vm,
                     ParserDomMutation::RemoveChild {
@@ -353,12 +361,16 @@ parserTarget.focus();
                 )
             };
             assert!(
-                !focus_reset_roots.is_empty(),
-                "removing a focused connected subtree should defer focus reset until the parser step returns"
+                !pending_work.is_empty(),
+                "parser removal retains deferred child-context cleanup"
+            );
+            assert!(
+                page_vm.vm().document_runtime.active_element_handle().is_none(),
+                "removal must clear focus during the structural parser step"
             );
             page_vm
                 .vm_mut()
-                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(focus_reset_roots)
+                .queue_and_run_pending_parser_post_step_runtime_work_in_default_context_for_test(pending_work)
                 .expect("parser focused remove followups should dispatch");
 
             let result = page_vm
@@ -377,7 +389,7 @@ parserTarget.focus();
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-remove-focus-target:blur:false","js-remove-focus-target:focusout:false","parser-remove-focus-target:blur:false","parser-remove-focus-target:focusout:false"],"js":{"focused":false,"parent":null},"parser":{"focused":false,"parent":null}}"#
+                    r#"{"events":[],"js":{"focused":false,"parent":null},"parser":{"focused":false,"parent":null}}"#
                 ),
                 "JS and parser removeChild should reset focused removed subtrees"
             );

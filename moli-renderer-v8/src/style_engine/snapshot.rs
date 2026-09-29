@@ -101,7 +101,7 @@ fn merge_moli_style_mutation_snapshot_for_pending_cause(
         PendingStyleInvalidationCause::FocusChange {
             previous,
             next,
-            previous_focus_within,
+            previous_focus_states,
         } => {
             if host.active_element_handle() != *next {
                 return None;
@@ -110,7 +110,7 @@ fn merge_moli_style_mutation_snapshot_for_pending_cause(
                 host,
                 *previous,
                 *next,
-                previous_focus_within.as_deref(),
+                previous_focus_states.as_deref(),
             );
             for (handle, old_state) in retained_stylo_old_states_for_query_roots(
                 host,
@@ -121,7 +121,7 @@ fn merge_moli_style_mutation_snapshot_for_pending_cause(
                         host,
                         handle,
                         *previous,
-                        previous_focus_within.as_deref(),
+                        previous_focus_states.as_deref(),
                         state,
                     )
                 },
@@ -178,20 +178,29 @@ fn old_focus_snapshot_state(
     host: &DomHost,
     handle: DomHandle,
     previous: Option<DomHandle>,
-    previous_focus_within: Option<&[DomHandle]>,
+    previous_focus_states: Option<&[moli_selector::StyloStateInvalidationRoot]>,
     mut state: StyloElementState,
 ) -> StyloElementState {
     state.remove(StyloElementState::FOCUS | StyloElementState::FOCUSRING);
     state.remove(StyloElementState::FOCUS_WITHIN);
+    if let Some(previous_focus_states) = previous_focus_states {
+        // A removal/adoption can sever the old shadow-host chain. Captured
+        // focus states are authoritative; never reconstruct them from the new tree.
+        for old in previous_focus_states
+            .iter()
+            .filter(|old| old.root() == handle)
+        {
+            state.insert(old.state());
+        }
+        return state;
+    }
     let Some(previous) = previous else {
         return state;
     };
     if stylo_focus_state_matches_handle(host, previous, handle) {
         state.insert(StyloElementState::FOCUS | StyloElementState::FOCUSRING);
     }
-    if previous_focus_within.is_some_and(|handles| handles.contains(&handle))
-        || stylo_focus_within_state_matches_handle(host, previous, handle)
-    {
+    if stylo_focus_within_state_matches_handle(host, previous, handle) {
         state.insert(StyloElementState::FOCUS_WITHIN);
     }
     state

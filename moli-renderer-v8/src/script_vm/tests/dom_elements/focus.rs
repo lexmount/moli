@@ -27,6 +27,28 @@ fn editing_focus_initializes_selection_before_events_and_preserves_existing_rang
 }
 
 #[test]
+fn removing_focused_nodes_resets_state_without_focus_update_events() {
+    let mut vm = new_storage_test_vm("https://focus-removal.test/");
+    assert_eq!(
+        vm.eval(include_str!("../../../../tests/fixtures/focus-removal.js"))
+            .expect("focus removal fixture"),
+        ""
+    );
+}
+
+#[test]
+fn focused_subtree_removal_invalidates_shadow_host_dependent_styles() {
+    let mut vm = new_storage_test_vm("https://focus-removal-style.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/focus-removal-style.js"
+        ))
+        .expect("focus removal style fixture"),
+        ""
+    );
+}
+
+#[test]
 fn editing_host_focus_initializes_the_first_visible_dom_caret() {
     let mut vm = new_storage_test_vm("https://editing-focus-selection.test/");
     assert_eq!(
@@ -607,8 +629,8 @@ fn focus_transitions_publish_state_before_each_event_phase() {
 
 #[test]
 fn reentrant_focus_handlers_preserve_the_completed_transition() {
-    // These event traces also match Chromium. In particular, a temporary focus
-    // that is blurred before the handler returns does not cancel the request.
+    // A temporary focus that is blurred before the handler returns does not
+    // cancel the request. Removal itself does not run focus update steps.
     for (source, event_type, action, expected) in [
         (
             "a",
@@ -668,7 +690,7 @@ fn reentrant_focus_handlers_preserve_the_completed_transition() {
             "b",
             "focus",
             "b.remove()",
-            "blur:a:body:b|focusout:a:body:b|focus:b:b:a|blur:b:body:null|focusout:b:body:null;body",
+            "blur:a:body:b|focusout:a:body:b|focus:b:b:a;body",
         ),
     ] {
         let mut vm = new_storage_test_vm("https://focus-reentry.test/");
@@ -763,6 +785,8 @@ fn shadow_root_active_element_tracks_focus_event_phases() {
 
 #[test]
 fn child_focus_transitions_preserve_the_viewport_and_scope_related_targets() {
+    // Cross-document transitions retain the old document's focused area;
+    // activeElement follows that area independently of the global input target.
     for (scenario, expected) in [
         (
             "same-child",
@@ -770,15 +794,15 @@ fn child_focus_transitions_preserve_the_viewport_and_scope_related_targets() {
         ),
         (
             "enter-child",
-            "blur:main:body:body:body:null|focusout:main:body:body:body:null|focus:b:one:b:body:null|focusin:b:one:b:body:null",
+            "blur:main:main:body:body:null|focusout:main:main:body:body:null|focus:b:one:b:body:null|focusin:b:one:b:body:null",
         ),
         (
             "leave-child",
-            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:main:main:body:body:null|focusin:main:main:body:body:null",
+            "blur:a:one:a:body:null|focusout:a:one:a:body:null|focus:main:main:a:body:null|focusin:main:main:a:body:null",
         ),
         (
             "sibling-child",
-            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:c:two:body:c:null|focusin:c:two:body:c:null",
+            "blur:a:one:a:body:null|focusout:a:one:a:body:null|focus:c:two:a:c:null|focusin:c:two:a:c:null",
         ),
     ] {
         let mut vm = new_storage_test_vm("https://child-focus-phases.test/");

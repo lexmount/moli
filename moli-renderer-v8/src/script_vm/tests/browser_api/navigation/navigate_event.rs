@@ -1,5 +1,42 @@
 use super::*;
 
+#[tokio::test]
+async fn removal_reenables_navigation_focus_reset_until_another_focus_change() {
+    for (action, expected) in [
+        ("a.remove()", "autofocus"),
+        ("destination.append(a)", "autofocus"),
+        ("b.focus(); b.remove()", "autofocus"),
+        ("b.focus(); a.remove()", "b"),
+        ("b.focus(); b.remove(); c.focus()", "c"),
+        ("destination.moveBefore(a, null)", "autofocus"),
+        ("b.focus(); destination.moveBefore(b, null)", "b"),
+    ] {
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_test_vm_with_loader("https://navigation-focus-removal.test/", &loader);
+        let script = r##"
+          const root = document.documentElement || document.appendChild(document.createElement('html'));
+          const body = document.body || root.appendChild(document.createElement('body'));
+          body.innerHTML = '<button id=a></button><button id=b></button><button id=c></button><button id=autofocus autofocus></button><div id=destination></div>';
+          const a = document.getElementById('a'), b = document.getElementById('b');
+          const c = document.getElementById('c'), destination = document.getElementById('destination');
+          a.focus();
+          let release;
+          const held = new Promise(resolve => { release = resolve; });
+          navigation.addEventListener('navigate', event => event.intercept({handler: () => held}), {once: true});
+          globalThis.focusResetResult = 'pending';
+          navigation.navigate('#next').finished.then(() => { focusResetResult = document.activeElement.id; });
+          /*ACTION*/;
+          setTimeout(release, 0);
+        "##.replace("/*ACTION*/", action);
+        vm.eval(&script).expect("navigation focus removal setup");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("navigation focus removal settlement");
+        assert_eq!(vm.eval("focusResetResult").unwrap(), expected, "{action}");
+    }
+}
+
 #[test]
 fn same_document_navigation_fires_navigate_event_before_mutation() {
     let mut vm = new_storage_test_vm("https://example.com/base");
