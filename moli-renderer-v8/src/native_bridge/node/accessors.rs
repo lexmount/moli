@@ -328,10 +328,7 @@ pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
                     runtime
                         .character_data_utf16_units(node.handle)
                         .unwrap_or_else(|| {
-                            native
-                                .text_content(runtime.dom_host().dom())
-                                .encode_utf16()
-                                .collect()
+                            native.text_content_utf16_units(runtime.dom_host().dom())
                         })
                 })
         }
@@ -379,7 +376,7 @@ pub(super) fn node_text_content_setter_function<'s>(
                     scope,
                     node.runtime_ptr,
                     node.handle,
-                    value.as_str_lossy(),
+                    value,
                 );
             }
             if let Some(removed_count) = removed_count {

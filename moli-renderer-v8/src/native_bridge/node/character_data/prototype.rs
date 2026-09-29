@@ -179,7 +179,7 @@ fn character_data_data_setter_callback<'a>(
             .map(|units| units.len() as u32)
             .unwrap_or(0);
         let inserted_count = value.len() as u32;
-        if runtime.set_character_data_utf16_units(scope, runtime_ptr, handle, &value) {
+        if runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &value) {
             document::detached_record_tree_mutation(scope, args.this());
         }
         crate::context_bootstrap::live_ranges_character_data_reset(

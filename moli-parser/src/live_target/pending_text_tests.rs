@@ -1,5 +1,5 @@
 use super::*;
-use moli_dom::native::DomMutationRecordKind;
+use moli_dom::native::{DomMutationRecordKind, DomStringValue};
 
 fn pump(stream: &crate::DocumentStream, host: &mut DomHost, input: &str) -> DomMutationEffects {
     let mut effects = DomMutationEffects::default();
@@ -18,13 +18,13 @@ fn pump(stream: &crate::DocumentStream, host: &mut DomHost, input: &str) -> DomM
     effects
 }
 
-fn old_texts(effects: &DomMutationEffects) -> Vec<&str> {
+fn old_texts(effects: &DomMutationEffects) -> Vec<DomStringValue> {
     effects
         .observer_records()
         .records()
         .iter()
         .filter_map(|record| match record.kind() {
-            DomMutationRecordKind::CharacterData { old_value } => old_value.as_deref(),
+            DomMutationRecordKind::CharacterData { old_value } => old_value.clone(),
             _ => None,
         })
         .collect()
@@ -33,7 +33,13 @@ fn old_texts(effects: &DomMutationEffects) -> Vec<&str> {
 fn assert_old_texts(effects: &DomMutationEffects, expected: &[&str]) {
     let actual = old_texts(effects);
     assert_eq!(actual.len(), expected.len(), "character-data record count");
-    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        expected
+            .iter()
+            .map(|text| DomStringValue::from(*text))
+            .collect::<Vec<_>>()
+    );
 }
 
 fn fixture(prefix: &str) -> (crate::DocumentStream, DomHost) {

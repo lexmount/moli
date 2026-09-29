@@ -5,15 +5,15 @@ use super::super::*;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Text")]
 struct DetachedTextConstructorBridgeArgs {
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Comment")]
 struct DetachedCommentConstructorBridgeArgs {
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 pub(in crate::native_bridge) fn bridge_create_detached_document_fragment_callback<'a>(
@@ -45,7 +45,11 @@ pub(in crate::native_bridge) fn bridge_create_detached_text_callback<'a>(
     let Some(parsed) = webidl::parse_args::<DetachedTextConstructorBridgeArgs>(scope, &args) else {
         return;
     };
-    match build_detached_text_object(scope, document, &parsed.data) {
+    match build_detached_text_object(
+        scope,
+        document,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
@@ -65,7 +69,11 @@ pub(in crate::native_bridge) fn bridge_create_detached_comment_callback<'a>(
     else {
         return;
     };
-    match build_detached_comment_object(scope, document, &parsed.data) {
+    match build_detached_comment_object(
+        scope,
+        document,
+        moli_dom::native::DomStringValue::from_utf16(parsed.data.0.as_slice()),
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
