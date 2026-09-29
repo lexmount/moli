@@ -463,16 +463,12 @@ impl DocumentRuntime {
             }
         }
 
-        let existing_children = self
-            .dom_host
-            .child_handles(selectedcontent)
-            .collect::<Vec<_>>();
-        self.replace_all_children_with_fragment_appending_to_current_reaction_queue(
+        self.replace_all_children_with_node_appending_to_current_reaction_queue(
             scope,
             host_ptr,
             selectedcontent,
             fragment,
-            &existing_children,
+            false,
         )
     }
 }
