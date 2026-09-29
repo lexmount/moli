@@ -1754,7 +1754,7 @@ JSON.stringify({
 
 #[test]
 fn frame_owner_content_accessors_live_on_exact_owner_prototypes() {
-    let mut vm = new_storage_test_vm("https://frame-owner-content-accessors.test/");
+    let mut vm = new_storage_html_test_vm("https://frame-owner-content-accessors.test/");
 
     let result = vm
         .eval(

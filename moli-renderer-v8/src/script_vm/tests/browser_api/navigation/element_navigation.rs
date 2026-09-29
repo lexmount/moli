@@ -1008,10 +1008,8 @@ async fn form_target_blank_preserves_source_referrer_and_relations() {
                     globalThis.results = [];
                     globalThis.channel = new BroadcastChannel("form-popup-relations");
                     channel.onmessage = event => results.push(event.data);
-                    const html = document.createElement("html");
-                    const body = document.createElement("body");
-                    html.appendChild(body);
-                    document.appendChild(html);
+                    const html = document.documentElement || document.appendChild(document.createElement("html"));
+                    const body = document.body || html.appendChild(document.createElement("body"));
                     if ({child_document}) {{
                       globalThis.frame = document.createElement("iframe");
                       frame.src = {child_url:?};
@@ -1127,10 +1125,8 @@ async fn popup_navigation_applies_referrer_policy_and_link_overrides() {
             r#"
             globalThis.results = [];
             onmessage = event => results.push(event.data);
-            const html = document.createElement("html");
-            const body = document.createElement("body");
-            html.appendChild(body);
-            document.appendChild(html);
+            const html = document.documentElement || document.appendChild(document.createElement("html"));
+            const body = document.body || html.appendChild(document.createElement("body"));
             const element = document.createElement({tag:?});
             element.target = "_blank";
             element.rel = "opener";

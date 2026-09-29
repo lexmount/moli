@@ -1605,7 +1605,7 @@ fn location_ancestor_origins_is_a_stable_document_list_with_a_detached_empty_lis
 
 #[test]
 fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
-    let mut vm = new_storage_test_vm("https://ancestor-policy.test/page.html");
+    let mut vm = new_storage_html_test_vm("https://ancestor-policy.test/page.html");
 
     let initial = vm
         .eval(

@@ -2137,7 +2137,7 @@ fn child_parser_checkpoints_once_before_adoption_agency_custom_element_construct
 
 #[test]
 fn child_document_write_constructs_and_connects_predefined_custom_elements_without_a_body() {
-    let mut vm = new_storage_test_vm("https://document-write-custom-elements.test/");
+    let mut vm = new_storage_html_test_vm("https://document-write-custom-elements.test/");
 
     vm.eval(
         r#"
