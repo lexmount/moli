@@ -21,6 +21,7 @@ pub(super) struct TreeMutationSourceProfile {
     pub(super) source: TreeMutationSideEffectSource,
     pub(super) reaction_policy: TreeReactionDispatchPolicy,
     pub(super) nonce_policy: TreeNoncePolicy,
+    pub(super) preserve_connection: bool,
     pub(super) upgrade_connected_subtrees: bool,
     pub(super) queue_parser_details_toggle_events: bool,
     pub(super) queue_resource_followups: bool,
@@ -55,6 +56,7 @@ impl TreeMutationSourceProfile {
             source: TreeMutationSideEffectSource::JsDomApi,
             reaction_policy,
             nonce_policy,
+            preserve_connection: false,
             upgrade_connected_subtrees: true,
             queue_parser_details_toggle_events: false,
             queue_resource_followups: true,
@@ -74,6 +76,7 @@ impl TreeMutationSourceProfile {
             source: TreeMutationSideEffectSource::ParserTreeSink,
             reaction_policy: TreeReactionDispatchPolicy::AppendToCurrentQueue,
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
+            preserve_connection: true,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
             queue_resource_followups: true,
@@ -88,11 +91,14 @@ impl TreeMutationSourceProfile {
         )
     }
 
-    pub(super) fn js_dom_api_preserving_nonce_appending_to_current_reaction_queue() -> Self {
-        Self::js_dom_api_with(
-            TreeReactionDispatchPolicy::AppendToCurrentQueue,
-            TreeNoncePolicy::PreserveInsertedContentAttributes,
-        )
+    pub(super) fn js_dom_move_appending_to_current_reaction_queue() -> Self {
+        Self {
+            preserve_connection: true,
+            ..Self::js_dom_api_with(
+                TreeReactionDispatchPolicy::AppendToCurrentQueue,
+                TreeNoncePolicy::PreserveInsertedContentAttributes,
+            )
+        }
     }
 
     pub(super) fn html_fragment_insertion_appending_to_current_reaction_queue() -> Self {
@@ -100,6 +106,7 @@ impl TreeMutationSourceProfile {
             source: TreeMutationSideEffectSource::JsDomApi,
             reaction_policy: TreeReactionDispatchPolicy::AppendToCurrentQueue,
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
+            preserve_connection: false,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
             queue_resource_followups: true,

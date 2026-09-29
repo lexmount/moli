@@ -8,7 +8,8 @@ mod fragment;
 mod parent_node;
 
 pub(in crate::native_bridge) use child_node::{
-    node_after_callback, node_before_callback, node_remove_callback, node_replace_with_callback,
+    ChildNodeMutation, mutate_child_node, node_after_callback, node_before_callback,
+    node_remove_callback, node_replace_with_callback,
 };
 pub(crate) use core::validate_pre_insert_handles;
 pub(in crate::native_bridge) use core::{

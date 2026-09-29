@@ -1,6 +1,6 @@
+use super::fragment::{convert_node_or_string_arguments, convert_nodes_into_node};
 use super::*;
-use crate::{custom_elements, util::v8_value_to_dom_string_u16};
-use widestring::U16String;
+use crate::custom_elements;
 
 #[derive(Clone, Copy)]
 pub(in crate::native_bridge) enum ParentNodeMutation {
@@ -17,11 +17,6 @@ impl ParentNodeMutation {
             Self::ReplaceChildren => "replaceChildren",
         }
     }
-}
-
-enum NodeOrString<'s> {
-    Node(v8::Local<'s, v8::Value>),
-    String(U16String),
 }
 
 pub(in crate::native_bridge) fn node_append_callback<'s>(
@@ -81,21 +76,9 @@ pub(in crate::native_bridge) fn mutate_parent_node<'s>(
     ) {
         return;
     }
-    // Web IDL converts every (Node or DOMString) argument before the DOM
-    // algorithm runs, including strings after a node that will fail insertion.
-    let mut inputs = Vec::with_capacity(values.len());
-    for &value in values {
-        if v8::Local::<v8::Object>::try_from(value)
-            .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
-        {
-            inputs.push(NodeOrString::Node(value));
-        } else {
-            let Some(value) = v8_value_to_dom_string_u16(scope, value, false) else {
-                return;
-            };
-            inputs.push(NodeOrString::String(value));
-        }
-    }
+    let Some(inputs) = convert_node_or_string_arguments(scope, values) else {
+        return;
+    };
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let document = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
         let Some(node) = convert_nodes_into_node(scope, runtime_ptr, document, inputs) else {
@@ -147,60 +130,4 @@ pub(in crate::native_bridge) fn mutate_parent_node<'s>(
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         }
     });
-}
-
-fn converted_input_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document: Option<DomHandle>,
-    input: NodeOrString<'_>,
-) -> Option<DomHandle> {
-    match input {
-        NodeOrString::Node(value) => {
-            if !crate::native_bridge::document::is_attr_node_value(scope, value)
-                && let Some(handle) =
-                    node_or_foreign_arg_handle_allow_detached(scope, runtime_ptr, document, value)
-            {
-                return Some(handle);
-            }
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            None
-        }
-        NodeOrString::String(value) => {
-            Some(unsafe { &mut *runtime_ptr }.create_text_node_from_utf16_units(document, value))
-        }
-    }
-}
-
-fn convert_nodes_into_node(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document: Option<DomHandle>,
-    mut inputs: Vec<NodeOrString<'_>>,
-) -> Option<DomHandle> {
-    if inputs.len() == 1 {
-        return converted_input_handle(scope, runtime_ptr, document, inputs.pop()?);
-    }
-    let runtime = unsafe { &mut *runtime_ptr };
-    let fragment = match document {
-        Some(document) => runtime.create_document_fragment_for_document(document),
-        None => runtime.create_document_fragment(),
-    };
-    for input in inputs {
-        let child = converted_input_handle(scope, runtime_ptr, document, input)?;
-        if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, fragment, child, None, &[])
-        {
-            return None;
-        }
-        if !unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            fragment,
-            child,
-        ) {
-            throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
-            return None;
-        }
-    }
-    Some(fragment)
 }
