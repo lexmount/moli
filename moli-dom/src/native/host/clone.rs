@@ -169,14 +169,21 @@ impl DomHost {
         self.node(document_handle)
             .is_some_and(Node::is_document)
             .then_some(())?;
-        self.node(handle).filter(|node| !node.is_document())?;
+        let node = self.node(handle).filter(|node| !node.is_document())?;
+        if node.owner_document() == Some(document_handle) {
+            return Some((handle, Vec::new()));
+        }
+        // Adoption changes ownership. Removal and insertion own connection
+        // changes; a ShadowRoot has no parent to remove and can remain live.
+        let connected = node.flags().connected();
+        let in_document_tree = node.flags().in_document_tree();
         let owners = self
             .dom
             .mark_subtree_tree_scope_collecting_stylesheet_owners(
                 handle,
                 Some(document_handle),
-                false,
-                false,
+                connected,
+                in_document_tree,
             );
         let owner_changes = owners
             .into_iter()

@@ -54,6 +54,16 @@ async fn document_preinsert_validation_precedes_mutation_and_adoption() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn node_replacement_preserves_records_adoption_and_live_state() {
+    let mut vm = observer_callback_test_vm("https://node-replacement.test/").await;
+    assert_eq!(
+        vm.eval(include_str!("node_replacement.js"))
+            .expect("Node replacement must preserve records, adoption and live state"),
+        "true"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn windowless_fragment_insertions_preserve_native_mutation_records() {
     let mut vm = observer_callback_test_vm("https://windowless-fragments.test/").await;
     assert_eq!(
