@@ -1,6 +1,7 @@
 use super::*;
 
 pub(in crate::native_bridge) use attr_object::AttrReference;
+pub(crate) use attr_object::install_attr_prototype;
 
 mod attr_object;
 mod attribute_node;
