@@ -48,13 +48,6 @@ impl DocumentRuntime {
         run_post_connection_steps: bool,
         prepublished_removals: Vec<super::devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> bool {
-        if effects.did_change() && !options.dispatch_atomic_move_callbacks {
-            self.discard_child_contexts_before_reinsertion_followups(
-                scope,
-                host_ptr,
-                insertion_plan,
-            );
-        }
         if !run_post_connection_steps
             || !insertion_plan.requires_interleaved_post_connection_steps()
         {
@@ -463,11 +456,11 @@ impl DocumentRuntime {
             }
         }
 
-        self.replace_all_children_with_node_appending_to_current_reaction_queue(
+        self.replace_all_children_appending_to_current_reaction_queue(
             scope,
             host_ptr,
             selectedcontent,
-            fragment,
+            Some(fragment),
             false,
         )
     }

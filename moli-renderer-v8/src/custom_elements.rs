@@ -85,13 +85,10 @@ pub(crate) use attribute_lifecycle::{
 };
 pub(crate) use connected_lifecycle::{
     enqueue_connected_callback, enqueue_connected_move_callback, enqueue_disconnected_callback,
-    enqueue_disconnected_callback_unless_pending,
 };
 pub(crate) use connected_subtree_lifecycle::enqueue_connected_and_form_callbacks_for_already_upgraded_subtrees;
 mod disconnected_subtree_lifecycle;
-pub(crate) use disconnected_subtree_lifecycle::{
-    dispatch_disconnected_callbacks_for_subtree, enqueue_disconnected_callbacks_for_subtree,
-};
+pub(crate) use disconnected_subtree_lifecycle::enqueue_disconnected_callbacks_for_subtree;
 pub(crate) use lifecycle::call_lifecycle_callback;
 mod parser_handoff;
 mod parser_handoff_attributes;
