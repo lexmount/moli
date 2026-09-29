@@ -153,7 +153,9 @@ pub struct DomMutationRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomMutationRecordKind {
     Attributes(DomAttributeMutation),
-    CharacterData { old_value: Option<String> },
+    CharacterData {
+        old_value: Option<crate::native::DomStringValue>,
+    },
     ChildList(DomChildListMutation),
 }
 
@@ -188,7 +190,7 @@ impl DomMutationEffects {
     pub(in crate::native::host::mutation) fn mark_character_data_mutation(
         &mut self,
         target: DomHandle,
-        old_value: Option<String>,
+        old_value: Option<crate::native::DomStringValue>,
     ) {
         self.push_mutation_record(DomMutationRecord {
             target,
@@ -196,7 +198,11 @@ impl DomMutationEffects {
         });
     }
 
-    pub fn queue_character_data_mutation(&mut self, target: DomHandle, old_value: Option<String>) {
+    pub fn queue_character_data_mutation(
+        &mut self,
+        target: DomHandle,
+        old_value: Option<crate::native::DomStringValue>,
+    ) {
         self.mark_character_data_mutation(target, old_value);
     }
 

@@ -5,14 +5,6 @@ use crate::{
 
 use super::*;
 
-pub(super) fn character_data_string(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
-    runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::node_value)
-        .map(str::to_owned)
-}
-
 pub(super) fn character_data_utf16_units(
     runtime: &JsContextHost,
     handle: DomHandle,

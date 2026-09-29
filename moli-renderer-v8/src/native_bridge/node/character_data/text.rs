@@ -1,9 +1,8 @@
 use super::helpers::{
-    character_data_string, character_data_utf16_units, require_argument_count,
-    utf16_index_value_or_throw,
+    character_data_utf16_units, require_argument_count, utf16_index_value_or_throw,
 };
 use super::*;
-use crate::{native_bridge::document, util::utf16_len, webidl};
+use crate::{native_bridge::document, webidl};
 use moli_dom::native::NodeType;
 
 pub(in crate::native_bridge) fn node_whole_text_utf16_units_from_object<'s>(
@@ -69,14 +68,14 @@ pub(in crate::native_bridge) fn node_split_text_callback<'s>(
         );
         return;
     }
-    let Some(data) = character_data_string(runtime, handle) else {
+    let Some(data) = character_data_utf16_units(runtime, handle) else {
         rv.set_undefined();
         return;
     };
     let Some(offset) = utf16_index_value_or_throw(
         scope,
         args.get(0),
-        utf16_len(&data),
+        data.len(),
         webidl::Context::argument("Text", 1),
     ) else {
         return;
