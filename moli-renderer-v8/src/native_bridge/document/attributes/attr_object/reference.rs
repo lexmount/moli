@@ -9,12 +9,51 @@ use crate::util::{v8_string_from_utf16_units, v8_string_to_u16_string};
 /// live in the existing private Attr state.
 pub(in crate::native_bridge) struct AttrReference<'s> {
     pub object: v8::Local<'s, v8::Object>,
-    state: v8::Local<'s, v8::Object>,
+    pub(super) state: v8::Local<'s, v8::Object>,
     pub namespace: Option<String>,
     pub local_name: String,
 }
 
 impl<'s> AttrReference<'s> {
+    pub fn metadata(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        name: &'static str,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        self.state.get(scope, v8str(scope, name).into())
+    }
+
+    pub fn name(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<String> {
+        object_string_property(scope, self.state, "name")
+    }
+
+    pub fn prefix(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<String> {
+        nullable_state_string(scope, self.state, "prefix")
+    }
+
+    pub fn child_nodes(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        const SLOT: &str = "__moliAttrChildNodes";
+        if let Some(list) = get_private_object(scope, self.object, SLOT) {
+            return Some(list);
+        }
+        let context = self.object.get_creation_context(scope)?;
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+        // Attr never acquires children. A cached empty native NodeList remains
+        // live and satisfies SameObject across calls from different realms.
+        let list = collections::build_collection_wrapper(
+            scope,
+            runtime_ptr,
+            &[],
+            CollectionKind::NodeList,
+        );
+        set_private_value(scope, self.object, SLOT, list.into());
+        Some(list)
+    }
+
     pub fn from_object(
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
