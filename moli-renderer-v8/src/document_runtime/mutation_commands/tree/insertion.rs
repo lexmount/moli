@@ -294,7 +294,7 @@ impl DocumentRuntime {
             false,
             true,
             ConnectedScriptMutationPolicy::DoNotPrepare,
-            TreeMutationSourceProfile::js_dom_api_preserving_nonce_appending_to_current_reaction_queue(),
+            TreeMutationSourceProfile::js_dom_move_appending_to_current_reaction_queue(),
         )
     }
 
