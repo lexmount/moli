@@ -149,6 +149,7 @@ impl DocumentRuntime {
         let added = fragment_children
             .as_deref()
             .unwrap_or_else(|| std::slice::from_ref(&new_child));
+        let previous_sibling = self.dom_host.node(old_child).and_then(Node::prev_sibling);
         // Replace adopts an attached input before removing oldChild. Fragment
         // children are removed later, as part of insertion. Both phases use
         // ordinary removal, retaining their actual form and lifecycle states.
@@ -164,7 +165,19 @@ impl DocumentRuntime {
         {
             return false;
         }
-        let previous_sibling = self.dom_host.node(old_child).and_then(Node::prev_sibling);
+        let Some(document) = self.dom_host.owner_document_handle(parent) else {
+            return false;
+        };
+        // Replace adopts its input before removing oldChild, including the
+        // fragment itself. Ordinary insertion only adopts fragment children.
+        if self
+            .adopt_native_node_appending_to_current_reaction_queue(
+                scope, host_ptr, document, new_child,
+            )
+            .is_none()
+        {
+            return false;
+        }
         let replacement_profile = source_profile.suppressing_observers();
         if !self.remove_child_with_source_profile(
             scope,
