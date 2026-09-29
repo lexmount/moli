@@ -952,8 +952,8 @@ async fn removing_popover_attribute_cancels_pending_toggle_event() {
             (() => {
               const popover = document.createElement("div");
               popover.popover = "auto";
-              const html = document.appendChild(document.createElement("html"));
-              html.appendChild(document.createElement("body")).appendChild(popover);
+              const html = document.documentElement || document.appendChild(document.createElement("html"));
+              (document.body || html.appendChild(document.createElement("body"))).appendChild(popover);
               globalThis.__lmPopoverAttributeRemovalEvents = [];
               for (const type of ["beforetoggle", "toggle"]) {
                 popover.addEventListener(type, event => {

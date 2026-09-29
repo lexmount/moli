@@ -1838,7 +1838,7 @@ fn pop_state_event_constructor_converts_visual_transition_and_state_members() {
 
 #[test]
 fn listener_exception_reporting_preserves_outer_realm_window_event() {
-    let mut vm = new_storage_test_vm("https://event-listener-nested-window-event.test/");
+    let mut vm = new_storage_html_test_vm("https://event-listener-nested-window-event.test/");
 
     vm.eval(
         r#"
@@ -1894,7 +1894,7 @@ fn listener_exception_reporting_preserves_outer_realm_window_event() {
 
 #[test]
 fn cross_realm_window_event_getters_preserve_nested_handler_events() {
-    let mut vm = new_storage_test_vm("https://nested-handler-window-event.test/");
+    let mut vm = new_storage_html_test_vm("https://nested-handler-window-event.test/");
 
     vm.eval(
         r#"
