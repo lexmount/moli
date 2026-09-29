@@ -1,6 +1,5 @@
 use super::super::{
-    ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest,
-    ChildBrowsingContextSnapshot, JsContextHost,
+    ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost,
     child_documents::{ChildDocumentCommitResult, ChildDocumentCommitState},
 };
 use crate::native_bridge::context_host::child_documents::ChildDocumentNavigationInitiator;
@@ -262,35 +261,6 @@ impl JsContextHost {
             return false;
         }
         self.register_reserved_service_worker_child_client_for_navigation(handle, url);
-        self.queue_child_browsing_context_navigation_commit(handle)
-    }
-
-    pub(in crate::native_bridge::context_host) fn queue_child_browsing_context_navigation_request(
-        &mut self,
-        handle: DomHandle,
-        request: ChildBrowsingContextNavigationRequest,
-    ) -> bool {
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        self.reject_replaced_service_worker_child_client_navigation(
-            handle,
-            "The navigation was canceled.".to_owned(),
-        );
-        let document_url = request.url.clone();
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Request(request),
-                None,
-                true,
-                None,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &document_url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
