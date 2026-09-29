@@ -169,7 +169,7 @@ impl RangeRecordRegistry {
         ids.into_iter().collect()
     }
 
-    fn live_record_ids_for_text_split(
+    fn live_record_ids_for_text_boundary_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         dom_host: &crate::dom::native::DomHost,
@@ -432,6 +432,27 @@ impl RangeRecordRegistry {
             let before = record.boundary_index_keys();
             record.for_each_boundary_mut(|boundary| {
                 boundary.update_for_text_split(dom_host, original, new_text, offset);
+            });
+            let after = record.boundary_index_keys();
+            self.reindex_record_boundaries_if_changed(*id, before, after);
+        }
+    }
+
+    fn update_for_text_merge(
+        &mut self,
+        dom_host: &crate::dom::native::DomHost,
+        ids: &[RangeRecordId],
+        target: DomHandle,
+        removed_text: DomHandle,
+        offset: u32,
+    ) {
+        for id in ids {
+            let Some(record) = self.records.get_mut(id) else {
+                continue;
+            };
+            let before = record.boundary_index_keys();
+            record.for_each_boundary_mut(|boundary| {
+                boundary.update_for_text_merge(dom_host, target, removed_text, offset);
             });
             let after = record.boundary_index_keys();
             self.reindex_record_boundaries_if_changed(*id, before, after);
@@ -785,7 +806,7 @@ impl JsContextHost {
             .update_composed_for_text_split(dom_host, original, new_text, offset);
         let ids = self
             .range_record_registry
-            .live_record_ids_for_text_split(scope, dom_host, original);
+            .live_record_ids_for_text_boundary_change(scope, dom_host, original);
         if ids.is_empty() {
             return;
         }
@@ -794,6 +815,37 @@ impl JsContextHost {
             .linked_range_boundaries(dom_host, &self.range_record_registry);
         self.range_record_registry
             .update_for_text_split(dom_host, &ids, original, new_text, offset);
+        self.selection_record_registry
+            .sync_linked_range_boundaries(&self.range_record_registry, selection_links);
+    }
+
+    pub(crate) fn update_live_range_records_for_text_merge(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: DomHandle,
+        removed_text: DomHandle,
+        offset: u32,
+    ) {
+        self.update_sequential_focus_starting_points_for_text_merge(target, removed_text, offset);
+        let dom_host = unsafe { &*self.runtime }.dom_host();
+        self.selection_record_registry
+            .update_composed_for_text_merge(dom_host, target, removed_text, offset);
+        let ids = self
+            .range_record_registry
+            .live_record_ids_for_text_boundary_change(scope, dom_host, removed_text);
+        if ids.is_empty() {
+            return;
+        }
+        let selection_links = self
+            .selection_record_registry
+            .linked_range_boundaries(dom_host, &self.range_record_registry);
+        self.range_record_registry.update_for_text_merge(
+            dom_host,
+            &ids,
+            target,
+            removed_text,
+            offset,
+        );
         self.selection_record_registry
             .sync_linked_range_boundaries(&self.range_record_registry, selection_links);
     }

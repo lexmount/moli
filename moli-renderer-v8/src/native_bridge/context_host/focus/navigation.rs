@@ -47,6 +47,22 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn update_sequential_focus_starting_points_for_text_merge(
+        &mut self,
+        target: DomHandle,
+        removed_text: DomHandle,
+        offset: u32,
+    ) {
+        let dom = unsafe { &*self.runtime }.dom_host();
+        for state in self.document_focus_changes.values_mut() {
+            if let Some(SequentialFocusStartingPoint::Position(point)) =
+                &mut state.sequential_starting_point
+            {
+                point.update_for_text_merge(dom, target, removed_text, offset);
+            }
+        }
+    }
+
     pub(crate) fn update_sequential_focus_starting_points_for_child_removal(
         &mut self,
         parent: DomHandle,
