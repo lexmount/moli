@@ -85,6 +85,11 @@
             descriptor(realm, key).set.call(a, {toString() { conversions++; return 'A\ud83d\ude00\0\ud83d\ude03B'; }});
             return [units(a.value), units(attached ? e.getAttributeNS('urn:attribute', 'key') : a.cloneNode().value), conversions];
           });
+          check(prefix + '/lone-utf16-write', [[65, 55296, 0, 56320, 66], [65, 55296, 0, 56320, 66], 1], () => {
+            const [a, e] = make(doc, attached); let conversions = 0;
+            descriptor(realm, key).set.call(a, {toString() { conversions++; return 'A\ud800\0\udc00B'; }});
+            return [units(a.value), units(attached ? e.getAttributeNS('urn:attribute', 'key') : a.cloneNode().value), conversions];
+          });
         }
       }
     }
