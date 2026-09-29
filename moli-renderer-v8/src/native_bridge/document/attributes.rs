@@ -1,5 +1,7 @@
 use super::*;
 
+pub(in crate::native_bridge) use attr_object::AttrReference;
+
 mod attr_object;
 mod attribute_node;
 mod named_node_map;
