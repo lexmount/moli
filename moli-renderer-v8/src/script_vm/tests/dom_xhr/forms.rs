@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn detached_option_keeps_its_selection_after_individual_removal() {
+    let mut vm = new_parsed_test_vm(
+        "https://option-removal.test/",
+        "<select><option>first</option><option>second</option></select>",
+    );
+    let result = vm
+        .eval(
+            r#"
+            const select = document.querySelector("select");
+            const first = select.options[0];
+            const second = select.options[1];
+            select.removeChild(first);
+            const afterFirst = [first.selected, second.selected, select.value];
+            select.removeChild(second);
+            JSON.stringify([afterFirst, second.selected, select.value]);
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[[true,true,"second"],true,""]"#);
+}
+
 mod blob_download;
 mod dialog;
 mod event_activation;
