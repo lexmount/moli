@@ -102,6 +102,9 @@ impl<'s> AttrReference<'s> {
                 .and_then(|node| node.as_element())
         {
             let namespace = self.namespace.as_deref().unwrap_or_default();
+            if let Some(units) = element.attribute_ns_utf16_units(namespace, &self.local_name) {
+                return DomStringValue::from_utf16(units);
+            }
             if let Some(value) = element.attribute_ns(namespace, &self.local_name) {
                 return value.into();
             }

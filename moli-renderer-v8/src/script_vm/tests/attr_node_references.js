@@ -129,6 +129,13 @@
       units(Node.prototype.cloneNode.call(unicode).value), unicode.isEqualNode(unicode.cloneNode())]);
     const v = doc.createElement('div'); v.setAttribute('data-value', '\ud801\udc00');
     check(context + '/native-utf16-distinct', false, () => unicode.isEqualNode(v.getAttributeNode('data-value')));
+    const loneOwner = doc.createElement('div'); loneOwner.setAttribute('data-value', '\ud800');
+    const lone = loneOwner.getAttributeNode('data-value');
+    check(context + '/native-lone-utf16-read-clone', [[55296], [55296], [55296], [55296], true], () => [
+      units(lone.value), units(lone.nodeValue), units(lone.textContent),
+      units(Node.prototype.cloneNode.call(lone).value), lone.isEqualNode(lone.cloneNode())]);
+    const otherLone = doc.createElement('div'); otherLone.setAttribute('data-value', '\ud801');
+    check(context + '/native-lone-utf16-distinct', false, () => lone.isEqualNode(otherLone.getAttributeNode('data-value')));
     let reads = 0;
     const left = attribute(doc, 'urn:attribute', 'x:key', 'same'), right = attribute(doc, 'urn:attribute', 'y:key', 'same');
     for (const node of [left, right]) for (const key of ['nodeType', 'namespaceURI', 'localName', 'value', 'ownerElement'])
