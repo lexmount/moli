@@ -404,9 +404,13 @@ impl Node {
     }
 
     pub fn is_equal_node(&self, dom: &NativeDom, other: &Node) -> bool {
+        self.is_equal_node_in(dom, other, dom)
+    }
+
+    pub fn is_equal_node_in(&self, dom: &NativeDom, other: &Node, other_dom: &NativeDom) -> bool {
         let mut stack = vec![(self.id(), other.id())];
         while let Some((left_id, right_id)) = stack.pop() {
-            let (Some(left), Some(right)) = (dom.node(left_id), dom.node(right_id)) else {
+            let (Some(left), Some(right)) = (dom.node(left_id), other_dom.node(right_id)) else {
                 return false;
             };
             if !node_data_is_equal(left, right) {
@@ -420,7 +424,7 @@ impl Node {
                     (Some(left_child_id), Some(right_child_id)) => {
                         stack.push((left_child_id, right_child_id));
                         left_child = dom.node(left_child_id).and_then(Node::next_sibling);
-                        right_child = dom.node(right_child_id).and_then(Node::next_sibling);
+                        right_child = other_dom.node(right_child_id).and_then(Node::next_sibling);
                     }
                     (None, None) => break,
                     _ => return false,

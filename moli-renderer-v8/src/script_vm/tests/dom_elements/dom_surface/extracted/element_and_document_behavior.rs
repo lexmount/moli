@@ -1143,6 +1143,10 @@ fn attr_state_slot_ignores_reflection_and_spoofing() {
       localName: "fake"
     }
   };
+  const rejectsFakeReceiver = method => {
+    try { method.call(fake, "xml"); return false; }
+    catch (error) { return error instanceof TypeError; }
+  };
   return JSON.stringify({
     internalNamesBefore,
     liveName: live.name,
@@ -1154,8 +1158,8 @@ fn attr_state_slot_ignores_reflection_and_spoofing() {
     detachedPrefix: detached.prefix,
     detachedNamespace: detached.namespaceURI,
     detachedValue: detached.value,
-    fakeClone: live.cloneNode.call(fake),
-    fakeLookupNamespace: live.lookupNamespaceURI.call(fake, "xml"),
+    fakeCloneRejected: rejectsFakeReceiver(live.cloneNode),
+    fakeLookupNamespaceRejected: rejectsFakeReceiver(live.lookupNamespaceURI),
     fakeStateValue: fake.__moliAttrState.value
   });
 })()
@@ -1165,7 +1169,7 @@ fn attr_state_slot_ignores_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"internalNamesBefore":{"live":[],"detached":[]},"liveName":"data-real","liveValue":"after","elementValue":"after","spoofedOwnerValue":null,"detachedName":"lm:flag","detachedLocalName":"flag","detachedPrefix":"lm","detachedNamespace":"urn:moli:test","detachedValue":"real","fakeClone":null,"fakeLookupNamespace":null,"fakeStateValue":"fake"}"#
+        r#"{"internalNamesBefore":{"live":[],"detached":[]},"liveName":"data-real","liveValue":"after","elementValue":"after","spoofedOwnerValue":null,"detachedName":"lm:flag","detachedLocalName":"flag","detachedPrefix":"lm","detachedNamespace":"urn:moli:test","detachedValue":"real","fakeCloneRejected":true,"fakeLookupNamespaceRejected":true,"fakeStateValue":"fake"}"#
     );
 }
 #[test]
