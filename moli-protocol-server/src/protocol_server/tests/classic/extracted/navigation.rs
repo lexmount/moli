@@ -1,16 +1,20 @@
 use super::*;
 
 #[tokio::test]
-async fn webdriver_classic_text_children_preserve_parent_encoding_without_a_charset() {
+async fn webdriver_classic_text_children_respect_encoding_inheritance_and_data_origins() {
     const LITERAL: &str = "<meta charset=gbk>吴姓－姓氏渊源";
+    // An opaque data document cannot inherit the UTF-8 container's encoding.
+    // Its literal meta markup is text, so the default windows-1252 applies.
+    const DATA_LITERAL: &str = "<meta charset=gbk>å\u{90}´å§“ï¼\u{8d}å§“æ°\u{8f}æ¸Šæº\u{90}";
     let cases = [
-        ("ascii", "plain ASCII"),
-        ("utf8", "吴姓－姓氏渊源"),
-        ("literal", LITERAL),
-        ("data", LITERAL),
+        ("ascii", "plain ASCII", "UTF-8"),
+        ("utf8", "吴姓－姓氏渊源", "UTF-8"),
+        ("literal", LITERAL, "UTF-8"),
+        ("data", DATA_LITERAL, "windows-1252"),
+        ("data-utf8", LITERAL, "UTF-8"),
     ];
     let mut fixture = axum::Router::new();
-    for (name, payload) in cases {
+    for (name, payload, _) in cases {
         fixture = fixture.route(
             &format!("/{name}"),
             axum::routing::get(
@@ -22,9 +26,14 @@ async fn webdriver_classic_text_children_preserve_parent_encoding_without_a_char
         "/parent/{kind}",
         axum::routing::get(
             |axum::extract::Path(kind): axum::extract::Path<String>| async move {
-                let target = if kind == "data" {
+                let target = if matches!(kind.as_str(), "data" | "data-utf8") {
+                    let charset = if kind == "data-utf8" {
+                        ";charset=utf-8"
+                    } else {
+                        ""
+                    };
                     format!(
-                        "data:text/plain;base64,{}",
+                        "data:text/plain{charset};base64,{}",
                         base64::Engine::encode(&BASE64_STANDARD, LITERAL)
                     )
                 } else {
@@ -41,7 +50,7 @@ async fn webdriver_classic_text_children_preserve_parent_encoding_without_a_char
     let app = build_router(test_state());
     let session = classic_request_json(app.clone(), Method::POST, "/session").await;
     let session_id = session["value"]["sessionId"].as_str().unwrap();
-    for (name, payload) in cases {
+    for (name, payload, character_set) in cases {
         classic_request_json_with_body(
             app.clone(),
             Method::POST,
@@ -75,7 +84,7 @@ async fn webdriver_classic_text_children_preserve_parent_encoding_without_a_char
         ).await;
         assert_eq!(
             observed["value"],
-            json!([payload, "UTF-8", "text/plain"]),
+            json!([payload, character_set, "text/plain"]),
             "{name}"
         );
         classic_request_json_with_body(
