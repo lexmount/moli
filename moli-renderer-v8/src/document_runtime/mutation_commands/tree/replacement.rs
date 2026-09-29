@@ -18,43 +18,67 @@ struct TreeReplacementPlan<'a> {
 }
 
 impl DocumentRuntime {
-    /// Replace every child of `parent` with the children of `fragment` while
-    /// preserving the single DOM "replace all" mutation record.
-    ///
-    /// `existing_children` must be captured before constructing `fragment`:
-    /// ParentNode.replaceChildren() is allowed to move an existing child into
-    /// that fragment before the final splice.
-    pub(crate) fn replace_all_children_with_fragment_appending_to_current_reaction_queue(
+    /// DOM replace-all: conversion has already completed. Suppress only this
+    /// operation's intermediate target records, then queue one replacement.
+    pub(crate) fn replace_all_children_with_node_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
-        fragment: DomHandle,
-        existing_children: &[DomHandle],
+        node: DomHandle,
+        detached: bool,
     ) -> bool {
-        let added_children = self.dom_host.child_handles(fragment).collect::<Vec<_>>();
-        let records_enabled = self.dom_host.mutation_records_enabled();
-        let removes_existing_children = !existing_children.is_empty();
-        for child in existing_children {
-            let _ = self
-                .remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, *child);
-        }
-        let inserted_new_children = !added_children.is_empty()
-            && self.append_child_appending_to_current_reaction_queue(
-                scope, host_ptr, parent, fragment,
-            );
-        let changed = inserted_new_children || removes_existing_children;
-        if changed && records_enabled {
-            crate::observer_runtime::coalesce_child_list_replacement_records(
+        let removed = self.dom_host.child_handles(parent).collect::<Vec<_>>();
+        let added = self
+            .fragment_insertion_children(node)
+            .unwrap_or_else(|| vec![node]);
+        let source_profile =
+            TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue()
+                .suppressing_observers();
+        for &child in &removed {
+            if !self.remove_child_with_source_profile(
+                scope,
                 host_ptr,
                 parent,
-                &added_children,
-                existing_children,
+                child,
+                source_profile,
+            ) {
+                return false;
+            }
+        }
+        let inserted = if detached {
+            self.insert_detached_native_child_with_source_profile(
+                scope,
+                host_ptr,
+                parent,
+                node,
                 None,
+                source_profile,
+            )
+        } else {
+            self.insert_before_with_source_profile(
+                scope,
+                host_ptr,
+                parent,
+                node,
                 None,
+                source_profile,
+            )
+        };
+        if !inserted {
+            return false;
+        }
+        if self.dom_host.mutation_records_enabled() && (!removed.is_empty() || !added.is_empty()) {
+            let mut effects = crate::dom::native::DomMutationEffects::default();
+            effects.queue_child_list_mutation(parent, &added, &removed, None, None);
+            crate::observer_runtime::queue_mutation_records(
+                scope,
+                host_ptr,
+                &self.dom_host,
+                &effects,
             );
         }
-        changed
+        true
     }
 
     pub(crate) fn replace_child_appending_to_current_reaction_queue(
