@@ -20,25 +20,6 @@ pub(super) struct LiveRangePreInsertPlan {
 }
 
 impl DocumentRuntime {
-    fn prospective_child_index(
-        &self,
-        parent: DomHandle,
-        excluded_children: &HashSet<DomHandle>,
-        target: DomHandle,
-    ) -> Option<usize> {
-        let mut index = 0;
-        for candidate in self.dom_host.child_handles(parent) {
-            if excluded_children.contains(&candidate) {
-                continue;
-            }
-            if candidate == target {
-                return Some(index);
-            }
-            index += 1;
-        }
-        None
-    }
-
     fn prospective_child_index_and_count(
         &self,
         parent: DomHandle,
@@ -85,41 +66,6 @@ impl DocumentRuntime {
             removals,
             insertion_index,
         }
-    }
-
-    pub(super) fn live_range_replace_plan(
-        &self,
-        parent: DomHandle,
-        insertion_roots: &[DomHandle],
-        old_child: DomHandle,
-    ) -> Option<LiveRangePreInsertPlan> {
-        let old_index = self.dom_host.child_index(parent, old_child)? as u32;
-        let mut removals = vec![LiveRangeRemoval {
-            parent,
-            child: old_child,
-            index: old_index,
-            previous_sibling: self.dom_host.node(old_child).and_then(Node::prev_sibling),
-        }];
-        if insertion_roots != [old_child] {
-            removals.extend(insertion_roots.iter().filter_map(|child| {
-                let old_parent = self.dom_host.node(*child)?.parent_node()?;
-                let old_index = self.dom_host.child_index(old_parent, *child)? as u32;
-                Some(LiveRangeRemoval {
-                    parent: old_parent,
-                    child: *child,
-                    index: old_index,
-                    previous_sibling: self.dom_host.node(*child).and_then(Node::prev_sibling),
-                })
-            }));
-        }
-        let excluded_children = insertion_roots.iter().copied().collect::<HashSet<_>>();
-        let insertion_index = self
-            .prospective_child_index(parent, &excluded_children, old_child)
-            .unwrap_or(old_index as usize) as u32;
-        Some(LiveRangePreInsertPlan {
-            removals,
-            insertion_index,
-        })
     }
 
     pub(super) fn apply_live_range_pre_insert_plan(

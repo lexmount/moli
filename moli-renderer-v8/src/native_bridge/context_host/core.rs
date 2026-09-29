@@ -2373,10 +2373,6 @@ impl JsContextHost {
         &mut self.custom_element_reactions
     }
 
-    pub(crate) fn custom_element_reactions(&self) -> &CustomElementReactionCoordinator {
-        &self.custom_element_reactions
-    }
-
     pub(crate) fn enter_parser_pause(&mut self) -> crate::document_runtime::ParserPauseGuard {
         unsafe { &mut *self.runtime }.enter_parser_pause()
     }
@@ -2490,6 +2486,13 @@ impl JsContextHost {
                 self.custom_elements_mut_for_registry_key(key)
             }
         }
+    }
+
+    pub(crate) fn upgraded_custom_element_handles(&self) -> impl Iterator<Item = DomHandle> + '_ {
+        std::iter::once(&self.custom_elements)
+            .chain(self.child_custom_elements.values())
+            .chain(self.scoped_custom_elements.values())
+            .flat_map(CustomElementStore::upgraded_handles)
     }
 
     pub(crate) fn custom_elements_subtree_lifecycle_quiescent(&self) -> bool {

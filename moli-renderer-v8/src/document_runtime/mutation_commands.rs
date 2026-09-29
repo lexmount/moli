@@ -45,22 +45,26 @@ enum TextContentReactionPolicy {
     AppendToCurrentQueue,
 }
 
-struct DomDebuggerTreeInsertionEffects {
+struct TreeInsertionEffects {
     effects: DomMutationEffects,
     prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
 }
 
 impl DocumentRuntime {
-    fn tree_insertion_effects_with_dom_debugger(
+    fn tree_insertion_effects_for_roots(
         &mut self,
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         child: DomHandle,
         insertion_roots: &[DomHandle],
         reference_child: Option<DomHandle>,
-    ) -> Option<DomDebuggerTreeInsertionEffects> {
+    ) -> Option<TreeInsertionEffects> {
         let host = unsafe { &mut *host_ptr };
-        if !host.has_dom_debugger_dom_breakpoints() {
+        let is_fragment = self
+            .dom_host
+            .node(child)
+            .is_some_and(Node::is_document_fragment);
+        if !host.has_dom_debugger_dom_breakpoints() && !is_fragment {
             return None;
         }
 
@@ -70,7 +74,7 @@ impl DocumentRuntime {
         // while retaining the existing combined-effects fast path when no DOM
         // breakpoint is installed.
         if insertion_roots.is_empty() {
-            return Some(DomDebuggerTreeInsertionEffects {
+            return Some(TreeInsertionEffects {
                 effects: self.insert_before_effects_in_structural_scope(
                     parent,
                     child,
@@ -99,7 +103,7 @@ impl DocumentRuntime {
             &mut effects,
             &mut prepublished_removals,
         ) {
-            return Some(DomDebuggerTreeInsertionEffects {
+            return Some(TreeInsertionEffects {
                 effects,
                 prepublished_removals,
             });
@@ -110,7 +114,7 @@ impl DocumentRuntime {
             let inserted =
                 self.insert_before_effects_in_structural_scope(parent, root, reference_child);
             if !inserted.did_change() {
-                return Some(DomDebuggerTreeInsertionEffects {
+                return Some(TreeInsertionEffects {
                     effects,
                     prepublished_removals,
                 });
@@ -125,7 +129,7 @@ impl DocumentRuntime {
             &lifecycle_connected_before,
             &mut effects,
         );
-        Some(DomDebuggerTreeInsertionEffects {
+        Some(TreeInsertionEffects {
             effects,
             prepublished_removals,
         })
@@ -281,12 +285,42 @@ impl DocumentRuntime {
         value: &str,
         reaction_policy: TextContentReactionPolicy,
     ) -> bool {
+        if matches!(reaction_policy, TextContentReactionPolicy::DispatchNow) {
+            return custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                self.set_text_content_with_reaction_policy(
+                    scope,
+                    host_ptr,
+                    handle,
+                    value,
+                    TextContentReactionPolicy::AppendToCurrentQueue,
+                )
+            });
+        }
         let started = dom_binding_timing_started();
-        let mut break_after_character_data_change = false;
-        let mut prepublished_removals = Vec::new();
-        if unsafe { &*host_ptr }.has_dom_debugger_dom_breakpoints() {
-            let node_type = self.dom_host.node(handle).map(Node::node_type);
-            if node_type.is_some_and(|node_type| {
+        let node_type = self.dom_host.node(handle).map(Node::node_type);
+        if node_type.is_some_and(|node_type| {
+            matches!(node_type, NodeType::Element | NodeType::DocumentFragment)
+        }) {
+            let node = if value.is_empty() {
+                if self.dom_host.first_child(handle).is_none() {
+                    return false;
+                }
+                None
+            } else {
+                let Some(document) = self.dom_host.owner_document_handle(handle) else {
+                    return false;
+                };
+                Some(self.create_text_node_for_document(document, value))
+            };
+            let changed = self.replace_all_children_appending_to_current_reaction_queue(
+                scope, host_ptr, handle, node, false,
+            );
+            record_dom_binding_timing("dom.setTextContent", started);
+            return changed;
+        }
+        let break_after_character_data_change = unsafe { &*host_ptr }
+            .has_dom_debugger_dom_breakpoints()
+            && node_type.is_some_and(|node_type| {
                 matches!(
                     node_type,
                     NodeType::Text
@@ -294,70 +328,18 @@ impl DocumentRuntime {
                         | NodeType::ProcessingInstruction
                         | NodeType::Comment
                 )
-            }) {
-                break_after_character_data_change =
-                    self.dom_host.node(handle).and_then(Node::node_value) != Some(value);
-            } else if node_type.is_some_and(|node_type| {
-                matches!(node_type, NodeType::Element | NodeType::DocumentFragment)
-            }) {
-                let children = self.dom_host.child_handles(handle).collect::<Vec<_>>();
-                for child in children {
-                    prepublished_removals.extend(
-                        self.break_on_dom_debugger_before_tree_removal(host_ptr, handle, child),
-                    );
-                }
-                if !value.is_empty() {
-                    unsafe { &mut *host_ptr }.break_on_dom_debugger_will_insert_dom_node(handle);
-                }
-            }
-        }
-        let disconnected_lifecycle_roots = self
-            .dom_host
-            .child_handles(handle)
-            .filter(|child| {
-                self.dom_host.is_connected(*child)
-                    || custom_elements::is_shadow_including_rooted_in_document(
-                        &self.dom_host,
-                        *child,
-                    )
             })
-            .collect::<Vec<_>>();
+            && self.dom_host.node(handle).and_then(Node::node_value) != Some(value);
         let effects = self.dom_host.set_text_content_effects(handle, value);
         if break_after_character_data_change && effects.did_change() {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);
         }
-        let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
+        let changed = self.apply_runtime_mutation_effects(
             scope,
             host_ptr,
             effects,
             RuntimeMutationOptions::js_dom_api(),
-            prepublished_removals,
         );
-        if changed {
-            for root in disconnected_lifecycle_roots {
-                if self.dom_host.is_connected(root)
-                    || custom_elements::is_shadow_including_rooted_in_document(&self.dom_host, root)
-                {
-                    continue;
-                }
-                unsafe { &mut *host_ptr }.mark_disconnected_shadow_roots_in_subtree(root);
-                match reaction_policy {
-                    TextContentReactionPolicy::DispatchNow => {
-                        custom_elements::dispatch_disconnected_callbacks_for_subtree(
-                            scope, host_ptr, root,
-                        );
-                    }
-                    TextContentReactionPolicy::AppendToCurrentQueue => {
-                        custom_elements::enqueue_disconnected_callbacks_for_subtree(
-                            scope, host_ptr, root,
-                        );
-                    }
-                }
-                JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
-                    scope, host_ptr, root,
-                );
-            }
-        }
         record_dom_binding_timing("dom.setTextContent", started);
         changed
     }
