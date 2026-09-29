@@ -1,5 +1,7 @@
 use super::*;
-use crate::native_bridge::node::{ParentNodeMutation, mutate_parent_node};
+use crate::native_bridge::node::{
+    ChildNodeMutation, ParentNodeMutation, mutate_child_node, mutate_parent_node,
+};
 
 fn detached_insert_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -331,6 +333,25 @@ pub(in crate::native_bridge) fn bridge_detached_replace_children_callback<'a>(
     });
 }
 
+fn mutate_native_detached_child<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    target: v8::Local<'s, v8::Object>,
+    mutation: ChildNodeMutation,
+) -> bool {
+    let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, target) else {
+        return false;
+    };
+    let values = (1..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    mutate_child_node(scope, runtime_ptr, handle, mutation, &values, true);
+    true
+}
+
 fn detached_fragment_from_child_mutation_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -351,6 +372,9 @@ pub(in crate::native_bridge) fn bridge_detached_before_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    if mutate_native_detached_child(scope, &args, target, ChildNodeMutation::Before) {
+        return;
+    }
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };
@@ -372,6 +396,9 @@ pub(in crate::native_bridge) fn bridge_detached_after_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    if mutate_native_detached_child(scope, &args, target, ChildNodeMutation::After) {
+        return;
+    }
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };
@@ -394,6 +421,9 @@ pub(in crate::native_bridge) fn bridge_detached_replace_with_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    if mutate_native_detached_child(scope, &args, target, ChildNodeMutation::ReplaceWith) {
+        return;
+    }
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };

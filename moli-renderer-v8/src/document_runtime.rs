@@ -1147,17 +1147,6 @@ impl DocumentRuntime {
     }
 
     #[track_caller]
-    fn replace_child_with_self_effects_in_structural_scope(
-        &mut self,
-        parent: DomHandle,
-        old_child: DomHandle,
-    ) -> DomMutationEffects {
-        let _guard = self.enter_structural_mutation();
-        self.dom_host
-            .replace_child_with_self_effects(parent, old_child)
-    }
-
-    #[track_caller]
     fn parser_append_child_effects_in_structural_scope(
         &mut self,
         parent: DomHandle,
