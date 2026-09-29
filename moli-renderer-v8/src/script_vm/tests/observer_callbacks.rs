@@ -998,3 +998,43 @@ fn xml_serializer_ordinary_xmlns_preserves_native_attribute_namespace_identity()
     );
     assert_eq!(vm.eval("__ordinaryXmlnsChecks.length").unwrap(), "324");
 }
+
+#[test]
+fn replace_child_adopts_the_foreign_fragment_itself() {
+    let mut vm = new_storage_html_test_vm("https://replace-fragment.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument('');
+  for (const owner of [document, document.implementation.createHTMLDocument('')]) {
+    const parent = owner.createElement('main');
+    owner.body.append(parent);
+    const old = owner.createElement('p');
+    parent.append(old);
+    const fragment = source.createDocumentFragment();
+    const replacement = source.createElement('span');
+    fragment.append(replacement);
+
+    let error;
+    try { parent.replaceChild(fragment, owner.createElement('aside')); }
+    catch (caught) { error = caught.name; }
+    if (error !== 'NotFoundError' || fragment.ownerDocument !== source ||
+        replacement.parentNode !== fragment) {
+      throw Error('failed replacement must preserve the input fragment');
+    }
+
+    if (parent.replaceChild(fragment, old) !== old || old.parentNode !== null ||
+        parent.firstChild !== replacement || replacement.ownerDocument !== owner ||
+        fragment.ownerDocument !== owner || fragment.hasChildNodes()) {
+      throw Error('replacement must adopt its input and insert the fragment children');
+    }
+  }
+  return true;
+})()
+"#
+        )
+        .unwrap(),
+        "true"
+    );
+}
