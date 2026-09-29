@@ -161,6 +161,38 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         let nested_visibility = page.render_page_dump(options(false));
         assert!(nested_visibility.contains("Full disclosure body"), "{nested_visibility}");
         assert!(!nested_visibility.contains("Nested hidden duplicate"), "{nested_visibility}");
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>.nested-hidden{visibility:hidden}.forced-baseline{vertical-align:baseline!important}</style>';
+            document.body.innerHTML = `
+                <button aria-expanded="false" aria-controls="styled-panel">Styled panel</button>
+                <section id="styled-panel" style="visibility:hidden">Styled disclosure<div class="nested-hidden">Stylesheet hidden duplicate</div></section>
+                <p>Account <span class="forced-baseline" style="vertical-align:super">settings</span></p>`;
+        "#).unwrap();
+        let cascaded_visibility = page.render_page_dump(options(false));
+        assert!(cascaded_visibility.contains("Styled disclosure"), "{cascaded_visibility}");
+        assert!(!cascaded_visibility.contains("Stylesheet hidden duplicate"), "{cascaded_visibility}");
+        assert!(cascaded_visibility.contains("Account settings"), "{cascaded_visibility}");
+        assert!(!cascaded_visibility.contains("<sup>settings</sup>"), "{cascaded_visibility}");
+        page.vm_mut().eval(r#"
+            document.body.style.visibility = 'hidden';
+            document.body.innerHTML = '<main>Root veil text<div class="nested-hidden">Root stylesheet hidden duplicate</div></main>';
+        "#).unwrap();
+        let cascaded_root_visibility = page.render_page_dump(options(false));
+        assert!(cascaded_root_visibility.contains("Root veil text"), "{cascaded_root_visibility}");
+        assert!(!cascaded_root_visibility.contains("Root stylesheet hidden duplicate"), "{cascaded_root_visibility}");
+        page.vm_mut().eval(r#"
+            document.body.style.visibility = '';
+            document.head.innerHTML = '<style>@keyframes state{to{opacity:0}}@media (min-width:999999px){@keyframes state{to{opacity:1}}}</style>';
+            document.body.innerHTML = '<p>Count <span style="opacity:0;animation:state 1s forwards">99</span>2</p>';
+        "#).unwrap();
+        let inactive_keyframes = page.render_page_dump(options(false));
+        assert!(inactive_keyframes.contains("Count 2"), "{inactive_keyframes}");
+        assert!(!inactive_keyframes.contains("Count 992"), "{inactive_keyframes}");
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>@keyframes state{to{opacity:0}}@media (min-width:1px){@keyframes state{to{opacity:1}}}</style>';
+        "#).unwrap();
+        let active_keyframes = page.render_page_dump(options(false));
+        assert!(active_keyframes.contains("Count 992"), "{active_keyframes}");
         page.vm_mut().eval(r##"
             document.body.innerHTML = `
                 <button onclick="console.log('tracking')">Save</button>
@@ -175,6 +207,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="history" style="display:none">Query-selected history</section>
                 <button onclick="return revealElement(document.getElementById('records'))">Records</button>
                 <section id="records" style="display:none">Function-revealed records</section>
+                <span class="hovl"><a href="#" onclick="return showPageElement(document.getElementById('results'))">+</a> <a href="#" onclick="return hidePageElement(document.getElementById('results'))">-</a></span><span id="results" style="display:none">Paired expandable results</span>
                 <button onclick="if(false) document.getElementById('unreachable').style.display='block'">Never</button>
                 <section id="unreachable" style="display:none">Unreachable hidden state</section>
                 <button onclick="showNext(document.getElementById('anchor'))">Next</button>
@@ -192,6 +225,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!related.contains("Hidden commented state"), "{related}");
         assert!(!related.contains("Query-selected history"), "{related}");
         assert!(!related.contains("Function-revealed records"), "{related}");
+        assert!(related.contains("Paired expandable results"), "{related}");
         assert!(!related.contains("Unreachable hidden state"), "{related}");
         assert!(!related.contains("Hidden anchor metadata"), "{related}");
         assert!(!related.contains("Actual next disclosure"), "{related}");

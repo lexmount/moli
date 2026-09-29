@@ -63,7 +63,7 @@ impl PageVm {
                 .vm()
                 .computed_style_property_values_for_document_snapshot(
                     span_nodes.iter().copied(),
-                    &["bottom".to_owned(), "vertical-align".to_owned()],
+                    &["bottom".to_owned(), "baseline-shift".to_owned()],
                 );
             let spans: HashMap<_, _> = span_nodes.into_iter().zip(span_values).collect();
             let image_values = self
@@ -95,6 +95,14 @@ impl PageVm {
                         "animation-play-state".to_owned(),
                     ],
                 );
+            let own_visibility_values = self
+                .vm()
+                .computed_style_own_inherited_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    "visibility",
+                );
+            let own_visibility: HashMap<_, _> =
+                nodes.iter().copied().zip(own_visibility_values).collect();
             let styles = nodes
                 .into_iter()
                 .zip(values)
@@ -145,14 +153,18 @@ impl PageVm {
                     values.push(animation_direction);
                     values.push(animation_play_state);
                     values.push(
-                        Dom::attribute(dom, node, "style")
+                        own_visibility
+                            .get(&node)
+                            .copied()
                             .unwrap_or_default()
-                            .to_owned(),
+                            .to_string(),
                     );
                     (node, values)
                 })
                 .collect::<Vec<_>>();
-            let stylesheet_texts = self.vm().active_stylesheet_texts_for_document_snapshot();
+            let stylesheet_texts = self
+                .vm()
+                .effective_keyframe_rule_texts_for_document_snapshot();
             let final_opacity_animations = visibility::final_opacity_animation_names(
                 stylesheet_texts.iter().map(String::as_str),
             );

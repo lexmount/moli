@@ -609,6 +609,28 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
         .collect()
 }
 
+pub(crate) fn computed_style_own_inherited_property_values_for_document_snapshot(
+    host: &JsContextHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+    property: &str,
+) -> Vec<bool> {
+    let mut observation = StyleObservation::new(host);
+    let shared_lock = host.style_engine_author_shared_lock();
+    handles
+        .into_iter()
+        .map(|handle| {
+            let Some(DocumentSnapshotStyleComputation::Available(_)) =
+                style_computation_context_for_document_snapshot(host, handle)
+            else {
+                return false;
+            };
+            observation
+                .read(handle)
+                .computed_style_has_own_inherited_longhand_value(property, &shared_lock)
+        })
+        .collect()
+}
+
 pub(crate) fn computed_style_properties_for_inspector_handle(
     host: &JsContextHost,
     handle: DomHandle,

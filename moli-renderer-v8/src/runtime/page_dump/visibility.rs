@@ -94,6 +94,11 @@ impl<'a> MarkdownDom<'a> {
                     .flatten()
             })
             .collect();
+        for (&id, &target) in &hidden_targets {
+            if paired_adjacent_disclosure(dom, target, id) {
+                disclosures.insert(id);
+            }
+        }
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
@@ -283,12 +288,12 @@ impl<'a> MarkdownDom<'a> {
             } else if matches!(computed_visibility, "hidden" | "collapse") {
                 match parent_visibility {
                     VisibilityMode::RootVeil
-                        if !explicit_visibility_hidden(values.get(21).map(String::as_str)) =>
+                        if values.get(21).is_none_or(|value| value != "true") =>
                     {
                         VisibilityMode::RootVeil
                     }
                     VisibilityMode::DisclosureVeil
-                        if !explicit_visibility_hidden(values.get(21).map(String::as_str)) =>
+                        if values.get(21).is_none_or(|value| value != "true") =>
                     {
                         VisibilityMode::DisclosureVeil
                     }
@@ -338,11 +343,9 @@ impl<'a> MarkdownDom<'a> {
             }
             if matches!(Dom::node_kind(dom, node), NodeKind::Element("span")) {
                 let vertical_align = values.get(7).map(String::as_str).unwrap_or_default();
-                let authored_vertical_align =
-                    explicit_vertical_align(values.get(21).map(String::as_str));
-                if vertical_align == "super" || authored_vertical_align == Some("super") {
+                if vertical_align == "super" {
                     superscripts.insert(node);
-                } else if vertical_align == "sub" || authored_vertical_align == Some("sub") {
+                } else if vertical_align == "sub" {
                     subscripts.insert(node);
                 }
             }
@@ -565,36 +568,44 @@ fn target_is_disclosure<D: Dom + ?Sized>(
     })
 }
 
-fn explicit_visibility_hidden(style: Option<&str>) -> bool {
-    style.is_some_and(|style| {
-        style.split(';').any(|declaration| {
-            declaration.split_once(':').is_some_and(|(name, value)| {
-                name.trim().eq_ignore_ascii_case("visibility")
-                    && matches!(
-                        value
-                            .split('!')
-                            .next()
-                            .unwrap_or_default()
-                            .trim()
-                            .to_ascii_lowercase()
-                            .as_str(),
-                        "hidden" | "collapse"
-                    )
-            })
-        })
-    })
+fn paired_adjacent_disclosure(dom: &NativeDom, target: NativeNodeId, id: &str) -> bool {
+    let mut sibling = dom.previous_sibling(target);
+    while sibling.is_some_and(|node| {
+        matches!(Dom::node_kind(dom, node), NodeKind::Text(value) if value.trim().is_empty())
+            || matches!(Dom::node_kind(dom, node), NodeKind::Other)
+    }) {
+        sibling = sibling.and_then(|node| dom.previous_sibling(node));
+    }
+    let Some(control_region) = sibling else {
+        return false;
+    };
+    if !matches!(Dom::node_kind(dom, control_region), NodeKind::Element(_)) {
+        return false;
+    }
+
+    let mut show = false;
+    let mut hide = false;
+    let mut pending = vec![control_region];
+    while let Some(node) = pending.pop() {
+        if matches!(Dom::node_kind(dom, node), NodeKind::Element("a" | "button"))
+            && Dom::attribute(dom, node, "onclick")
+                .is_some_and(|handler| handler_references_id(handler, id))
+        {
+            match text(dom, node, None).trim().to_ascii_lowercase().as_str() {
+                "+" | "show" | "expand" | "more" => show = true,
+                "-" | "hide" | "collapse" | "less" => hide = true,
+                _ => {}
+            }
+        }
+        pending.extend(dom.child_ids(node));
+    }
+    show && hide
 }
 
-fn explicit_vertical_align(style: Option<&str>) -> Option<&str> {
-    style?
-        .split(';')
-        .filter_map(|declaration| declaration.split_once(':'))
-        .rev()
-        .find_map(|(name, value)| {
-            name.trim()
-                .eq_ignore_ascii_case("vertical-align")
-                .then(|| value.trim())
-        })
+fn handler_references_id(handler: &str, id: &str) -> bool {
+    [format!("'{id}'"), format!("\"{id}\"")]
+        .iter()
+        .any(|quoted| handler.contains(quoted))
 }
 
 fn code_marker_offsets(value: &str, marker: &str) -> Vec<usize> {

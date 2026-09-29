@@ -169,16 +169,19 @@ fn valid_positive_integer(value: &str) -> Option<u64> {
 
 fn valid_positive_float(value: &str) -> Option<f64> {
     let bytes = value.as_bytes();
-    if bytes.is_empty() || matches!(bytes[0], b'+' | b'-') {
+    if bytes.is_empty() || bytes[0] == b'+' {
         return None;
     }
-    let mut offset = 0;
+    let mut offset = usize::from(bytes[0] == b'-');
+    if offset == bytes.len() {
+        return None;
+    }
+    let integer_start = offset;
     while offset < bytes.len() && bytes[offset].is_ascii_digit() {
         offset += 1;
     }
-    if offset == 0 {
-        return None;
-    }
+    let has_integer = offset > integer_start;
+    let mut has_fraction = false;
     if bytes.get(offset) == Some(&b'.') {
         offset += 1;
         let fraction = offset;
@@ -188,6 +191,10 @@ fn valid_positive_float(value: &str) -> Option<f64> {
         if fraction == offset {
             return None;
         }
+        has_fraction = true;
+    }
+    if !has_integer && !has_fraction {
+        return None;
     }
     if matches!(bytes.get(offset), Some(b'e' | b'E')) {
         offset += 1;
@@ -205,7 +212,7 @@ fn valid_positive_float(value: &str) -> Option<f64> {
     (offset == bytes.len())
         .then(|| value.parse::<f64>().ok())
         .flatten()
-        .filter(|value| value.is_finite() && *value > 0.0)
+        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn largest_srcset_candidate(srcset: &str, image: bool) -> Option<Cow<'_, str>> {

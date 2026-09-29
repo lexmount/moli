@@ -218,6 +218,25 @@ pub(super) fn native_effective_font_face_rule_addresses(
     native_effective_font_face_rule_addresses_with_guard(stylesheet, device, custom_media, &guard)
 }
 
+pub(super) fn native_effective_keyframe_rule_texts(
+    stylesheet: &DocumentStyleSheet,
+    device: &Device,
+    custom_media: &CustomMediaMap,
+) -> Vec<String> {
+    let guard = stylesheet.0.shared_lock.read();
+    if !stylesheet.enabled() || !stylesheet.is_effective_for_device(device, custom_media, &guard) {
+        return Vec::new();
+    }
+    stylesheet
+        .contents(&guard)
+        .effective_rules(device, custom_media, &guard)
+        .filter_map(|rule| match rule {
+            CssRule::Keyframes(rule) => Some(rule.read_with(&guard).to_css_string(&guard)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn native_effective_font_face_rule_addresses_with_guard(
     stylesheet: &DocumentStyleSheet,
     device: &Device,

@@ -11,7 +11,7 @@ use style::{
     data::ElementStyles,
     dom::{TElement, TNode},
     properties::{
-        ComputedValues, PropertyId,
+        CSSWideKeyword, ComputedValues, PropertyDeclarationId, PropertyId,
         longhands::{
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
@@ -281,6 +281,55 @@ impl StyloComputedStyleSnapshot {
         }
         let property_id = PropertyId::parse_enabled_for_all_content(property).ok()?;
         serialize_raw_computed_property(&self.primary, property_id)
+    }
+
+    /// Whether this element's cascade supplies a value for an inherited
+    /// longhand instead of taking the value from its parent.
+    ///
+    /// Computed values alone cannot distinguish `visibility:hidden` declared
+    /// on an element from the same value inherited from an ancestor. Consumers
+    /// that selectively expose an otherwise hidden subtree need that source
+    /// distinction, but should not parse inline style or stylesheet text a
+    /// second time.
+    pub(crate) fn has_own_inherited_longhand_value(
+        &self,
+        property: &str,
+        shared_lock: &style::shared_lock::SharedRwLock,
+    ) -> bool {
+        let Ok(property_id) = PropertyId::parse_enabled_for_all_content(property) else {
+            return false;
+        };
+        let Some(longhand) = property_id.longhand_id() else {
+            return false;
+        };
+        let guard = shared_lock.read();
+        let guards = StylesheetGuards::same(&guard);
+        for node in self.primary.rules().self_and_ancestors() {
+            let Some(source) = node.style_source() else {
+                continue;
+            };
+            for (declaration, importance) in source
+                .read(node.cascade_level().guard(&guards))
+                .declaration_importance_iter()
+                .rev()
+            {
+                if importance.important() != node.importance().important()
+                    || declaration.id() != PropertyDeclarationId::Longhand(longhand)
+                {
+                    continue;
+                }
+                match declaration.get_css_wide_keyword() {
+                    Some(CSSWideKeyword::Inherit | CSSWideKeyword::Unset) => return false,
+                    Some(
+                        CSSWideKeyword::Revert
+                        | CSSWideKeyword::RevertLayer
+                        | CSSWideKeyword::RevertRule,
+                    ) => continue,
+                    _ => return true,
+                }
+            }
+        }
+        false
     }
 
     pub(crate) fn resolved_property_value(&self, property: &str) -> Option<String> {

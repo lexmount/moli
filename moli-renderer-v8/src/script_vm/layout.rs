@@ -40,24 +40,10 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn active_stylesheet_texts_for_document_snapshot(&self) -> Vec<String> {
+    pub(crate) fn effective_keyframe_rule_texts_for_document_snapshot(&self) -> Vec<String> {
         let host = self._context_host.borrow();
         let document = host.document_handle();
-        host.retained_stylesheet_query_snapshot_for_document(document)
-            .map(|snapshot| {
-                snapshot
-                    .document_stylesheet_sources
-                    .iter()
-                    .chain(
-                        snapshot
-                            .shadow_stylesheet_sources
-                            .iter()
-                            .flat_map(|(_, sources)| sources.iter()),
-                    )
-                    .map(|source| source.serialized_css_text().to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
+        host.effective_keyframe_rule_texts_for_document(document)
     }
 
     pub(crate) fn sync_live_document_style_sources(&mut self) {
@@ -76,6 +62,18 @@ impl ScriptVm {
             &self._context_host.borrow(),
             handles,
             properties,
+        )
+    }
+
+    pub(crate) fn computed_style_own_inherited_property_values_for_document_snapshot(
+        &self,
+        handles: impl IntoIterator<Item = DomHandle>,
+        property: &str,
+    ) -> Vec<bool> {
+        crate::native_bridge::element::computed_style_own_inherited_property_values_for_document_snapshot(
+            &self._context_host.borrow(),
+            handles,
+            property,
         )
     }
 

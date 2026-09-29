@@ -1517,6 +1517,18 @@ impl JsContextHost {
             .retained_stylesheet_query_snapshot_for_document(document)
     }
 
+    pub(crate) fn style_engine_author_shared_lock(&self) -> style::shared_lock::SharedRwLock {
+        self.style_engine.author_shared_lock()
+    }
+
+    pub(crate) fn effective_keyframe_rule_texts_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<String> {
+        self.style_engine
+            .effective_keyframe_rule_texts_for_document(document)
+    }
+
     #[cfg(test)]
     pub(crate) fn computed_style_cache_generation_for_document_for_test(
         &self,

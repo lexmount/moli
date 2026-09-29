@@ -1353,3 +1353,22 @@ fn srcset_rejects_invalid_numbers_and_commas_inside_parentheses() {
     );
     assert!(!result.contains("phantom.jpg"), "{result}");
 }
+
+#[test]
+fn srcset_density_uses_the_html_floating_point_grammar() {
+    let result = markdown(
+        "<img alt='Fraction' srcset='/fraction.jpg .5x'><img alt='Exponent' srcset='/exponent.jpg .5e1x'><img alt='Zero' srcset='/zero.jpg 0x'><img alt='Negative zero' srcset='/negative-zero.jpg -0x'><img alt='Invalid plus' srcset='/invalid-plus.jpg +2x'><img alt='Invalid trailing dot' srcset='/invalid-dot.jpg 2.x'><img alt='Negative' srcset='/negative.jpg -.5x'>",
+        false,
+    );
+    for expected in [
+        "![Fraction](/fraction.jpg)",
+        "![Exponent](/exponent.jpg)",
+        "![Zero](/zero.jpg)",
+        "![Negative zero](/negative-zero.jpg)",
+    ] {
+        assert!(result.contains(expected), "missing {expected}: {result}");
+    }
+    for rejected in ["invalid-plus.jpg", "invalid-dot.jpg", "negative.jpg"] {
+        assert!(!result.contains(rejected), "accepted {rejected}: {result}");
+    }
+}

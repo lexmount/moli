@@ -323,6 +323,44 @@ impl MoliStyleEngine {
             })
     }
 
+    pub(crate) fn effective_keyframe_rule_texts_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<String> {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return Vec::new();
+        };
+        world
+            .document_state
+            .try_with_retained_style_system(|retained| {
+                let device = retained.stylist.device();
+                let mut result = Vec::new();
+                let document_custom_media = retained
+                    .stylist
+                    .cascade_data()
+                    .borrow_for_origin(style::stylesheets::Origin::Author)
+                    .custom_media_map();
+                for entry in retained.document_stylesheets.entries() {
+                    result.extend(stylesheet::native_effective_keyframe_rule_texts(
+                        entry.stylesheet(),
+                        device,
+                        document_custom_media,
+                    ));
+                }
+                for scope in &retained.shadow_scopes {
+                    for entry in scope.active_stylesheets().entries() {
+                        result.extend(stylesheet::native_effective_keyframe_rule_texts(
+                            entry.stylesheet(),
+                            device,
+                            scope.author_styles().data.custom_media_map(),
+                        ));
+                    }
+                }
+                result
+            })
+            .unwrap_or_default()
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn computed_style_observation_input_epochs(
         &self,
