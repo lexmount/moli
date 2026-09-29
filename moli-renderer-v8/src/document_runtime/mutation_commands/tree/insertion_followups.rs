@@ -148,24 +148,8 @@ impl DocumentRuntime {
         profile: TreeMutationSourceProfile,
     ) {
         let was_connected = insertion_plan.was_lifecycle_connected_before_insert();
-        // Ordinary insertion removes a connected input before reinserting it,
-        // even when the node keeps its parent and position in the same document.
-        if was_connected
-            && !insertion_plan.inserting_fragment_children
-            && !profile.preserve_connection
-        {
-            self.enqueue_custom_element_disconnected_callbacks_in_subtrees_unless_pending(
-                scope,
-                host_ptr,
-                &insertion_plan.lifecycle_connected_roots_before_insert,
-            );
-        }
-        self.enqueue_custom_element_disconnected_callbacks_for_moved_roots_if_needed(
-            scope,
-            host_ptr,
-            insertion_plan.insertion_roots,
-            was_connected,
-        );
+        // Ordinary inputs have already run removal steps in this reaction
+        // scope. Parser and atomic moves retain their separate connection policy.
         custom_elements::apply_registry_association_retargets(
             host_ptr,
             &insertion_plan.adoption.custom_elements().registry_retargets,

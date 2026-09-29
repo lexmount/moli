@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn form_associated_custom_elements_preserve_removal_and_insertion_owner_transitions() {
+    let mut vm = new_storage_test_vm("https://form-association-removal.test/");
+    let result = vm
+        .eval(include_str!("../../form_association_removal.js"))
+        .expect("form owner removal and insertion reactions should evaluate");
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn custom_state_set_invalidates_shadow_source_scopes() {
     let mut vm = new_storage_test_vm("https://custom-state-shadow-scope.test/");
 

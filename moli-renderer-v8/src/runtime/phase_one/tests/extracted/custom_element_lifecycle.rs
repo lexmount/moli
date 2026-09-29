@@ -908,7 +908,7 @@ fieldset.appendChild(jsTarget);
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
                 Some(
-                    r#"{"events":["js-face-target:connected:parser-face-fieldset","js-face-target:form:parser-face-form-b","js-face-target:disabled:true","parser-face-target:form:parser-face-form-b","parser-face-target:disabled:true"],"parserParent":"parser-face-fieldset","jsParent":"parser-face-fieldset"}"#
+                    r#"{"events":["js-face-target:form:null","js-face-target:connected:parser-face-fieldset","js-face-target:form:parser-face-form-b","js-face-target:disabled:true","parser-face-target:form:parser-face-form-b","parser-face-target:disabled:true"],"parserParent":"parser-face-fieldset","jsParent":"parser-face-fieldset"}"#
                 ),
                 "parser FACE reparent should retain form-state reactions without the JS insertion connection callback"
             );
