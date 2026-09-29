@@ -44,6 +44,7 @@ mod queries;
 mod state;
 mod structure;
 
+pub(crate) use attributes::install_attr_prototype;
 pub(crate) use attributes::install_named_node_map_template_bindings;
 pub(crate) use queries::evaluate_live_xpath_search_node_handles;
 

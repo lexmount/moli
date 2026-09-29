@@ -13,5 +13,4 @@ pub(in crate::native_bridge) use self::form_association::{
 pub(in crate::native_bridge) use self::iframe_content_cache::{
     clear_detached_iframe_cached_context, clear_detached_iframe_cached_context_for_handle,
 };
-pub(in crate::native_bridge) use self::node_text_content::set_detached_node_text_content;
 pub(in crate::native_bridge) use self::shadow::detached_shadow_root_for_host;

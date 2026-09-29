@@ -1,5 +1,4 @@
 use super::super::reference::native_owner_document;
-use super::install::install_attr_instance_properties;
 use super::*;
 use crate::util::set_null_prototype;
 use crate::web_api_interfaces;
@@ -60,7 +59,5 @@ pub(crate) fn new_attr_object<'s>(
     .bind(scope)
     .ok()?;
     set_null_prototype(scope, state);
-    let object = AttrObjectDeclaration { state }.bind(scope).ok()?;
-    install_attr_instance_properties(scope, object);
-    Some(object)
+    AttrObjectDeclaration { state }.bind(scope).ok()
 }

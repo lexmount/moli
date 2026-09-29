@@ -78,6 +78,15 @@ test(function () {
   assert_equals(attr.value, "null");
 
   attr.nodeValue = undefined;
+  assert_equals(attr.value, "");
+
+  attr.nodeValue = null;
+  assert_equals(attr.value, "");
+
+  attr.textContent = null;
+  assert_equals(attr.value, "");
+
+  attr.value = undefined;
   assert_equals(attr.value, "undefined");
 
   attr.textContent = { toString: function () { return "text"; } };
@@ -92,5 +101,5 @@ test(function () {
     attr.nodeValue = { toString: function () { throw new Error("node"); } };
   });
   assert_equals(attr.value, "text");
-}, "Attr value accessors use DOMString conversion");
+}, "Attr.value uses DOMString conversion and Node value setters use nullable DOMString conversion");
 </script>
