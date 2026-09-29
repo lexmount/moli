@@ -26,6 +26,7 @@ impl<'a> MarkdownDom<'a> {
         dom: &'a NativeDom,
         styles: impl IntoIterator<Item = (NativeNodeId, Vec<String>)>,
         base_url: Option<&Url>,
+        final_opacity_animations: HashSet<String>,
     ) -> Self {
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
@@ -277,11 +278,14 @@ impl<'a> MarkdownDom<'a> {
             if visibility_restored {
                 visibility_restored_regions.insert(node);
             }
+            let has_bounded_final_opacity =
+                has_bounded_final_opacity(&values, &final_opacity_animations);
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
                     && !lazy_media
+                    && !has_bounded_final_opacity
                     && !document_root)
                 && !disclosure_root
                 && !disclosure_path)
@@ -406,6 +410,142 @@ impl<'a> MarkdownDom<'a> {
         }
         None
     }
+}
+
+fn has_bounded_final_opacity(
+    values: &[String],
+    final_opacity_animations: &HashSet<String>,
+) -> bool {
+    let names: Vec<_> = values
+        .get(14)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let durations: Vec<_> = values
+        .get(15)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let fill_modes: Vec<_> = values
+        .get(16)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let delays: Vec<_> = values
+        .get(17)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let iteration_counts: Vec<_> = values
+        .get(18)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let directions: Vec<_> = values
+        .get(19)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    let play_states: Vec<_> = values
+        .get(20)
+        .map(|value| value.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+    names.iter().enumerate().any(|(index, name)| {
+        final_opacity_animations.contains(*name)
+            && !durations.is_empty()
+            && animation_duration_is_positive(durations[index % durations.len()])
+            && !fill_modes.is_empty()
+            && matches!(fill_modes[index % fill_modes.len()], "forwards" | "both")
+            && !delays.is_empty()
+            && animation_time_seconds(delays[index % delays.len()])
+                .is_some_and(|delay| delay <= 0.0)
+            && !iteration_counts.is_empty()
+            && iteration_counts[index % iteration_counts.len()].parse::<f32>() == Ok(1.0)
+            && !directions.is_empty()
+            && directions[index % directions.len()] == "normal"
+            && !play_states.is_empty()
+            && play_states[index % play_states.len()] == "running"
+    })
+}
+
+fn animation_duration_is_positive(duration: &str) -> bool {
+    animation_time_seconds(duration).is_some_and(|duration| duration > 0.0)
+}
+
+fn animation_time_seconds(value: &str) -> Option<f32> {
+    value
+        .strip_suffix("ms")
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .map(|value| value / 1000.0)
+        .or_else(|| {
+            value
+                .strip_suffix('s')
+                .and_then(|value| value.trim().parse::<f32>().ok())
+        })
+}
+
+/// Return only animations whose declared final keyframe paints a nonzero
+/// opacity. The caller still requires a finite, forward, running animation
+/// before using that final authored state for the static document snapshot.
+pub(super) fn final_opacity_animation_names<'a>(
+    stylesheets: impl IntoIterator<Item = &'a str>,
+) -> HashSet<String> {
+    let mut result = HashSet::new();
+    for source in stylesheets {
+        let folded = source.to_ascii_lowercase();
+        for offset in code_marker_offsets(&folded, "@keyframes") {
+            let Some(relative_open) = source[offset..].find('{') else {
+                continue;
+            };
+            let open = offset + relative_open;
+            let Some(close) = matching_delimiter(source, open, '{', '}') else {
+                continue;
+            };
+            let Some(rule) =
+                moli_css_parse::parse_keyframes_rule_view_with_stylo(&source[offset..=close])
+            else {
+                continue;
+            };
+            let Some(canonical_open) = rule.css_text.find('{') else {
+                continue;
+            };
+            let Some(canonical_close) =
+                matching_delimiter(&rule.css_text, canonical_open, '{', '}')
+            else {
+                continue;
+            };
+            if final_keyframe_reveals(&rule.css_text[canonical_open + 1..canonical_close]) {
+                result.insert(rule.name);
+            }
+        }
+    }
+    result
+}
+
+fn final_keyframe_reveals(body: &str) -> bool {
+    let mut offset = 0;
+    while let Some(relative_open) = body[offset..].find('{') {
+        let open = offset + relative_open;
+        let selector = body[offset..open].trim();
+        let Some(close) = matching_delimiter(body, open, '{', '}') else {
+            return false;
+        };
+        let is_final = selector
+            .split(',')
+            .map(str::trim)
+            .any(|value| matches!(value, "to" | "100%" | "100.0%"));
+        if is_final {
+            for declaration in body[open + 1..close].split(';') {
+                let Some((name, value)) = declaration.split_once(':') else {
+                    continue;
+                };
+                if name.trim().eq_ignore_ascii_case("opacity")
+                    && value
+                        .trim()
+                        .parse::<f32>()
+                        .is_ok_and(|opacity| opacity > 0.0)
+                {
+                    return true;
+                }
+            }
+        }
+        offset = close + 1;
+    }
+    false
 }
 
 fn target_is_disclosure<D: Dom + ?Sized>(

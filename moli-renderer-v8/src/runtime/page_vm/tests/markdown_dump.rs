@@ -39,9 +39,13 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
                 <p style="opacity:0;animation-name:spin">Animated hidden text</p>
-                <style>@keyframes reveal { from { opacity:0 } to { opacity:1 } }</style>
-                <p style="opacity:0;animation:reveal 0.25s ease-in forwards">Animated revealed text</p>
+                <style>@KEYFRAMES fade-in { from { opacity:0 } to { opacity:1 } }</style>
+                <p style="opacity:0;animation:fade-in 0.25s ease-in forwards">Animated revealed text</p>
+                <style>@keyframes spin { from { transform:rotate(0deg) } to { transform:rotate(1turn) } }</style>
                 <p style="opacity:0;animation:spin 1s forwards">Animated rotation text</p>
+                <p style="opacity:0;animation-name:fade-in,spin;animation-duration:0s,1s;animation-fill-mode:forwards">Zero-duration reveal text</p>
+                <p style="opacity:0;animation:fade-in 1s infinite forwards">Repeating reveal text</p>
+                <p style="opacity:0;animation:fade-in 1s reverse forwards">Reverse reveal text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
                 <p>Mass 2.4 × 10<span style="position:relative;top:-0.5em;line-height:0">−17</span> J; m<span style="position:relative;bottom:-0.25em;line-height:0">n</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
@@ -64,7 +68,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval("document.getElementById('legacy-hidden').setAttribute('color','white')").unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 313131", "Parser trap", "Accessible helper", "Faded text", "Animated revealed text", "Visible value 8", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -72,7 +76,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(output.contains("Active\nReviewed"), "{output}");
             assert!(!output.contains("tracking.gif"), "{output}");
             assert!(output.contains("Upload complete"), "{output}");
-            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Animated revealed text", "Animated rotation text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
+            for omitted in ["Translation pending", "Share metadata", "Hidden ancestor", "Inherited hidden", "Cookie template", "Followers 92", "Animated hidden text", "Animated rotation text", "Zero-duration reveal text", "Repeating reveal text", "Reverse reveal text", "Transparent parent", "Transparent child", "hidden suffix", "product.name", "Vue template"] {
                 assert!(!output.contains(omitted), "leaked {omitted}: {output}");
             }
         }

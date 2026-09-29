@@ -4,7 +4,7 @@ use crate::runtime::page_surface::{
 };
 use moli_html2md::{Dom, NodeKind};
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::page_vm::PageVm;
 
@@ -15,7 +15,9 @@ impl PageVm {
         let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
             .then(|| self.vm().document_runtime.dom_host().document_base_url())
             .flatten();
-        let styles = if options.format == RendererPageDumpFormat::Markdown {
+        let (styles, final_opacity_animations) = if options.format
+            == RendererPageDumpFormat::Markdown
+        {
             let dom = self.vm().document_runtime.dom_host().dom();
             let mut nodes = Vec::new();
             collect_node_ids(dom, dom.document_node_id(), &mut nodes);
@@ -84,12 +86,26 @@ impl PageVm {
                         "top".to_owned(),
                         "color".to_owned(),
                         "text-shadow".to_owned(),
+                        "animation-name".to_owned(),
+                        "animation-duration".to_owned(),
+                        "animation-fill-mode".to_owned(),
+                        "animation-delay".to_owned(),
+                        "animation-iteration-count".to_owned(),
+                        "animation-direction".to_owned(),
+                        "animation-play-state".to_owned(),
                     ],
                 );
-            nodes
+            let styles = nodes
                 .into_iter()
                 .zip(values)
                 .map(|(node, mut values)| {
+                    let animation_play_state = values.pop().unwrap_or_default();
+                    let animation_direction = values.pop().unwrap_or_default();
+                    let animation_iteration_count = values.pop().unwrap_or_default();
+                    let animation_delay = values.pop().unwrap_or_default();
+                    let animation_fill_mode = values.pop().unwrap_or_default();
+                    let animation_duration = values.pop().unwrap_or_default();
+                    let animation_name = values.pop().unwrap_or_default();
                     let text_shadow = values.pop().unwrap_or_default();
                     let foreground = values.pop().unwrap_or_default();
                     // Preserve the visibility adapter's stable field layout.
@@ -121,11 +137,23 @@ impl PageVm {
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
                     values.push(text_shadow);
                     values.push(background_images.get(&node).cloned().unwrap_or_default());
+                    values.push(animation_name);
+                    values.push(animation_duration);
+                    values.push(animation_fill_mode);
+                    values.push(animation_delay);
+                    values.push(animation_iteration_count);
+                    values.push(animation_direction);
+                    values.push(animation_play_state);
                     (node, values)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let stylesheet_texts = self.vm().active_stylesheet_texts_for_document_snapshot();
+            let final_opacity_animations = visibility::final_opacity_animation_names(
+                stylesheet_texts.iter().map(String::as_str),
+            );
+            (styles, final_opacity_animations)
         } else {
-            Vec::new()
+            (Vec::new(), HashSet::new())
         };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
@@ -136,6 +164,7 @@ impl PageVm {
                 self.vm().document_runtime.dom_host().dom(),
                 styles,
                 markdown_base_url.as_ref(),
+                final_opacity_animations,
             );
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
@@ -156,9 +185,12 @@ impl PageVm {
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => {
-                render_markdown_document_with_styles(&dom, styles, markdown_base_url.as_ref())
-            }
+            RendererPageDumpFormat::Markdown => render_markdown_document_with_styles(
+                &dom,
+                styles,
+                markdown_base_url.as_ref(),
+                final_opacity_animations,
+            ),
         }
     }
 
@@ -308,16 +340,17 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
 
 #[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
-    render_markdown_document_with_styles(dom, Vec::new(), None)
+    render_markdown_document_with_styles(dom, Vec::new(), None, HashSet::new())
 }
 
 fn render_markdown_document_with_styles(
     dom: &NativeDom,
     styles: Vec<(NativeNodeId, Vec<String>)>,
     base_url: Option<&url::Url>,
+    final_opacity_animations: HashSet<String>,
 ) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
-    let visible = visibility::MarkdownDom::new(dom, styles, base_url);
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url, final_opacity_animations);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
