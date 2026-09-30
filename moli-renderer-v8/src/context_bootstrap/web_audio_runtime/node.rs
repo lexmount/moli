@@ -244,6 +244,7 @@ fn has_stereo_channel_limit<'s>(
 ) -> bool {
     web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node)
         || web_api_interfaces::StereoPannerNode::is_instance(scope, node)
+        || web_api_interfaces::ConvolverNode::is_instance(scope, node)
 }
 
 fn set_channel_count<'s>(

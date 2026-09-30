@@ -2229,6 +2229,7 @@ mod canvas_transform_snapshots;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod close_watchers;
+mod convolver_interfaces;
 mod credential_interfaces;
 mod cross_origin_symbol_fallback;
 mod cross_origin_window_indexes;
