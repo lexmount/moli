@@ -83,6 +83,18 @@
           for (const value of [true, 1, 'false', Symbol(), 1n, object]) { node.normalize = value; assert(node.normalize === true, 'truthy normalization'); }
           assert(reads === 0 && new w.ConvolverNode(context, {disableNormalization: object}).normalize === false, 'ToBoolean has no author hooks');
         });
+        await check(label + '/ConvolverNode/fractional offline context sample-rate', async () => {
+          for (const sampleRate of [NaN, Infinity, -Infinity, 1e100, Symbol(), 1n]) assert(thrown(() => new w.OfflineAudioContext(1, 16, sampleRate)) instanceof w.TypeError, 'context sample rate uses restricted float');
+          const offline = new w.OfflineAudioContext(1, 16, 44100.1), rate = Math.fround(44100.1);
+          assert(offline.sampleRate === rate, 'context preserves converted float sample rate');
+          const buffer = offline.createBuffer(1, 4, rate), node = new w.ConvolverNode(offline, {buffer});
+          assert(buffer.sampleRate === rate && node.buffer === buffer, 'matching fractional native buffer accepted');
+          Object.defineProperty(offline, 'sampleRate', {get() { throw Error('public context metadata'); }});
+          const factory = offline.createConvolver(); factory.buffer = buffer;
+          assert(factory.buffer === buffer, 'sample-rate validation uses native context metadata');
+          const rendered = await offline.startRendering();
+          assert(rendered instanceof w.AudioBuffer && rendered.sampleRate === rate && rendered.getChannelData(0).every(value => value === 0), 'silent rendered buffer preserves native float sample rate');
+        });
         await check(label + '/ConvolverNode/cross-realm factory and graph', () => {
           const foreign = new window.AudioContext();
           try {
