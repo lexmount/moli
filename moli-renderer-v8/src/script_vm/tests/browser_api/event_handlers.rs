@@ -193,3 +193,32 @@ fn parser_inserted_frameset_window_event_handlers_reflect_on_window() {
 mod node_compilation;
 
 mod document_replacement;
+
+#[test]
+fn added_window_and_dom_handler_properties_share_native_registration() {
+    let mut vm = new_parsed_test_vm(
+        "https://native-handler-surface.test/",
+        "<body><iframe id=child></iframe></body>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("event_handlers/native_surface_split.js"))
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn device_window_handler_properties_follow_secure_context_exposure() {
+    for url in [
+        "https://native-device-handler.test/",
+        "http://native-device-handler.test/",
+    ] {
+        let mut vm = new_parsed_test_vm(url, "<body><iframe id=child></iframe></body>");
+        assert_eq!(
+            vm.eval(include_str!("event_handlers/native_secure_split.js"))
+                .unwrap(),
+            "true",
+            "{url}"
+        );
+    }
+}

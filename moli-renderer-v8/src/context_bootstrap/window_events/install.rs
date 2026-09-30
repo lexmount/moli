@@ -1,4 +1,3 @@
-use super::WINDOW_EVENT_HANDLER_PROPERTIES;
 use super::accessors::{
     window_event_handler_getter_function, window_event_handler_setter_function,
     window_onerror_getter_function, window_onerror_setter_function,
@@ -6,6 +5,7 @@ use super::accessors::{
     window_onrejectionhandled_getter_function, window_onrejectionhandled_setter_function,
     window_onunhandledrejection_getter_function, window_onunhandledrejection_setter_function,
 };
+use super::{SECURE_WINDOW_EVENT_HANDLER_PROPERTIES, WINDOW_EVENT_HANDLER_PROPERTIES};
 use crate::definitions::define_function_accessor_property;
 use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
@@ -72,5 +72,30 @@ pub(in crate::context_bootstrap) fn install_window_global_accessors<'s>(
             v8::PropertyAttribute::NONE,
         )
         .expect("Window event handler accessor should initialize");
+    }
+}
+
+pub(crate) fn install_secure_window_event_handler_accessors<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    secure_context_available: bool,
+) {
+    for name in SECURE_WINDOW_EVENT_HANDLER_PROPERTIES {
+        if secure_context_available {
+            let data = v8str(scope, name).into();
+            define_function_accessor_property(
+                scope,
+                window,
+                name,
+                window_event_handler_getter_function,
+                Some(data),
+                window_event_handler_setter_function,
+                Some(data),
+                v8::PropertyAttribute::NONE,
+            )
+            .expect("secure Window event handler accessor should initialize");
+        } else {
+            let _ = window.delete(scope, v8str(scope, name).into());
+        }
     }
 }

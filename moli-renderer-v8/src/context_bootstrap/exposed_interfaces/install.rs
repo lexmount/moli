@@ -128,11 +128,16 @@ fn worker_interface_template_registry<C>(
     ExposedInterfaceTemplateRegistry::install(scope, specs, expected_profile)
 }
 
-pub(crate) fn filter_window_exposed_interfaces(
-    scope: &mut v8::PinScope<'_, '_>,
-    global: v8::Local<'_, v8::Object>,
+pub(crate) fn filter_window_exposed_interfaces<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
     secure_context: bool,
 ) -> Result<()> {
+    super::super::window_events::install_secure_window_event_handler_accessors(
+        scope,
+        global,
+        secure_context,
+    );
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     for metadata in registry.metadata_entries() {
