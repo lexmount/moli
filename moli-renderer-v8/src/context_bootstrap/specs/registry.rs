@@ -1492,6 +1492,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::GainNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ChannelMergerNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelMergerNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChannelSplitterNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelSplitterNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::DelayNode::DESCRIPTOR,
         kind: ConstructorKind::DelayNode,
     },

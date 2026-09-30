@@ -46,6 +46,8 @@ interfaces! {
     BatteryManager;
     BeforeUnloadEvent: Event;
     BiquadFilterNode: AudioNode;
+    ChannelMergerNode: AudioNode;
+    ChannelSplitterNode: AudioNode;
     ConstantSourceNode: AudioScheduledSourceNode;
     DelayNode: AudioNode;
     GainNode: AudioNode;

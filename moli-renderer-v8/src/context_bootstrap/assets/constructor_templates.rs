@@ -76,9 +76,9 @@ use super::super::{
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
         audio_buffer_source_constructor_callback, build_audio_context_constructor_template,
-        build_audio_worklet_node_constructor_template, constant_source_constructor_callback,
-        delay_constructor, gain_constructor, offline_audio_context_constructor_callback,
-        stereo_panner_constructor,
+        build_audio_worklet_node_constructor_template, channel_merger_constructor,
+        channel_splitter_constructor, constant_source_constructor_callback, delay_constructor,
+        gain_constructor, offline_audio_context_constructor_callback, stereo_panner_constructor,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
@@ -1111,6 +1111,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::GainNode,
                 gain_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelMergerNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelMergerNode,
+                channel_merger_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelSplitterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelSplitterNode,
+                channel_splitter_constructor
             ))
             .length(1)
             .build(scope)
