@@ -177,27 +177,3 @@ pub(crate) fn current_window_style_viewport(
         })
         .unwrap_or_else(|| host.style_viewport())
 }
-
-pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(handle) = window_child_context_handle(scope, receiver) else {
-        return false;
-    };
-    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
-        return true;
-    };
-    let host = unsafe { &*host_ptr };
-    // Container removal disconnects the DOM node before its unload callbacks.
-    // The captured LocalWindow remains current until those callbacks finish;
-    // checking its identity also keeps reattachment from reviving an old realm.
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return true;
-    };
-    host.window_execution_context_identity_for_access_check(context)
-        .is_none_or(|identity| {
-            identity.dispatch_scope() != crate::native_bridge::OwnerDispatchScope::Child(handle)
-                || !host.window_execution_context_identity_is_current(identity)
-        })
-}
