@@ -2351,6 +2351,7 @@ mod frame_owner_origin_access;
 mod hyperlink_null_url_protocol;
 mod idb_rejected_request;
 mod iframe_reinsertion;
+mod iir_filter_interfaces;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
