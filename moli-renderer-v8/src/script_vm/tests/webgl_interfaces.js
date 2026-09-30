@@ -2,11 +2,13 @@
   const rows = [], assert = (ok, message) => { if (!ok) throw Error(message); };
   const check = async (name, run) => { try { await run(); rows.push({ name, pass: true }); } catch (error) { rows.push({ name, pass: false, message: String(error) }); } };
   const inWindow = typeof window !== 'undefined';
-  const realms = inWindow ? [['main', window], ['child', document.getElementById('child').contentWindow]] : [['worker', self]];
+  const popup = inWindow ? open() : null;
+  const realms = inWindow ? [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]] : [['worker', self]];
   const resources = ['WebGLTexture', 'WebGLQuery', 'WebGLSampler', 'WebGLSync', 'WebGLTransformFeedback', 'WebGLVertexArrayObject'];
   const attributes = { WebGLActiveInfo: ['size', 'type', 'name'], WebGLShaderPrecisionFormat: ['rangeMin', 'rangeMax', 'precision'], WebGLContextEvent: ['statusMessage'] };
   const names = [...resources, ...Object.keys(attributes)];
-  for (const [label, w] of realms) {
+  try {
+    for (const [label, w] of realms) {
       for (const name of names) {
         await check(label + '/' + name + '/constructor', () => {
           const C = w[name], parent = resources.includes(name) ? w.WebGLObject : name === 'WebGLContextEvent' ? w.Event : w.Object;
@@ -86,6 +88,7 @@
         assert(getter.call(value) === precision, 'native state survives author prototype change');
       });
     }
+  } finally { if (popup) popup.close(); }
   globalThis.__nodeReplacementResults = { rows, failures: rows.filter(row => !row.pass), passed: rows.filter(row => row.pass).length, total: rows.length };
   return rows.every(row => row.pass);
 })()
