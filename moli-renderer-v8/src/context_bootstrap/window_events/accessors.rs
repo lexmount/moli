@@ -1,8 +1,9 @@
-use super::super::window_accessors::window_child_context_handle;
+use super::super::window_accessors::{window_child_context_handle, window_owner_dispatch_scope};
 use super::super::window_receiver::require_same_origin_window_receiver;
 use super::*;
 use crate::{
     document_runtime::EventTargetHandle,
+    native_bridge::OwnerDispatchScope,
     util::{context_host_ptr_from_global_bridge, context_host_ptr_from_window_object},
 };
 
@@ -29,17 +30,18 @@ fn window_event_handler_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let host_ptr = context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))?;
-    match window_child_context_handle(scope, receiver) {
-        Some(handle) => unsafe { &mut *host_ptr }.child_window_event_handler_property_value(
-            scope,
-            handle,
-            property_name,
-        ),
-        None => crate::native_bridge::element::resolve_window_event_handler_content_attribute(
-            scope,
-            host_ptr,
-            property_name.strip_prefix("on").unwrap_or(property_name),
-        ),
+    match window_owner_dispatch_scope(scope, receiver)? {
+        OwnerDispatchScope::LightweightPopup(popup_id) => unsafe { &mut *host_ptr }
+            .lightweight_popup_event_handler_property_value(scope, popup_id, property_name),
+        OwnerDispatchScope::Child(handle) => unsafe { &mut *host_ptr }
+            .child_window_event_handler_property_value(scope, handle, property_name),
+        OwnerDispatchScope::Top => {
+            crate::native_bridge::element::resolve_window_event_handler_content_attribute(
+                scope,
+                host_ptr,
+                property_name.strip_prefix("on").unwrap_or(property_name),
+            )
+        }
     }
 }
 
@@ -54,10 +56,15 @@ fn set_window_event_handler_value<'s>(
     else {
         return;
     };
+    let Some(owner) = window_owner_dispatch_scope(scope, receiver) else {
+        return;
+    };
     let handler = v8::Local::<v8::Object>::try_from(value).ok();
     let host = unsafe { &mut *host_ptr };
-    match window_child_context_handle(scope, receiver) {
-        Some(handle) => {
+    match owner {
+        OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .set_lightweight_popup_event_handler_property(scope, popup_id, property_name, handler),
+        OwnerDispatchScope::Child(handle) => {
             let relevant_context = handler
                 .and_then(|handler| handler.get_creation_context(scope))
                 .unwrap_or_else(|| scope.get_current_context());
@@ -69,7 +76,7 @@ fn set_window_event_handler_value<'s>(
                 relevant_context,
             );
         }
-        None => host.set_registered_event_handler_property(
+        OwnerDispatchScope::Top => host.set_registered_event_handler_property(
             scope,
             EventTargetHandle::Window,
             property_name.strip_prefix("on").unwrap_or(property_name),
@@ -218,14 +225,6 @@ pub(in crate::context_bootstrap) fn window_onerror_getter_function<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        rv.set(
-            window_event_handler_value(scope, args.this(), "onerror")
-                .unwrap_or_else(|| v8::null(scope).into()),
-        );
-        return;
-    }
-    super::error::ensure_window_reflecting_body_onerror_handler(scope);
     rv.set(
         window_event_handler_value(scope, args.this(), "onerror")
             .unwrap_or_else(|| v8::null(scope).into()),

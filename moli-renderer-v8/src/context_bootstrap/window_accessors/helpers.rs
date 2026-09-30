@@ -91,7 +91,7 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
     None
 }
 
-pub(super) fn window_owner_dispatch_scope<'s>(
+pub(in crate::context_bootstrap) fn window_owner_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<crate::native_bridge::OwnerDispatchScope> {

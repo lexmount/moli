@@ -194,6 +194,36 @@ pub(super) fn create_script_origin_with_base_url<'s>(
     )
 }
 
+pub(super) fn create_function_origin_with_base_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resource_name: &str,
+    base_url: &Url,
+    context_extension_count: usize,
+) -> Option<v8::ScriptOrigin<'s>> {
+    let name = v8_string(scope, resource_name)?;
+    let options = script_host_defined_options(
+        scope,
+        base_url,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
+        false,
+        None,
+        Some(context_extension_count),
+    )?;
+    Some(v8::ScriptOrigin::new(
+        scope,
+        name.into(),
+        0,
+        0,
+        false,
+        -1,
+        None,
+        false,
+        false,
+        false,
+        Some(options),
+    ))
+}
+
 pub(super) fn create_script_origin_with_base_url_and_fetch_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
@@ -360,6 +390,17 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     muted_errors: bool,
     request_url: Option<&Url>,
 ) -> Option<v8::Local<'s, v8::Data>> {
+    script_host_defined_options(scope, base_url, metadata, muted_errors, request_url, None)
+}
+
+fn script_host_defined_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    base_url: &Url,
+    metadata: &crate::module_runtime::ModuleFetchMetadata,
+    muted_errors: bool,
+    request_url: Option<&Url>,
+    context_extension_count: Option<usize>,
+) -> Option<v8::Local<'s, v8::Data>> {
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
     let value = v8_string(scope, base_url.as_str())?;
     let nonce = v8_string(scope, metadata.nonce().unwrap_or_default())?;
@@ -388,7 +429,8 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
             .as_deref()
             .unwrap_or_default(),
     )?;
-    let options = v8::PrimitiveArray::new(scope, 8);
+    let options =
+        v8::PrimitiveArray::new(scope, 8 + usize::from(context_extension_count.is_some()));
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
@@ -397,6 +439,13 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     options.set(scope, 5, request_url.into());
     options.set(scope, 6, credentials.into());
     options.set(scope, 7, referrer_policy.into());
+    if let Some(count) = context_extension_count {
+        // V8's CompileFunction cache lookup precedes its context-extension
+        // check. Distinguish the compiled scope chain without changing the
+        // source text, source URL, or dynamic-import metadata.
+        let count = v8::Number::new(scope, count as f64);
+        options.set(scope, 8, count.into());
+    }
     Some(options.into())
 }
 

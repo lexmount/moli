@@ -60,17 +60,25 @@ pub(in crate::context_bootstrap) fn install_window_global_accessors<'s>(
         ) {
             continue;
         }
-        let data = v8str(scope, name).into();
-        define_function_accessor_property(
-            scope,
-            global,
-            name,
-            window_event_handler_getter_function,
-            Some(data),
-            window_event_handler_setter_function,
-            Some(data),
-            v8::PropertyAttribute::NONE,
-        )
-        .expect("Window event handler accessor should initialize");
+        install_window_event_handler_accessor(scope, global, name);
     }
+}
+
+pub(crate) fn install_window_event_handler_accessor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) {
+    let data = v8str(scope, name).into();
+    define_function_accessor_property(
+        scope,
+        window,
+        name,
+        window_event_handler_getter_function,
+        Some(data),
+        window_event_handler_setter_function,
+        Some(data),
+        v8::PropertyAttribute::NONE,
+    )
+    .expect("Window event handler accessor should initialize");
 }
