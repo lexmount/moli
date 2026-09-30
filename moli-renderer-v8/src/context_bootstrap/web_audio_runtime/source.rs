@@ -169,15 +169,7 @@ fn buffer_value<'s>(
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    let object = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "AudioBuffer"))?;
-    if !web_api_interfaces::AudioBuffer::is_instance(scope, object) {
-        return Err(webidl::WebIdlError::cannot_convert(context, "AudioBuffer"));
-    }
-    Ok(Some(object))
+    buffer::nullable_value(scope, value, context)
 }
 
 fn buffer_member<'s>(
@@ -391,7 +383,8 @@ fn buffer_setter<'s>(
             v8::Boolean::new(scope, true).into(),
         );
         if graph::source_started(scope, node) {
-            set_private_value(scope, node, ACQUIRED_BUFFER, buffer.into());
+            let content = buffer::acquire(scope, buffer);
+            set_private_value(scope, node, ACQUIRED_BUFFER, content.into());
         }
     }
     set_private_value(
@@ -524,7 +517,8 @@ fn record_buffer_start<'s>(
     set_web_audio_number_slot(scope, node, START_OFFSET, offset);
     set_web_audio_number_slot(scope, node, START_DURATION, duration);
     if let Some(buffer) = web_audio_object_slot(scope, node, BUFFER) {
-        set_private_value(scope, node, ACQUIRED_BUFFER, buffer.into());
+        let content = buffer::acquire(scope, buffer);
+        set_private_value(scope, node, ACQUIRED_BUFFER, content.into());
     }
 }
 
