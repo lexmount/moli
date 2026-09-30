@@ -1496,6 +1496,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ConstantSourceNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::WaveShaperNode::DESCRIPTOR,
+        kind: ConstructorKind::WaveShaperNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::GainNode::DESCRIPTOR,
         kind: ConstructorKind::GainNode,
     },
