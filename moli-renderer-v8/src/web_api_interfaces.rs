@@ -118,6 +118,7 @@ interfaces! {
     DOMPointReadOnly;
     DOMQuad;
     DOMRect: DOMRectReadOnly;
+    DOMRectList;
     DOMRectReadOnly;
     DOMStringList;
     DOMStringMap;

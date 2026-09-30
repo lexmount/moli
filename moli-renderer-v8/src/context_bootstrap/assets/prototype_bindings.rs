@@ -15,6 +15,7 @@ use super::super::{
     css_runtime::install_css_typed_om_template_bindings,
     css_stylesheet_runtime::install_css_stylesheet_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
+    dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
     file_api::install_file_api_template_bindings,
     geometry_runtime::install_geometry_template_bindings,
@@ -409,6 +410,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_abort_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
+    install_dom_rect_list_template_bindings(scope, template, spec.interface.name());
     install_dom_exception_template_bindings(scope, template, spec.interface.name());
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
