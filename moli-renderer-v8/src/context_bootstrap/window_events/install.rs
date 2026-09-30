@@ -77,18 +77,7 @@ pub(crate) fn install_secure_window_event_handler_accessors<'s>(
         .chain(SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES)
     {
         if secure_context_available {
-            let data = v8str(scope, name).into();
-            define_function_accessor_property(
-                scope,
-                window,
-                name,
-                window_event_handler_getter_function,
-                Some(data),
-                window_event_handler_setter_function,
-                Some(data),
-                v8::PropertyAttribute::NONE,
-            )
-            .expect("secure Window event handler accessor should initialize");
+            install_window_event_handler_accessor(scope, window, name);
         } else {
             let _ = window.delete(scope, v8str(scope, name).into());
         }

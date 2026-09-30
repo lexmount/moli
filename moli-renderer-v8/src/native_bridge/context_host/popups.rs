@@ -6402,7 +6402,16 @@ fn set_lightweight_popup_persisted_script_global<'s>(
     name: &str,
     value: v8::Local<'s, v8::Value>,
 ) {
-    if WINDOW_EVENT_HANDLER_PROPERTIES.contains(&name) {
+    let secure_handler = crate::context_bootstrap::SECURE_WINDOW_EVENT_HANDLER_PROPERTIES
+        .contains(&name)
+        && lightweight_popup_id_from_window(scope, window)
+            .zip(context_host_ptr_from_global_bridge(scope))
+            .is_some_and(|(id, host)| {
+                unsafe { &*host }
+                    .lightweight_popup_document_record(id)
+                    .is_some_and(|document| document.state.secure_context_available)
+            });
+    if WINDOW_EVENT_HANDLER_PROPERTIES.contains(&name) || secure_handler {
         // The wrapped popup script already assigned this value while its
         // exact popup owner scope was active. Do not invoke the setter again
         // from the surrounding top scope or replace its accessor.

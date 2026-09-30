@@ -3,9 +3,10 @@ use super::{
 };
 use crate::{
     context_bootstrap::{
-        WINDOW_EVENT_HANDLER_PROPERTIES, install_simple_event_target_ordered_handlers,
-        install_window_event_handler_accessor, simple_object_event_activate_uncompiled_handler,
-        simple_object_event_set_ordered_handler,
+        WINDOW_EVENT_HANDLER_PROPERTIES, install_secure_window_event_handler_accessors,
+        install_simple_event_target_ordered_handlers, install_window_event_handler_accessor,
+        simple_object_event_activate_uncompiled_handler, simple_object_event_set_ordered_handler,
+        window_event_handler_properties,
     },
     document_runtime::DomHandle,
     native_bridge::OwnerDispatchScope,
@@ -129,10 +130,8 @@ impl JsContextHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
-        let Some(property_name) = WINDOW_EVENT_HANDLER_PROPERTIES
-            .iter()
-            .copied()
-            .find(|name| *name == property_name)
+        let Some(property_name) =
+            window_event_handler_properties().find(|name| *name == property_name)
         else {
             return;
         };
@@ -208,11 +207,13 @@ impl JsContextHost {
 pub(super) fn install_lightweight_popup_event_handler_accessors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
+    secure_context_available: bool,
 ) {
     install_simple_event_target_ordered_handlers(scope, window);
     for property_name in WINDOW_EVENT_HANDLER_PROPERTIES {
         install_window_event_handler_accessor(scope, window, property_name);
     }
+    install_secure_window_event_handler_accessors(scope, window, secure_context_available);
 }
 
 fn lightweight_popup_event_handler_value<'s>(
@@ -266,7 +267,7 @@ pub(super) fn clear_lightweight_popup_window_document_event_state<'s>(
         undefined.into(),
     );
     let null = v8::null(scope).into();
-    for name in WINDOW_EVENT_HANDLER_PROPERTIES {
+    for name in window_event_handler_properties() {
         // Reset the shared handler state even if script has replaced the
         // public accessor. Document retirement must not invoke author setters.
         set_private_value(scope, window, name, null);

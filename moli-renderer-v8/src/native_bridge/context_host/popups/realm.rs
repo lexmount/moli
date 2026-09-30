@@ -152,6 +152,7 @@ impl JsContextHost {
             .ok_or_else(|| anyhow::anyhow!("missing popup Document during bootstrap"))?;
         let url = document.url.clone();
         let local_window_id = document.local_window_id;
+        let secure = document.state.secure_context_available;
         let name = self
             .lightweight_popup_browsing_contexts
             .get(&popup_id)
@@ -174,7 +175,7 @@ impl JsContextHost {
             LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
             false,
         );
-        install_lightweight_popup_event_handler_accessors(scope, window);
+        install_lightweight_popup_event_handler_accessors(scope, window, secure);
         LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window)?;
         install_storage_aliases_for_window(scope, window)?;
         crate::context_bootstrap::reset_window_location_runtime_state(scope, window, url.as_str())?;

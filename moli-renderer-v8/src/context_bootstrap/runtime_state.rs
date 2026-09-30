@@ -2045,6 +2045,7 @@ fn install_window_runtime_state<'s>(
         WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT,
         v8::Boolean::new(scope, secure_context_available).into(),
     );
+    super::install_secure_window_event_handler_accessors(scope, global, secure_context_available);
     install_webassembly_runtime_state(scope, global)?;
     install_webidl_collection_iterator_intrinsics(scope, global)?;
 
