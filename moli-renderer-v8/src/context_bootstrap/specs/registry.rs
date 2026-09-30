@@ -769,6 +769,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::StorageBucket,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::Cache::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CacheStorage::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::FileSystemHandle::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
