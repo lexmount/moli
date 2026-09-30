@@ -16,6 +16,7 @@ pub(crate) use generic::{
     GlobalEventHandlerOwner, canonical_event_handler_event_type,
     event_handler_content_attribute_name, install_global_event_handler_template_bindings,
     install_node_event_handler_template_bindings, legacy_lenient_this_event_handler,
+    node_event_handler_getter_function, node_event_handler_setter_function,
     shadow_root_event_handler_getter_function, shadow_root_event_handler_setter_function,
 };
 
