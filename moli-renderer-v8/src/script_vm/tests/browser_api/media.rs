@@ -2674,7 +2674,8 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
     shared: [ctx.destination, osc, comp, analyser].every(node =>
       ["connect", "disconnect"].every(name =>
         !Object.hasOwn(node, name) && node[name] === AudioNode.prototype[name])),
-    oscStart: describe(osc, "start"),
+    oscStart: describe(AudioScheduledSourceNode.prototype, "start"),
+    sharedStart: !Object.hasOwn(osc, "start") && osc.start === AudioScheduledSourceNode.prototype.start,
     param: describe(osc.frequency, "setValueAtTime")
   });
 })()
@@ -2684,7 +2685,7 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"ctxKeys":"","inheritedEvents":true,"oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:2","removeEventListener:true:true:true:function:removeEventListener:2","dispatchEvent:true:true:true:function:dispatchEvent:1"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
+        r#"{"ctxKeys":"","inheritedEvents":true,"oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:2","removeEventListener:true:true:true:function:removeEventListener:2","dispatchEvent:true:true:true:function:dispatchEvent:1"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:true:true:true:function:start:0","sharedStart":true,"param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
     );
 }
 
