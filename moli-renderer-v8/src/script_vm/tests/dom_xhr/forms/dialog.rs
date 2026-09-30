@@ -357,8 +357,8 @@ async fn dialog_request_close_ignores_recursive_cancel_and_queues_close() {
     );
 
     assert!(
-        !vm.has_ready_timeout(),
-        "dialog requestClose must not create synthetic Page timers"
+        !vm.has_ready_callback_timer(),
+        "dialog requestClose must not create a callback timer; focus rendering wakes are separate"
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
