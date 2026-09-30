@@ -1,5 +1,4 @@
 use super::super::constructors::*;
-use super::super::events::{device_motion_event_constructor, device_orientation_event_constructor};
 use super::super::{
     animation_runtime::{animation_constructor_callback, keyframe_effect_constructor_callback},
     broadcast_channel::broadcast_channel_constructor_callback,
