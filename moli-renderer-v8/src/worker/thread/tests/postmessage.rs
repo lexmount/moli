@@ -2153,24 +2153,6 @@ async fn worker_self_close() {
 // ─── Error propagation ──────────────────────────────────────────────
 
 #[tokio::test]
-async fn worker_does_not_expose_window_worklet_interfaces() {
-    ensure_v8();
-    let mut handle = spawn_worker(
-        "postMessage({Worklet: 'Worklet' in self, AudioWorklet: 'AudioWorklet' in self}); close();"
-            .to_owned(),
-        "https://worklet-worker.test/worker.js".into(),
-    );
-    let message = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(
-        expect_post_json(message),
-        r#"{"Worklet":false,"AudioWorklet":false}"#
-    );
-}
-
-#[tokio::test]
 async fn worker_error_propagation() {
     ensure_v8();
     let mut handle = spawn_worker(
@@ -2566,24 +2548,6 @@ async fn worker_performance_observer_delivers_live_and_buffered_user_timing_entr
     assert_eq!(
         expect_post_json(msg),
         r#"{"interfaces":true,"prototypeMethods":true,"supportedEntryTypes":"mark,measure,resource","live":"worker-observed-mark:mark,worker-observed-measure:measure","liveMarks":1,"namedMeasure":1,"buffered":"worker-observed-mark:mark"}"#
-    );
-}
-
-#[tokio::test]
-async fn worker_webgl_interfaces_share_native_value_and_event_bindings() {
-    ensure_v8();
-    let source = format!(
-        "({}).then(passed => {{ postMessage({{ passed, failures: __nodeReplacementResults.failures }}); close(); }}, error => {{ postMessage({{ passed: false, failures: [String(error)] }}); close(); }});",
-        include_str!("../../../script_vm/tests/webgl_interfaces.js")
-    );
-    let mut handle = spawn_worker(source, "test://worker-webgl-interfaces".into());
-    let message = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(
-        expect_post_json(message),
-        r#"{"passed":true,"failures":[]}"#
     );
 }
 

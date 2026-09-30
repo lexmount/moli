@@ -1081,14 +1081,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::XmlHttpRequest,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::Cache::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::CacheStorage::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::Headers::DESCRIPTOR,
         kind: ConstructorKind::Headers,
     },

@@ -529,11 +529,6 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_css_stylesheet_template_bindings(scope, template, spec.interface.name());
     install_range_template_bindings(scope, template, spec.interface.name());
     install_indexed_db_template_bindings(scope, template, spec.interface.name());
-    crate::context_bootstrap::window_runtime::install_cache_template_bindings(
-        scope,
-        template,
-        spec.interface.name(),
-    );
     install_selection_template_bindings(scope, template, spec.interface.name());
     install_file_api_template_bindings(scope, template, spec.interface.name());
     install_dom_parser_template_bindings(scope, template, spec.interface.name());
