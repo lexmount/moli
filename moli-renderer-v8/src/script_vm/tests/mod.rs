@@ -2210,6 +2210,7 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
 mod audio_node_interfaces;
 mod attr_accessors;
 mod attr_node_references;
+mod audio_buffer_interfaces;
 mod audio_channel_node_interfaces;
 mod audio_event_interfaces;
 mod audio_node_interfaces;
