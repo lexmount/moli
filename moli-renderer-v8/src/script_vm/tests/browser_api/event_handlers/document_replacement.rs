@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn root_document_replacement_clears_native_handlers_without_changing_public_descriptors() {
+fn document_replacement_clears_native_handlers_without_changing_public_descriptors() {
     let mut vm = new_storage_html_test_vm("https://document-handler-cleanup.test/");
     vm.eval(include_str!("document_replacement.js")).unwrap();
     assert_eq!(
