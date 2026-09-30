@@ -534,13 +534,9 @@ impl ScriptVm {
         // alive without a RefCell borrow across reentrant author callbacks.
         let context_host = Rc::clone(&self._context_host);
         let host_ptr = (*context_host).as_ptr();
-        let allowed = unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope);
-        // A paused Runtime command may own the active recorder. Flush its
-        // concrete prefix just as for a modal dialog, without closing that
-        // recorder or completing the suspended task. The navigation reply
-        // fences this prefix so console/binding output precedes the fetch.
-        unsafe { &*host_ptr }.publish_live_turn_output_prefix();
-        allowed
+        // The nested command boundary resolves the remaining output and fences
+        // the concrete stream tail without closing the paused command recorder.
+        unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
     }
 
     pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {

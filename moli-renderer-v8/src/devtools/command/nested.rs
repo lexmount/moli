@@ -6,7 +6,9 @@ use crate::runtime::{RendererPageCommand, RendererScreenshotPurpose};
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        use RendererDevToolsMainNestedDispatch::{BeforeUnload, InspectorSession, OwnerOnly, PageAgent};
+        use RendererDevToolsMainNestedDispatch::{
+            BeforeUnload, InspectorSession, OwnerOnly, PageAgent,
+        };
         match self {
             Self::Native(command) => {
                 if command.operation.can_dispatch_on_nested_main() {

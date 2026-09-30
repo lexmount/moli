@@ -1811,9 +1811,15 @@ impl PageVm {
         self.vm().append_live_command_output_prefix();
         self.absorb_pending_dom_mutations_into_output_journal();
         self.record_document_title_change_if_needed();
-        let publication = self.vm_mut().settle_renderer_output_prefix()?;
-        let journal = self.vm().renderer_command_output_journal();
-        journal.publish_resolved_prefix_and_declare_fence(publication)
+        if let Some(publication) = self.vm_mut().settle_renderer_output_prefix() {
+            let journal = self.vm().renderer_command_output_journal();
+            return journal.publish_resolved_prefix_and_declare_fence(publication);
+        }
+        // Inspector callbacks can publish the prefix while the owner remains
+        // paused. An empty pending journal still needs a fence for that concrete
+        // tail before an internal reply starts navigation or replaces the Page.
+        let cursor = self.renderer_output_tail_cursor()?;
+        Some(self.declare_renderer_output_fence(cursor))
     }
 
     fn record_document_title_change_if_needed(&mut self) {
