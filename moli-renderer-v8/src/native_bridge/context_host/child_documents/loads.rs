@@ -771,7 +771,7 @@ impl JsContextHost {
             if replaces_existing_document {
                 self.disconnect_shared_worker_clients_for_child_context(handle);
             }
-            self.clear_child_window_document_event_state(scope, handle);
+            self.clear_child_window_event_listeners(handle);
             self.replace_child_custom_elements_registry_for_document_commit(scope, handle);
             self.clear_child_browsing_context_current_document(handle);
             self.clear_pending_service_worker_child_client(handle);

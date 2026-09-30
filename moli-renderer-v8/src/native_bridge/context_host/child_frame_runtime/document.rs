@@ -637,7 +637,7 @@ impl JsContextHost {
                     ),
                 );
 
-                host.clear_child_window_document_event_state(scope, child_handle);
+                host.clear_child_window_event_listeners(child_handle);
                 host.clear_event_callbacks_for_document_replacement(document_handle, false);
                 for child in children {
                     let _ = remove_child_to_current_reaction_queue(
