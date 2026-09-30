@@ -2443,6 +2443,7 @@ mod video_codecs_shell;
 mod idb_database_native_receivers;
 
 mod web_lock_interface_exposure_interfaces;
+mod wake_lock_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;

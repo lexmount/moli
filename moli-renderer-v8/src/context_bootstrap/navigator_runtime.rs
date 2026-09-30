@@ -10,12 +10,14 @@ mod navigator_subobjects;
 mod screen;
 mod user_activation;
 mod visual_viewport;
+mod wake_lock;
 mod window_state;
 
 pub(crate) use geolocation::notify_geolocation_override_changed;
 
 pub(in crate::context_bootstrap) use self::clipboard::clipboard_item_constructor_callback;
 pub(crate) use self::navigator::build_lightweight_popup_window_navigator_object;
+pub(super) use self::navigator::finalize_navigator_realm_bindings;
 pub(super) use self::navigator::install_navigator_template_bindings;
 pub(crate) use self::navigator::install_worker_navigator_runtime_state;
 pub(in crate::context_bootstrap) use self::navigator::{
