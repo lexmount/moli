@@ -183,7 +183,11 @@ async fn check_beforeunload_while_paused(runtime_command: bool) {
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
     fixture.abort();
-    assert_eq!(bindings, vec![json!("root:false"), json!("child:false")]);
+    assert_eq!(
+        bindings,
+        vec![json!("root:false"), json!("child:false")],
+        "before fetch: {messages:#?}; navigation completion: {completed:#?}"
+    );
     assert_eq!(
         consoles,
         vec![json!("beforeunload:root"), json!("beforeunload:child")]
