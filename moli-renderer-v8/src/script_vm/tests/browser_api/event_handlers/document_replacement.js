@@ -16,6 +16,7 @@
     let frame;
     let target;
     if (owner === 'root') target = window;
+    else if (owner === 'popup') target = open();
     else {
       frame = document.createElement('iframe');
       document.body.appendChild(frame);
@@ -28,6 +29,7 @@
       return run(target);
     } finally {
       if (frame) frame.remove();
+      if (owner === 'popup') target.close();
     }
   }
   function replace(target, operation) {
@@ -35,7 +37,7 @@
     else target.document.write('<!doctype html><body>replacement');
     target.document.close();
   }
-  for (const owner of ['child', 'root']) {
+  for (const owner of ['child', 'popup', 'root']) {
     for (const operation of ['open', 'write']) {
       for (const mode of ['native', 'deleted', 'replaced', 'throwing-setter', 'read-only']) {
         check(`${owner}:${operation}:${mode}`, () => withWindow(owner, target => {
