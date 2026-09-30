@@ -2654,6 +2654,11 @@ async fn native_terminals_publish_before_waiters_are_polled() {
         renderer_json_value(later.into_reply_and_state().0),
         Some(serde_json::json!(42))
     );
+    // Retire the stream before polling native waiters or publication receipts.
+    // Already-published replies and their exact fences must survive teardown.
+    page.close_async()
+        .await
+        .expect("close page before consuming native replies");
     let terminals = output_rx
         .drain()
         .into_iter()
@@ -2704,15 +2709,26 @@ async fn native_terminals_publish_before_waiters_are_polled() {
             assert!(error.to_string().contains("native response was canceled"));
             continue;
         }
-        let reply = pending
+        let completion = pending
             .wait()
             .await
-            .expect("receive native completion")
-            .into_reply_and_state()
+            .expect("receive native completion after page retirement");
+        let terminal_cursor = terminals
+            .iter()
+            .find(|(_, terminal)| terminal.command_id.get() == command_id)
+            .expect("native terminal was published before retirement")
             .0;
+        assert_eq!(
+            completion
+                .renderer_output_predecessor()
+                .expect("native terminal fence")
+                .cursor(),
+            terminal_cursor,
+            "retirement must retain the exact committed terminal boundary",
+        );
+        let reply = completion.into_reply_and_state().0;
         assert!(matches!(reply, RendererPageReply::NativeCommandPublished));
     }
-    page.close_async().await.expect("close page");
 }
 
 #[tokio::test(flavor = "multi_thread")]

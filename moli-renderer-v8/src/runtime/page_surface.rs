@@ -1612,9 +1612,18 @@ impl RendererCommandTurnOutput {
                 // Settlement has already published this turn's earlier facts.
                 // Publish the ready reply here, before a later Main command
                 // can append its output, regardless of adapter waiter polling.
-                ready
-                    .publish(&page_state)?
-                    .merge_into_same_stream_tail(&mut renderer_output_predecessor);
+                let terminal = ready.publish(&page_state)?;
+                if let Some(prefix) = &renderer_output_predecessor {
+                    assert_eq!(
+                        terminal.cursor(),
+                        terminal.cursor().latest_in_same_stream(prefix.cursor()),
+                        "native terminal must cover its settled output prefix",
+                    );
+                }
+                // The terminal lease is declared before the covered prefix
+                // is released. Only this final boundary leaves the renderer;
+                // typed/composite replies still retain independent leases.
+                renderer_output_predecessor = Some(terminal);
                 RendererPageReply::NativeCommandPublished
             }
             reply => reply,
