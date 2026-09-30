@@ -47,6 +47,7 @@ pub(crate) use global_scope::{
     forget_worker_broadcast_channel_wrapper,
     forget_worker_message_port_wrapper,
     get_worker_state,
+    install_service_worker_interface_template_bindings,
     queue_worker_font_task,
     register_worker_blob_read_task,
     register_worker_broadcast_channel_wrapper,

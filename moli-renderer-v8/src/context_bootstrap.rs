@@ -5,6 +5,7 @@ mod assets;
 mod bar_prop;
 pub(crate) mod bridge_descriptor;
 mod external;
+pub(crate) mod service_worker_interfaces;
 pub(crate) use bar_prop::install_window_bar_props;
 pub(crate) use runtime_state::{
     install_lightweight_popup_legacy_objects, window_realm_secure_context_available,
@@ -49,7 +50,6 @@ pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
-mod javascript_url;
 pub(crate) use self::idle_detection::{
     apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
 };
