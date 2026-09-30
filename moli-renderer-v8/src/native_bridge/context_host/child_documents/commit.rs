@@ -353,7 +353,7 @@ impl JsContextHost {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {
                 self.disconnect_shared_worker_clients_for_child_context(handle);
                 if !preserve_window_event_state {
-                    self.clear_child_window_document_event_state(scope, handle);
+                    self.clear_child_window_event_listeners(handle);
                 }
                 self.replace_child_custom_elements_registry_for_document_commit(scope, handle);
             }
