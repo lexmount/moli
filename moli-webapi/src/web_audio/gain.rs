@@ -105,6 +105,8 @@ fn initialize<'s>(
         return false;
     }
     graph::initialize_node(scope, node, context);
+    // Gain processing is unavailable in the legacy oscillator backend.
+    graph::mark_unsupported_processor(scope, node);
     true
 }
 
