@@ -1534,3 +1534,83 @@ fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
         "undefined"
     );
 }
+
+#[tokio::test]
+async fn failed_object_attribute_navigation_enters_fallback_without_recreating_child_context() {
+    let (object_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(404).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &object_url.replace("/child.html", "/page"),
+        &loader,
+    );
+
+    assert_eq!(
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const root = document.body || document.documentElement || document;
+  const object = document.createElement('object');
+  object.type = 'text/html';
+  object.data = {object_url:?};
+  globalThis.__failedObjectEvents = [];
+  object.addEventListener('load', () => __failedObjectEvents.push('load'));
+  object.addEventListener('error', event => __failedObjectEvents.push(
+    `error:${{event.isTrusted}}:${{object.contentWindow === null}}`
+  ));
+  const fallback = document.createElement('span');
+  fallback.id = 'object-fallback';
+  fallback.textContent = 'fallback';
+  object.appendChild(fallback);
+  root.appendChild(object);
+  globalThis.__failedObject = object;
+  return [object.contentWindow !== null, window.length].join('|');
+}})()
+"#
+        ))
+        .expect("failed object setup should evaluate"),
+        "true|1",
+        "the object should expose its initial child browsing context while loading"
+    );
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "object attribute navigation should start from its frame-lane commit",
+    )
+    .await;
+    request_rx
+        .await
+        .expect("failed object document request should arrive");
+    release_tx
+        .send(())
+        .expect("release failed object document response");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "failed object document completion",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+JSON.stringify({
+  contentWindowIsNull: __failedObject.contentWindow === null,
+  contentDocumentIsNull: __failedObject.contentDocument === null,
+  childCount: window.length,
+  fallbackConnected: document.getElementById('object-fallback').isConnected,
+  events: __failedObjectEvents
+})
+"#,
+        )
+        .expect("failed object fallback state should evaluate"),
+        r#"{"contentWindowIsNull":true,"contentDocumentIsNull":true,"childCount":0,"fallbackConnected":true,"events":["error:true:true"]}"#
+    );
+    assert_eq!(
+        vm._context_host.borrow().child_browsing_context_count(),
+        0,
+        "contentWindow and contentDocument getters must not recreate a failed object context"
+    );
+    server.await.expect("failed object server should finish");
+}
