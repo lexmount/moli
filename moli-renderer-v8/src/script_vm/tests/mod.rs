@@ -2304,6 +2304,7 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
+mod gamepad_interfaces;
 mod geometry_matrix_constructor_union;
 mod geometry_point_conversion_order;
 mod geometry_point_transform;

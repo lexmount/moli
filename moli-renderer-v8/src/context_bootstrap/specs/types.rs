@@ -12,6 +12,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     BlobEvent,
     MIDIConnectionEvent,
     MIDIMessageEvent,
+    GamepadEvent,
     WebGLContextEvent,
     ToolActivatedEvent,
     ToolCancelEvent,

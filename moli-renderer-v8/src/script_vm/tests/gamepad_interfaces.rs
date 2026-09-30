@@ -11,7 +11,7 @@ fn gamepad_interfaces_use_native_brands_and_shared_event_payloads() {
             .unwrap(),
         "[]"
     );
-    assert_eq!(vm.eval("__nodeReplacementResults.total").unwrap(), "28");
+    assert_eq!(vm.eval("__nodeReplacementResults.total").unwrap(), "42");
     assert_eq!(vm.eval("__gamepadDone").unwrap(), "true");
 }
 
