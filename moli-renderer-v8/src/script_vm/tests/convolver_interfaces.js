@@ -6,9 +6,9 @@
     catch (error) { rows.push({name, pass: false, message: String(error)}); }
   };
   const thrown = callback => { try { callback(); } catch (error) { return error; } throw Error('expected exception'); };
-  
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
-  
+  const popup = open();
+  const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       const context = new w.AudioContext();
       const make = (channels = 1, rate = context.sampleRate) => new w.AudioBuffer({numberOfChannels: channels, length: 8, sampleRate: rate});
@@ -123,7 +123,7 @@
         });
       } finally { await context.close(); }
     }
-  
+  } finally { popup.close(); }
   globalThis.__nodeReplacementResults = {rows, passed: rows.filter(row => row.pass).length, total: rows.length, failures: rows.filter(row => !row.pass)};
   return rows.every(row => row.pass);
 })()
