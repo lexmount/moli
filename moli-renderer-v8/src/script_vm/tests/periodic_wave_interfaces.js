@@ -6,9 +6,9 @@
     try { await run(); rows.push({name, pass: true}); }
     catch (error) { rows.push({name, pass: false, message: String(error)}); }
   };
-  
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
-  
+  const popup = open();
+  const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       const context = new w.OfflineAudioContext(1, 16, 48000);
       const wave = () => new w.PeriodicWave(context);
@@ -196,7 +196,7 @@
         node.stop(); node.type = 'triangle'; node.setPeriodicWave(wave()); assert(node.type === 'custom', 'wave changes allowed after start/stop');
       });
     }
-  
+  } finally { if (popup) popup.close(); }
   const result = {total: rows.length, passed: rows.filter(row => row.pass).length, failures: rows.filter(row => !row.pass), rows};
   globalThis.__nodeReplacementResults = result;
   return result.failures.length === 0;
