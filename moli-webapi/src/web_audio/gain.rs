@@ -105,6 +105,9 @@ fn initialize<'s>(
         return false;
     }
     graph::initialize_node(scope, node, context);
+    // The legacy oscillator signal is not a Gain processor. Preserve the
+    // explicit unsupported-rendering boundary until PCM processing exists.
+    graph::mark_unsupported_processor(scope, node);
     true
 }
 

@@ -9,12 +9,13 @@
     try { callback(); } catch (error) { return error; }
     throw Error('expected exception');
   };
-  
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
-  
+  const popup = open();
+  const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       const context = new w.AudioContext();
       const types = [
+        ['GainNode', 'createGain', 'gain', 1, -Math.fround(3.4028234663852886e38), Math.fround(3.4028234663852886e38), 'max'],
         ['DelayNode', 'createDelay', 'delayTime', 0, 0, 1, 'max'],
         ['StereoPannerNode', 'createStereoPanner', 'pan', 0, -1, 1, 'clamped-max']
       ];
@@ -144,7 +145,7 @@
         });
       } finally { await context.close(); }
     }
-  
+  } finally { popup.close(); }
   globalThis.__nodeReplacementResults = {rows, rejectedModeStates, passed: rows.filter(row => row.pass).length, total: rows.length, failures: rows.filter(row => !row.pass)};
   return rows.every(row => row.pass);
 })()
