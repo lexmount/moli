@@ -13,6 +13,8 @@ const DOM_POINT_X_SLOT: &str = "__moliDomPointX";
 const DOM_POINT_Y_SLOT: &str = "__moliDomPointY";
 const DOM_POINT_Z_SLOT: &str = "__moliDomPointZ";
 const DOM_POINT_W_SLOT: &str = "__moliDomPointW";
+const DOM_POINT_RESTRICTED_NUMBER_SLOT: &str = "__moliDomPointRestrictedNumber";
+const DOM_POINT_READ_ONLY_SLOT: &str = "__moliDomPointReadOnly";
 
 const DOM_MATRIX_M11_SLOT: &str = "__moliDomMatrixM11";
 const DOM_MATRIX_M12_SLOT: &str = "__moliDomMatrixM12";
@@ -561,7 +563,73 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
         .expect("DOMPoint declaration should bind")
 }
 
-pub(in crate::context_bootstrap) fn build_dom_matrix_identity_object<'s>(
+pub(super) fn dom_point_init_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> DomPointInit {
+    DomPointInit {
+        x: dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
+        y: dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
+        z: dom_point_slot(scope, object, DOM_POINT_Z_SLOT, 0.0),
+        w: dom_point_slot(scope, object, DOM_POINT_W_SLOT, 1.0),
+    }
+}
+
+pub(super) fn dom_point_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(bool, [f64; 4])> {
+    if !dom_point_receiver_branded(scope, object) {
+        return None;
+    }
+    let mutable = web_api_interfaces::DOMPoint::is_instance(scope, object);
+    Some((
+        mutable,
+        [
+            dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_Z_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_W_SLOT, 1.0),
+        ],
+    ))
+}
+
+pub(in crate::context_bootstrap) fn build_svg_point_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> v8::Local<'s, v8::Object> {
+    build_svg_point_object_with_values(scope, 0.0, 0.0)
+}
+
+pub(in crate::context_bootstrap) fn build_svg_point_object_with_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    x: f64,
+    y: f64,
+) -> v8::Local<'s, v8::Object> {
+    let object = build_dom_point_object(scope, x, y, 0.0, 1.0);
+    let restricted = v8::Boolean::new(scope, true);
+    set_private_value(
+        scope,
+        object,
+        DOM_POINT_RESTRICTED_NUMBER_SLOT,
+        restricted.into(),
+    );
+    object
+}
+
+pub(in crate::context_bootstrap) fn set_svg_point_read_only<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    point: v8::Local<'s, v8::Object>,
+    read_only: bool,
+) {
+    set_private_value(
+        scope,
+        point,
+        DOM_POINT_READ_ONLY_SLOT,
+        v8::Boolean::new(scope, read_only).into(),
+    );
+}
+
+fn build_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
     build_dom_matrix_object(scope, DomMatrixComponents::identity())
@@ -647,12 +715,33 @@ fn dom_point_setter_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let Some(value) = geometry_number_value(
-        scope,
-        args.get(0),
-        webidl::Context::member("DOMPoint", slot),
-    ) else {
+    if get_private_value(scope, args.this(), DOM_POINT_READ_ONLY_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG point is read-only.",
+        );
         return;
+    }
+    let context = webidl::Context::member("DOMPoint", slot);
+    let value = if get_private_value(scope, args.this(), DOM_POINT_RESTRICTED_NUMBER_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        match webidl::convert::<webidl::Double>(scope, args.get(0), context) {
+            Ok(value) => value.0,
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                return;
+            }
+        }
+    } else {
+        let Some(value) = geometry_number_value(scope, args.get(0), context) else {
+            return;
+        };
+        value
     };
     set_private_value(
         scope,
@@ -660,6 +749,7 @@ fn dom_point_setter_callback<'s>(
         slot,
         v8::Number::new(scope, value).into(),
     );
+    super::svg_runtime::reflect_svg_point_mutation(scope, args.this());
     rv.set_undefined();
 }
 
@@ -2193,3 +2283,76 @@ const DOM_MATRIX_ATTRIBUTES: &[DomMatrixAttribute] = &[
     DOM_MATRIX_READONLY_ATTRIBUTES[0],
     DOM_MATRIX_READONLY_ATTRIBUTES[1],
 ];
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "DOMMatrix2DInit")]
+struct DomMatrix2DInit {
+    a: Option<f64>,
+    b: Option<f64>,
+    c: Option<f64>,
+    d: Option<f64>,
+    e: Option<f64>,
+    f: Option<f64>,
+    m11: Option<f64>,
+    m12: Option<f64>,
+    m21: Option<f64>,
+    m22: Option<f64>,
+    m41: Option<f64>,
+    m42: Option<f64>,
+}
+
+pub(in crate::context_bootstrap) fn dom_matrix_2d_init_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+    prefix: &'static str,
+) -> Option<[f64; 6]> {
+    if index >= args.length() || args.get(index).is_undefined() {
+        return Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+    let init = match webidl::parse_dictionary::<DomMatrix2DInit>(
+        scope,
+        args.get(index),
+        webidl::Context::argument(prefix, (index + 1) as usize),
+    ) {
+        Ok(Some(init)) => init,
+        Ok(None) => DomMatrix2DInit::default(),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    Some([
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "a", init.a, "m11", init.m11, 1.0)?,
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "b", init.b, "m12", init.m12, 0.0)?,
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "c", init.c, "m21", init.m21, 0.0)?,
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "d", init.d, "m22", init.m22, 1.0)?,
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "e", init.e, "m41", init.m41, 0.0)?,
+        validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "f", init.f, "m42", init.m42, 0.0)?,
+    ])
+}
+
+fn validated_dom_matrix_2d_alias(
+    scope: &mut v8::PinScope<'_, '_>,
+    dictionary_name: &'static str,
+    alias_name: &'static str,
+    alias: Option<f64>,
+    matrix_name: &'static str,
+    matrix: Option<f64>,
+    default: f64,
+) -> Option<f64> {
+    if let (Some(alias), Some(matrix)) = (alias, matrix)
+        && !same_dom_matrix_2d_number(alias, matrix)
+    {
+        throw_type_error(
+            scope,
+            &format!("{dictionary_name} {alias_name} and {matrix_name} values differ."),
+        );
+        return None;
+    }
+    Some(matrix.or(alias).unwrap_or(default))
+}
+
+fn same_dom_matrix_2d_number(lhs: f64, rhs: f64) -> bool {
+    lhs == rhs || (lhs.is_nan() && rhs.is_nan())
+}
