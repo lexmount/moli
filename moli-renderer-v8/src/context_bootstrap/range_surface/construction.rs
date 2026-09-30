@@ -91,6 +91,9 @@ pub(super) fn document_create_range_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let document = args.this();
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
     let Some(range) = new_range_for_document(scope, document) else {
         rv.set_undefined();
         return;

@@ -78,6 +78,9 @@ pub(super) fn document_create_event_callback<'s>(
         throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
         return;
     };
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
     if kind == DocumentCreateEventKind::TextEvent {
         match new_uninitialized_text_event(scope) {
             Some(event) => rv.set(event.into()),
