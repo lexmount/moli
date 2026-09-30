@@ -84,7 +84,9 @@
           assert(reads === 0 && new w.ConvolverNode(context, {disableNormalization: object}).normalize === false, 'ToBoolean has no author hooks');
         });
         await check(label + '/ConvolverNode/fractional offline context sample-rate', async () => {
+          for (const sampleRate of [NaN, Infinity, -Infinity, 1e100, Symbol(), 1n]) assert(thrown(() => new w.OfflineAudioContext(1, 16, sampleRate)) instanceof w.TypeError, 'context sample rate uses restricted float');
           const offline = new w.OfflineAudioContext(1, 16, 44100.1), rate = Math.fround(44100.1);
+          assert(offline.sampleRate === rate, 'context preserves converted float sample rate');
           const buffer = offline.createBuffer(1, 4, rate), node = new w.ConvolverNode(offline, {buffer});
           assert(buffer.sampleRate === rate && node.buffer === buffer, 'matching fractional native buffer accepted');
           Object.defineProperty(offline, 'sampleRate', {get() { throw Error('public context metadata'); }});
