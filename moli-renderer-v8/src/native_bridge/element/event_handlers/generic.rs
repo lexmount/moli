@@ -371,7 +371,7 @@ pub(crate) fn shadow_root_event_handler_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn node_event_handler_getter_function<'s>(
+pub(crate) fn node_event_handler_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -542,7 +542,7 @@ fn compile_node_event_attribute_handler<'s>(
     Some(handler)
 }
 
-fn node_event_handler_setter_function<'s>(
+pub(crate) fn node_event_handler_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -627,9 +627,10 @@ pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
     }
 }
 
-
 pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> Option<String> {
     let event_type = match event_type {
+        // The SVG handlers observe the *Event types, not events named after
+        // their attributes. Do not invoke onbegin for dispatchEvent("begin").
         "begin" | "end" | "repeat" => return None,
         "beginEvent" => "begin",
         "endEvent" => "end",
