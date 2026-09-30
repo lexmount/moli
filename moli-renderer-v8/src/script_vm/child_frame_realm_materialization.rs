@@ -327,7 +327,7 @@ impl ScriptVm {
         let binding_names = self
             ._context_host
             .borrow()
-            .stored_default_runtime_binding_names();
+            .stored_default_native_runtime_binding_names();
         for name in binding_names {
             if let Err(error) =
                 self.install_runtime_binding_in_child_default_context(execution_context_id, &name)
