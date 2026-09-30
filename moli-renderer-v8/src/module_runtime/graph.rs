@@ -2750,6 +2750,7 @@ mod tests {
         for (module_type, text) in [
             ("json", r#"{"answer":42}"#),
             ("css", "body { color: red; }"),
+            ("text", "plain text export"),
         ] {
             let mut vm = new_test_vm("https://app.example.test/page");
             let source_url = url(&format!("https://app.example.test/source.{module_type}"));
@@ -2785,10 +2786,10 @@ mod tests {
             );
             drop(fetched);
             drop(source);
-            if module_type == "json" {
+            if module_type != "css" {
                 assert!(
                     weak_source.upgrade().is_none(),
-                    "parsed JSON modules must release the original source text",
+                    "{module_type}: V8 exports must release the original source text",
                 );
             } else {
                 assert_eq!(
