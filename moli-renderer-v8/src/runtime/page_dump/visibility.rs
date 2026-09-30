@@ -34,7 +34,7 @@ impl<'a> MarkdownDom<'a> {
         dom: &'a NativeDom,
         styles: impl IntoIterator<Item = (NativeNodeId, Vec<String>)>,
         base_url: Option<&Url>,
-        final_opacity_animations: HashMap<NativeNodeId, HashSet<String>>,
+        final_opacity_elements: HashSet<NativeNodeId>,
     ) -> Self {
         let styles: Vec<_> = styles.into_iter().collect();
         let document_element = dom.document_element_node_id();
@@ -283,12 +283,12 @@ impl<'a> MarkdownDom<'a> {
             } else if matches!(computed_visibility, "hidden" | "collapse") {
                 match parent_visibility {
                     VisibilityMode::RootVeil
-                        if values.get(21).is_none_or(|value| value != "true") =>
+                        if values.get(14).is_none_or(|value| value != "true") =>
                     {
                         VisibilityMode::RootVeil
                     }
                     VisibilityMode::DisclosureVeil
-                        if values.get(21).is_none_or(|value| value != "true") =>
+                        if values.get(14).is_none_or(|value| value != "true") =>
                     {
                         VisibilityMode::DisclosureVeil
                     }
@@ -298,15 +298,12 @@ impl<'a> MarkdownDom<'a> {
                 parent_visibility
             };
             visibility_modes.insert(node, visibility_mode);
-            let has_bounded_final_opacity = final_opacity_animations
-                .get(&node)
-                .is_some_and(|names| has_bounded_final_opacity(&values, names));
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
                     && !lazy_media
-                    && !has_bounded_final_opacity
+                    && !final_opacity_elements.contains(&node)
                     && !document_root)
                 && !disclosure_root
                 && !disclosure_path)
@@ -409,86 +406,6 @@ impl<'a> MarkdownDom<'a> {
         }
         None
     }
-}
-
-fn has_bounded_final_opacity(
-    values: &[String],
-    final_opacity_animations: &HashSet<String>,
-) -> bool {
-    let names = parse_animation_names(values.get(14));
-    let durations: Vec<_> = values
-        .get(15)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    let fill_modes: Vec<_> = values
-        .get(16)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    let delays: Vec<_> = values
-        .get(17)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    let iteration_counts: Vec<_> = values
-        .get(18)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    let directions: Vec<_> = values
-        .get(19)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    let play_states: Vec<_> = values
-        .get(20)
-        .map(|value| value.split(',').map(str::trim).collect())
-        .unwrap_or_default();
-    names.iter().enumerate().any(|(index, name)| {
-        final_opacity_animations.contains(name)
-            && !durations.is_empty()
-            && animation_duration_is_positive(durations[index % durations.len()])
-            && !fill_modes.is_empty()
-            && matches!(fill_modes[index % fill_modes.len()], "forwards" | "both")
-            && !delays.is_empty()
-            && animation_time_seconds(delays[index % delays.len()])
-                .is_some_and(|delay| delay <= 0.0)
-            && !iteration_counts.is_empty()
-            && iteration_counts[index % iteration_counts.len()].parse::<f32>() == Ok(1.0)
-            && !directions.is_empty()
-            && directions[index % directions.len()] == "normal"
-            && !play_states.is_empty()
-            && play_states[index % play_states.len()] == "running"
-    })
-}
-
-pub(super) fn computed_property_animation_names(values: &[String]) -> Vec<String> {
-    parse_animation_names(values.get(8))
-}
-
-fn parse_animation_names(value: Option<&String>) -> Vec<String> {
-    value
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|name| !name.is_empty() && *name != "none")
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn animation_duration_is_positive(duration: &str) -> bool {
-    animation_time_seconds(duration).is_some_and(|duration| duration > 0.0)
-}
-
-fn animation_time_seconds(value: &str) -> Option<f32> {
-    value
-        .strip_suffix("ms")
-        .and_then(|value| value.trim().parse::<f32>().ok())
-        .map(|value| value / 1000.0)
-        .or_else(|| {
-            value
-                .strip_suffix('s')
-                .and_then(|value| value.trim().parse::<f32>().ok())
-        })
 }
 
 fn target_is_disclosure<D: Dom + ?Sized>(

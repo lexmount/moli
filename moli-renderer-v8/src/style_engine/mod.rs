@@ -332,13 +332,13 @@ impl MoliStyleEngine {
             })
     }
 
-    pub(crate) fn final_opacity_animation_names_for_elements(
+    pub(crate) fn elements_with_bounded_final_opacity(
         &self,
         host: &DomHost,
         document: DomHandle,
-        elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
-    ) -> HashMap<DomHandle, HashSet<String>> {
-        computed::retained_final_opacity_animation_names(self, host, document, elements)
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> HashSet<DomHandle> {
+        computed::retained_elements_with_bounded_final_opacity(self, host, document, elements)
     }
 
     #[cfg(debug_assertions)]

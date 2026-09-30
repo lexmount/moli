@@ -14,7 +14,7 @@ use style::{
     data::ElementStyles,
     dom::{TElement, TNode},
     properties::{
-        ComputedValues, PropertyId,
+        ComputedValues, LonghandId, PropertyDeclarationId, PropertyId,
         longhands::{
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
@@ -33,7 +33,9 @@ use style::{
     traversal::resolve_style,
     traversal_flags::TraversalFlags,
     values::{
-        AtomIdent, resolved,
+        AtomIdent,
+        computed::{AnimationDirection, AnimationFillMode, AnimationPlayState},
+        resolved,
         specified::{
             box_::{ContentVisibility, Display, DisplayInside, DisplayOutside},
             text::TextTransformCase,
@@ -352,12 +354,12 @@ pub(super) fn retained_current_element_state(
     })?
 }
 
-pub(super) fn retained_final_opacity_animation_names(
+pub(super) fn retained_elements_with_bounded_final_opacity(
     engine: &MoliStyleEngine,
     host: &DomHost,
     document: DomHandle,
-    elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
-) -> std::collections::HashMap<DomHandle, HashSet<String>> {
+    elements: impl IntoIterator<Item = DomHandle>,
+) -> HashSet<DomHandle> {
     let elements: Vec<_> = elements.into_iter().collect();
     if elements.is_empty() {
         return Default::default();
@@ -392,36 +394,60 @@ pub(super) fn retained_final_opacity_animation_names(
             };
             elements
                 .into_iter()
-                .filter_map(|(handle, names)| {
+                .filter_map(|handle| {
                     let element = dom_adapter.element(host, handle)?;
                     let base_style = element.borrow_data()?.styles.primary().clone();
-                    let revealing = names
-                        .into_iter()
-                        .filter(|name| {
-                            #[cfg(test)]
-                            FINAL_OPACITY_ANIMATION_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
-                            let atom = Atom::from(name.as_str());
-                            let Some(animation) = retained.stylist.lookup_keyframes(&atom, element)
-                            else {
-                                return false;
-                            };
-                            let mut resolver = StyleResolverForElement::new(
-                                element,
-                                &mut context,
-                                RuleInclusion::All,
-                                PseudoElementResolution::IfApplicable,
-                            );
-                            let opacity = final_keyframe_opacity(
-                                element,
-                                animation,
-                                &shared,
-                                &base_style,
-                                &mut resolver,
-                            );
-                            opacity.is_some_and(|opacity| opacity > 0.0)
-                        })
-                        .collect::<HashSet<_>>();
-                    (!revealing.is_empty()).then_some((handle, revealing))
+                    let ui = base_style.get_ui();
+                    let opacity_property = PropertyDeclarationId::Longhand(LonghandId::Opacity);
+                    let mut final_opacity = None;
+                    let mut final_opacity_is_known = true;
+                    for (index, name) in ui.animation_name_iter().enumerate() {
+                        let Some(name) = name.as_atom() else {
+                            continue;
+                        };
+                        #[cfg(test)]
+                        FINAL_OPACITY_ANIMATION_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+                        let Some(animation) = retained.stylist.lookup_keyframes(name, element)
+                        else {
+                            continue;
+                        };
+                        if !animation.properties_changed.contains(opacity_property) {
+                            continue;
+                        }
+                        let bounded = ui.animation_duration_mod(index).seconds() > 0.0
+                            && matches!(
+                                ui.animation_fill_mode_mod(index),
+                                AnimationFillMode::Forwards | AnimationFillMode::Both
+                            )
+                            && ui.animation_delay_mod(index).seconds() <= 0.0
+                            && ui.animation_iteration_count_mod(index).0 == 1.0
+                            && ui.animation_direction_mod(index) == AnimationDirection::Normal
+                            && ui.animation_play_state_mod(index) == AnimationPlayState::Running;
+                        if !bounded {
+                            final_opacity_is_known = false;
+                            continue;
+                        }
+                        let mut resolver = StyleResolverForElement::new(
+                            element,
+                            &mut context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        if let Some(opacity) = final_keyframe_opacity(
+                            element,
+                            animation,
+                            &shared,
+                            &base_style,
+                            &mut resolver,
+                        ) {
+                            final_opacity = Some(opacity);
+                            final_opacity_is_known = true;
+                        } else {
+                            final_opacity_is_known = false;
+                        }
+                    }
+                    (final_opacity_is_known && final_opacity.is_some_and(|value| value > 0.0))
+                        .then_some(handle)
                 })
                 .collect()
         })

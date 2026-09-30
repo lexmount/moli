@@ -40,13 +40,13 @@ impl ScriptVm {
         )
     }
 
-    pub(crate) fn final_opacity_animation_names_for_element_snapshots(
+    pub(crate) fn elements_with_bounded_final_opacity_for_document_snapshot(
         &self,
-        elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
-    ) -> std::collections::HashMap<DomHandle, std::collections::HashSet<String>> {
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> std::collections::HashSet<DomHandle> {
         let host = self._context_host.borrow();
         let document = host.document_handle();
-        host.final_opacity_animation_names_for_elements(document, elements)
+        host.elements_with_bounded_final_opacity(document, elements)
     }
 
     pub(crate) fn sync_live_document_style_sources(&mut self) {

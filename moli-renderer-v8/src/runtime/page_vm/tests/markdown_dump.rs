@@ -236,6 +236,36 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!keyframe_priority.contains("Layered count 992"), "{keyframe_priority}");
         assert!(!keyframe_priority.contains("Repeated count 992"), "{keyframe_priority}");
         page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>@keyframes reveal{to{opacity:1}}@keyframes conceal{to{opacity:0}}@keyframes spin{to{transform:rotate(1turn)}}@keyframes "fade,in"{to{opacity:1}}</style>';
+            document.body.innerHTML = `
+                <p>Leading none <span style="opacity:0;animation-name:none,reveal;animation-duration:1s,1s;animation-fill-mode:none,forwards">kept</span></p>
+                <p>Middle none <span style="opacity:0;animation-name:spin,none,reveal;animation-duration:1s;animation-fill-mode:none,none,forwards">kept</span></p>
+                <p>Trailing none <span style="opacity:0;animation-name:reveal,none;animation-duration:1s;animation-fill-mode:forwards">kept</span></p>
+                <p>Wrong slot <span style="opacity:0;animation-name:none,reveal;animation-duration:1s;animation-fill-mode:forwards,none">hidden99</span>2</p>
+                <p>Escaped name <span style='opacity:0;animation-name:"fade,in";animation-duration:1s;animation-fill-mode:forwards'>kept</span></p>
+                <p>Reveal then conceal <span style="opacity:0;animation:reveal 1s forwards,conceal 1s forwards">hidden99</span>2</p>
+                <p>Conceal then reveal <span style="opacity:0;animation:conceal 1s forwards,reveal 1s forwards">kept</span></p>
+                <p>Reveal then transform <span style="opacity:0;animation:reveal 1s forwards,spin 1s forwards">kept</span></p>`;
+        "#).unwrap();
+        for strip_css in [false, true] {
+            let animation_lists = page.render_page_dump(options(strip_css));
+            for text in [
+                "Leading none kept",
+                "Middle none kept",
+                "Trailing none kept",
+                "Escaped name kept",
+                "Conceal then reveal kept",
+                "Reveal then transform kept",
+            ] {
+                assert!(animation_lists.contains(text), "missing {text}: {animation_lists}");
+            }
+            for text in ["Wrong slot hidden99", "Reveal then conceal hidden99"] {
+                assert!(!animation_lists.contains(text), "leaked {text}: {animation_lists}");
+            }
+            assert!(animation_lists.contains("Wrong slot 2"), "{animation_lists}");
+            assert!(animation_lists.contains("Reveal then conceal 2"), "{animation_lists}");
+        }
+        page.vm_mut().eval(r#"
             const unrelatedRules = Array.from({length:128}, (_, index) => `@keyframes unused${index}{to{opacity:1}}`).join('');
             const unrelatedNodes = Array.from({length:128}, (_, index) => `<span style="opacity:0">hidden${index}</span>`).join('');
             document.head.innerHTML = `<style>${unrelatedRules}@keyframes used{to{opacity:1}}</style>`;

@@ -1517,13 +1517,13 @@ impl JsContextHost {
             .retained_stylesheet_query_snapshot_for_document(document)
     }
 
-    pub(crate) fn final_opacity_animation_names_for_elements(
+    pub(crate) fn elements_with_bounded_final_opacity(
         &self,
         document: DomHandle,
-        elements: impl IntoIterator<Item = (DomHandle, Vec<String>)>,
-    ) -> std::collections::HashMap<DomHandle, std::collections::HashSet<String>> {
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> std::collections::HashSet<DomHandle> {
         self.style_engine
-            .final_opacity_animation_names_for_elements(self.dom_host(), document, elements)
+            .elements_with_bounded_final_opacity(self.dom_host(), document, elements)
     }
 
     #[cfg(test)]
