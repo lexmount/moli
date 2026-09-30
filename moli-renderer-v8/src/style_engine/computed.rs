@@ -23,7 +23,7 @@ use style::{
         parse_style_attribute,
     },
     selector_parser::{PseudoElement, SnapshotMap},
-    servo::animation::final_keyframe_opacity,
+    servo::animation::{FinalKeyframeOpacity, final_keyframe_opacity},
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
     style_resolver::{PseudoElementResolution, StyleResolverForElement},
@@ -414,16 +414,26 @@ pub(super) fn retained_elements_with_bounded_final_opacity(
                         if !animation.properties_changed.contains(opacity_property) {
                             continue;
                         }
-                        let bounded = ui.animation_duration_mod(index).seconds() > 0.0
-                            && matches!(
-                                ui.animation_fill_mode_mod(index),
-                                AnimationFillMode::Forwards | AnimationFillMode::Both
-                            )
+                        let has_bounded_final_state = ui.animation_duration_mod(index).seconds()
+                            > 0.0
                             && ui.animation_delay_mod(index).seconds() <= 0.0
                             && ui.animation_iteration_count_mod(index).0 == 1.0
                             && ui.animation_direction_mod(index) == AnimationDirection::Normal
                             && ui.animation_play_state_mod(index) == AnimationPlayState::Running;
-                        if !bounded {
+                        if has_bounded_final_state
+                            && matches!(
+                                ui.animation_fill_mode_mod(index),
+                                AnimationFillMode::None | AnimationFillMode::Backwards
+                            )
+                        {
+                            continue;
+                        }
+                        if !has_bounded_final_state
+                            || !matches!(
+                                ui.animation_fill_mode_mod(index),
+                                AnimationFillMode::Forwards | AnimationFillMode::Both
+                            )
+                        {
                             final_opacity_is_known = false;
                             continue;
                         }
@@ -433,17 +443,21 @@ pub(super) fn retained_elements_with_bounded_final_opacity(
                             RuleInclusion::All,
                             PseudoElementResolution::IfApplicable,
                         );
-                        if let Some(opacity) = final_keyframe_opacity(
+                        match final_keyframe_opacity(
                             element,
                             animation,
                             &shared,
                             &base_style,
                             &mut resolver,
                         ) {
-                            final_opacity = Some(opacity);
-                            final_opacity_is_known = true;
-                        } else {
-                            final_opacity_is_known = false;
+                            FinalKeyframeOpacity::NoEffect | FinalKeyframeOpacity::Underlying => {}
+                            FinalKeyframeOpacity::Replace(opacity) => {
+                                final_opacity = Some(opacity);
+                                final_opacity_is_known = true;
+                            }
+                            FinalKeyframeOpacity::Unknown => {
+                                final_opacity_is_known = false;
+                            }
                         }
                     }
                     (final_opacity_is_known && final_opacity.is_some_and(|value| value > 0.0))
