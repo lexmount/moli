@@ -4,12 +4,12 @@ use super::{
 use crate::{
     context_bootstrap::{
         WINDOW_EVENT_HANDLER_PROPERTIES, install_simple_event_target_ordered_handlers,
-        simple_object_event_activate_uncompiled_handler, simple_object_event_set_ordered_handler,
+        install_window_event_handler_accessor, simple_object_event_activate_uncompiled_handler,
+        simple_object_event_set_ordered_handler,
     },
-    definitions::define_function_accessor_property,
     document_runtime::DomHandle,
     native_bridge::OwnerDispatchScope,
-    util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value, v8str},
+    util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
 };
 use std::collections::HashMap;
 
@@ -211,53 +211,8 @@ pub(super) fn install_lightweight_popup_event_handler_accessors<'s>(
 ) {
     install_simple_event_target_ordered_handlers(scope, window);
     for property_name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        let data = v8str(scope, property_name).into();
-        define_function_accessor_property(
-            scope,
-            window,
-            property_name,
-            lightweight_popup_event_handler_getter,
-            Some(data),
-            lightweight_popup_event_handler_setter,
-            Some(data),
-            v8::PropertyAttribute::NONE,
-        )
-        .expect("lightweight popup Window event handler accessor should initialize");
+        install_window_event_handler_accessor(scope, window, property_name);
     }
-}
-
-fn lightweight_popup_event_handler_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<&'static str> {
-    let requested = data.to_string(scope)?.to_rust_string_lossy(scope);
-    WINDOW_EVENT_HANDLER_PROPERTIES
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == requested)
-}
-
-fn lightweight_popup_event_handler_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(popup_id) = lightweight_popup_id_from_window(scope, args.this()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let value = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        unsafe { &mut *host_ptr }.lightweight_popup_event_handler_property_value(
-            scope,
-            popup_id,
-            property_name,
-        )
-    });
-    rv.set(value.unwrap_or_else(|| v8::null(scope).into()));
 }
 
 fn lightweight_popup_event_handler_value<'s>(
@@ -268,31 +223,6 @@ fn lightweight_popup_event_handler_value<'s>(
     get_private_value(scope, window, property_name)
         .filter(|value| value.is_object())
         .unwrap_or_else(|| v8::null(scope).into())
-}
-
-fn lightweight_popup_event_handler_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(popup_id) = lightweight_popup_id_from_window(scope, args.this()) else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
-        rv.set_undefined();
-        return;
-    };
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let handler = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
-        unsafe { &mut *host_ptr }.set_lightweight_popup_event_handler_property(
-            scope,
-            popup_id,
-            property_name,
-            handler,
-        );
-    }
-    rv.set_undefined();
 }
 
 fn set_lightweight_popup_event_handler_value<'s>(
