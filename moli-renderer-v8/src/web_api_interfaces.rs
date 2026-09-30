@@ -56,6 +56,7 @@ interfaces! {
     ConstantSourceNode: AudioScheduledSourceNode;
     DelayNode: AudioNode;
     GainNode: AudioNode;
+    IIRFilterNode: AudioNode;
     Gamepad;
     GamepadButton;
     GamepadEvent: Event;
