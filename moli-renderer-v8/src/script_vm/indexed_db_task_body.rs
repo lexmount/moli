@@ -55,8 +55,7 @@ impl ScriptVm {
 
     /// Executes one exact Page-side IndexedDB task after Page-root and Window
     /// realm authorization. The local task id is consumed by identity rather
-    /// than by queue head so a stale alias can never steal another realm's
-    /// task from a shared V8 context.
+    /// than by queue head so a stale ticket cannot consume another task.
     pub(crate) fn apply_current_indexed_db_task_body(
         &mut self,
         authorization: AuthorizedCurrentPageIndexedDbTask,

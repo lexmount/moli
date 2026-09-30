@@ -20,7 +20,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_databases_callback<'
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
 
-    let Some(owner) = idb_factory_effective_execution_owner(scope, args.this()) else {
+    let Some(owner) = indexed_db_typed_execution_owner(scope, args.this()) else {
         let exception = dom_exception_value(
             scope,
             "Failed to execute 'databases' on 'IDBFactory': access to the Indexed Database API is denied in this context.",

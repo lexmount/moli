@@ -300,31 +300,6 @@ impl NativeBridgeBindings {
         wrapper
     }
 
-    pub(super) fn instantiate_window_shell<'s, 'i>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
-    ) -> v8::Local<'s, v8::Object> {
-        let wrapper = self
-            .window_wrapper_template()
-            .new_instance(scope)
-            .expect("failed to instantiate synthetic Window wrapper");
-        let host_external = v8::External::new(scope, host_ptr as *mut c_void);
-        assert!(
-            wrapper.set_internal_field(0, host_external.into()),
-            "synthetic Window wrapper must expose its runtime field"
-        );
-        assert!(
-            wrapper.set_internal_field(1, v8::Number::new(scope, 0.0).into()),
-            "synthetic Window wrapper must expose its shell marker"
-        );
-        web_api_interfaces::Window::DESCRIPTOR
-            .initialize(scope, wrapper)
-            .expect("synthetic Window identity should initialize");
-        set_named_constructor_prototype(scope, wrapper, "Window");
-        wrapper
-    }
-
     pub(super) fn instantiate_window_proxy_shell<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
