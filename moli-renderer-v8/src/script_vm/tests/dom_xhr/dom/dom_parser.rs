@@ -315,3 +315,32 @@ yield; // Publish this scene before reading its geometry.
         "INPUT|<input><span>some text</span>|<input type=\"text\" id=\"inputid\"><div id=\"divid\">new text</div>|inputId|0|1|Som|NotSupportedError:9"
     );
 }
+
+#[test]
+fn dom_parser_expands_entities_from_an_internal_subset() {
+    let mut vm = new_storage_test_vm("https://dom-parser-internal-subset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = new DOMParser().parseFromString(
+    '<!DOCTYPE foo [ <!ENTITY x "y"> ]><foo>&x;</foo>',
+    'text/xml'
+  );
+  const serializer = new XMLSerializer();
+  return [
+    doc.doctype.name,
+    doc.doctype.publicId,
+    doc.doctype.systemId,
+    serializer.serializeToString(doc.documentElement),
+    serializer.serializeToString(doc.doctype),
+    doc.getElementsByTagName('parsererror').length
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser internal subset entity should evaluate");
+
+    assert_eq!(result, "foo|||<foo>y</foo>|<!DOCTYPE foo>|0");
+}
