@@ -205,18 +205,33 @@ impl RendererTurnOutputJournal {
     /// Admit a prefix whose cursor was already allocated by
     /// `take_pending_for_resolution`. Resolution updates Inspector mirrors
     /// outside the journal lock and must not allocate a second cursor.
-    pub(crate) fn publish_resolved_prefix(&self, publication: RendererOutputPublication) -> bool {
+    /// Publication and its retention lease share this lock, so retirement
+    /// cannot close the stream between admitting the prefix and its fence.
+    pub(crate) fn publish_resolved_prefix_and_declare_fence(
+        &self,
+        publication: RendererOutputPublication,
+    ) -> Option<RendererOutputFence> {
         let mut state = self.state.lock();
-        assert_eq!(publication.cursor().stream(), state.stream);
+        let cursor = publication.cursor();
+        assert_eq!(cursor.stream(), state.stream);
         if state.closed {
-            return false;
+            return None;
         }
+        assert!(
+            state
+                .last_published_sequence
+                .is_some_and(|sequence| sequence.get() >= cursor.sequence()),
+            "renderer output fence cannot name an unpublished cursor"
+        );
         if let Some(transport) = state.transport.as_ref() {
-            publication.publish_to(transport).is_ok()
+            publication.publish_to(transport).ok()?;
         } else {
             state.deferred_publications.push(publication);
-            true
         }
+        Some(RendererOutputFence::declare(
+            cursor,
+            state.transport.clone(),
+        ))
     }
 
     /// Atomically appends and publishes one already-resolved producer batch.

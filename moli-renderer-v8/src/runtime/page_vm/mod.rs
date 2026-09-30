@@ -1797,10 +1797,7 @@ impl PageVm {
         self.record_document_title_change_if_needed();
         let publication = self.vm_mut().settle_renderer_output_prefix()?;
         let journal = self.vm().renderer_command_output_journal();
-        let cursor = publication.cursor();
-        journal
-            .publish_resolved_prefix(publication)
-            .then(|| journal.declare_fence(cursor))
+        journal.publish_resolved_prefix_and_declare_fence(publication)
     }
 
     fn record_document_title_change_if_needed(&mut self) {
