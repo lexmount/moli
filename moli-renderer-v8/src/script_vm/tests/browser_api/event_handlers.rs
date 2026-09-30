@@ -8,6 +8,7 @@ mod popup;
 mod popup_callback_owner;
 mod popup_window;
 mod surface;
+mod window_receivers;
 
 #[test]
 fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
