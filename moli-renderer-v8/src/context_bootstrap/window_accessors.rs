@@ -30,6 +30,7 @@ pub(crate) use helpers::{current_window_style_viewport, window_host_ptr};
 pub(super) use helpers::{
     window_child_context_handle, window_current_dispatch_scope, window_document_handle,
     window_has_discarded_child_browsing_context,
+    window_owner_dispatch_scope,
 };
 pub(super) use interceptors::{
     window_indexed_property_definer, window_indexed_property_deleter,

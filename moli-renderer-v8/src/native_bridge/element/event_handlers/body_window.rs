@@ -154,7 +154,10 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
     // event and re-enters the corresponding getter. Replace the uncompiled
     // state before invoking V8 so that re-entry observes null instead of
     // recursively compiling the same content attribute.
-    let target_context = scope.get_current_context();
+    let dispatch_scope = OwnerDispatchScope::Top;
+    let context_owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
+    let (_, target_context) =
+        runtime.window_execution_context(scope, context_owner, dispatch_scope)?;
     runtime.set_registered_content_attribute_event_handler_property(
         scope,
         EventTargetHandle::Window,
@@ -162,13 +165,22 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
         None,
         target_context,
     );
-    let Some(handler) = compile_body_window_event_attribute(scope, runtime_ptr, owner, event_type)
-    else {
+    let handler = {
+        // A borrowed Window or body getter can run in another realm. The
+        // handler and any compilation error belong to the target Document.
+        let scope = &mut v8::ContextScope::new(scope, target_context);
+        let previous = dispatch_scope.enter(scope);
+        let handler = compile_body_window_event_attribute(scope, runtime_ptr, owner, event_type)
+            .map(|handler| v8::Global::new(scope, handler));
+        dispatch_scope.restore(scope, previous);
+        handler
+    };
+    let Some(handler) = handler else {
         // Error reporting can replace or deactivate the handler, even through
         // document.open(). Keep those changes and return null for this read.
         return Some(v8::null(scope).into());
     };
-    let target_context = scope.get_current_context();
+    let handler = v8::Local::new(scope, &handler);
     unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
         scope,
         EventTargetHandle::Window,

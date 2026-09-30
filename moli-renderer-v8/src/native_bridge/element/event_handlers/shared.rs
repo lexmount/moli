@@ -3,7 +3,7 @@ use crate::{
     document_runtime::DomHandle,
     exception_reporting::build_exception_report_without_stack,
     native_bridge::{JsContextHost, OwnerDispatchScope},
-    util::{create_script_origin_with_base_url, v8_string},
+    util::{create_function_origin_with_base_url, v8_string},
 };
 
 pub(super) fn compile_event_attribute_handler<'s>(
@@ -65,7 +65,12 @@ fn compile_event_attribute_function<'s>(
 ) -> Option<v8::Local<'s, v8::Function>> {
     let source_text = v8_string(scope, source)?;
     let source_url = unsafe { &*host_ptr }.document_url().to_string();
-    let origin = create_script_origin_with_base_url(scope, &source_url, 0, Some(base_url));
+    let origin = create_function_origin_with_base_url(
+        scope,
+        &source_url,
+        base_url,
+        context_extensions.len(),
+    )?;
     let mut compiler_source = v8::script_compiler::Source::new(source_text, Some(&origin));
 
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
