@@ -607,6 +607,21 @@ impl TestContext {
         }
     }
 
+    /// Collects the renderer events routed during completion together with
+    /// the command messages. Domain tests need that prefix to inspect native
+    /// notifications rather than observing only the terminal response.
+    #[cfg(test)]
+    pub(crate) async fn complete_command_task_step_with_events_for_test(
+        &mut self,
+        step: CdpCommandTaskStep,
+    ) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
+        let sent_start = self.sent.len();
+        let (messages, scheduler_events) = self.complete_command_task_step_for_test(step).await;
+        let mut published: Vec<_> = self.sent.drain(sent_start..).collect();
+        published.extend(messages);
+        (published, scheduler_events)
+    }
+
     #[cfg(test)]
     pub(crate) async fn complete_command_task_step_for_test(
         &mut self,

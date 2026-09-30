@@ -7,35 +7,21 @@ use serde_json::{Value, json};
 
 async fn complete_pending_command_task_for_test(
     ctx: &mut TestContext,
-    mut pending: crate::conn::PendingCdpCommandDispatch,
+    pending: crate::conn::PendingCdpCommandDispatch,
 ) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
-    loop {
-        let completed = pending.wait().await;
-        match ctx.conn.complete_pending_command_dispatch(completed).await {
-            CdpCommandTaskStep::Pending(next) => pending = *next,
-            CdpCommandTaskStep::Complete(outcome) => {
-                return ctx.route_completed_command_outcome_for_test(outcome).await;
-            }
-        }
-    }
+    ctx.complete_command_task_step_with_events_for_test(CdpCommandTaskStep::Pending(Box::new(
+        pending,
+    )))
+    .await
 }
 
 async fn complete_command_task_for_test(
     ctx: &mut TestContext,
     step: CdpCommandTaskStep,
 ) -> Vec<Value> {
-    match step {
-        CdpCommandTaskStep::Complete(outcome) => {
-            ctx.route_completed_command_outcome_for_test(outcome)
-                .await
-                .0
-        }
-        CdpCommandTaskStep::Pending(pending) => {
-            complete_pending_command_task_for_test(ctx, *pending)
-                .await
-                .0
-        }
-    }
+    ctx.complete_command_task_step_with_events_for_test(step)
+        .await
+        .0
 }
 
 async fn load_page_async(ctx: &mut TestContext, html: &str) {

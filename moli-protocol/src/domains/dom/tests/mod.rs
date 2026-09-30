@@ -249,16 +249,11 @@ async fn complete_pending_command_task_for_test(
     ctx: &mut TestContext,
     pending: PendingCdpCommandDispatch,
 ) -> Vec<Value> {
-    let sent_start = ctx.sent.len();
-    let (messages, _) = ctx
-        .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(Box::new(pending)))
-        .await;
-    // Native handlers publish node-path events and their response together.
-    // The scheduler helper returns the response while retaining journal events
-    // in `sent`; include that prefix so these tests inspect the wire order.
-    let mut published: Vec<_> = ctx.sent.drain(sent_start..).collect();
-    published.extend(messages);
-    published
+    ctx.complete_command_task_step_with_events_for_test(CdpCommandTaskStep::Pending(Box::new(
+        pending,
+    )))
+    .await
+    .0
 }
 
 async fn complete_command_dispatch_without_legacy_fallback_for_test(
@@ -268,11 +263,9 @@ async fn complete_command_dispatch_without_legacy_fallback_for_test(
 ) -> Vec<Value> {
     let raw = command.to_string();
     let step = ctx.conn.start_command_dispatch(&raw);
-    let sent_start = ctx.sent.len();
-    let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
-    let mut published: Vec<_> = ctx.sent.drain(sent_start..).collect();
-    published.extend(messages);
-    published
+    ctx.complete_command_task_step_with_events_for_test(step)
+        .await
+        .0
 }
 
 fn child_element_by_node_name<'a>(node: &'a Value, node_name: &str) -> &'a Value {
