@@ -47,14 +47,6 @@ pub(super) struct CompletedCreateIsolatedWorldCommand {
     completed: CompletedCreateIsolatedWorldPhase,
 }
 
-pub(super) struct PendingAddScriptToEvaluateOnNewDocumentCommand {
-    command: DevToolsAddPreloadScriptCommand,
-}
-
-pub(super) struct CompletedAddScriptToEvaluateOnNewDocumentCommand {
-    command: DevToolsAddPreloadScriptCommand,
-}
-
 struct RecordedDocumentStartScript {
     identifier: String,
     script: DocumentStartScript,
@@ -114,14 +106,6 @@ impl PendingCreateIsolatedWorldCommand {
         CompletedCreateIsolatedWorldCommand {
             task: self.task,
             completed,
-        }
-    }
-}
-
-impl PendingAddScriptToEvaluateOnNewDocumentCommand {
-    pub(super) async fn wait(self) -> CompletedAddScriptToEvaluateOnNewDocumentCommand {
-        CompletedAddScriptToEvaluateOnNewDocumentCommand {
-            command: self.command,
         }
     }
 }
@@ -1036,7 +1020,7 @@ fn start_devtools_add_preload_script_command(
             command_id,
             owner_scope: crate::conn::CommandOwnerScope::capture(conn, command_session_id),
             kind: Box::new(PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(
-                PendingAddScriptToEvaluateOnNewDocumentCommand { command },
+                command,
             )),
         });
     }
@@ -1699,16 +1683,15 @@ async fn complete_create_isolated_world_task(
 
 pub(super) async fn complete_pending_add_script_to_evaluate_on_new_document_command(
     conn: &mut CdpConnection,
-    _command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    completed: CompletedAddScriptToEvaluateOnNewDocumentCommand,
+    command: DevToolsAddPreloadScriptCommand,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
     let mut plan = CommandOutputPlan::default();
     match add_script_to_evaluate_on_new_document_direct_async(
         conn,
         owner,
-        completed.command,
+        command,
         &mut plan,
         command_context,
     )

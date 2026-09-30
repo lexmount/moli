@@ -1,13 +1,14 @@
 use crate::devtools_runtime::{
-    DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
-    DevToolsCaptureScreenshotResult, DevToolsCommand, DevToolsCommandContext,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsGetFrameTreeCommand,
-    DevToolsGetFrameTreeResult, DevToolsGetFrameTreesCommand, DevToolsGetFrameTreesResult,
-    DevToolsGetJavaScriptDialogCommand, DevToolsGetLayoutMetricsCommand,
-    DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
-    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsProtocol, DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand,
-    DevToolsTargetInfo, DevToolsTargetKind, UserPromptClosedEvent,
+    DevToolsAddPreloadScriptCommand, DevToolsCaptureScreenshotClip,
+    DevToolsCaptureScreenshotCommand, DevToolsCaptureScreenshotResult, DevToolsCommand,
+    DevToolsCommandContext, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
+    DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult, DevToolsGetFrameTreesCommand,
+    DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
+    DevToolsGetLayoutMetricsCommand, DevToolsHandleJavaScriptDialogCommand,
+    DevToolsJavaScriptDialogResult, DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand,
+    DevToolsPrintToPdfTransferMode, DevToolsProtocol, DevToolsScreenshotClip,
+    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
+    UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -212,7 +213,7 @@ enum PendingPageCommandKind {
     RemoveDocumentStartScript {
         pending: PendingPageCommand,
     },
-    AddScriptToEvaluateOnNewDocument(preload::PendingAddScriptToEvaluateOnNewDocumentCommand),
+    AddScriptToEvaluateOnNewDocument(DevToolsAddPreloadScriptCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
         target_id: String,
@@ -280,7 +281,7 @@ enum CompletedPageCommandKind {
     RemoveDocumentStartScript {
         completed: Box<Result<CompletedPageCommand, String>>,
     },
-    AddScriptToEvaluateOnNewDocument(preload::CompletedAddScriptToEvaluateOnNewDocumentCommand),
+    AddScriptToEvaluateOnNewDocument(DevToolsAddPreloadScriptCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
         target_id: String,
@@ -399,8 +400,8 @@ impl PendingPageCommandDispatch {
                     completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
                 }
             }
-            PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(pending) => {
-                CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(pending.wait().await)
+            PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(command) => {
+                CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(command)
             }
             PendingPageCommandKind::GetFrameTree {
                 output_kind,
@@ -2018,12 +2019,11 @@ pub(crate) async fn complete_pending_page_command(
                 *completed,
             );
         }
-        CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(completed) => {
+        CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(command) => {
             return preload::complete_pending_add_script_to_evaluate_on_new_document_command(
                 conn,
-                command_id,
                 &owner_scope,
-                completed,
+                command,
                 command_context,
             )
             .await;
