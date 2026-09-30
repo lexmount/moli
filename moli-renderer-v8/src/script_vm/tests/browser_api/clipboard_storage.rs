@@ -605,7 +605,7 @@ fn popup_storage_aliases_reuse_window_getters_and_native_identity() {
           check(descriptor.get.call(self) === self[name], name + ' borrowed receiver');
           let error;
           try { descriptor.get.call({}); } catch (caught) { error = caught; }
-          check(error instanceof TypeError, name + ' receiver validation');
+          check(error instanceof popup.TypeError && !(error instanceof TypeError), name + ' callee realm receiver validation');
         }
         return true;
       } finally { popup.close(); }

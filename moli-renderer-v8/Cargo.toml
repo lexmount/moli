@@ -70,7 +70,6 @@ moli-module-syntax = { path = "../moli-module-syntax" }
 moli-owner-queue = { path = "../moli-owner-queue" }
 moli-paint = { path = "../moli-paint" }
 moli-script = { path = "../moli-script" }
-moli-site = { path = "../moli-site" }
 moli-session-history = { path = "../moli-session-history" }
 moli-history = { path = "../moli-history" }
 moli-site = { path = "../moli-site" }
