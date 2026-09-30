@@ -76,6 +76,7 @@ pub(crate) enum PreparedScriptRunBody {
     LoadedSource {
         source: String,
         source_bytes: Option<Vec<u8>>,
+        muted_errors: bool,
     },
     ExternalModuleGraph,
 }

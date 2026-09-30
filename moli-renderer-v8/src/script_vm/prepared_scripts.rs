@@ -117,11 +117,15 @@ impl ScriptVm {
                 body: PreparedScriptRunBody::ExternalModuleGraph,
             }));
         }
-        let (source, source_bytes) = match &script.source {
-            crate::planning::ScriptSource::Loaded(source) => (source.clone(), None),
-            crate::planning::ScriptSource::LoadedBinary { source, bytes } => {
-                (source.clone(), Some(bytes.clone()))
+        let (source, source_bytes, muted_errors) = match &script.source {
+            crate::planning::ScriptSource::Loaded(source) => {
+                (source.clone(), None, script.fetch_metadata.muted_errors)
             }
+            crate::planning::ScriptSource::LoadedBinary { source, bytes } => (
+                source.clone(),
+                Some(bytes.clone()),
+                script.fetch_metadata.muted_errors,
+            ),
             _ => {
                 let document_character_set =
                     self.document_runtime.document_character_set().to_owned();
@@ -159,7 +163,7 @@ impl ScriptVm {
                         PreparedScriptExecutionError::from_message(message)
                     }
                 })?;
-                (source, outcome.source_bytes)
+                (source, outcome.source_bytes, outcome.muted_errors)
             }
         };
         debug!(
@@ -187,6 +191,7 @@ impl ScriptVm {
             body: PreparedScriptRunBody::LoadedSource {
                 source,
                 source_bytes,
+                muted_errors,
             },
         }))
     }
@@ -442,13 +447,29 @@ impl ScriptVm {
             PreparedScriptRunBody::LoadedSource {
                 source,
                 source_bytes,
+                muted_errors,
             } => {
-                self.execute_loaded_prepared_script_source(script, &source, source_bytes.as_deref())
-                    .await
+                let loaded_script = if muted_errors == script.fetch_metadata.muted_errors {
+                    None
+                } else {
+                    Some(crate::planning::prepared_script_with_loaded_source(
+                        script.clone(),
+                        source.clone(),
+                        source_bytes.clone(),
+                        muted_errors,
+                    ))
+                };
+                // Evaluation can contain a module graph. Keep that future out
+                // of every caller's async state, including classic-script lanes.
+                Box::pin(self.execute_loaded_prepared_script_source(
+                    loaded_script.as_ref().unwrap_or(script),
+                    &source,
+                    source_bytes.as_deref(),
+                ))
+                .await
             }
             PreparedScriptRunBody::ExternalModuleGraph => {
-                self.execute_external_prepared_module_script_graph(script)
-                    .await
+                Box::pin(self.execute_external_prepared_module_script_graph(script)).await
             }
         }
     }
@@ -609,6 +630,7 @@ impl ScriptVm {
                     Err(eval_exec::RawScriptExecutionError::Exception { report, .. }) => {
                         self.report_classic_script_exception_and_finish_evaluation_best_effort(
                             &report,
+                            fetch_metadata.muted_errors,
                         );
                         Ok(LoadedScriptExecutionOutcome::Completed(
                             PreparedScriptBodyActivity::Entered,
