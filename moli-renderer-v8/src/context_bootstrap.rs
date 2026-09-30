@@ -4,6 +4,7 @@ mod animation_runtime;
 mod assets;
 mod bar_prop;
 pub(crate) mod bridge_descriptor;
+pub(crate) mod service_worker_interfaces;
 pub(crate) use bar_prop::install_window_bar_props;
 use moli_webapi::external;
 pub(crate) use runtime_state::{

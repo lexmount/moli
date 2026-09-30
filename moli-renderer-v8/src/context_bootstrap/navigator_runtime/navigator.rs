@@ -11,7 +11,8 @@ use super::super::window_runtime::{
     navigator_service_worker_message_handler_setter_callback,
     navigator_service_worker_messageerror_handler_getter_callback,
     navigator_service_worker_messageerror_handler_setter_callback,
-    navigator_service_worker_register_callback, navigator_storage_estimate_callback,
+    navigator_service_worker_ready_getter_callback, navigator_service_worker_register_callback,
+    navigator_service_worker_start_messages_callback, navigator_storage_estimate_callback,
     navigator_storage_get_directory_callback, navigator_storage_persist_callback,
     navigator_storage_persisted_callback, navigator_vibrate_callback,
     permission_status_name_getter_callback, permission_status_state_getter_callback,
@@ -376,9 +377,11 @@ pub(in crate::context_bootstrap) fn install_storage_manager_constructor_template
 #[webapi(interface = web_api_interfaces::StorageBucketManager)]
 struct StorageBucketManagerObjectDeclaration {}
 
-#[derive(Default, WebApiObject)]
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ServiceWorkerContainer)]
-struct ServiceWorkerContainerDeclaration {
+struct ServiceWorkerContainerDeclaration<'scope> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'scope, v8::Object>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
@@ -393,6 +396,16 @@ struct ServiceWorkerContainerDeclaration {
 
     #[webapi(slot = SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT, init = "null")]
     _controller: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorkerContainer, enumerable)]
+struct ServiceWorkerContainerPrototypeDeclaration {
+    #[webapi(accessor_property, getter = navigator_service_worker_ready_getter_callback, returns_promise)]
+    ready: (),
+
+    #[webapi(method, length = 0, callback = navigator_service_worker_start_messages_callback)]
+    start_messages: (),
 
     #[webapi(accessor_property = "controller", enumerable, getter = navigator_service_worker_controller_getter_callback)]
     controller: (),
@@ -830,6 +843,11 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
                 scope, prototype,
             );
         }
+        "ServiceWorkerContainer" => {
+            ServiceWorkerContainerPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "Permissions" => {
             PermissionsPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
         }
@@ -927,7 +945,8 @@ fn build_service_worker_container<'s>(
     owner_child: Option<DomHandle>,
     owner_popup: Option<u64>,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    let service_worker = ServiceWorkerContainerDeclaration::default()
+    let prototype = ensure_intrinsic_interface_prototype(scope, "ServiceWorkerContainer")?;
+    let service_worker = ServiceWorkerContainerDeclaration::new(prototype)
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind navigator.serviceWorker object: {error}"))?;
     let owner = owner_child
