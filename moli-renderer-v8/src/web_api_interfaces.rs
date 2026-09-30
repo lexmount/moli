@@ -65,6 +65,7 @@ interfaces! {
     GamepadHapticActuator;
     StereoPannerNode: AudioNode;
     WaveShaperNode: AudioNode;
+    ConvolverNode: AudioNode;
     Blob;
     BlobEvent: Event;
     MIDIConnectionEvent: Event;
