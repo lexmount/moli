@@ -1,7 +1,7 @@
 (async()=>{
  const completionFlags=[],rows=[],assert=(ok,message)=>{if(!ok)throw Error(message);},check=async(name,fn)=>{try{await fn();rows.push({name,pass:true});}catch(error){rows.push({name,pass:false,message:String(error)});}},errorFrom=fn=>{try{fn();}catch(error){return error;}throw Error('expected exception');};
- const input=await new OfflineAudioContext(1,8,8000).startRendering(),output=await new OfflineAudioContext(1,16,8000).startRendering(),realms=[['main',window],['child',document.getElementById('child').contentWindow]];
- for(const [label,w] of realms){
+ const input=await new OfflineAudioContext(1,8,8000).startRendering(),output=await new OfflineAudioContext(1,16,8000).startRendering(),popup=open(),realms=[['main',window],['child',document.getElementById('child').contentWindow],['popup',popup]];
+ try {for(const [label,w] of realms){
   const specs=[['AudioProcessingEvent',{inputBuffer:input,outputBuffer:output,playbackTime:1.25},['inputBuffer','outputBuffer','playbackTime']],['OfflineAudioCompletionEvent',{renderedBuffer:input},['renderedBuffer']]];
   for(const [name,payload,members] of specs){
    const init=()=>({...payload,bubbles:true,cancelable:true,composed:true});
@@ -54,6 +54,6 @@
    completionFlags.push({realm:label,mode,bubbles:event.bubbles,cancelable:event.cancelable,composed:event.composed});
    assert(event.type==='complete'&&typeof event.bubbles==='boolean'&&!event.cancelable&&!event.composed&&event.currentTarget===null&&event.renderedBuffer===rendered,'complete payload and cleanup '+JSON.stringify({type:event.type,bubbles:event.bubbles,cancelable:event.cancelable,composed:event.composed,currentIsNull:event.currentTarget===null,sameBuffer:event.renderedBuffer===rendered}));
   });
- }
+ }}finally{popup.close();}
  globalThis.__audioEventResults={completionFlags,rows,passed:rows.filter(r=>r.pass).length,total:rows.length,failures:rows.filter(r=>!r.pass)};return rows.every(r=>r.pass);
 })()
