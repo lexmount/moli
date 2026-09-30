@@ -25,9 +25,9 @@ self.addEventListener("message", event => {
     const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true });
     const options = sub.options;
     const userVisibleOnlyDescriptor =
-      Object.getOwnPropertyDescriptor(options, "userVisibleOnly");
+      Object.getOwnPropertyDescriptor(PushSubscriptionOptions.prototype, "userVisibleOnly");
     const applicationServerKeyDescriptor =
-      Object.getOwnPropertyDescriptor(options, "applicationServerKey");
+      Object.getOwnPropertyDescriptor(PushSubscriptionOptions.prototype, "applicationServerKey");
     const readonlyWriteErrors = [];
     for (const [key, value] of [
       ["userVisibleOnly", false],
@@ -63,15 +63,22 @@ self.addEventListener("message", event => {
         sub.options.userVisibleOnly !== true ||
         sub.options.applicationServerKey !== null ||
         !userVisibleOnlyDescriptor ||
-        userVisibleOnlyDescriptor.writable !== false ||
+        typeof userVisibleOnlyDescriptor.get !== "function" ||
+        userVisibleOnlyDescriptor.set !== undefined ||
         !applicationServerKeyDescriptor ||
-        applicationServerKeyDescriptor.writable !== false ||
+        typeof applicationServerKeyDescriptor.get !== "function" ||
+        applicationServerKeyDescriptor.set !== undefined ||
         readonlyWriteErrors.join(",") !==
           "userVisibleOnly:TypeError,applicationServerKey:TypeError" ||
         typeof sub.unsubscribe !== "function" ||
         json.endpoint !== sub.endpoint ||
         json.expirationTime !== null ||
-        json.options.userVisibleOnly !== true ||
+        Object.keys(json).join(",") !== "endpoint,expirationTime,keys" ||
+        Object.keys(json.keys).length !== 0 ||
+        Object.getPrototypeOf(sub) !== PushSubscription.prototype ||
+        Object.getPrototypeOf(options) !== PushSubscriptionOptions.prototype ||
+        self.registration.pushManager.subscribe !== PushManager.prototype.subscribe ||
+        sub.getKey("auth") !== null || sub.getKey("p256dh") !== null ||
         !endpointDescriptor ||
         endpointDescriptor.value !== sub.endpoint ||
         endpointDescriptor.writable !== true ||

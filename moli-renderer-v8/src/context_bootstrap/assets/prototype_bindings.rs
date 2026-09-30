@@ -559,6 +559,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
         template,
         spec.interface.name(),
     );
+    crate::context_bootstrap::push_interfaces::install_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::context_bootstrap::service_worker_interfaces::install_attributes(
         scope,
         template,

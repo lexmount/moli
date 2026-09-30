@@ -45,7 +45,7 @@ use moli_fetch::{
     should_request_be_blocked_due_to_bad_port,
 };
 use moli_storage_key::MoliStorageKey;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
     Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
@@ -706,6 +706,12 @@ pub(crate) fn install_service_worker_interface_template_bindings<'s>(
         "ServiceWorker" => {
             ServiceWorkerPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "PushManager" => ServiceWorkerGlobalPushManagerDeclaration::initialize_prototype_template(
+            scope, prototype,
+        ),
+        "PushSubscription" => {
+            PushSubscriptionMethods::initialize_prototype_template(scope, prototype)
+        }
         "NavigationPreloadManager" => {
             ServiceWorkerGlobalNavigationPreloadManagerDeclaration::initialize_prototype_template(
                 scope, prototype,
@@ -758,12 +764,13 @@ struct ServiceWorkerGlobalPeriodicSyncManagerDeclaration {
     unregister: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushManager, enumerable, receiver)]
 struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
         callback = service_worker_push_manager_subscribe_callback,
+        returns_promise,
         length = 0
     )]
     subscribe: (),
@@ -771,6 +778,7 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "getSubscription",
         callback = service_worker_push_manager_get_subscription_callback,
+        returns_promise,
         length = 0
     )]
     get_subscription: (),
@@ -778,9 +786,17 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "permissionState",
         callback = service_worker_push_manager_permission_state_callback,
+        returns_promise,
         length = 0
     )]
     permission_state: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushSubscription, enumerable, receiver)]
+struct PushSubscriptionMethods {
+    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0, returns_promise)]
+    unsubscribe: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -817,39 +833,6 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
         length = 0
     )]
     get_state: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscription)]
-struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    endpoint: String,
-
-    #[webapi(data_property = "expirationTime", readonly)]
-    expiration_time: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, readonly)]
-    options: v8::Local<'scope, v8::Object>,
-
-    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0)]
-    unsubscribe: (),
-
-    #[webapi(
-        method = "toJSON",
-        callback = service_worker_push_subscription_to_json_callback,
-        length = 0
-    )]
-    to_json: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
-struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
-    #[webapi(data_property = "userVisibleOnly", readonly)]
-    user_visible_only: bool,
-
-    #[webapi(data_property = "applicationServerKey", readonly)]
-    application_server_key: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
