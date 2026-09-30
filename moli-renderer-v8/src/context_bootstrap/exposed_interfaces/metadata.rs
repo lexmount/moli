@@ -163,8 +163,6 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "URL",
     "URLSearchParams",
     "FormData",
-    "Cache",
-    "CacheStorage",
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
@@ -215,8 +213,6 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "DeviceMotionEventAcceleration",
     "DeviceMotionEventRotationRate",
     "DeviceOrientationEvent",
-    "MediaDeviceInfo",
-    "InputDeviceInfo",
     "MediaDevices",
     "WakeLock",
     "WakeLockSentinel",
@@ -226,12 +222,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "Lock",
     "LockManager",
     "IdleDetector",
-    "Worklet",
-    "AudioWorklet",
     "Clipboard",
     "ClipboardItem",
-    "Cache",
-    "CacheStorage",
     "VideoDecoder",
     "VideoEncoder",
 ];
