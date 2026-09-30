@@ -7,9 +7,9 @@
   };
   const thrown = callback => { try { callback(); } catch (error) { return error; } throw Error('expected exception'); };
   const closeTo = (actual, expected, label) => assert(Math.abs(actual - expected) <= 5e-6 * Math.max(1, Math.abs(expected)), label + ': ' + actual + ' != ' + expected);
-  
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
-  
+  const popup = open();
+  const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       const context = new w.OfflineAudioContext(1, 16, 48000);
       const options = {feedforward: [1], feedback: [1, -.9]};
@@ -188,7 +188,7 @@
         const intrinsic = window.IIRFilterNode; try { window.IIRFilterNode = function() { throw Error('author constructor'); }; assert(Object.getPrototypeOf(method.call(foreign, [1], [1])) === intrinsic.prototype, 'factory uses intrinsic constructor'); } finally { window.IIRFilterNode = intrinsic; }
       });
     }
-  
+  } finally { popup.close(); }
   globalThis.__nodeReplacementResults = {rows, passed:rows.filter(row => row.pass).length, total:rows.length, failures:rows.filter(row => !row.pass)};
   return rows.every(row => row.pass);
 })()
