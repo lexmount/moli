@@ -2250,6 +2250,7 @@ mod http_fixture;
 mod media_owner_playback_interfaces;
 mod svg_animation_interfaces;
 mod iframe_reinsertion;
+mod iir_filter_interfaces;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
