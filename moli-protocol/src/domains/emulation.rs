@@ -1003,21 +1003,21 @@ fn start_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if crate::domains::native::frontend_attachment(conn, cmd).is_some() {
+    if let Some(attachment) = crate::domains::native::frontend_attachment(conn, cmd) {
         if let Err(error) = record_device_metrics(conn, &owner, &metrics) {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
                 error,
             ));
         }
-        return native_configuration::try_start(
+        return native_configuration::start_admitted(
             conn,
             cmd,
             native_configuration::unit(moli_core::RendererPageCommand::SetViewportSurface(Some(
                 metrics.viewport_surface(),
             ))),
             PendingEmulationPageOperation::SetViewportSurface,
-        )
-        .expect("native configuration admission");
+            attachment,
+        );
     }
     match start_apply_device_metrics(conn, cmd.id, metrics, owner) {
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(pending),

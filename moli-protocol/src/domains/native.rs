@@ -153,8 +153,8 @@ pub(crate) fn start_operation(
 }
 
 /// Admit only frontend calls with an accessible document and renderer.
-/// Return the checked attachment so configuration can retain its replay identity
-/// without probing the Page a second time.
+/// Return the checked attachment so preparation can retain its replay identity.
+/// Enqueue revalidates access after preparation, which may update Browser policy.
 pub(crate) fn frontend_attachment(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
