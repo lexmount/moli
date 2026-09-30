@@ -6798,7 +6798,6 @@ async fn parse_time_lifecycle_queue_can_stop_cleanly_at_load_stage_after_load_mi
     Ok(())
 }
 
-
 #[path = "scripts/child_markup_insertion.rs"]
 mod child_markup_insertion;
 #[path = "scripts/preload_consumption.rs"]

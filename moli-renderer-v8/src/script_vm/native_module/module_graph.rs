@@ -71,7 +71,9 @@ impl ScriptVm {
                 )
             }
             ModuleKind::Json | ModuleKind::Css | ModuleKind::Text => {
-                let ModuleSource::Text(source) = source else {
+                let (ModuleSource::Text(source) | ModuleSource::TextWithOrigin { source, .. }) =
+                    source
+                else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
                         format!("synthetic text module `{source_url}` did not retain text source"),

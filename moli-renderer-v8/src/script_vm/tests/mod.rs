@@ -2327,14 +2327,11 @@ mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
 mod window_getter_consolidation;
-mod worklet_interfaces;
 mod payment_response_interfaces;
 
 mod body_mime_consolidation;
 mod intersection_target_order;
 mod observer_element_arguments;
-mod media_device_interfaces;
-mod dom_rect_factory_descriptors;
 mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 mod resize_observer_entries;
