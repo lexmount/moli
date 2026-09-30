@@ -584,6 +584,7 @@ pub(crate) use self::window_events::{
     dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
     dispatch_window_report_error_message, event_handler_property_is_exposed,
     install_simple_window_event_handlers, is_window_event_handler_property,
+    install_secure_window_event_handler_accessors, window_event_handler_properties,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
