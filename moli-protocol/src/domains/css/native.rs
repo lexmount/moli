@@ -25,14 +25,12 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                 move |reply| match reply {
                     Ok(Reply::StyleSheetInventory(update)) => {
                         let mut response = Response::success(json!({}));
-                        for id in update.removed {
-                            response.notifications.push(json!({"method": "CSS.styleSheetRemoved", "params": {"styleSheetId": id}}).into());
-                        }
-                        for header in update.added {
-                            response.notifications.push(json!({"method": "CSS.styleSheetAdded", "params": {
-                                "header": style_sheets::style_sheet_header_value(&frame_id, &header),
-                            }}).into());
-                        }
+                        response.notifications.extend(
+                            style_sheets::style_sheet_inventory_notifications(&frame_id, update)
+                                .map(|(method, params)| {
+                                    json!({ "method": method, "params": params }).into()
+                                }),
+                        );
                         response
                     }
                     Err(error) => Response::error(-32000, error.to_string()),

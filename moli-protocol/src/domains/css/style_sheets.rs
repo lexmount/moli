@@ -67,25 +67,31 @@ pub(super) fn complete_enable_command_output_plan(
     update: RendererStyleSheetInventoryUpdate,
 ) -> CommandOutputPlan {
     let mut plan = CommandOutputPlan::success();
-    for style_sheet_id in update.removed {
+    for (method, params) in style_sheet_inventory_notifications(frame_id, update) {
         plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
-            "CSS.styleSheetRemoved",
-            json!({
-                "styleSheetId": style_sheet_id,
-            }),
-            session_id,
-        )));
-    }
-    for header in update.added {
-        plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
-            "CSS.styleSheetAdded",
-            json!({
-                "header": style_sheet_header_value(frame_id, &header),
-            }),
-            session_id,
+            method, params, session_id,
         )));
     }
     plan
+}
+
+pub(super) fn style_sheet_inventory_notifications(
+    frame_id: &str,
+    update: RendererStyleSheetInventoryUpdate,
+) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+    let removed = update.removed.into_iter().map(|style_sheet_id| {
+        (
+            "CSS.styleSheetRemoved",
+            json!({ "styleSheetId": style_sheet_id }),
+        )
+    });
+    let added = update.added.into_iter().map(move |header| {
+        (
+            "CSS.styleSheetAdded",
+            json!({ "header": style_sheet_header_value(frame_id, &header) }),
+        )
+    });
+    removed.chain(added)
 }
 
 pub(super) fn get_style_sheet_result(
