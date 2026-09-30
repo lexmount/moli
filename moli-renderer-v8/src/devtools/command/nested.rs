@@ -6,7 +6,9 @@ use crate::runtime::RendererPageCommand;
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        use RendererDevToolsMainNestedDispatch::{BeforeUnload, InspectorSession, OwnerOnly, PageAgent};
+        use RendererDevToolsMainNestedDispatch::{
+            BeforeUnload, InspectorSession, OwnerOnly, PageAgent,
+        };
         match self {
             Self::WebMcp { .. } => OwnerOnly,
             Self::ForDocument { command, .. } => command.nested_dispatch(),
