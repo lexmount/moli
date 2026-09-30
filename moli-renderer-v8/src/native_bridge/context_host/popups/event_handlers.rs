@@ -5,6 +5,7 @@ use crate::{
     context_bootstrap::{
         WINDOW_EVENT_HANDLER_PROPERTIES, SIMPLE_EVENT_TARGET_LISTENERS_SLOT, clear_simple_window_event_handler_values,
         simple_object_event_activate_uncompiled_handler, simple_object_event_set_handler,
+        window_event_handler_properties,
     },
     document_runtime::DomHandle,
     native_bridge::OwnerDispatchScope,
@@ -128,10 +129,8 @@ impl JsContextHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
-        let Some(property_name) = WINDOW_EVENT_HANDLER_PROPERTIES
-            .iter()
-            .copied()
-            .find(|name| *name == property_name)
+        let Some(property_name) =
+            window_event_handler_properties().find(|name| *name == property_name)
         else {
             return;
         };
