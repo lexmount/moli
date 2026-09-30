@@ -1,7 +1,6 @@
 use std::sync::LazyLock;
 
-use super::{Attribute, CustomElementState, ElementControlState};
-use crate::forms::InputType;
+use super::{Attribute, CustomElementState, ElementControlState, InputValueAttributes};
 use crate::native::NativeNodeId;
 
 static EMPTY_CONTROL_STATE: LazyLock<ElementControlState> =
@@ -176,8 +175,7 @@ impl ElementRareData {
         &mut self,
         namespace: &str,
         local_name: &str,
-        input_type: InputType,
-        input_multiple: bool,
+        input: InputValueAttributes<'_>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -189,8 +187,7 @@ impl ElementRareData {
             control_state.sync_from_attribute_parts(
                 namespace,
                 local_name,
-                input_type,
-                input_multiple,
+                input,
                 attribute_name,
                 attribute_value,
             );
@@ -209,8 +206,7 @@ impl ElementRareData {
         self.control_state_mut().sync_from_attribute_parts(
             namespace,
             local_name,
-            input_type,
-            input_multiple,
+            input,
             attribute_name,
             attribute_value,
         );

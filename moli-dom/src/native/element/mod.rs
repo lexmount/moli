@@ -25,6 +25,14 @@ use crate::forms::{
     InputType, is_valid_number_input_value, sanitize_input_value_for_type_with_multiple,
 };
 
+/// Input attributes used when synchronizing a native control value.
+#[derive(Debug, Clone, Copy)]
+pub struct InputValueAttributes<'a> {
+    pub input_type: InputType,
+    pub multiple: bool,
+    pub value: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomElementState {
     Uncustomized,
@@ -1154,6 +1162,14 @@ impl Element {
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
+        let input_value_attribute = if self.namespace() == "http://www.w3.org/1999/xhtml"
+            && self.local_name() == "input"
+            && attribute_name == "type"
+        {
+            self.attribute("value").map(str::to_owned)
+        } else {
+            None
+        };
         let input_type = if self.namespace() == "http://www.w3.org/1999/xhtml"
             && self.local_name() == "input"
             && attribute_name == "type"
@@ -1166,8 +1182,11 @@ impl Element {
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
-            input_type,
-            input_multiple,
+            InputValueAttributes {
+                input_type,
+                multiple: input_multiple,
+                value: input_value_attribute.as_deref(),
+            },
             attribute_name,
             attribute_value,
         );
