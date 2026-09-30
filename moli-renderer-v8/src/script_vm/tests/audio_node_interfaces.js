@@ -1,7 +1,7 @@
 (async()=>{
  const rows=[],assert=(ok,message)=>{if(!ok)throw Error(message);},check=async(name,fn)=>{try{await fn();rows.push({name,pass:true});}catch(error){rows.push({name,pass:false,message:String(error)});}};
- const realms=[['main',window],['child',document.getElementById('child').contentWindow]];
- for(const [label,w] of realms){
+ const popup=open(),realms=[['main',window],['child',document.getElementById('child').contentWindow],['popup',popup]];
+ try {for(const [label,w] of realms){
   const context=new w.AudioContext(),prototype=w.AudioNode?.prototype;
   try {
    await check(label+'/AudioNode',()=>{
@@ -71,6 +71,6 @@
     Object.setPrototypeOf(source,null);assert(Object.getOwnPropertyDescriptor(prototype,'context').get.call(source)===context,'native identity independent of prototype');
    });
   }finally{await context.close();}
- }
+ }}finally{popup.close();}
  globalThis.__nodeReplacementResults={rows,passed:rows.filter(r=>r.pass).length,total:rows.length,failures:rows.filter(r=>!r.pass)};return rows.every(r=>r.pass);
 })()
