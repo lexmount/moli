@@ -5,6 +5,7 @@ mod assets;
 mod bar_prop;
 pub(crate) mod bridge_descriptor;
 mod external;
+pub(crate) mod push_interfaces;
 pub(crate) mod service_worker_interfaces;
 pub(crate) use bar_prop::install_window_bar_props;
 pub(crate) use runtime_state::{
