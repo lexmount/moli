@@ -14,39 +14,13 @@ const OUTPUTS: &str = "__moliAudioNodeOutputs";
 const START_TIME: &str = "__moliAudioSourceStartTime";
 const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AudioNode", enumerable)]
-struct AudioNodePrototypeDeclaration {
-    #[webapi(accessor_property, getter = context_getter)]
-    context: (),
-}
-
-pub(super) fn install<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) {
-    AudioNodePrototypeDeclaration::initialize_prototype_template(
-        scope,
-        template.prototype_template(scope),
-    );
-}
-
-fn context_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(context) = require_node_context(scope, args.this()) {
-        rv.set(context.into());
-    }
-}
-
 pub(super) fn initialize_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Object>,
 ) {
     set_private_value(scope, node, CONTEXT, context.into());
+    node::initialize(scope, node);
     for slot in [INPUTS, OUTPUTS] {
         let array = v8::Array::new(scope, 0);
         set_private_value(scope, node, slot, array.into());
@@ -68,10 +42,14 @@ pub(super) fn set_destination<'s>(
     set_private_value(scope, context, DESTINATION, node.into());
 }
 
-fn require_node_context<'s>(
+pub(super) fn require_node_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if !web_api_interfaces::AudioNode::is_instance(scope, node) {
+        throw_type_error(scope, "Illegal invocation: expected an AudioNode.");
+        return None;
+    }
     let context = web_audio_object_slot(scope, node, CONTEXT);
     if context.is_none() {
         throw_type_error(scope, "Illegal invocation: expected an AudioNode.");
@@ -110,7 +88,10 @@ fn add_edge<'s>(
         set_private_value(scope, node, slot, array.into());
         array
     });
-    let _ = array.set_index(scope, array.length(), other.into());
+    let index = v8::Integer::new_from_unsigned(scope, array.length())
+        .to_string(scope)
+        .expect("native array index should stringify");
+    let _ = array.create_data_property(scope, index.into(), other.into());
 }
 
 fn remove_edge<'s>(
@@ -142,6 +123,9 @@ pub(super) fn connect<'s>(
         return None;
     };
     let target_context = require_node_context(scope, destination)?;
+    // Convert all Web IDL arguments before checking graph state or port ranges.
+    let output = args.get(1).uint32_value(scope)?;
+    let input = args.get(2).uint32_value(scope)?;
     if context != target_context {
         throw_dom_exception(
             scope,
@@ -163,16 +147,14 @@ pub(super) fn connect<'s>(
         return None;
     }
     // The remaining node implementations each expose a single output/input port.
-    for index in 1..args.length().min(3) {
-        if args.get(index).uint32_value(scope)? != 0 {
-            throw_dom_exception(
-                scope,
-                "IndexSizeError",
-                1,
-                "Audio node port index is out of range.",
-            );
-            return None;
-        }
+    if output != 0 || input != 0 {
+        throw_dom_exception(
+            scope,
+            "IndexSizeError",
+            1,
+            "Audio node port index is out of range.",
+        );
+        return None;
     }
     add_edge(scope, source, OUTPUTS, destination);
     add_edge(scope, destination, INPUTS, source);

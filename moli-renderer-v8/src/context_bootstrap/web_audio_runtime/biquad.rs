@@ -18,10 +18,6 @@ struct BiquadFilterNodeObjectDeclaration<'scope> {
     q: v8::Local<'scope, v8::Object>,
     #[webapi(data_property, readonly)]
     gain: v8::Local<'scope, v8::Object>,
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

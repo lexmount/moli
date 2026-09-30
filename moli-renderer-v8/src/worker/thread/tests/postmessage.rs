@@ -3550,3 +3550,17 @@ async fn worker_does_not_expose_window_media_device_interfaces() {
         r#"{"MediaDeviceInfo":false,"InputDeviceInfo":false}"#
     );
 }
+
+#[tokio::test]
+async fn worker_does_not_expose_window_audio_node_interface() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        "postMessage({AudioNode:'AudioNode' in self});close();".to_owned(),
+        "https://audio-node-worker.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(message), r#"{"AudioNode":false}"#);
+}
