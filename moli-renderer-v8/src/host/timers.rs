@@ -1118,30 +1118,6 @@ fn scheduled_timer_owner_for_target<'s>(
         ),
     };
 
-    // Lightweight popups share the renderer isolate and install their context
-    // lazily. Capture the popup object's exact creation context before queueing.
-    let binding =
-        if binding.is_none() && matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_)) {
-            let context = receiver
-                .and_then(|receiver| receiver.get_creation_context(scope))
-                .unwrap_or(fallback_context);
-            let realm_token = timer_context_realm_token(scope, context)?;
-            let binding = WindowExecutionContextBinding::new(
-                execution_context_owner,
-                dispatch_scope,
-                realm_token,
-                v8::Global::new(scope, context),
-            );
-            host.register_window_execution_context(WindowExecutionContextBinding::new(
-                execution_context_owner,
-                dispatch_scope,
-                realm_token,
-                v8::Global::new(scope, context),
-            ));
-            Some(binding)
-        } else {
-            binding
-        };
     Some(ScheduledTimerOwner::Window(
         ScheduledWindowTimerTarget::new(execution_context_owner, dispatch_scope, binding),
     ))

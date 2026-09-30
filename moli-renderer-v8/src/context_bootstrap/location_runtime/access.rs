@@ -81,9 +81,8 @@ fn location_proxy_set<'s>(
         .unwrap_or_else(|| scope.get_current_context());
     if super::origin::context_can_access(scope, caller, target) {
         // Reflect.set itself performs the target access check in its own
-        // realm. Use the caller's captured intrinsic when the handler belongs
-        // to a popup that shares an unrelated opener realm. Calling it without
-        // entering a ContextScope preserves the original entry settings.
+        // realm. Use the caller's captured intrinsic without entering a
+        // ContextScope so the original entry settings are preserved.
         let global = caller.global(scope);
         let reflect_set =
             get_private_value(scope, global, REFLECT_SET_SLOT).unwrap_or_else(|| args.data());

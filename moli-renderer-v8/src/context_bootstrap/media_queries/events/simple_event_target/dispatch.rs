@@ -348,11 +348,8 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
             value: None,
         };
     };
-    // Keep the callback's captured Window identity for every event. A popup
-    // aliases its opener's V8 realm, so resolving that realm during dispatch
-    // would instead adopt the event target's active popup scope. The captured
-    // identity also preserves retirement checks after its realm leaves the
-    // live registry.
+    // Keep the callback's captured Window identity for every event, including
+    // retirement checks after its realm leaves the live registry.
     invoke_simple_event_callback_with_invocation(
         scope,
         event_type,

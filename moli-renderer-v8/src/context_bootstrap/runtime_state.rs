@@ -27,7 +27,7 @@ use super::{
 };
 use crate::web_api_interfaces;
 use crate::{
-    document_runtime::{DocumentRuntime, DomHandle},
+    document_runtime::DomHandle,
     native_bridge::{
         self, JsContextHost,
         document::{
@@ -781,8 +781,7 @@ fn window_surface_slot_getter<'s>(
         }
         return;
     }
-    // Lightweight popup shells share their opener's V8 realm but have their
-    // own associated objects. Do not materialize the opener's lazy surface.
+    // Popup bootstrap installs these Window-associated objects explicitly.
     if matches!(slot, WINDOW_NAVIGATOR_SLOT | WINDOW_EXTERNAL_SLOT)
         && crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
     {
@@ -1681,7 +1680,7 @@ pub(crate) fn install_wpt_webdriver_runtime_state(
 pub(crate) fn finish_context_bootstrap(
     scope: &mut v8::PinScope<'_, '_>,
     document_runtime: &mut JsContextHost,
-    secure_context_url: &url::Url,
+    secure_context_available: bool,
 ) -> Result<()> {
     super::window_accessors::initialize_cross_origin_window_cache(scope)?;
     super::exposed_interfaces::initialize_realm_interface_registry(
@@ -1705,7 +1704,7 @@ pub(crate) fn finish_context_bootstrap(
         );
     }
     let _ = global.delete(scope, console_key.into());
-    install_window_runtime_state(scope, global, document_runtime, secure_context_url)?;
+    install_window_runtime_state(scope, global, document_runtime, secure_context_available)?;
     // WPT harness helper only. Normal builds keep the feature disabled so pages
     // do not observe non-standard `webdriver` / `WebDriver` globals.
     #[cfg(feature = "wpt-extensions")]
@@ -2037,10 +2036,9 @@ pub(crate) fn window_realm_secure_context_available<'s>(
 fn install_window_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
-    runtime: &DocumentRuntime,
-    secure_context_url: &url::Url,
+    runtime: &JsContextHost,
+    secure_context_available: bool,
 ) -> Result<()> {
-    let secure_context_available = moli_url::is_potentially_trustworthy_url(secure_context_url);
     set_private_value(
         scope,
         global,
@@ -2050,20 +2048,23 @@ fn install_window_runtime_state<'s>(
     install_webassembly_runtime_state(scope, global)?;
     install_webidl_collection_iterator_intrinsics(scope, global)?;
 
+    let dispatch_scope = super::navigation_window::runtime_window_dispatch_scope(scope, global)
+        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+    let document_loader = runtime
+        .document_resource_loader_for_dispatch_scope(dispatch_scope)
+        .ok_or_else(|| {
+            anyhow!("Window bootstrap requires its committed Document resource authority")
+        })?;
+    let document_context = document_loader.fetch_context();
     install_window_location_history_navigation_runtime_state(
         scope,
         global,
-        runtime.document_url().as_str(),
+        document_context.document_url().as_str(),
     )?;
-    let origin = context_host_ptr_from_global_bridge(scope)
-        .map(|host| unsafe { &*host }.main_document_origin())
-        .unwrap_or_else(|| {
-            if runtime.document_sandbox_policy().forces_opaque_origin {
-                "null".into()
-            } else {
-                moli_url::origin_ascii_serialization(runtime.document_url())
-            }
-        });
+    let origin =
+        crate::native_bridge::WindowSecurityOrigin::for_context(scope.get_current_context())
+            .map(|origin| origin.serialized_origin())
+            .unwrap_or_else(|| document_context.origin().to_owned());
     set_window_origin_runtime_state(scope, global, &origin)?;
 
     let console = ConsoleObjectDeclaration::default()
@@ -2109,9 +2110,6 @@ fn install_window_runtime_state<'s>(
         .map_err(|error| anyhow!(error.to_string()))?;
     install_document_runtime_state(scope, global)?;
     install_navigator_runtime_state(scope, global, secure_context_available)?;
-    let document_loader = runtime
-        .current_document_resource_loader()
-        .expect("Window bootstrap requires the committed Document resource authority");
     bind_window_navigator_identity_seed(
         scope,
         global,

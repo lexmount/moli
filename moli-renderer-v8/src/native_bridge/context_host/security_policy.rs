@@ -807,6 +807,10 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> OwnerDispatchScope {
+        let context = scope.get_entered_or_microtask_context();
+        if let Some(identity) = self.window_execution_context_identity_for_access_check(context) {
+            return identity.dispatch_scope();
+        }
         if let Some(handle) = entered_child_window_handle(scope) {
             return OwnerDispatchScope::Child(handle);
         }

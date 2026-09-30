@@ -108,20 +108,27 @@ async fn retained_popup_storage_managers_use_bound_popup_owner() {
     vm.with_default_context_scope(|scope, host_ptr| {
         let host = unsafe { &*host_ptr };
         let popup_id = host.open_lightweight_popup_ids()[0];
-        let owner = crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
-        let previous = owner.enter(scope);
-        let popup = host.lightweight_popup_window(scope, popup_id).unwrap();
-        let navigator = popup
-            .get(scope, crate::util::v8str(scope, "navigator").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .unwrap();
-        let storage = navigator
-            .get(scope, crate::util::v8str(scope, "storage").into())
-            .unwrap();
-        let buckets = navigator
-            .get(scope, crate::util::v8str(scope, "storageBuckets").into())
-            .unwrap();
-        owner.restore(scope, previous);
+        let (storage, buckets) = {
+            let popup = host.lightweight_popup_window(scope, popup_id).unwrap();
+            let context = popup.get_creation_context(scope).unwrap();
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let navigator = popup
+                .get(scope, crate::util::v8str(scope, "navigator").into())
+                .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())
+                .unwrap();
+            let storage = navigator
+                .get(scope, crate::util::v8str(scope, "storage").into())
+                .unwrap();
+            let buckets = navigator
+                .get(scope, crate::util::v8str(scope, "storageBuckets").into())
+                .unwrap();
+            (
+                v8::Global::new(scope, storage),
+                v8::Global::new(scope, buckets),
+            )
+        };
+        let storage = v8::Local::new(scope, &storage);
+        let buckets = v8::Local::new(scope, &buckets);
         let global = scope.get_current_context().global(scope);
         assert_eq!(
             global.set(
@@ -1163,43 +1170,27 @@ async fn lightweight_popup_local_storage_events_fire_on_opener() {
     );
 }
 #[test]
-fn window_open_lightweight_popup_inherits_opener_viewport_surface() {
+fn window_open_popup_uses_native_viewport_without_reading_opener_expandos() {
     let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              for (const [name, value] of Object.entries({
-                innerWidth: 320,
-                innerHeight: 240,
-                outerWidth: 321,
-                outerHeight: 241,
-                devicePixelRatio: 2.5
-              })) {
-                Object.defineProperty(globalThis, name, {
-                  configurable: true,
-                  get: () => value
-                });
-              }
-              const popup = open("about:blank#surface");
-              return JSON.stringify({
-                width: popup.innerWidth,
-                height: popup.innerHeight,
-                outerWidth: popup.outerWidth,
-                outerHeight: popup.outerHeight,
-                dpr: popup.devicePixelRatio
-              });
-            })()
-            "##,
-        )
-        .expect("popup viewport surface probe should evaluate");
-
     assert_eq!(
-        result,
-        r#"{"width":320,"height":240,"outerWidth":321,"outerHeight":241,"dpr":2.5}"#
+        vm.eval(
+            r#"(() => {
+      const names = ['innerWidth','innerHeight','outerWidth','outerHeight','devicePixelRatio'];
+      const expected = names.map(name => window[name]);
+      let reads = 0;
+      for (const name of names) Object.defineProperty(window, name, {
+        configurable:true, get(){ ++reads; throw new Error('opener viewport getter'); }
+      });
+      const popup = open();
+      try { return JSON.stringify([reads, names.every((name,i) => popup[name] === expected[i])]); }
+      finally { popup.close(); }
+    })()"#
+        )
+        .unwrap(),
+        "[0,true]"
     );
 }
+
 #[tokio::test]
 async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -2345,19 +2336,14 @@ async fn lightweight_popup_javascript_url_uses_inline_navigation_csp_not_eval_cs
             .expect("allowed javascript URL setup should evaluate"),
         "true"
     );
-    for _ in 0..4 {
-        if allowed
-            .eval("__javascriptUrlMessages.length")
-            .expect("javascript URL message count should evaluate")
-            == "1"
-        {
-            break;
-        }
-        let _ = allowed
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
-            .await
-            .expect("wait driver should advance javascript URL task");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut allowed,
+        &loader,
+        "String(__javascriptUrlMessages.length)",
+        "1",
+        "allowed popup javascript URL message",
+    )
+    .await;
     assert_eq!(
         allowed
             .eval("JSON.stringify([__javascriptUrlMessages, __javascriptUrlViolations])")
@@ -2997,7 +2983,7 @@ async fn lightweight_popup_response_csp_sandbox_disallows_document_domain_setter
       popup.document.domain = popup.document.domain;
       __popupResponseSandboxDomainProbe.push(`${{initial}}|${{popup.document.domain}}`);
     }} catch (error) {{
-      __popupResponseSandboxDomainProbe.push(`${{error.name}}:${{error instanceof DOMException}}:${{error.code}}`);
+      __popupResponseSandboxDomainProbe.push(`${{error.name}}:${{error instanceof popup.DOMException}}:${{error instanceof DOMException}}:${{error.code}}`);
     }}
   }};
   return __popupResponseSandboxDomainProbe.length;
@@ -3028,7 +3014,7 @@ async fn lightweight_popup_response_csp_sandbox_disallows_document_domain_setter
     assert_eq!(
         vm.eval("__popupResponseSandboxDomainProbe.join('|')")
             .expect("popup response CSP sandbox document-domain result should evaluate"),
-        "SecurityError:true:18"
+        "SecurityError:true:false:18"
     );
 }
 #[tokio::test]

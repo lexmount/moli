@@ -231,42 +231,12 @@ impl JsContextHost {
         self.bridge.abort.clear_for_context_teardown();
     }
 
-    pub(crate) fn register_lightweight_popup_execution_context(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        popup_id: u64,
-    ) -> bool {
-        let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
-            return false;
-        };
-        let Some(realm_token) = current_runtime_observable_context_token(scope) else {
-            return false;
-        };
-        self.register_window_execution_context(WindowExecutionContextBinding::new(
-            owner,
-            dispatch_scope,
-            realm_token,
-            v8::Global::new(scope, scope.get_current_context()),
-        ));
-        true
-    }
-
     pub(crate) fn ensure_lightweight_popup_execution_context(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
     ) -> bool {
-        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-            return false;
-        };
-        let Some(context) = window.get_creation_context(scope) else {
-            return false;
-        };
-        let context = v8::Global::new(scope, context);
-        let context = v8::Local::new(scope, &context);
-        let popup_scope = &mut v8::ContextScope::new(scope, context);
-        self.register_lightweight_popup_execution_context(popup_scope, popup_id)
+        self.ensure_popup_default_context(scope, popup_id).is_ok()
     }
 
     pub(crate) fn current_runtime_window_execution_context_binding(
@@ -291,7 +261,11 @@ impl JsContextHost {
         {
             return Some(owner.identity);
         }
-        let dispatch_scope = if let Some(popup_id) = active_lightweight_popup_id(scope) {
+        let dispatch_scope = if let Some(identity) =
+            self.window_execution_context_identity_for_access_check(scope.get_current_context())
+        {
+            identity.dispatch_scope()
+        } else if let Some(popup_id) = active_lightweight_popup_id(scope) {
             OwnerDispatchScope::LightweightPopup(popup_id)
         } else if let Some(child_handle) =
             crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope)
@@ -314,23 +288,7 @@ impl JsContextHost {
         let realm_token = current_runtime_observable_context_token(scope)?;
         let registration = self
             .window_execution_context_realms
-            .registration(dispatch_scope, realm_token)
-            .or_else(|| {
-                // Lightweight popups still share their opener's concrete V8 context. Until P2
-                // gives each popup a LocalWindow realm, the active popup scope is the only exact
-                // address available at API acceptance.
-                matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_))
-                    .then(|| {
-                        self.current_window_execution_context_owner(dispatch_scope)
-                            .map(|owner| {
-                                WindowExecutionContextRealmRegistration::new(
-                                    owner,
-                                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
-                                )
-                            })
-                    })
-                    .flatten()
-            })?;
+            .registration(dispatch_scope, realm_token)?;
         let owner = registration.owner;
         if !self.window_execution_context_owner_is_current(owner, dispatch_scope) {
             return None;
@@ -392,28 +350,16 @@ impl JsContextHost {
 
     pub(crate) fn window_execution_context_identity_for_v8_context(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
+        _scope: &mut v8::PinScope<'_, '_>,
         context: v8::Local<'_, v8::Context>,
     ) -> Option<WindowExecutionContextIdentity> {
         let realm_token = context
             .get_slot::<RuntimeObservableContextToken>()
             .as_deref()
             .copied()?;
-        let registered = match active_lightweight_popup_id(scope) {
-            Some(popup_id) => {
-                let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-                let registration = self
-                    .window_execution_context_realms
-                    .registration(dispatch_scope, realm_token)?;
-                super::WindowExecutionContextScopedRealmRegistration::new(
-                    dispatch_scope,
-                    registration,
-                )
-            }
-            None => self
-                .window_execution_context_realms
-                .concrete_registration(realm_token)?,
-        };
+        let registered = self
+            .window_execution_context_realms
+            .concrete_registration(realm_token)?;
         Some(WindowExecutionContextIdentity::new(
             registered.registration.owner,
             registered.dispatch_scope,
@@ -531,21 +477,10 @@ impl JsContextHost {
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
         if let Some(binding) = retired.as_ref() {
-            // A lightweight popup is an owner alias over its opener's concrete
-            // realm. Retire its exact-owner state without destroying the
-            // opener's realm-wide wrappers and IndexedDB state.
-            if matches!(
-                binding.dispatch_scope(),
-                OwnerDispatchScope::LightweightPopup(_)
-            ) {
-                let retirement = self.retire_indexed_db_owner(owner);
-                retirement.finish(self.indexed_db_manager.as_ref());
-            } else {
-                let retirement = self.retire_indexed_db_context(binding.realm_token());
-                retirement.finish(self.indexed_db_manager.as_ref());
-                self.bridge
-                    .retire_default_world_wrappers_for_realm(binding.realm_token());
-            }
+            let retirement = self.retire_indexed_db_context(binding.realm_token());
+            retirement.finish(self.indexed_db_manager.as_ref());
+            self.bridge
+                .retire_default_world_wrappers_for_realm(binding.realm_token());
         }
         self.window_execution_context_realms.retire_owner(owner);
         if retired.is_some() {
@@ -794,13 +729,14 @@ mod tests {
         document_runtime::DomHandle,
         frame_owner_model::LocalWindowId,
         native_bridge::context_host::{
-            WindowExecutionContextRealmRecords, WindowExecutionContextScopedRealmRegistration,
+            WindowExecutionContextRealmRecords,
+            window_execution_context::WindowExecutionContextScopedRealmRegistration,
         },
         window_document_identity::LightweightPopupLocalWindowId,
     };
 
     #[test]
-    fn concrete_realm_identity_and_lightweight_popup_alias_share_one_context_token() {
+    fn popup_and_opener_have_distinct_concrete_realm_tokens() {
         let mut records = WindowExecutionContextRealmRecords::default();
         let token = RuntimeObservableContextToken::from_raw(17);
         let top_scope = OwnerDispatchScope::Top;
@@ -809,6 +745,7 @@ mod tests {
             WindowExecutionContextAccessPolicy::EnforceWebOrigin,
         );
         let popup_scope = OwnerDispatchScope::LightweightPopup(7);
+        let popup_token = RuntimeObservableContextToken::from_raw(18);
         let popup_registration = WindowExecutionContextRealmRegistration::new(
             WindowExecutionContextOwner::LightweightPopup {
                 popup_id: 7,
@@ -821,8 +758,21 @@ mod tests {
         assert!(
             records
                 .register(popup_scope, token, popup_registration)
+                .is_err()
+        );
+        assert!(
+            records
+                .register(popup_scope, popup_token, popup_registration)
                 .is_ok()
         );
+        assert_eq!(
+            records.concrete_registration(popup_token),
+            Some(WindowExecutionContextScopedRealmRegistration::new(
+                popup_scope,
+                popup_registration
+            ))
+        );
+
         assert_eq!(
             records.concrete_registration(token),
             Some(WindowExecutionContextScopedRealmRegistration::new(
@@ -831,7 +781,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            records.registration(popup_scope, token),
+            records.registration(popup_scope, popup_token),
             Some(popup_registration)
         );
 
@@ -843,7 +793,9 @@ mod tests {
             "one V8 context token must have exactly one concrete Window realm"
         );
 
-        assert_eq!(records.remove_token(token), 2);
+        assert_eq!(records.remove_token(token), 1);
+        assert!(records.registration(popup_scope, popup_token).is_some());
+        assert_eq!(records.remove_token(popup_token), 1);
         assert!(records.concrete_registration(token).is_none());
         assert!(records.registration(popup_scope, token).is_none());
     }

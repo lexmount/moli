@@ -28,7 +28,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_open_callback<'s>(
         );
         return;
     }
-    let Some(owner) = idb_factory_effective_execution_owner(scope, args.this()) else {
+    let Some(owner) = indexed_db_typed_execution_owner(scope, args.this()) else {
         let exception = dom_exception_value(
             scope,
             "Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context.",

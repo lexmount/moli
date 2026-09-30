@@ -18,7 +18,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
         return;
     };
     let name = parsed.name;
-    let Some(owner) = idb_factory_effective_execution_owner(scope, args.this()) else {
+    let Some(owner) = indexed_db_typed_execution_owner(scope, args.this()) else {
         let exception = dom_exception_value(
             scope,
             "Failed to execute 'deleteDatabase' on 'IDBFactory': access to the Indexed Database API is denied in this context.",

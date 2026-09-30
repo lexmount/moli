@@ -548,6 +548,7 @@ pub(crate) fn window_open_callback<'s>(
                 id,
                 opener,
                 opener_child_handle,
+                popup_source_scope,
                 url.as_deref(),
                 entered_base_url,
                 creator_policy_container,
@@ -555,7 +556,6 @@ pub(crate) fn window_open_callback<'s>(
             ),
             _ => host.open_lightweight_popup_window(
                 scope,
-                host_ptr,
                 opener,
                 opener_child_handle,
                 Some(popup_source_scope),

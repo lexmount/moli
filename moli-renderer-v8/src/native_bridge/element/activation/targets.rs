@@ -344,7 +344,6 @@ fn navigate_element_popup_target(
     }
     let Some(opened_popup) = runtime.open_lightweight_popup_window(
         scope,
-        runtime_ptr,
         opener,
         opener_child_handle,
         Some(dispatch_scope),
@@ -483,13 +482,13 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             id,
             opener,
             opener_child_handle,
+            source,
             None,
             creator.base_url,
             creator.policy_container,
         ),
         _ => runtime.open_lightweight_popup_window(
             scope,
-            runtime_ptr,
             opener,
             opener_child_handle,
             Some(source),

@@ -180,7 +180,6 @@ struct ChildWindowProxyRecord {
     browsing_context_parent_window: Option<v8::Global<v8::Object>>,
     browsing_context_top_window: Option<v8::Global<v8::Object>>,
     browsing_context_opener: Option<ChildWindowProxyOpener>,
-    realm_top_window_wrapper: Option<v8::Global<v8::Object>>,
     live_window_exposed_to_top: bool,
     cross_origin_window_proxy: Option<v8::Global<v8::Object>>,
     default_execution_context_id: Option<i64>,
@@ -341,36 +340,6 @@ impl ChildWindowProxyRecords {
         Some((opener.endpoint, v8::Local::new(scope, &opener.window)))
     }
 
-    pub(in crate::native_bridge::context_host) fn set_realm_top(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        top: v8::Local<'_, v8::Object>,
-    ) {
-        if moli_trace::window_message_trace_enabled() {
-            let global = scope.get_current_context().global(scope);
-            tracing::info!(
-                target: "moli_window_message_trace",
-                handle = handle.index(),
-                top_is_target_global = top.strict_equals(global.into()),
-                stage = "child_window_proxy_realm_top_installed",
-            );
-        }
-        self.record_mut(handle).realm_top_window_wrapper = Some(v8::Global::new(scope, top));
-    }
-
-    pub(in crate::native_bridge::context_host) fn realm_top<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.records
-            .get(&handle)?
-            .realm_top_window_wrapper
-            .as_ref()
-            .map(|top| v8::Local::new(scope, top))
-    }
-
     pub(in crate::native_bridge::context_host) fn mark_live_window_exposed_to_top(
         &mut self,
         handle: DomHandle,
@@ -433,7 +402,6 @@ impl ChildWindowProxyRecords {
             return;
         };
         record.default_execution_context_id = None;
-        record.realm_top_window_wrapper = None;
     }
 
     pub(in crate::native_bridge::context_host) fn clear_default_execution_context_id_if_matches(
@@ -450,7 +418,6 @@ impl ChildWindowProxyRecords {
             return false;
         }
         record.default_execution_context_id = None;
-        record.realm_top_window_wrapper = None;
         true
     }
 
@@ -1508,14 +1475,6 @@ impl JsContextHost {
         self.child_window_proxy_records.live_window(scope, handle)
     }
 
-    pub(crate) fn child_browsing_context_top_window_for_current_realm<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.child_window_proxy_records.realm_top(scope, handle)
-    }
-
     pub(crate) fn set_child_browsing_context_opener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -2525,22 +2484,7 @@ pub(crate) fn install_popup_window_cross_origin_access_surface<'s>(
     install_cross_origin_window_accessors(scope, surface);
     install_cross_origin_window_methods(scope, surface);
     install_cross_origin_symbol_slots(scope, surface);
-    // Popup shells can share the opener's execution context. Their access
-    // surface belongs to this Window, not to that context's real global.
-    if let Some(location) = crate::context_bootstrap::window_location_for_holder(scope, window) {
-        set_private_value(
-            scope,
-            surface,
-            CROSS_ORIGIN_WINDOW_LOCATION_SLOT,
-            location.into(),
-        );
-    }
-    set_private_value(
-        scope,
-        window,
-        CROSS_ORIGIN_WINDOW_ACCESS_SURFACE_SLOT,
-        surface.into(),
-    );
+    retain_window_cross_origin_access_surface(scope, window, surface);
 }
 
 fn retain_window_cross_origin_access_surface<'s>(
@@ -3453,12 +3397,6 @@ fn live_location_for_cross_origin_window<'s>(
     };
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
-    if let super::super::OwnerDispatchScope::LightweightPopup(popup_id) = dispatch_scope {
-        // Lightweight popups share a V8 realm with the opener. Its global is
-        // not the popup's Window and must not supply this proxy's Location.
-        let window = host.lightweight_popup_window(scope, popup_id)?;
-        return crate::context_bootstrap::window_location_for_holder(scope, window);
-    }
     let owner = host.current_window_execution_context_owner(dispatch_scope)?;
     let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
     let target_scope = &mut v8::ContextScope::new(scope, context);

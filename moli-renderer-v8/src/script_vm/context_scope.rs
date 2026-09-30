@@ -151,6 +151,20 @@ impl ScriptVm {
     }
 
     #[cfg(test)]
+    pub(super) fn with_popup_context_scope_and_checkpoint_for_test<T>(
+        &mut self,
+        popup_id: u64,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+            let context =
+                unsafe { &mut *host_ptr }.ensure_popup_default_context(scope, popup_id)?;
+            let scope = &mut v8::ContextScope::new(scope, context);
+            op(scope, host_ptr)
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn with_frame_realm_scope_and_checkpoint_for_test<T>(
         &mut self,
         realm_id: FrameRealmId,

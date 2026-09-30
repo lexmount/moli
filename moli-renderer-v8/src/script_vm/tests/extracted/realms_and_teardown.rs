@@ -1725,14 +1725,11 @@ async fn popup_replacement_retires_local_window_owned_webcrypto_tasks() {
         .current_lightweight_popup_local_window_id(popup_id)
         .expect("initial popup LocalWindow owner");
 
-    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-        let previous_popup =
-            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
+    vm.with_popup_context_scope_and_checkpoint_for_test(popup_id, |scope, host_ptr| {
         let resolver = v8::PromiseResolver::new(scope).expect("popup WebCrypto test resolver");
         let registered = unsafe { &mut *host_ptr }
             .register_pending_webcrypto_task(scope, resolver)
             .is_some();
-        crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
         assert!(
             registered,
             "popup WebCrypto task should bind a Window execution context"
@@ -1857,15 +1854,12 @@ fn popup_replacement_retires_local_window_owned_xhr() {
         .expect("initial popup LocalWindow owner");
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
     let (_, owner, _) = vm
-        .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-            let previous_popup =
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
+        .with_popup_context_scope_and_checkpoint_for_test(popup_id, |scope, host_ptr| {
             let registered = register_pending_window_xhr_for_test(
                 scope,
                 unsafe { &mut *host_ptr },
                 cancel_handle.clone(),
             );
-            crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
             Ok(registered)
         })
         .expect("popup XHR should register");
@@ -2023,9 +2017,7 @@ fn popup_replacement_aborts_fetch_and_detaches_keepalive() {
         .and_then(|activation| activation.popup_id())
         .expect("popup Fetch owner id");
     let (ordinary, keepalive) = vm
-        .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-            let previous_popup =
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
+        .with_popup_context_scope_and_checkpoint_for_test(popup_id, |scope, host_ptr| {
             let host = unsafe { &mut *host_ptr };
             let registered = (
                 register_pending_window_fetch_for_test(
@@ -2041,7 +2033,6 @@ fn popup_replacement_aborts_fetch_and_detaches_keepalive() {
                     PendingWindowFetchTestStage::Pending,
                 ),
             );
-            crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
             Ok(registered)
         })
         .expect("popup Fetches should register");
