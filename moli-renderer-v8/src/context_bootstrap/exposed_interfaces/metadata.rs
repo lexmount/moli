@@ -153,6 +153,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "MIDIOutput",
     "MIDIInputMap",
     "MIDIOutputMap",
+    "Worklet",
+    "AudioWorklet",
     "ServiceWorker",
     "ServiceWorkerContainer",
     "ServiceWorkerRegistration",
