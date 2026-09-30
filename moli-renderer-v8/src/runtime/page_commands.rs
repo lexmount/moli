@@ -853,9 +853,6 @@ impl PageVm {
             RendererPageCommand::RenderPageDump { options } => Ok(RendererPageReply::OptionalString(
                 Some(self.render_page_dump(options)),
             )),
-            RendererPageCommand::SerializeHtml => {
-                Ok(RendererPageReply::OptionalString(Some(self.serialize_html())))
-            }
             RendererPageCommand::SerializeDocument => {
                 // Capture both from the live document in this handler turn.
                 // Browser admission metadata may precede a queued history update.

@@ -1449,7 +1449,7 @@ impl Page {
     }
 
     pub fn start_serialize_html(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SerializeHtml)
+        self.start_page_command(RendererPageCommand::SerializeDocument)
     }
 
     /// Publishes current layout for subsequent geometry reads without painting.
@@ -1562,8 +1562,8 @@ impl Page {
         expect_page_reply!(
             reply,
             "serialize HTML page command",
-            "a string reply",
-            RendererPageReply::OptionalString(Some(html)) => Ok(html),
+            "a serialized document reply",
+            RendererPageReply::SerializedDocument { html, .. } => Ok(html),
         )
     }
 
@@ -1576,8 +1576,8 @@ impl Page {
         expect_page_reply!(
             reply,
             "serialize HTML page command",
-            "a string reply",
-            RendererPageReply::OptionalString(Some(html)) => Ok(html),
+            "a serialized document reply",
+            RendererPageReply::SerializedDocument { html, .. } => Ok(html),
         )
     }
 

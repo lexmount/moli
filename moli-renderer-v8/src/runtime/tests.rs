@@ -278,12 +278,12 @@ async fn recv_page_lifecycle_until(
 
 async fn serialize_html_for_renderer_page(page: &RendererPageHandle) -> String {
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::SerializeHtml)
+        .run_async_command(RendererPageCommand::SerializeDocument)
         .await
         .expect("renderer page should serialize HTML");
     match reply {
-        RendererPageReply::OptionalString(Some(html)) => html,
-        _ => panic!("expected SerializeHtml string reply"),
+        RendererPageReply::SerializedDocument { html, .. } => html,
+        _ => panic!("expected serialized document reply"),
     }
 }
 

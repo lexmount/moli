@@ -922,7 +922,6 @@ impl RendererRuntimeCommandOutput {
     }
 
     #[doc(hidden)]
-    #[doc(hidden)]
     pub fn bind_renderer_agent_attachment(&mut self, id: RendererAgentAttachmentId) {
         match self.renderer_agent_attachment_id {
             Some(current) => assert_eq!(
@@ -5008,7 +5007,6 @@ pub enum RendererPageCommand {
     RenderPageDump {
         options: RendererPageDumpOptions,
     },
-    SerializeHtml,
     SerializeDocument,
     LayoutMetrics,
     PublishLayout,
@@ -5623,7 +5621,6 @@ impl RendererPageCommand {
             Self::OuterHtmlForDocument { .. } => Some("OuterHtmlForDocument"),
             Self::OuterHtmlForBackendNodeId { .. } => Some("OuterHtmlForBackendNodeId"),
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
-            Self::SerializeHtml => Some("SerializeHtml"),
             Self::SerializeDocument => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),

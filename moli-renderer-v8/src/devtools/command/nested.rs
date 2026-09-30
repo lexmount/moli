@@ -75,7 +75,6 @@ impl RendererPageCommand {
             | Self::ResetCssAgentSession { .. }
             | Self::OuterHtmlForDocument { .. }
             | Self::OuterHtmlForBackendNodeId { .. }
-            | Self::SerializeHtml
             | Self::SerializeDocument
             | Self::LayoutMetrics
             | Self::PublishLayout
