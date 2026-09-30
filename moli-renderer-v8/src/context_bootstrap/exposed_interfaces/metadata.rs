@@ -215,6 +215,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "DeviceMotionEventAcceleration",
     "DeviceMotionEventRotationRate",
     "DeviceOrientationEvent",
+    "MediaDeviceInfo",
+    "InputDeviceInfo",
     "MediaDevices",
     "MediaDeviceInfo",
     "InputDeviceInfo",
