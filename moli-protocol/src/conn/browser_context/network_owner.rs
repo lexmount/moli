@@ -134,6 +134,14 @@ impl TargetNetworkListenerOwnerMut<'_> {
         }
         self.remove_network_observation_cursor(listener_session_id.as_deref());
         self.remove_captured_response_body_visibility_for_session(listener_session_id.as_deref());
+        if !self.is_attached_session()
+            && let Some(primary_session_id) = self.target.session_id().map(str::to_owned)
+        {
+            // Primary commands share one listener whether routed on the root
+            // channel or its flattened session. Captured events can carry the
+            // explicit primary ID, so revoke both wire identities on disable.
+            self.remove_captured_response_body_visibility_for_session(Some(&primary_session_id));
+        }
         self.clear_network_observation_artifacts_if_unobserved();
         true
     }
