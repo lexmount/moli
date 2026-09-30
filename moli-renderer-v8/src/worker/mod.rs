@@ -45,7 +45,7 @@ pub(crate) use global_scope::{
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
     forget_worker_message_port_wrapper, forward_nested_worker_error_after_owner_close,
-    get_worker_state, queue_worker_font_task, register_worker_blob_read_task, register_worker_broadcast_channel_wrapper,
+    get_worker_state, install_service_worker_interface_template_bindings, queue_worker_font_task, register_worker_blob_read_task, register_worker_broadcast_channel_wrapper,
     register_worker_message_port_wrapper, register_worker_opfs_iterator_task,
     register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
     register_worker_websocket, reserve_nested_worker_context, send_worker_websocket_binary,
