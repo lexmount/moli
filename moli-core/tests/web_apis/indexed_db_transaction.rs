@@ -37,7 +37,7 @@ async fn indexed_db_factory_checks_native_receivers_and_rejects_promises_in_call
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 149 } else { 447 },
+            if target == "worker" { 162 } else { 486 },
             "{target}: {result}"
         );
     }

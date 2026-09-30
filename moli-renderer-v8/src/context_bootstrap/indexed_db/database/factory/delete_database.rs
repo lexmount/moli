@@ -36,6 +36,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
         scope.throw_exception(exception);
         return;
     };
+    // Argument conversions and synchronous exceptions belong to the callee.
+    // Allocate and schedule the resulting request in the factory's own realm.
+    let Some(relevant_context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
     let _ = ensure_indexed_db_runtime_state(scope);
     let origin = storage_scope.storage_key().to_owned();
     let request_storage_scope = storage_scope.clone();
