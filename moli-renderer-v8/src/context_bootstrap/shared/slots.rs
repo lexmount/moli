@@ -36,7 +36,6 @@ pub(in crate::context_bootstrap) const WINDOW_TOP_SLOT: &str = "__moliWindowTop"
 pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowFrames";
 // Each SimpleEventTarget stores its own listener registry directly under this key.
 pub(crate) const SIMPLE_EVENT_TARGET_LISTENERS_SLOT: &str = "__moliEventTargetListeners";
-pub(in crate::context_bootstrap) const OFFLINE_AUDIO_BUFFER_SLOT: &str = "__moliOfflineAudioBuffer";
 pub(in crate::context_bootstrap) const DOM_IMPLEMENTATION_SINGLETON_SLOT: &str =
     "__moliDOMImplementationSingleton";
 pub(in crate::context_bootstrap) const URL_HREF_SLOT: &str = "__moliUrlHref";
