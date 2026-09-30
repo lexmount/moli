@@ -61,6 +61,7 @@ interfaces! {
     GamepadEvent: Event;
     GamepadHapticActuator;
     StereoPannerNode: AudioNode;
+    WaveShaperNode: AudioNode;
     Blob;
     BlobEvent: Event;
     BroadcastChannel: EventTarget;

@@ -2320,6 +2320,7 @@ mod time_ranges;
 mod url_components;
 mod video_codecs_shell;
 mod wake_lock_interfaces;
+mod wave_shaper_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;

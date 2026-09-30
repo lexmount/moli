@@ -19,6 +19,20 @@ const START_TIME: &str = "__moliAudioSourceStartTime";
 const STOP_TIME: &str = "__moliAudioSourceStopTime";
 const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
 const UNSUPPORTED_PROCESSOR: &str = "__moliAudioNodeNeedsProcessingBackend";
+const UNSUPPORTED_GENERATOR: &str = "__moliAudioNodeNeedsGenerationBackend";
+
+pub(super) fn set_unsupported_generator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    required: bool,
+) {
+    set_private_value(
+        scope,
+        node,
+        UNSUPPORTED_GENERATOR,
+        v8::Boolean::new(scope, required).into(),
+    );
+}
 
 pub(super) fn mark_unsupported_processor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -409,6 +423,17 @@ fn has_started_source<'s>(
             continue;
         }
         visited.push(node);
+        if get_private_value(scope, node, UNSUPPORTED_GENERATOR)
+            .is_some_and(|value| value.boolean_value(scope))
+        {
+            throw_dom_exception(
+                scope,
+                "NotSupportedError",
+                9,
+                "Signal generation for this audio node is not implemented.",
+            );
+            return None;
+        }
         let active = web_audio_number_slot(scope, node, START_TIME).is_some_and(|start| {
             start < end_time
                 && web_audio_number_slot(scope, node, STOP_TIME).is_some_and(|stop| stop > start)
