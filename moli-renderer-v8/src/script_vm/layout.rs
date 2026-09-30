@@ -1,6 +1,15 @@
 use super::*;
 
 impl ScriptVm {
+    pub(crate) fn elements_with_bounded_final_opacity_for_document_snapshot(
+        &self,
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> std::collections::HashSet<DomHandle> {
+        let host = self._context_host.borrow();
+        let document = host.document_handle();
+        host.elements_with_bounded_final_opacity(document, elements)
+    }
+
     pub(crate) fn sync_live_document_style_sources(&mut self) {
         let document = self.document_runtime.document_handle();
         self._context_host
@@ -17,6 +26,16 @@ impl ScriptVm {
             &self._context_host.borrow(),
             handles,
             properties,
+        )
+    }
+
+    pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
+        &self,
+        handles: impl IntoIterator<Item = DomHandle>,
+    ) -> Vec<bool> {
+        crate::native_bridge::element::computed_style_own_visibility_values_for_document_snapshot(
+            &self._context_host.borrow(),
+            handles,
         )
     }
 

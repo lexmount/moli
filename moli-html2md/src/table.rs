@@ -10,7 +10,6 @@ pub(crate) struct Table<Id> {
     cells: std::vec::IntoIter<Cell<Id>>,
     content: Vec<Output>,
     in_cell: bool,
-    has_complex_content: bool,
     rows: Vec<usize>,
     separators: Vec<&'static str>,
     has_header: bool,
@@ -37,7 +36,6 @@ impl<Id: Copy> Table<Id> {
             cells: Vec::new().into_iter(),
             content: Vec::new(),
             in_cell: false,
-            has_complex_content: false,
             rows: Vec::new(),
             separators: Vec::new(),
             has_header: false,
@@ -166,39 +164,9 @@ impl<Id: Copy> Table<Id> {
         self.in_cell = false;
     }
 
-    pub(crate) fn visit_element(&mut self, tag: &str) {
-        if self.in_cell
-            && matches!(
-                tag,
-                "table"
-                    | "pre"
-                    | "blockquote"
-                    | "ul"
-                    | "ol"
-                    | "li"
-                    | "hr"
-                    | "h1"
-                    | "h2"
-                    | "h3"
-                    | "h4"
-                    | "h5"
-                    | "h6"
-            )
-        {
-            self.has_complex_content = true;
-        }
-    }
-
     pub(crate) fn finish(self) -> Output {
-        if self.has_complex_content {
-            let mut output = Output::default();
-            for cell in self.content.into_iter().filter(|cell| !cell.is_empty()) {
-                if !output.is_empty() {
-                    output.push_text("\n\n".into());
-                }
-                output.append(cell);
-            }
-            return output;
+        if self.content.iter().all(Output::is_empty) {
+            return Output::default();
         }
         let mut output = String::new();
         if !self.has_header {

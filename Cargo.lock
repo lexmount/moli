@@ -1248,7 +1248,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3562,7 +3562,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4503,7 +4503,7 @@ dependencies = [
  "errno 0.3.14",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4625,7 +4625,7 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.40.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "bitflags",
  "cssparser",
@@ -4757,7 +4757,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.4.3"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -5010,7 +5010,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -5066,7 +5066,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "string_cache",
  "string_cache_codegen",
@@ -5075,7 +5075,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5087,7 +5087,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "bitflags",
  "stylo_malloc_size_of",
@@ -5096,7 +5096,7 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "app_units",
  "cssparser",
@@ -5113,7 +5113,7 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "toml",
 ]
@@ -5131,7 +5131,7 @@ dependencies = [
 [[package]]
 name = "stylo_traits"
 version = "0.20.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "app_units",
  "bitflags",
@@ -5225,7 +5225,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5431,7 +5431,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "to_shmem"
 version = "0.5.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "cssparser",
  "servo_arc",
@@ -5444,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.1.0"
-source = "git+https://github.com/lexmount/stylo?branch=moli#3c8bbb450a52f9a4dcb2de51061216a1d2727def"
+source = "git+https://github.com/lexmount/stylo?rev=db0a97a2d2939d621eb0c9d16dd85cb3e22535f5#db0a97a2d2939d621eb0c9d16dd85cb3e22535f5"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -6063,7 +6063,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

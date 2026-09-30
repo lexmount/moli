@@ -1492,6 +1492,15 @@ impl JsContextHost {
             .retained_stylesheet_query_snapshot_for_document(document)
     }
 
+    pub(crate) fn elements_with_bounded_final_opacity(
+        &self,
+        document: DomHandle,
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> std::collections::HashSet<DomHandle> {
+        self.style_engine
+            .elements_with_bounded_final_opacity(self.dom_host(), document, elements)
+    }
+
     #[cfg(test)]
     pub(crate) fn computed_style_cache_generation_for_document_for_test(
         &self,
