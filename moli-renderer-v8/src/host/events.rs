@@ -161,7 +161,7 @@ pub(crate) fn event_handler_content_attribute_owner(
     event_type: &str,
 ) -> Option<DomHandle> {
     let attribute_name =
-        crate::native_bridge::element::event_handler_content_attribute_name(event_type);
+        crate::native_bridge::element::event_handler_content_attribute_name(event_type)?;
     let handle = match target {
         EventTargetHandle::Node(handle) => {
             if crate::native_bridge::element::body_or_frameset_reflects_window_event_type(
@@ -396,8 +396,11 @@ fn invoke_event_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    let handler_name =
-        crate::native_bridge::element::event_handler_content_attribute_name(event_type);
+    let Some(handler_name) =
+        crate::native_bridge::element::event_handler_content_attribute_name(event_type)
+    else {
+        return;
+    };
     let callback_id = match registry.event_handler_property_value(target, event_type) {
         Some(EventHandlerPropertyValue::Callback(callback_id)) => callback_id,
         Some(EventHandlerPropertyValue::Null) => {

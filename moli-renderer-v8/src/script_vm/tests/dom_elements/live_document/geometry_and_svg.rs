@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn svg_animation_elements_use_native_interfaces_and_event_handlers() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animation.test/",
+        "<body><iframe id=child></iframe></body>",
+    );
+    vm.eval(include_str!("svg_animation_interfaces.js"))
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__nodeReplacementResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_animation_timing_shim_validates_arguments_before_reporting_unsupported() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animation-timing.test/",
+        "<body><iframe id=child></iframe></body>",
+    );
+    assert_eq!(vm.eval(r#"
+    (() => {
+      const other = document.getElementById('child').contentWindow;
+      for (const realm of [window, other]) {
+        const element = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+        for (const name of ['beginElement', 'endElement', 'beginElementAt', 'endElementAt']) {
+          let error, conversions = 0;
+          try {realm.SVGAnimationElement.prototype[name].call(element, {valueOf() {conversions++; return 0.25;}});}
+          catch (caught) {error = caught;}
+          if (!(error instanceof realm.DOMException) || error.name !== 'NotSupportedError') throw Error(name + ' shim error');
+          if (conversions !== (name.endsWith('At') ? 1 : 0)) throw Error(name + ' argument conversion');
+          if (element.getCurrentTime() !== 0) throw Error('shim cannot advance the timeline');
+        }
+      }
+      return true;
+    })()
+    "#).unwrap(), "true");
+}
+
+#[test]
 fn namespaced_attribute_values_preserve_utf16_and_namespace_identity() {
     let mut vm = new_parsed_test_vm("https://namespace-utf16.test/", "<body></body>");
     assert_eq!(

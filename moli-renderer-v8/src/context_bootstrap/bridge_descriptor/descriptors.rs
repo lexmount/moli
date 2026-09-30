@@ -101,6 +101,26 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     descriptor(web_api_interfaces::Element::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(web_api_interfaces::SVGElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(
+        web_api_interfaces::SVGAnimationElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGAnimateElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGAnimateMotionElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGAnimateTransformElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGSetElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGGraphicsElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),

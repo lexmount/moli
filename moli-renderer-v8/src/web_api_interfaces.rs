@@ -419,6 +419,11 @@ interfaces! {
     ResizeObserverSize;
     Response;
     SVGAElement: SVGGraphicsElement;
+    SVGAnimationElement: SVGElement;
+    SVGAnimateElement: SVGAnimationElement;
+    SVGAnimateMotionElement: SVGAnimationElement;
+    SVGAnimateTransformElement: SVGAnimationElement;
+    SVGSetElement: SVGAnimationElement;
     SVGAnimatedEnumeration;
     SVGAnimatedString;
     SVGAnimatedLength;
@@ -508,7 +513,6 @@ interfaces! {
     SVGScriptElement: SVGElement;
     SVGStyleElement: SVGElement;
     SVGSwitchElement: SVGGraphicsElement;
-    SVGMPathElement: SVGElement;
     SVGSymbolElement: SVGGraphicsElement;
     SVGTSpanElement: SVGTextPositioningElement;
     SVGTextContentElement: SVGGraphicsElement;

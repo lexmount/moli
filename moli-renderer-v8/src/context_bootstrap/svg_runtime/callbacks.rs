@@ -762,6 +762,17 @@ pub(super) fn svg_graphics_transform_getter<'s>(
 pub(super) fn svg_graphics_test_string_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_graphics_element_receiver(scope, args.this(), "SVGTests") {
+        return;
+    }
+    svg_test_string_list_getter(scope, args, rv);
+}
+
+pub(super) fn svg_test_string_list_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Some((attribute, slot)) = callback_data_item(
@@ -774,9 +785,10 @@ pub(super) fn svg_graphics_test_string_list_getter<'s>(
         return;
     };
     let receiver = args.this();
-    if !require_svg_graphics_element_receiver(scope, receiver, attribute) {
+    let Some(context) = receiver.get_creation_context(scope) else {
         return;
-    }
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, receiver, slot) {
         if let Ok(list) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_string_list_from_owner_attribute(scope, list);

@@ -18,6 +18,7 @@ use moli_svg::{
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
 
+mod animation;
 mod bindings;
 mod builders;
 mod callbacks;
@@ -1279,6 +1280,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     name: &str,
 ) {
     bindings::install_svg_element_accessor_bindings(scope, template, name);
+    animation::install_bindings(scope, template, name);
     filters::install_bindings(scope, template, name);
     bindings::install_svg_enumeration_constant_bindings(scope, template, name);
     match name {
