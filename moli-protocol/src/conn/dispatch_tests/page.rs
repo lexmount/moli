@@ -913,6 +913,7 @@ async fn devtools_command_executes_context_viewport_override() {
                     target_id: Some(target_id),
                     ..context
                 },
+                publish_layout: false,
             },
         ))
         .await

@@ -2949,6 +2949,7 @@ async fn bidi_input_viewport_bounds(
             target_id: Some(DevToolsTargetId::from(context_id)),
             browser_context_id: None,
         },
+        publish_layout: false,
     });
     match scheduler
         .execute_devtools_command_with_protocol_messages(command)

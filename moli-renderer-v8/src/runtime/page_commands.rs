@@ -853,7 +853,10 @@ impl PageVm {
             RendererPageCommand::SerializeHtml => {
                 Ok(RendererPageReply::OptionalString(Some(self.serialize_html())))
             }
-            RendererPageCommand::LayoutMetrics => {
+            RendererPageCommand::LayoutMetrics { publish_layout } => {
+                if publish_layout {
+                    self.vm_mut().publish_layout()?;
+                }
                 Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()?))
             }
             RendererPageCommand::PublishLayout => {

@@ -14,9 +14,9 @@ use crate::{
     style_engine::{
         AdoptedStyleSheetInstallation, CssCustomPropertyRegistration,
         CssCustomPropertyRegistrationError, FullStyleWorldSnapshot,
-        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleAttributeImpact,
-        StyleMutationEffect, StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot,
-        StyloStyleEnvironment, StyloStylesheetSource,
+        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleMutationEffect,
+        StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot, StyloStyleEnvironment,
+        StyloStylesheetSource,
     },
     {
         RendererWebStorageHandles,
@@ -355,11 +355,13 @@ impl JsContextHost {
             .get_attribute(owner, "media")
             .unwrap_or_default();
         stylesheet.set_media_text(&media);
-        self.style_engine.refresh_owner_live_stylesheet_with_host(
+        if self.style_engine.refresh_owner_live_stylesheet_with_host(
             unsafe { &*dom_host },
             owner,
             stylesheet.id(),
-        );
+        ) {
+            self.clear_layout_rect_cache();
+        }
     }
 
     fn refresh_linked_live_stylesheet_attributes(&mut self, owner: DomHandle) {
@@ -795,6 +797,7 @@ impl JsContextHost {
         if self.emulated_media != *overrides {
             self.style_engine
                 .bump_target_context_epoch_for_document(self.document_handle());
+            self.clear_layout_rect_cache();
         }
         self.emulated_media = overrides.clone();
     }
@@ -808,11 +811,27 @@ impl JsContextHost {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
-        if changed {
+        let previous_style_viewport = self.style_viewport();
+        let previous_emulated_view = self
+            .viewport_surface
+            .and_then(|surface| surface.emulated_view);
+        self.viewport_surface = viewport_surface;
+        if changed && previous_style_viewport != self.style_viewport() {
             self.style_engine
                 .bump_target_context_epoch_for_document(self.document_handle());
+            self.clear_layout_rect_cache();
         }
-        self.viewport_surface = viewport_surface;
+        if previous_emulated_view
+            != self
+                .viewport_surface
+                .and_then(|surface| surface.emulated_view)
+        {
+            // A compositor-only emulated view changes screencast pixels without
+            // changing the CSS layout viewport.
+            self.document_layout_state
+                .borrow_mut()
+                .mark_visual_state_dirty();
+        }
         changed
     }
 
@@ -872,6 +891,7 @@ impl JsContextHost {
         document: DomHandle,
         installations: Vec<AdoptedStyleSheetInstallation>,
     ) {
+        self.clear_layout_rect_cache();
         self.style_engine
             .set_document_adopted_style_sheet_installations(document, installations);
     }
@@ -1103,12 +1123,17 @@ impl JsContextHost {
         suppressed: bool,
     ) -> bool {
         let dom_host = self.dom_host() as *const _;
-        self.style_engine
+        let changed = self
+            .style_engine
             .set_owner_style_sheet_csp_suppressed_with_host(
                 unsafe { &*dom_host },
                 owner,
                 suppressed,
-            )
+            );
+        if changed {
+            self.clear_layout_rect_cache();
+        }
+        changed
     }
 
     pub(crate) fn install_linked_stylesheet(
@@ -1281,13 +1306,16 @@ impl JsContextHost {
         document: DomHandle,
         registration: CssCustomPropertyRegistration,
     ) -> Result<(), CssCustomPropertyRegistrationError> {
-        self.clear_layout_rect_cache();
         let base_url = self.style_base_url_for_document(document);
-        self.style_engine.register_css_custom_property_for_document(
+        let result = self.style_engine.register_css_custom_property_for_document(
             document,
             registration,
             base_url,
-        )
+        );
+        if result.is_ok() {
+            self.clear_layout_rect_cache();
+        }
+        result
     }
 
     pub(crate) fn validate_css_custom_property_registration_for_document(
@@ -1856,6 +1884,14 @@ impl JsContextHost {
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
     ) {
+        if previous != next
+            && previous
+                .into_iter()
+                .chain(next)
+                .any(|element| self.dom_host().is_connected(element))
+        {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -1874,6 +1910,14 @@ impl JsContextHost {
         next: Option<DomHandle>,
         previous_focus_within: Option<Vec<DomHandle>>,
     ) {
+        if previous != next
+            && previous
+                .into_iter()
+                .chain(next)
+                .any(|element| self.dom_host().is_connected(element))
+        {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -1893,6 +1937,14 @@ impl JsContextHost {
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
     ) {
+        if previous != next
+            && previous
+                .into_iter()
+                .chain(next)
+                .any(|element| self.dom_host().is_connected(element))
+        {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -1912,6 +1964,12 @@ impl JsContextHost {
         state: StyloElementState,
         old_state: Option<StyloElementState>,
     ) {
+        let state_changed = old_state
+            .zip(self.retained_current_element_state(element))
+            .is_none_or(|(old, current)| old & state != current & state);
+        if state_changed && self.dom_host().is_connected(element) {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -1978,6 +2036,9 @@ impl JsContextHost {
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
     ) {
+        if !state_names.is_empty() && self.dom_host().is_connected(element) {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2241,7 +2302,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
-        if style_mutation_effects_affect_layout_metric(effects) {
+        if style_mutation_effects_affect_layout_metric(self.dom_host(), effects) {
             self.clear_layout_rect_cache();
         }
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
@@ -2267,14 +2328,18 @@ impl JsContextHost {
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
-        self.clear_layout_rect_cache();
+        if self.dom_host().is_connected(root) {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .invalidate_inline_style_subtree(unsafe { &*dom_host }, root);
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {
-        self.clear_layout_rect_cache();
+        if self.dom_host().is_connected(root) {
+            self.clear_layout_rect_cache();
+        }
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .invalidate_style_subtree(unsafe { &*dom_host }, root);
@@ -2573,15 +2638,27 @@ impl JsContextHost {
     }
 }
 
-fn style_mutation_effects_affect_layout_metric(effects: &[StyleMutationEffect]) -> bool {
+fn style_mutation_effects_affect_layout_metric(
+    host: &crate::dom::native::DomHost,
+    effects: &[StyleMutationEffect],
+) -> bool {
     effects.iter().any(|effect| match effect {
-        StyleMutationEffect::Attribute { name, .. } => {
-            StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
+        // Any connected attribute can participate in an authored attribute
+        // selector whose winning declaration changes box geometry. The fixed
+        // native-attribute classification only covers non-CSS side effects.
+        StyleMutationEffect::Attribute { element, .. } => host.is_connected(*element),
+        // Tree-effect names describe the insertion/removal operation, not a
+        // guaranteed document-connected transition: inserting into a detached
+        // parent still emits `ConnectedSubtrees`. Check the post-insertion
+        // roots directly. A removed root is already disconnected by the time
+        // effects are consumed; removal from the live document remains covered
+        // by its accompanying `ChildList`, whose parent stays connected.
+        StyleMutationEffect::ConnectedSubtrees { roots } => {
+            roots.iter().any(|root| host.is_connected(*root))
         }
-        StyleMutationEffect::ConnectedSubtrees { .. }
-        | StyleMutationEffect::DisconnectedSubtrees { .. }
-        | StyleMutationEffect::SlotAssignment { .. }
-        | StyleMutationEffect::CharacterData { .. }
-        | StyleMutationEffect::ChildList { .. } => true,
+        StyleMutationEffect::DisconnectedSubtrees { .. } => false,
+        StyleMutationEffect::SlotAssignment { slot, .. } => host.is_connected(*slot),
+        StyleMutationEffect::CharacterData { node } => host.is_connected(*node),
+        StyleMutationEffect::ChildList { parent, .. } => host.is_connected(*parent),
     })
 }

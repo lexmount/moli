@@ -60,4 +60,5 @@ mod content_and_invalidation;
 mod cross_document_and_animations;
 mod nested_document_invalidation;
 mod properties_and_selectors;
+mod root_font_units;
 mod stylesheet_and_document_lifecycle;

@@ -31,6 +31,7 @@ pub fn create_initial_target_command(context: &ClassicDevToolsCommandContext) ->
 pub fn layout_metrics_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
     DevToolsCommand::GetLayoutMetrics(DevToolsGetLayoutMetricsCommand {
         context: context.command_context(),
+        publish_layout: false,
     })
 }
 

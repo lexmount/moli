@@ -1057,6 +1057,70 @@ fn screenshot_data_url(html: &str) -> String {
         percent_encoding::percent_encode(html.as_bytes(), percent_encoding::NON_ALPHANUMERIC)
     )
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explicit_layout_metrics_publication_exposes_new_click_target() {
+    let mut ctx = TestContext::new();
+    let session = "SID-EXPLICIT-LAYOUT-PUBLICATION";
+    install_active_screenshot_page(
+        &mut ctx,
+        "BID-EXPLICIT-LAYOUT-PUBLICATION",
+        "TID-EXPLICIT-LAYOUT-PUBLICATION",
+        session,
+        &screenshot_data_url(
+            "<!doctype html><style>html,body{margin:0}button{display:none;position:absolute;left:10px;top:20px;width:80px;height:30px}</style><button id=action>New</button>",
+        ),
+    )
+    .await;
+    set_screenshot_viewport(&mut ctx, session, 320, 240, 1.0, 200).await;
+
+    ctx.process_async(json!({"id":201,"method":"Page.getLayoutMetrics","sessionId":session}))
+        .await;
+    take_response_by_id(&mut ctx, 201);
+    ctx.process_async(json!({
+        "id":202,"method":"Runtime.evaluate","sessionId":session,
+        "params":{"expression":"document.querySelector('#action').style.display='block'"}
+    }))
+    .await;
+    take_response_by_id(&mut ctx, 202);
+
+    for (id, params) in [(203, json!({})), (205, json!({"publishLayout":false}))] {
+        ctx.process_async(json!({
+            "id":id,"method":"Page.getLayoutMetrics","sessionId":session,
+            "params":params
+        }))
+        .await;
+        assert!(take_response_by_id(&mut ctx, id).get("result").is_some());
+        ctx.process_async(json!({
+            "id":id+1,"method":"Runtime.evaluate","sessionId":session,
+            "params":{"expression":"document.querySelector('#action').getBoundingClientRect().width"}
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id + 1)["result"]["result"]["value"],
+            0,
+            "ordinary metrics must retain the published frame"
+        );
+    }
+
+    ctx.process_async(json!({
+        "id":207,"method":"Page.getLayoutMetrics","sessionId":session,
+        "params":{"publishLayout":true}
+    }))
+    .await;
+    assert!(take_response_by_id(&mut ctx, 207).get("result").is_some());
+    ctx.process_async(json!({
+        "id":208,"method":"Runtime.evaluate","sessionId":session,
+        "params":{"expression":"({width:document.querySelector('#action').getBoundingClientRect().width,hit:document.elementFromPoint(20,30)?.id})","returnByValue":true}
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 208)["result"]["result"]["value"],
+        json!({"width":80,"hit":"action"}),
+        "an explicit automation refresh must publish geometry and hit testing"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics_initializes_layout_and_reuses_content_until_capture() {
     let mut ctx = TestContext::new();
