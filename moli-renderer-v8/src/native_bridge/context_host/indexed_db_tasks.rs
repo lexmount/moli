@@ -1,6 +1,5 @@
 use super::{
     JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
-    WindowExecutionContextOwner,
 };
 use moli_indexeddb::{
     DatabaseHandle,
@@ -91,9 +90,4 @@ impl JsContextHost {
         retired
     }
 
-    pub(super) fn retire_indexed_db_owner(&self, owner: WindowExecutionContextOwner) {
-        self.indexed_db_context_tasks
-            .retire_matching(|candidate| candidate.owner() == owner);
-        self.signal_page_indexed_db_task_reconsideration_if_installed();
-    }
 }

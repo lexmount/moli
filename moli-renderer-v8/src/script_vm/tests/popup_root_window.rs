@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn popup_window_owns_its_script_global_and_intrinsic_prototypes() {
+    let mut vm = new_storage_html_test_vm("https://popup-realm.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/popup-window-realm.js"
+    ))
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__nodeReplacementResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+}
+
 #[tokio::test]
 async fn initial_popup_aliases_its_creators_document_domain_in_both_directions() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
@@ -102,19 +116,52 @@ async fn popup_window_promise_reactions_keep_their_origin_without_granting_it_to
             }).catch(error => { popupNavigationError = error.name; });
             "#,
         );
-        let owner = crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
-        let previous = owner.enter(scope);
-        // Keep this job queued while a new LocalWindow commits. Its origin
-        // must remain that of the old popup, even after the proxy becomes
-        // same-origin with the opener.
-        run_body(
+        let root = scope.get_current_context().global(scope);
+        let reports = root
+            .get(
+                scope,
+                crate::util::v8str(scope, "retainedPopupReaction").into(),
+            )
+            .unwrap();
+        let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope).unwrap();
+        let context = unsafe { &mut *host_ptr }.ensure_popup_default_context(scope, popup_id)?;
+        let retained_probe = {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let popup = context.global(scope);
+            popup.set(
+                scope,
+                crate::util::v8str(scope, "retainedPopupReaction").into(),
+                reports,
+            );
+            popup.set(
+                scope,
+                crate::util::v8str(scope, "popup").into(),
+                popup.into(),
+            );
+            // Capture the actual old realm before the opener's queued navigation.
+            run_body(
+                scope,
+                r#"((reports, target) => {
+                    Promise.resolve().then(() => {
+                        try { reports.push(target.document.URL); }
+                        catch (error) { reports.push(error.name); }
+                    });
+                })(retainedPopupReaction, popup);"#,
+            );
+            let source = crate::util::v8_string(
+                scope,
+                "((target) => () => { try { return target.document.URL; } catch (error) { return error.name; } })(popup)",
+            )
+            .unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            let probe = crate::script_execution::execute_compiled_script(scope, script).unwrap();
+            v8::Global::new(scope, probe)
+        };
+        root.set(
             scope,
-            r#"Promise.resolve().then(() => {
-            try { retainedPopupReaction.push(popup.document.URL); }
-            catch (error) { retainedPopupReaction.push(error.name); }
-        });"#,
+            crate::util::v8str(scope, "retainedPopupProbe").into(),
+            v8::Local::new(scope, &retained_probe),
         );
-        owner.restore(scope, previous);
         run_body(
             scope,
             r#"
@@ -125,9 +172,9 @@ async fn popup_window_promise_reactions_keep_their_origin_without_granting_it_to
     })
     .unwrap();
     assert_eq!(
-        vm.eval("JSON.stringify([retainedPopupReaction, newWindowReaction, popupNavigationError])")
+        vm.eval("JSON.stringify([retainedPopupReaction, retainedPopupProbe(), newWindowReaction, popupNavigationError])")
             .unwrap(),
-        r#"[["SecurityError"],["about:blank"],null]"#
+        r#"[[],"SecurityError",["about:blank"],null]"#
     );
     assert_eq!(server.finish_targets().await.len(), 1);
 }

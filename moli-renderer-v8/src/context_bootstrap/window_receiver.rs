@@ -27,6 +27,9 @@ fn is_current_window_receiver<'s>(
     let current_context = scope.get_current_context();
     receiver.strict_equals(current_context.global(scope).into())
         && context_host_ptr_from_context_slot(current_context).is_some()
+        && receiver
+            .get_creation_context(scope)
+            .is_none_or(|context| context == current_context)
 }
 
 pub(crate) fn require_same_origin_window_receiver<'s>(

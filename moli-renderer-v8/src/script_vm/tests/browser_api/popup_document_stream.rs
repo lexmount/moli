@@ -25,7 +25,7 @@ fn popup_document_stream_methods_use_native_document_receiver_checks() {
       for (const receiver of [{}, Object.create(d), proxy, revoked.proxy]) {
         let error;
         try { d[name].call(receiver, value); } catch (caught) { error = caught; }
-        if (!(error instanceof TypeError) || conversions !== 0 || traps !== 0) {
+        if (!(error instanceof w.TypeError) || error instanceof TypeError || conversions !== 0 || traps !== 0) {
           failures.push([name, String(error), conversions, traps]);
         }
       }
@@ -53,7 +53,7 @@ fn popup_document_stream_methods_reject_xml_receivers_without_mutation() {
       const doc = new DOMParser().parseFromString('<root/>', 'text/xml');
       let error;
       try { w.document[name].call(doc, 'text'); } catch (caught) { error = caught; }
-      if (!(error instanceof DOMException) || error.name !== 'InvalidStateError' ||
+      if (!(error instanceof w.DOMException) || error instanceof DOMException || error.name !== 'InvalidStateError' ||
           new XMLSerializer().serializeToString(doc) !== '<root/>') {
         failures.push([name, String(error)]);
       }

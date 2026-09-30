@@ -58,15 +58,9 @@ impl WindowExecutionContextScopedRealmRegistration {
 
 #[derive(Default)]
 pub(in crate::native_bridge::context_host) struct WindowExecutionContextRealmRecords {
-    // A V8 context token identifies one concrete realm. Lightweight popups
-    // currently share their opener's concrete context, so their entries are
-    // explicitly scoped aliases rather than competing concrete registrations.
+    // Every Window owns a concrete V8 realm, including popup Windows.
     pub(in crate::native_bridge::context_host) concrete_by_token:
         HashMap<RuntimeObservableContextToken, WindowExecutionContextScopedRealmRegistration>,
-    lightweight_popup_aliases: HashMap<
-        (OwnerDispatchScope, RuntimeObservableContextToken),
-        WindowExecutionContextRealmRegistration,
-    >,
 }
 
 impl WindowExecutionContextRealmRecords {
@@ -75,17 +69,10 @@ impl WindowExecutionContextRealmRecords {
         dispatch_scope: OwnerDispatchScope,
         realm_token: RuntimeObservableContextToken,
     ) -> Option<WindowExecutionContextRealmRegistration> {
-        match dispatch_scope {
-            OwnerDispatchScope::LightweightPopup(_) => self
-                .lightweight_popup_aliases
-                .get(&(dispatch_scope, realm_token))
-                .copied(),
-            OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => self
-                .concrete_by_token
-                .get(&realm_token)
-                .filter(|registered| registered.dispatch_scope == dispatch_scope)
-                .map(|registered| registered.registration),
-        }
+        self.concrete_by_token
+            .get(&realm_token)
+            .filter(|registered| registered.dispatch_scope == dispatch_scope)
+            .map(|registered| registered.registration)
     }
 
     pub(in crate::native_bridge::context_host) fn concrete_registration(
@@ -103,33 +90,12 @@ impl WindowExecutionContextRealmRecords {
     ) -> Result<(), WindowExecutionContextScopedRealmRegistration> {
         let candidate =
             WindowExecutionContextScopedRealmRegistration::new(dispatch_scope, registration);
-        match dispatch_scope {
-            OwnerDispatchScope::LightweightPopup(_) => {
-                match self
-                    .lightweight_popup_aliases
-                    .get(&(dispatch_scope, realm_token))
-                {
-                    Some(registered) if *registered != registration => {
-                        return Err(WindowExecutionContextScopedRealmRegistration::new(
-                            dispatch_scope,
-                            *registered,
-                        ));
-                    }
-                    Some(_) => return Ok(()),
-                    None => {}
-                }
-                self.lightweight_popup_aliases
-                    .insert((dispatch_scope, realm_token), registration);
-            }
-            OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => {
-                match self.concrete_by_token.get(&realm_token) {
-                    Some(registered) if *registered != candidate => return Err(*registered),
-                    Some(_) => return Ok(()),
-                    None => {}
-                }
-                self.concrete_by_token.insert(realm_token, candidate);
-            }
+        match self.concrete_by_token.get(&realm_token) {
+            Some(registered) if *registered != candidate => return Err(*registered),
+            Some(_) => return Ok(()),
+            None => {}
         }
+        self.concrete_by_token.insert(realm_token, candidate);
         Ok(())
     }
 
@@ -138,20 +104,12 @@ impl WindowExecutionContextRealmRecords {
         dispatch_scope: OwnerDispatchScope,
         realm_token: RuntimeObservableContextToken,
     ) {
-        match dispatch_scope {
-            OwnerDispatchScope::LightweightPopup(_) => {
-                self.lightweight_popup_aliases
-                    .remove(&(dispatch_scope, realm_token));
-            }
-            OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => {
-                if self
-                    .concrete_by_token
-                    .get(&realm_token)
-                    .is_some_and(|registered| registered.dispatch_scope == dispatch_scope)
-                {
-                    self.concrete_by_token.remove(&realm_token);
-                }
-            }
+        if self
+            .concrete_by_token
+            .get(&realm_token)
+            .is_some_and(|registered| registered.dispatch_scope == dispatch_scope)
+        {
+            self.concrete_by_token.remove(&realm_token);
         }
     }
 
@@ -159,11 +117,7 @@ impl WindowExecutionContextRealmRecords {
         &mut self,
         realm_token: RuntimeObservableContextToken,
     ) -> usize {
-        let concrete_count = usize::from(self.concrete_by_token.remove(&realm_token).is_some());
-        let alias_count_before = self.lightweight_popup_aliases.len();
-        self.lightweight_popup_aliases
-            .retain(|(_, token), _| *token != realm_token);
-        concrete_count + alias_count_before.saturating_sub(self.lightweight_popup_aliases.len())
+        usize::from(self.concrete_by_token.remove(&realm_token).is_some())
     }
 
     pub(in crate::native_bridge::context_host) fn retire_owner(
@@ -172,8 +126,6 @@ impl WindowExecutionContextRealmRecords {
     ) {
         self.concrete_by_token
             .retain(|_, registered| registered.registration.owner != owner);
-        self.lightweight_popup_aliases
-            .retain(|_, registered| registered.owner != owner);
     }
 }
 
@@ -217,9 +169,8 @@ impl WindowExecutionContextIdentity {
     }
 
     /// Encodes an exact callback-realm identity for storage in an internal V8
-    /// private slot. Lightweight popup realms alias their opener's V8 context,
-    /// so retaining only that context would lose the LocalWindow generation
-    /// and dispatch address captured when the callback was converted.
+    /// private slot. It preserves the LocalWindow generation and dispatch
+    /// address captured when the callback was converted.
     pub(crate) fn serialize_for_internal_slot(self) -> String {
         let policy = u8::from(self.grants_universal_access());
         match (self.owner, self.dispatch_scope) {

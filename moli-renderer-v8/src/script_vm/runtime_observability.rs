@@ -188,6 +188,17 @@ impl ScriptVm {
                 });
             }
         }
+        let popups = self.popup_default_contexts.borrow();
+        let mut popup_ids = popups.keys().copied().collect::<Vec<_>>();
+        popup_ids.sort_unstable();
+        for popup_id in popup_ids {
+            let popup = &popups[&popup_id];
+            contexts.push(PageRuntimeObservableContext {
+                execution_context_id: None,
+                context_token: popup.realm_token,
+                context: &popup.context as *const _,
+            });
+        }
         contexts
     }
 

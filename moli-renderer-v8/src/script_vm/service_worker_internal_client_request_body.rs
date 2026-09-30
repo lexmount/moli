@@ -247,7 +247,6 @@ impl ScriptVm {
             let previous_owner_context = host_scope.enter(scope);
             let opened_popup = host.open_lightweight_popup_window(
                 scope,
-                host_ptr,
                 None,
                 None,
                 None,
@@ -332,7 +331,6 @@ impl ScriptVm {
             let previous_owner_context = host_scope.enter(scope);
             let opened_popup = host.open_lightweight_popup_window(
                 scope,
-                host_ptr,
                 None,
                 None,
                 None,

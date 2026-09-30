@@ -221,36 +221,16 @@ fn message_channel_construction_keeps_popup_realm_with_ambient_child_marker() {
         )
     };
 
-    let top_context_ptr = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
-    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
-        let _previous_child =
+    let result = vm.with_popup_context_scope_and_checkpoint_for_test(popup_id, |scope, _| {
+        let previous_child =
             crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));
-        let _previous_popup =
-            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
-        Ok(())
-    })
-    .expect("overlapping ambient owner markers should install");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  const channel = new MessageChannel();
-  return [
-    channel.port1 instanceof MessagePort,
-    channel.port2 instanceof MessagePort
-  ].join("|");
-})()
-"#,
-        )
-        .expect("MessageChannel should construct in the popup realm");
-
-    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
-        let _previous_child = crate::native_bridge::enter_active_child_window_scope(scope, None);
-        let _previous_popup = crate::native_bridge::enter_top_level_lightweight_popup_scope(scope);
-        Ok(())
-    })
-    .expect("ambient owner markers should clear");
+        let source = crate::util::v8str(scope, "(() => { const c = new MessageChannel(); return [c.port1 instanceof MessagePort, c.port2 instanceof MessagePort].join('|'); })()");
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
+        let result = value.to_rust_string_lossy(scope);
+        crate::native_bridge::restore_active_child_window_scope(scope, previous_child);
+        Ok(result)
+    }).expect("MessageChannel should construct in the popup's actual realm");
 
     assert_eq!(result, "true|true");
     let owners = vm
