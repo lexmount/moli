@@ -16,6 +16,79 @@ use crate::domains::network::{
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn durable_response_body_session_budgets_survive_peer_eviction_and_reconfiguration() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-durable".into());
+    bc.set_active_target_id("TID-durable".to_owned());
+    bc.attach_active_session("SID-large".to_owned());
+    assert!(bc.assign_attached_session_to_target("TID-durable", "SID-small".to_owned()));
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    for (id, session, total, resource) in
+        [(79_300, "SID-large", 30, 20), (79_301, "SID-small", 10, 6)]
+    {
+        ctx.process_async(json!({"id":id,"method":"Network.enable","sessionId":session,"params":{
+            "enableDurableMessages":true,"maxTotalBufferSize":total,"maxResourceBufferSize":resource
+        }})).await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
+    for id in ["REQ-a", "REQ-b", "REQ-c"] {
+        bc.record_captured_response_body(
+            id.into(),
+            "123456".into(),
+            [Some("SID-large".into()), Some("SID-small".into())],
+        );
+    }
+    bc.active_page_target_mut()
+        .prepare_document_navigation_request_ids(
+            &mut crate::conn::ConnectionNetworkRequestIdAllocator::default(),
+            true,
+            true,
+            false,
+        );
+    for (index, request_id) in ["REQ-a", "REQ-b", "REQ-c"].into_iter().enumerate() {
+        let id = 79_302 + index as u64;
+        ctx.process_async(json!({"id":id,"method":"Network.getResponseBody","sessionId":"SID-large","params":{"requestId":request_id}})).await;
+        ctx.expect_result(
+            id,
+            json!({"body":"123456","base64Encoded":false}),
+            Some("SID-large"),
+        );
+    }
+    ctx.process_async(json!({"id":79_305,"method":"Network.getResponseBody","sessionId":"SID-small","params":{"requestId":"REQ-a"}})).await;
+    ctx.expect_error(
+        79_305,
+        -32000,
+        "Request content was evicted from inspector cache",
+    );
+    ctx.process_async(json!({"id":79_306,"method":"Network.getResponseBody","sessionId":"SID-small","params":{"requestId":"REQ-c"}})).await;
+    ctx.expect_result(
+        79_306,
+        json!({"body":"123456","base64Encoded":false}),
+        Some("SID-small"),
+    );
+    ctx.process_async(
+        json!({"id":79_307,"method":"Network.enable","sessionId":"SID-small","params":{
+            "enableDurableMessages":true,"maxTotalBufferSize":4,"maxResourceBufferSize":4
+        }}),
+    )
+    .await;
+    ctx.expect_result(79_307, json!({}), Some("SID-small"));
+    ctx.process_async(json!({"id":79_308,"method":"Network.getResponseBody","sessionId":"SID-small","params":{"requestId":"REQ-c"}})).await;
+    ctx.expect_error(
+        79_308,
+        -32000,
+        "Request content was evicted from inspector cache",
+    );
+    ctx.process_async(json!({"id":79_309,"method":"Network.getResponseBody","sessionId":"SID-large","params":{"requestId":"REQ-c"}})).await;
+    ctx.expect_result(
+        79_309,
+        json!({"body":"123456","base64Encoded":false}),
+        Some("SID-large"),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn durable_response_body_survives_navigation_only_for_opted_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-durable".into());

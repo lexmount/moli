@@ -1444,6 +1444,12 @@ class FixtureServer:
                     self._send_text("fixture api body")
                 elif route == "/api-response-body-budget-small":
                     self._send_text("bounded response body remains readable")
+                elif route == "/api-durable-body":
+                    size = int(query.get("size", ["0"])[0])
+                    if not 0 <= size <= 128_000:
+                        self.send_error(HTTPStatus.BAD_REQUEST)
+                    else:
+                        self._send_text("x" * size)
                 elif route == "/api-response-body-budget-oversize":
                     self._send_common(
                         HTTPStatus.OK,

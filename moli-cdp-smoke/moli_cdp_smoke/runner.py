@@ -54,6 +54,7 @@ from .groups.network import (
     run_page_network_group,
     run_websocket_group,
 )
+from .groups.network_durable import run_network_durable_group
 from .groups.navigation_outcomes import run_navigation_outcomes_group
 from .groups.pdf import run_pdf_group
 from .groups.playwright_compat import run_playwright_compat_group
@@ -231,6 +232,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 PAGE_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "network-durable",
+        "Per-session durable response total/resource budgets, navigation retention and peer revocation.",
+        "page",
+        run_network_durable_group,
+    ),
     SmokeGroup(
         "iframe-input",
         "Cross-engine transformed single and nested iframe hover, click, wheel, and target-Document coordinate routing.",
