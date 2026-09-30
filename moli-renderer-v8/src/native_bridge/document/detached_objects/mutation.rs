@@ -141,9 +141,7 @@ fn define_detached_attribute_maps_for_live_element<'s>(
         namespace_attributes.into(),
     );
 
-    if let Some(snapshot) =
-        live_native_attribute_snapshot(scope, element).filter(|snapshot| !snapshot.is_empty())
-    {
+    if let Some(snapshot) = live_native_attribute_snapshot(scope, element) {
         for attribute in snapshot {
             detached_map_set(scope, attributes, &attribute.name, &attribute.value);
             if attribute.namespace_uri.is_some()
