@@ -217,6 +217,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     XPathEvaluator,
     BaseAudioContext,
     AudioDestinationNode,
+    AudioBufferSourceNode,
+    ConstantSourceNode,
     OscillatorNode,
     DynamicsCompressorNode,
     AnalyserNode,
