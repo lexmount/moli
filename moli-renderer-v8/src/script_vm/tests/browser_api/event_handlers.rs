@@ -2,6 +2,7 @@ use super::*;
 
 mod child_window;
 mod compilation;
+mod device_handlers;
 mod document_replacement;
 mod object_values;
 mod parser_merged_body;
