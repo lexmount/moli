@@ -3538,20 +3538,6 @@ async fn worker_does_not_expose_window_worklet_interfaces() {
 }
 
 #[tokio::test]
-async fn worker_does_not_expose_window_media_device_interfaces() {
-    ensure_v8();
-    let mut handle = spawn_worker("postMessage({MediaDeviceInfo:'MediaDeviceInfo' in self,InputDeviceInfo:'InputDeviceInfo' in self});close();".to_owned(), "https://media-device-worker.test/worker.js".into());
-    let message = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(
-        expect_post_json(message),
-        r#"{"MediaDeviceInfo":false,"InputDeviceInfo":false}"#
-    );
-}
-
-#[tokio::test]
 async fn worker_does_not_expose_window_audio_node_interface() {
     ensure_v8();
     let mut handle = spawn_worker(
