@@ -1367,9 +1367,7 @@ impl JsContextHost {
         (!is_cross_origin_window_proxy(scope, object)).then_some(object)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_top_for_realm_global<
-        's,
-    >(
+    pub(in crate::native_bridge) fn child_browsing_context_parent_top_for_realm_global<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,

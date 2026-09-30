@@ -1895,6 +1895,23 @@ async fn popup_initial_navigation_replaces_internal_blank_history_entry() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn window_open_named_target_reuses_existing_popup_target() {
+    // Rename access requires a same-origin WindowProxy. Separate HTTP paths
+    // retain full document navigations; data: documents have opaque origins.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .fallback(|| async { ([(CONTENT_TYPE, "text/html")], "<main>named popup</main>") }),
+        )
+        .await
+        .unwrap();
+    });
+    let opener_url = format!("http://{address}/opener");
+    let first_url = format!("http://{address}/first-popup");
+    let second_url = format!("http://{address}/second-popup");
+    let renamed_url = format!("http://{address}/renamed-popup");
     let mut ctx = TestContext::new();
     // Target creation/named-target selection is synchronous with
     // `window.open()`, but fetching the selected target's URL is not. Mirror
@@ -1903,11 +1920,11 @@ async fn window_open_named_target_reuses_existing_popup_target() {
     ctx.enable_background_navigation_scheduler_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
-            load_bc_with_titled_page_async(
+            load_bc_with_page_url_async(
                 &mut ctx,
                 "BID-popup-name",
                 "TID-opener-name",
-                "<main>popup opener</main>",
+                &opener_url,
             )
             .await;
             ctx.process_async(json!({
@@ -1935,7 +1952,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                 "method": "Runtime.evaluate",
                 "sessionId": opener_session_id,
                 "params": {
-                    "expression": "window.open('data:text/html,first-popup', 'reportWindow') !== null"
+                    "expression": format!("window.__namedPopup = window.open({}, 'reportWindow'); window.__namedPopup !== null", json!(first_url))
                 }
             }))
             .await;
@@ -1951,7 +1968,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                 .to_owned();
             assert_eq!(
                 created["params"]["targetInfo"]["url"],
-                json!("data:text/html,first-popup")
+                json!(first_url)
             );
             assert!(
                 first_sent
@@ -1959,13 +1976,12 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                     .any(|message| message["method"] == json!("Page.windowOpen")),
                 "first named window.open should emit Page.windowOpen: {first_sent:?}"
             );
-
             ctx.process_async(json!({
                 "id": 15,
                 "method": "Runtime.evaluate",
                 "sessionId": opener_session_id,
                 "params": {
-                    "expression": "window.open('data:text/html,second-popup', 'reportWindow') !== null"
+                    "expression": format!("window.open({}, 'reportWindow') !== null", json!(second_url))
                 }
             }))
             .await;
@@ -1994,7 +2010,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                             && message["params"]["targetInfo"]["targetId"]
                                 == json!(target_id)
                             && message["params"]["targetInfo"]["url"]
-                                == json!("data:text/html,second-popup")
+                                == json!(second_url)
                     },
                 )
                 .await;
@@ -2004,7 +2020,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
             );
             assert_eq!(
                 changed["params"]["targetInfo"]["url"],
-                json!("data:text/html,second-popup")
+                json!(second_url)
             );
             ctx.wait_until_scheduler_state("reused named popup remains selected", |conn| {
                 conn.browser_context_by_id("BID-popup-name")
@@ -2012,7 +2028,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                         browser_context.active_target_id() == Some(target_id.as_str())
                             && loaded_page_for_target(browser_context, &target_id).is_some_and(
                                 |page| {
-                                    page.final_url().as_str() == "data:text/html,second-popup"
+                                    page.final_url().as_str() == second_url
                                 },
                             )
                     })
@@ -2022,12 +2038,123 @@ async fn window_open_named_target_reuses_existing_popup_target() {
             assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
             assert_eq!(
                 browser_context.target_url(),
-                "data:text/html,second-popup"
+                second_url
+            );
+            ctx.process_async(json!({
+                "id": 141,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": target_id }
+            }))
+            .await;
+            let popup_session_id = take_response_by_id(&mut ctx, 141)["result"]["sessionId"]
+                .as_str()
+                .expect("popup session id")
+                .to_owned();
+            ctx.sent.clear();
+
+            ctx.process_async(json!({
+                "id": 16,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.__namedPopup.name = 'renamedWindow'; window.__namedPopup.name"
+                }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 16)["result"]["result"]["value"],
+                json!("renamedWindow")
+            );
+            ctx.process_async(json!({
+                "id": 161,
+                "method": "Runtime.evaluate",
+                "sessionId": popup_session_id,
+                "params": { "expression": "window.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 161)["result"]["result"]["value"],
+                json!("renamedWindow"),
+                "a proxy rename must be immediately visible in the target"
+            );
+            ctx.process_async(json!({
+                "id": 162,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": format!("window.open({}, 'renamedWindow') !== null", json!(renamed_url))
+                }
+            }))
+            .await;
+            let renamed_sent = ctx.take_all();
+            assert!(
+                !renamed_sent
+                    .iter()
+                    .any(|message| message["method"] == json!("Target.targetCreated")),
+                "opening a popup by its live renamed Window.name must reuse its bound target: {renamed_sent:?}"
+            );
+            ctx.wait_for_scheduler_message("renamed popup target navigation", |message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+                    && message["params"]["targetInfo"]["url"]
+                        == json!(renamed_url)
+            })
+            .await;
+            let browser_context = ctx.conn.browser_context.as_ref().unwrap();
+            assert_eq!(
+                browser_context.target_id_for_window_name("renamedWindow"),
+                Some(target_id.as_str())
+            );
+            assert_eq!(
+                browser_context.target_id_for_window_name("reportWindow"),
+                None,
+                "renaming a live popup must invalidate its previous target name"
+            );
+
+            ctx.process_async(json!({
+                "id": 163,
+                "method": "Runtime.evaluate",
+                "sessionId": popup_session_id,
+                "params": { "expression": "window.name = 'targetRenamed'; window.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 163)["result"]["result"]["value"],
+                json!("targetRenamed")
+            );
+            ctx.process_async(json!({
+                "id": 164,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": { "expression": "window.__namedPopup.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 164)["result"]["result"]["value"],
+                json!("targetRenamed"),
+                "a target rename must be immediately visible through its retained proxy"
+            );
+
+            ctx.process_async(json!({
+                "id": 17,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.open('about:blank', 'renamedWindow') !== null"
+                }
+            }))
+            .await;
+            let old_name_sent = ctx.take_all();
+            assert!(
+                old_name_sent
+                    .iter()
+                    .any(|message| message["method"] == json!("Target.targetCreated")),
+                "the target's previous name must no longer resolve to it: {old_name_sent:?}"
             );
         })
         .await;
+    server.abort();
 }
-
 #[tokio::test(flavor = "multi_thread")]
 async fn window_open_named_target_reused_in_same_command_emits_one_page_event() {
     let mut ctx = TestContext::new();

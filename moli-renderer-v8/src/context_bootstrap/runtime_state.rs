@@ -871,26 +871,59 @@ fn window_surface_replaceable_setter<'s>(
     define_replaceable_window_property(scope, receiver, name, args.get(0));
 }
 
+fn window_name_receiver_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<(*mut JsContextHost, native_bridge::OwnerDispatchScope)> {
+    if !super::is_window_receiver(scope, receiver) {
+        return None;
+    }
+    let host_ptr = crate::util::context_host_ptr_from_window_object(scope, receiver)
+        .or_else(|| {
+            receiver
+                .get_creation_context(scope)
+                .and_then(crate::util::context_host_ptr_from_context_slot)
+        })
+        .or_else(|| {
+            receiver
+                .strict_equals(scope.get_current_context().global(scope).into())
+                .then(|| context_host_ptr_from_global_bridge(scope))
+                .flatten()
+        })?;
+    let owner = super::navigation_window::runtime_window_dispatch_scope(scope, receiver)
+        .unwrap_or(native_bridge::OwnerDispatchScope::Top);
+    Some((host_ptr, owner))
+}
+
 fn window_name_runtime_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if child_context_handle_from_owner(scope, receiver).is_none()
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &*host_ptr };
-        let name = if host.browsing_context_is_closed() {
-            String::new()
-        } else {
-            host.browsing_context_name().get()
-        };
-        rv.set(v8::String::new(scope, &name).unwrap().into());
+    let Some((host_ptr, owner)) = window_name_receiver_owner(scope, receiver) else {
+        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
         return;
+    };
+    let host = unsafe { &*host_ptr };
+    let value = match owner {
+        native_bridge::OwnerDispatchScope::Top => {
+            let name = if host.browsing_context_is_closed() {
+                String::new()
+            } else {
+                host.browsing_context_name().get()
+            };
+            v8_string(scope, &name).map(v8::Local::<v8::Value>::from)
+        }
+        native_bridge::OwnerDispatchScope::Child(_) => {
+            object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
+        }
+        native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .lightweight_popup_window_name(popup_id)
+            .and_then(|name| v8_string(scope, &name))
+            .map(v8::Local::<v8::Value>::from),
     }
-    let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
-        .unwrap_or_else(|| v8::String::empty(scope).into());
+    .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
 }
 
@@ -900,20 +933,27 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    let next = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
-            host.set_child_browsing_context_name(handle, next.clone());
-        } else {
+    let Some((host_ptr, owner)) = window_name_receiver_owner(scope, receiver) else {
+        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+        return;
+    };
+    let Some(next) = args.get(0).to_string(scope) else {
+        return;
+    };
+    let next = next.to_rust_string_lossy(scope);
+    let host = unsafe { &mut *host_ptr };
+    match owner {
+        native_bridge::OwnerDispatchScope::Top => {
             if host.browsing_context_is_closed() {
                 return;
             }
             host.browsing_context_name().set(next.clone());
+        }
+        native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.set_child_browsing_context_name(handle, next.clone())
+        }
+        native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.set_lightweight_popup_window_name(popup_id, &next)
         }
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);

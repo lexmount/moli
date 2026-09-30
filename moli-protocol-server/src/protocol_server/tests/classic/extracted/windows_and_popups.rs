@@ -730,6 +730,387 @@ async fn webdriver_classic_window_open_self_click_waits_for_current_url() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn webdriver_classic_keeps_all_live_popup_proxy_aliases() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let window_path = format!("/session/{session_id}/window");
+    let execute_path = format!("/session/{session_id}/execute/sync");
+    let original = classic_request_json(app.clone(), Method::GET, &window_path).await;
+    let original = original["value"].as_str().unwrap().to_owned();
+
+    let created = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__oldReport = open('about:blank#report', 'report'); const helper = open('about:blank#helper', 'helper'); return [window.__oldReport, helper];",
+            "args": []
+        }),
+    )
+    .await;
+    let report = created["value"][0][CLASSIC_WINDOW_REFERENCE_KEY]
+        .as_str()
+        .expect("report handle")
+        .to_owned();
+    let helper = created["value"][1][CLASSIC_WINDOW_REFERENCE_KEY]
+        .as_str()
+        .expect("helper handle")
+        .to_owned();
+
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": helper }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    let second_alias = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__newReport = open('about:blank#next', 'report'); return window.__newReport;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        second_alias["value"][CLASSIC_WINDOW_REFERENCE_KEY],
+        json!(report)
+    );
+
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": original }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    let old_alias = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({ "script": "return window.__oldReport;", "args": [] }),
+    )
+    .await;
+    assert_eq!(
+        old_alias["value"][CLASSIC_WINDOW_REFERENCE_KEY],
+        json!(report)
+    );
+
+    let handles = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/window/handles"),
+    )
+    .await;
+    assert_eq!(
+        handles["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|handle| **handle == json!(report))
+            .count(),
+        1
+    );
+
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": report }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    let remaining = classic_request_json(app.clone(), Method::DELETE, &window_path).await;
+    assert_eq!(remaining["value"].as_array().map(Vec::len), Some(2));
+
+    for (owner, proxy) in [(&original, "__oldReport"), (&helper, "__newReport")] {
+        assert_eq!(
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &window_path,
+                json!({ "handle": owner }),
+            )
+            .await,
+            json!({ "value": null })
+        );
+        assert_eq!(
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &execute_path,
+                json!({
+                    "script": format!("return window.{proxy}.closed;"),
+                    "args": []
+                }),
+            )
+            .await,
+            json!({ "value": true }),
+            "every live alias must observe the shared target close"
+        );
+    }
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_noopener_reuses_a_related_named_popup() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let window_path = format!("/session/{session_id}/window");
+    let handles_path = format!("/session/{session_id}/window/handles");
+    let execute_path = format!("/session/{session_id}/execute/sync");
+
+    let created = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__report = open('about:blank#first', 'report'); return window.__report;",
+            "args": []
+        }),
+    )
+    .await;
+    let report = created["value"][CLASSIC_WINDOW_REFERENCE_KEY]
+        .as_str()
+        .expect("report handle")
+        .to_owned();
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &execute_path,
+            json!({
+                "script": "return window.__report.opener === window;",
+                "args": []
+            }),
+        )
+        .await,
+        json!({ "value": true }),
+        "the original popup proxy must retain its opener"
+    );
+    let before = classic_request_json(app.clone(), Method::GET, &handles_path).await;
+
+    let reused = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "return open('about:blank#second', 'report', 'noopener') === null;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(reused, json!({ "value": true }));
+    assert_eq!(
+        classic_request_json(app.clone(), Method::GET, &handles_path).await,
+        before,
+        "noopener must not create a new target when a related named target exists"
+    );
+
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": report }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &execute_path,
+            json!({
+                "script": "return location.href;",
+                "args": []
+            }),
+        )
+        .await,
+        json!({ "value": "about:blank#second" }),
+        "the selected target must receive the noopener navigation"
+    );
+
+    let original = before["value"]
+        .as_array()
+        .and_then(|handles| {
+            handles.iter().find_map(|handle| {
+                let handle = handle.as_str()?;
+                (handle != report).then(|| handle.to_owned())
+            })
+        })
+        .expect("original window handle");
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": original }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &execute_path,
+            json!({
+                "script": "return window.__report.opener === window;",
+                "args": []
+            }),
+        )
+        .await,
+        json!({ "value": true }),
+        "reusing with noopener must not clear the existing proxy's opener"
+    );
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_close_retires_popup_aliases_before_named_reopen() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let window_path = format!("/session/{session_id}/window");
+    let execute_path = format!("/session/{session_id}/execute/sync");
+    let original = classic_request_json(app.clone(), Method::GET, &window_path).await;
+    let original = original["value"].as_str().unwrap().to_owned();
+
+    let created = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__oldReport = open('about:blank#one', 'report'); return window.__oldReport;",
+            "args": []
+        }),
+    )
+    .await;
+    let old_report = created["value"][CLASSIC_WINDOW_REFERENCE_KEY]
+        .as_str()
+        .expect("old report handle")
+        .to_owned();
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": old_report }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    let remaining = classic_request_json(app.clone(), Method::DELETE, &window_path).await;
+    assert_eq!(remaining, json!({ "value": [original.clone()] }));
+
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &window_path,
+            json!({ "handle": original }),
+        )
+        .await,
+        json!({ "value": null })
+    );
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &execute_path,
+            json!({
+                "script": "return window.__oldReport.closed;",
+                "args": []
+            }),
+        )
+        .await,
+        json!({ "value": true }),
+        "a proxy must observe that its protocol target was closed"
+    );
+    let replacement = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__newReport = open('about:blank#two', 'report'); return window.__newReport;",
+            "args": []
+        }),
+    )
+    .await;
+    let new_report = replacement["value"][CLASSIC_WINDOW_REFERENCE_KEY]
+        .as_str()
+        .expect("replacement report handle")
+        .to_owned();
+    assert_ne!(new_report, old_report);
+
+    let reused = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.__newReport.marker = 19; window.__newReport.document.body.textContent = 'kept'; for (let i = 0; i < 20; ++i) { if (open('', 'report') !== window.__newReport) return [false, i]; } return [true, window.__newReport.marker, window.__newReport.document.body.textContent, window.__newReport.closed];",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(reused, json!({ "value": [true, 19, "kept", false] }));
+    let handles = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/window/handles"),
+    )
+    .await;
+    assert_eq!(handles["value"].as_array().map(Vec::len), Some(2));
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_empty_parent_ignores_replaced_public_parent_property() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let result = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "const fake = {}; let reads = 0; Object.defineProperty(window, 'parent', { configurable: true, get() { ++reads; return fake; } }); const selected = open('', '_parent'); return [selected === window, selected === fake, reads];",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(result, json!({ "value": [true, false, 0] }));
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
 #[tokio::test]
 async fn webdriver_classic_named_popup_reuse_navigates_existing_window() {
     let app = build_router(test_state());
@@ -2580,4 +2961,75 @@ async fn webdriver_classic_new_window_user_prompt_behavior_matches_chromium_wpt(
         )
         .await;
     }
+}
+#[tokio::test]
+async fn webdriver_classic_named_popup_does_not_reuse_an_independent_tab() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let window_path = format!("/session/{session_id}/window");
+    let handles_path = format!("/session/{session_id}/window/handles");
+    let execute_path = format!("/session/{session_id}/execute/sync");
+
+    let original = classic_request_json(app.clone(), Method::GET, &window_path).await;
+    let original = original["value"]
+        .as_str()
+        .expect("original window handle")
+        .to_owned();
+    let named = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "window.name = 'independent-report'; return window.name;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(named, json!({ "value": "independent-report" }));
+
+    let independent = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/window/new"),
+        json!({ "type": "tab" }),
+    )
+    .await;
+    let independent = independent["value"]["handle"]
+        .as_str()
+        .expect("independent tab handle")
+        .to_owned();
+    let switched = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &window_path,
+        json!({ "handle": independent }),
+    )
+    .await;
+    assert_eq!(switched, json!({ "value": null }));
+
+    let opened = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &execute_path,
+        json!({
+            "script": "const popup = window.open('about:blank#independent-popup', 'independent-report'); return popup !== null;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(opened, json!({ "value": true }));
+    let handles = classic_request_json(app.clone(), Method::GET, &handles_path).await;
+    let handles = handles["value"].as_array().expect("window handles");
+    assert_eq!(
+        handles.len(),
+        3,
+        "an unrelated same-name tab must not be selected as the popup target: {handles:?}"
+    );
+    assert!(handles.contains(&json!(original)));
+    assert!(handles.contains(&json!(independent)));
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
 }

@@ -49,10 +49,12 @@ impl JsContextHost {
                 .sandbox
                 .with_response_content_security_policy(sandbox);
         }
+        let creator_scope =
+            lightweight_popup_initiator_endpoint(scope, Some(creator), creator_child_handle)
+                .expect("popup navigation requires its creator Window")
+                .dispatch_scope();
         let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
-            scope,
-            Some(creator),
-            creator_child_handle,
+            creator_scope,
             &about_blank_url(),
             policy.sandbox.forces_opaque_origin,
         );
@@ -100,12 +102,11 @@ impl JsContextHost {
         let environment = self
             .page_script_environment()
             .ok_or_else(|| anyhow::anyhow!("auxiliary creator Page is retired"))?;
-        if exposes_opener
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(existing) =
                 environment.named_related_window(&name, self.browsing_context_name())
         {
-            if update_existing_opener {
+            if update_existing_opener && exposes_opener {
                 existing.set_opener(Some(v8::Global::new(scope, creator)));
             }
             let (window, name) = existing
@@ -176,10 +177,12 @@ impl JsContextHost {
             policy.sandbox = DocumentSandboxPolicy::default();
         }
         inherit_lightweight_popup_opener_sandbox(&mut policy.sandbox, sandbox);
+        let creator_scope =
+            lightweight_popup_initiator_endpoint(scope, Some(creator), creator_child_handle)
+                .expect("popup navigation requires its creator Window")
+                .dispatch_scope();
         let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
-            scope,
-            Some(creator),
-            creator_child_handle,
+            creator_scope,
             &initial_url,
             policy.sandbox.forces_opaque_origin,
         );

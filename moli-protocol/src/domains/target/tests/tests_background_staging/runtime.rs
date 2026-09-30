@@ -575,6 +575,28 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     .await;
     let response = take_response_by_id(&mut ctx, 1041949447);
     assert_eq!(response["result"]["result"]["value"], json!("named target"));
+
+    ctx.process_async(json!({
+        "id": 1041949448,
+        "method": "Runtime.evaluate",
+        "sessionId": owner.session_id,
+        "params": {
+            "expression": "window.name"
+        }
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 1041949448);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!("reportWindow"),
+        "a reused named target must retain its browsing-context name across Document replacement"
+    );
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    assert_eq!(
+        browser_context.target_id_for_window_name("reportWindow"),
+        Some(owner.target_id.as_str()),
+        "the popup proxy name and the live target engine must share one browsing-context owner"
+    );
         })
         .await;
 }

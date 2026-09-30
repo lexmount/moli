@@ -161,15 +161,38 @@ pub(crate) fn window_open_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
+    // Argument conversion and relative URL settings belong to the calling
+    // realm; native target selection belongs to the Window receiver.
+    let host = unsafe { &*host_ptr };
+    let entered_base_url = entered_window_api_base_url(scope, host);
+    let owner = crate::native_bridge::marked_window_dispatch_scope(scope, args.this())
+        .or_else(|| {
+            args.this()
+                .get_creation_context(scope)
+                .and_then(|context| {
+                    host.window_execution_context_identity_for_access_check(context)
+                })
+                .map(|identity| identity.dispatch_scope())
+        })
+        .unwrap_or_else(|| host.entered_owner_dispatch_scope(scope));
+    let previous = owner.enter(scope);
+    window_open_for_receiver(scope, args, rv, parsed, host_ptr, entered_base_url);
+    owner.restore(scope, previous);
+}
+
+fn window_open_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    parsed: WindowOpenArgs,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    entered_base_url: Url,
+) {
     let entered_window = {
         let host = unsafe { &*host_ptr };
         window_open_entered_window(scope, host).unwrap_or_else(|| args.this())
     };
     let special_target = SpecialBrowsingContextTarget::parse(&parsed.target_name);
-    let entered_base_url = {
-        let host = unsafe { &*host_ptr };
-        entered_window_api_base_url(scope, host)
-    };
     let url = if parsed.raw_url.is_empty() {
         Url::parse("about:blank").expect("about:blank should parse")
     } else {
@@ -198,6 +221,31 @@ pub(crate) fn window_open_callback<'s>(
     }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
     let suppress_opener = parsed_features.suppresses_opener();
+    let named_source = if special_target.is_none() && !parsed.target_name.is_empty() {
+        let host = unsafe { &*host_ptr };
+        match host.entered_owner_dispatch_scope(scope) {
+            OwnerDispatchScope::Top => host.browsing_context_name().get() == parsed.target_name,
+            OwnerDispatchScope::Child(handle) => {
+                host.child_browsing_context_handle_by_name(&parsed.target_name) == Some(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => host
+                .lightweight_popup_window_name(popup_id)
+                .is_some_and(|name| name == parsed.target_name),
+        }
+    } else {
+        false
+    };
+    if named_source {
+        if parsed.raw_url.is_empty() {
+            rv.set(entered_window.into());
+        } else {
+            navigate_window_open_self(scope, entered_window, url.as_str(), &mut rv);
+        }
+        if suppress_opener {
+            rv.set_null();
+        }
+        return;
+    }
     let mut creator_policy_container = {
         let host = unsafe { &*host_ptr };
         window_open_entered_policy_container(scope, host)
