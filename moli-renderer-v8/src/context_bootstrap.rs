@@ -4,6 +4,8 @@ mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
 mod external;
+pub(crate) mod push_interfaces;
+pub(crate) mod service_worker_interfaces;
 pub(crate) use runtime_state::install_lightweight_popup_legacy_objects;
 mod broadcast_channel;
 mod canvas;

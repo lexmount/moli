@@ -505,6 +505,34 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::StorageBucket,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorker::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerContainer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerRegistration::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PushManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PushSubscription::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PushSubscriptionOptions::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::NavigationPreloadManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::FileSystemHandle::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

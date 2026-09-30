@@ -2675,3 +2675,71 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
         .await
         .expect("service worker URL argument script server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_native_interfaces_connect_window_and_worker_backends() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript",
+        include_str!("../../../service_worker_interfaces_worker.js"),
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(&format!("({}).then(value => globalThis.__serviceWorkerInterfaceDone = value, error => globalThis.__serviceWorkerInterfaceDone = String(error));",
+        include_str!("../../../service_worker_interfaces_registration.js"))).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "typeof __serviceWorkerInterfaceDone",
+        "boolean",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__nodeReplacementResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("__serviceWorkerInterfaceDone").unwrap(), "true");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn push_native_interfaces_connect_window_and_worker_backends() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript",
+        include_str!("../../../push_interfaces_worker.js"),
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(&format!("({}).then(value => globalThis.__pushInterfaceDone = value, error => globalThis.__pushInterfaceDone = String(error));",
+        include_str!("../../../push_interfaces_registration.js"))).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "typeof __pushInterfaceDone",
+        "boolean",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__nodeReplacementResults.failures)")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("__pushInterfaceDone").unwrap(), "true");
+    server.await.unwrap();
+}

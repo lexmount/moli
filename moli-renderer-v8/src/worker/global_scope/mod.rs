@@ -11,6 +11,10 @@
 //! - `requestAnimationFrame` / `cancelAnimationFrame`
 //! - `globalThis`
 
+use crate::context_bootstrap::service_worker_interfaces::{
+    NavigationPreloadManagerObjectDeclaration, ServiceWorkerObjectDeclaration,
+    ServiceWorkerRegistrationObjectDeclaration,
+};
 use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -41,7 +45,7 @@ use moli_fetch::{
     should_request_be_blocked_due_to_bad_port,
 };
 use moli_storage_key::MoliStorageKey;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
     Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
@@ -182,6 +186,7 @@ pub(super) const WORKER_EXCEPTION_LINE_SLOT: &str = "__moliWorkerExceptionLine";
 pub(super) const WORKER_EXCEPTION_COLUMN_SLOT: &str = "__moliWorkerExceptionColumn";
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
 const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
+const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
 const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
 const SERVICE_WORKER_WORKER_EVENTS_SLOT: &str = "__moliServiceWorkerWorkerEvents";
 const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
@@ -669,71 +674,60 @@ struct WorkerPrototypeTagDeclaration {
     tag: &'static str,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration,)]
-struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    scope: String,
-
-    #[webapi(
-        accessor_property = "installing",
-        getter = service_worker_registration_installing_getter
-    )]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration, enumerable, receiver)]
+struct ServiceWorkerRegistrationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = service_worker_registration_installing_getter)]
     installing: (),
-
-    #[webapi(
-        accessor_property = "waiting",
-        getter = service_worker_registration_waiting_getter
-    )]
+    #[webapi(accessor_property, getter = service_worker_registration_waiting_getter)]
     waiting: (),
-
-    #[webapi(
-        accessor_property = "active",
-        getter = service_worker_registration_active_getter
-    )]
+    #[webapi(accessor_property, getter = service_worker_registration_active_getter)]
     active: (),
-
-    #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
+    #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0, returns_promise)]
     unregister: (),
-
-    #[webapi(
-        method = "showNotification",
-        callback = service_worker_registration_show_notification_callback,
-        length = 1
-    )]
+    #[webapi(method, callback = crate::context_bootstrap::service_worker_interfaces::registration_update_callback, length = 0, returns_promise)]
+    update: (),
+    #[webapi(method, callback = service_worker_registration_show_notification_callback, length = 1, returns_promise)]
     show_notification: (),
-
-    #[webapi(
-        method = "getNotifications",
-        callback = service_worker_registration_get_notifications_callback,
-        length = 0
-    )]
+    #[webapi(method, callback = service_worker_registration_get_notifications_callback, length = 0, returns_promise)]
     get_notifications: (),
-
-    #[webapi(data_property, readonly)]
-    sync: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "periodicSync", readonly)]
-    periodic_sync: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "pushManager", readonly)]
-    push_manager: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "navigationPreload", readonly)]
-    navigation_preload: v8::Local<'scope, v8::Object>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorker,)]
-struct ServiceWorkerGlobalServiceWorkerDeclaration {
-    #[webapi(data_property = "scriptURL", readonly)]
-    script_url: String,
-
-    #[webapi(data_property, readonly)]
-    state: String,
-
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorker, enumerable, receiver)]
+struct ServiceWorkerPrototypeDeclaration {
     #[webapi(method = "postMessage", callback = service_worker_worker_post_message_callback, length = 1)]
     post_message: (),
+}
+
+pub(crate) fn install_service_worker_interface_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
+) {
+    let prototype = template.prototype_template(scope);
+    match name {
+        "ServiceWorkerRegistration" => {
+            ServiceWorkerRegistrationPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "ServiceWorker" => {
+            ServiceWorkerPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PushManager" => ServiceWorkerGlobalPushManagerDeclaration::initialize_prototype_template(
+            scope, prototype,
+        ),
+        "PushSubscription" => {
+            PushSubscriptionMethods::initialize_prototype_template(scope, prototype)
+        }
+        "NavigationPreloadManager" => {
+            ServiceWorkerGlobalNavigationPreloadManagerDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        _ => {}
+    }
 }
 
 #[derive(WebApiObject)]
@@ -779,12 +773,13 @@ struct ServiceWorkerGlobalPeriodicSyncManagerDeclaration {
     unregister: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushManager, enumerable, receiver)]
 struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
         callback = service_worker_push_manager_subscribe_callback,
+        returns_promise,
         length = 0
     )]
     subscribe: (),
@@ -792,6 +787,7 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "getSubscription",
         callback = service_worker_push_manager_get_subscription_callback,
+        returns_promise,
         length = 0
     )]
     get_subscription: (),
@@ -799,17 +795,26 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "permissionState",
         callback = service_worker_push_manager_permission_state_callback,
+        returns_promise,
         length = 0
     )]
     permission_state: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushSubscription, enumerable, receiver)]
+struct PushSubscriptionMethods {
+    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0, returns_promise)]
+    unsubscribe: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager, enumerable, receiver)]
 struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_enable_callback,
+        returns_promise,
         length = 0
     )]
     enable: (),
@@ -817,6 +822,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_disable_callback,
+        returns_promise,
         length = 0
     )]
     disable: (),
@@ -824,6 +830,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "setHeaderValue",
         callback = service_worker_navigation_preload_manager_set_header_value_callback,
+        returns_promise,
         length = 1
     )]
     set_header_value: (),
@@ -831,42 +838,10 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "getState",
         callback = service_worker_navigation_preload_manager_get_state_callback,
+        returns_promise,
         length = 0
     )]
     get_state: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscription)]
-struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    endpoint: String,
-
-    #[webapi(data_property = "expirationTime", readonly)]
-    expiration_time: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, readonly)]
-    options: v8::Local<'scope, v8::Object>,
-
-    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0)]
-    unsubscribe: (),
-
-    #[webapi(
-        method = "toJSON",
-        callback = service_worker_push_subscription_to_json_callback,
-        length = 0
-    )]
-    to_json: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
-struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
-    #[webapi(data_property = "userVisibleOnly", readonly)]
-    user_visible_only: bool,
-
-    #[webapi(data_property = "applicationServerKey", readonly)]
-    application_server_key: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -3814,7 +3789,6 @@ fn install_worker_global_scope_constructors<'s>(
         super::thread::WorkerGlobalKind::Service { .. } => {
             ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
                 .initialize(scope, global)?;
-            ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
         }
     }
     if !global
@@ -3860,7 +3834,6 @@ fn install_service_worker_extendable_event_constructors<'s>(
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize ExtendableMessageEvent global: {error}"))?;
 
-    ensure_worker_interface_constructor(scope, "ServiceWorker")?;
     web_api_interfaces::WindowClient::DESCRIPTOR.register(scope)?;
     ensure_worker_interface_constructor(scope, "Client")?;
     ensure_worker_interface_constructor(scope, "WindowClient")?;

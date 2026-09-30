@@ -36,30 +36,35 @@ fn build_service_worker_global_registration<'s>(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker periodic sync manager: {error:?}"))?;
-    let push_manager = ServiceWorkerGlobalPushManagerDeclaration {
-        subscribe: (),
-        get_subscription: (),
-        permission_state: (),
-    }
-    .bind(scope)
-    .map_err(|error| anyhow!("failed to build service worker push manager: {error:?}"))?;
+    let push_manager = crate::context_bootstrap::push_interfaces::build_manager(scope)
+        .ok_or_else(|| anyhow!("failed to build service worker push manager"))?;
     let navigation_preload =
         build_service_worker_global_navigation_preload_manager(scope, scope_url)?;
-    let registration = ServiceWorkerGlobalRegistrationDeclaration {
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "ServiceWorkerRegistration",
+    )?;
+    let update_via_cache = worker_service_worker_runtime(scope)
+        .and_then(|runtime| runtime.registration_snapshot_by_id(registration_id))
+        .map(|snapshot| snapshot.update_via_cache().as_str())
+        .unwrap_or("imports");
+    let registration = ServiceWorkerRegistrationObjectDeclaration {
+        prototype,
         scope: scope_url.as_str().to_owned(),
-        installing: (),
-        waiting: (),
-        active: (),
-        unregister: (),
-        show_notification: (),
-        get_notifications: (),
-        sync: sync_manager,
-        periodic_sync: periodic_sync_manager,
-        push_manager,
-        navigation_preload,
+        update_via_cache,
+        sync: Some(sync_manager),
+        periodic_sync: Some(periodic_sync_manager),
+        push_manager: Some(push_manager),
+        navigation_preload: Some(navigation_preload),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker registration: {error:?}"))?;
+    crate::context_bootstrap::mark_simple_event_target_slot(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
+    );
+    install_simple_event_target_ordered_handlers(scope, registration);
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate service worker registration scope"))?;
     set_private_value(
@@ -89,15 +94,13 @@ fn build_service_worker_global_navigation_preload_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &Url,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
-    let navigation_preload = ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
-        enable: (),
-        disable: (),
-        set_header_value: (),
-        get_state: (),
-    }
-    .bind(scope)
-    .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "NavigationPreloadManager",
+    )?;
+    let navigation_preload = NavigationPreloadManagerObjectDeclaration::new(prototype)
+        .bind(scope)
+        .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate navigation preload registration scope"))?;
     set_private_value(
@@ -175,11 +178,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "ServiceWorker")?;
-    let worker = ServiceWorkerGlobalServiceWorkerDeclaration {
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")?;
+    let worker = ServiceWorkerObjectDeclaration {
+        prototype,
         script_url: version.script_url().as_str().to_owned(),
-        state: version.state().to_owned(),
-        post_message: (),
+        state: version.state(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build worker ServiceWorker object: {error:?}"))?;
@@ -190,7 +194,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT, false);
+    crate::context_bootstrap::mark_simple_event_target_slot(
+        scope,
+        worker,
+        SERVICE_WORKER_WORKER_EVENTS_SLOT,
+    );
+    install_simple_event_target_ordered_handlers(scope, worker);
     Ok(worker)
 }
 
@@ -945,11 +954,29 @@ pub(super) fn service_worker_push_manager_subscribe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(options) = crate::context_bootstrap::push_interfaces::parse_options(scope, &args)
+    else {
+        return;
+    };
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
+
+    if options.has_application_server_key {
+        let reason = worker_dom_exception_value(
+            scope,
+            "Push encryption and application server keys are not supported.",
+            "NotSupportedError",
+        );
+        let _ = resolver.reject(scope, reason);
+        return;
+    }
 
     if service_worker_push_permission_state(scope) != "granted" {
         let reason = worker_dom_exception_value(
@@ -983,7 +1010,7 @@ pub(super) fn service_worker_push_manager_subscribe_callback<'s>(
         let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
         return;
     };
-    let user_visible_only = service_worker_push_subscribe_user_visible_only(scope, args.get(0));
+    let user_visible_only = options.user_visible_only;
     let request_id = {
         let mut state = state.borrow_mut();
         state.register_pending_service_worker_push_subscribe(v8::Global::new(scope, resolver))
@@ -1000,9 +1027,13 @@ pub(super) fn service_worker_push_manager_subscribe_callback<'s>(
 
 pub(super) fn service_worker_push_manager_get_subscription_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -1048,9 +1079,16 @@ pub(super) fn service_worker_push_manager_get_subscription_callback<'s>(
 
 pub(super) fn service_worker_push_manager_permission_state_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if crate::context_bootstrap::push_interfaces::parse_options(scope, &args).is_none() {
+        return;
+    }
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -1061,18 +1099,6 @@ pub(super) fn service_worker_push_manager_permission_state_callback<'s>(
         .map(v8::Local::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.resolve(scope, value);
-}
-
-fn service_worker_push_subscribe_user_visible_only(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return false;
-    };
-    options
-        .get(scope, v8str(scope, "userVisibleOnly").into())
-        .is_some_and(|value| value.boolean_value(scope))
 }
 
 fn service_worker_push_permission_state(scope: &mut v8::PinScope<'_, '_>) -> String {
@@ -1095,28 +1121,18 @@ pub(super) fn build_service_worker_push_subscription_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &ServiceWorkerPushSubscriptionSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let options = ServiceWorkerPushSubscriptionOptionsDeclaration::new(
-        snapshot.user_visible_only,
-        v8::null(scope).into(),
-    )
-    .bind(scope)
-    .ok()?;
-    ServiceWorkerPushSubscriptionDeclaration {
-        endpoint: snapshot.endpoint.clone(),
-        expiration_time: v8::null(scope).into(),
-        options,
-        unsubscribe: (),
-        to_json: (),
-    }
-    .bind(scope)
-    .ok()
+    crate::context_bootstrap::push_interfaces::build_subscription(scope, snapshot)
 }
 
 pub(super) fn service_worker_push_subscription_unsubscribe_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -1157,22 +1173,6 @@ pub(super) fn service_worker_push_subscription_unsubscribe_callback<'s>(
             version_id,
         },
     ));
-}
-
-pub(super) fn service_worker_push_subscription_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let object = ObjectLiteralDeclaration::bind(scope);
-    for name in ["endpoint", "expirationTime", "options"] {
-        let value = args
-            .this()
-            .get(scope, v8str(scope, name).into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        object.set_string_property(scope, name, value);
-    }
-    rv.set(object.into_value());
 }
 
 pub(super) fn service_worker_skip_waiting_callback<'s>(

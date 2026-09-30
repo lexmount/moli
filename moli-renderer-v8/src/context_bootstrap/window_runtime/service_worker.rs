@@ -2,6 +2,10 @@ use super::*;
 use crate::context_bootstrap::navigator_runtime::{
     SERVICE_WORKER_OWNER_TOKEN_SLOT, service_worker_owner_token_value,
 };
+use crate::context_bootstrap::service_worker_interfaces::{
+    CONTAINER_READY, NavigationPreloadManagerObjectDeclaration, REGISTRATION_UPDATE_VIA_CACHE,
+    ServiceWorkerObjectDeclaration, ServiceWorkerRegistrationObjectDeclaration, WORKER_STATE,
+};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::service_worker_runtime::{
@@ -12,7 +16,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use crate::worker::WorkerScriptKind;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject, WebApiObjectDeclaration};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiObjectDeclaration};
 
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
 const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
@@ -39,71 +43,23 @@ const SERVICE_WORKER_CONTAINER_REGISTRATIONS_SLOT: &str =
     "__moliServiceWorkerContainerRegistrations";
 const SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT: &str = "__moliServiceWorkerContainerController";
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration)]
-struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    scope: String,
-
-    #[webapi(data_property = "updateViaCache", readonly)]
-    update_via_cache: &'static str,
-
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration, enumerable, receiver)]
+struct ServiceWorkerRegistrationPrototypeDeclaration {
     #[webapi(accessor_property, getter = service_worker_registration_installing_getter_callback)]
     installing: (),
-
     #[webapi(accessor_property, getter = service_worker_registration_waiting_getter_callback)]
     waiting: (),
-
     #[webapi(accessor_property, getter = service_worker_registration_active_getter_callback)]
     active: (),
-
-    #[webapi(method, callback = navigator_service_worker_unregister_callback, length = 0)]
+    #[webapi(method, callback = navigator_service_worker_unregister_callback, length = 0, returns_promise)]
     unregister: (),
-
-    #[webapi(
-        method = "showNotification",
-        callback = service_worker_registration_show_notification_callback,
-        length = 1
-    )]
+    #[webapi(method, callback = crate::context_bootstrap::service_worker_interfaces::registration_update_callback, length = 0, returns_promise)]
+    update: (),
+    #[webapi(method, callback = service_worker_registration_show_notification_callback, length = 1, returns_promise)]
     show_notification: (),
-
-    #[webapi(
-        method = "getNotifications",
-        callback = service_worker_registration_get_notifications_callback,
-        length = 0
-    )]
+    #[webapi(method, callback = service_worker_registration_get_notifications_callback, length = 0, returns_promise)]
     get_notifications: (),
-
-    #[webapi(data_property, readonly)]
-    sync: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(data_property = "periodicSync", readonly)]
-    periodic_sync: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(data_property = "pushManager", readonly)]
-    push_manager: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(data_property = "navigationPreload", readonly)]
-    navigation_preload: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_registration_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -114,16 +70,6 @@ struct ServiceWorkerNavigationPreloadStateDeclaration {
 
     #[webapi(data_property = "headerValue", enumerable)]
     header_value: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
-struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
-    #[webapi(data_property = "userVisibleOnly", readonly)]
-    user_visible_only: bool,
-
-    #[webapi(data_property = "applicationServerKey", readonly)]
-    application_server_key: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -169,12 +115,13 @@ struct ServiceWorkerPeriodicSyncManagerDeclaration {
     unregister: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushManager, enumerable, receiver)]
 struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
         callback = service_worker_push_manager_subscribe_callback,
+        returns_promise,
         length = 0
     )]
     subscribe: (),
@@ -182,6 +129,7 @@ struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "getSubscription",
         callback = service_worker_push_manager_get_subscription_callback,
+        returns_promise,
         length = 0
     )]
     get_subscription: (),
@@ -189,17 +137,26 @@ struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "permissionState",
         callback = service_worker_push_manager_permission_state_callback,
+        returns_promise,
         length = 0
     )]
     permission_state: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushSubscription, enumerable, receiver)]
+struct PushSubscriptionMethods {
+    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0, returns_promise)]
+    unsubscribe: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager, enumerable, receiver)]
 struct ServiceWorkerNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_enable_callback,
+        returns_promise,
         length = 0
     )]
     enable: (),
@@ -207,6 +164,7 @@ struct ServiceWorkerNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_disable_callback,
+        returns_promise,
         length = 0
     )]
     disable: (),
@@ -214,6 +172,7 @@ struct ServiceWorkerNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "setHeaderValue",
         callback = service_worker_navigation_preload_manager_set_header_value_callback,
+        returns_promise,
         length = 1
     )]
     set_header_value: (),
@@ -221,66 +180,47 @@ struct ServiceWorkerNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "getState",
         callback = service_worker_navigation_preload_manager_get_state_callback,
+        returns_promise,
         length = 0
     )]
     get_state: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscription)]
-struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    endpoint: String,
-
-    #[webapi(data_property = "expirationTime", readonly)]
-    expiration_time: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, readonly)]
-    options: v8::Local<'scope, v8::Object>,
-
-    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0)]
-    unsubscribe: (),
-
-    #[webapi(
-        method = "toJSON",
-        callback = service_worker_push_subscription_to_json_callback,
-        length = 0
-    )]
-    to_json: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorker)]
-struct ServiceWorkerObjectDeclaration {
-    #[webapi(data_property = "scriptURL", readonly)]
-    script_url: String,
-
-    #[webapi(data_property, readonly)]
-    state: &'static str,
-
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorker, enumerable, receiver)]
+struct ServiceWorkerPrototypeDeclaration {
     #[webapi(method = "postMessage", callback = service_worker_post_message_callback, length = 1)]
     post_message: (),
+}
 
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_worker_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
+pub(in crate::context_bootstrap) fn install_service_worker_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
+) {
+    let prototype = template.prototype_template(scope);
+    match name {
+        "ServiceWorkerRegistration" => {
+            ServiceWorkerRegistrationPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "ServiceWorker" => {
+            ServiceWorkerPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PushManager" => {
+            ServiceWorkerPushManagerDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PushSubscription" => {
+            PushSubscriptionMethods::initialize_prototype_template(scope, prototype)
+        }
+        "NavigationPreloadManager" => {
+            ServiceWorkerNavigationPreloadManagerDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        _ => {}
+    }
 }
 
 #[derive(WebApiObject)]
@@ -294,13 +234,6 @@ struct ServiceWorkerMessageEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
     #[webapi(data_property, enumerable)]
     ports: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
-struct ServiceWorkerSimpleEventDeclaration<'scope> {
-    #[webapi(data_property = "type", enumerable)]
-    event_type: v8::Local<'scope, v8::String>,
 }
 
 fn bind_declared_service_worker_object<'s, D>(
@@ -930,7 +863,7 @@ fn service_worker_container_cached_registration_for_scope<'s>(
             continue;
         };
         let Some(value) =
-            object_own_hidden_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)
+            get_private_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)
         else {
             continue;
         };
@@ -950,7 +883,7 @@ fn remember_service_worker_container_registration<'s>(
     registration: v8::Local<'s, v8::Object>,
 ) {
     let Some(scope_value) =
-        object_own_hidden_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)
+        get_private_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)
     else {
         return;
     };
@@ -1462,7 +1395,12 @@ fn service_worker_navigation_preload_manager_set_enabled<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
     enabled: bool,
 ) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+    let Some(resolver) =
+        crate::context_bootstrap::service_worker_interfaces::receiver_promise_resolver(
+            scope,
+            args.this(),
+        )
+    else {
         return;
     };
     let promise = resolver.get_promise(scope);
@@ -1500,7 +1438,12 @@ fn service_worker_navigation_preload_manager_set_header_value_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+    let Some(resolver) =
+        crate::context_bootstrap::service_worker_interfaces::receiver_promise_resolver(
+            scope,
+            args.this(),
+        )
+    else {
         return;
     };
     let promise = resolver.get_promise(scope);
@@ -1553,7 +1496,12 @@ fn service_worker_navigation_preload_manager_get_state_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+    let Some(resolver) =
+        crate::context_bootstrap::service_worker_interfaces::receiver_promise_resolver(
+            scope,
+            args.this(),
+        )
+    else {
         return;
     };
     let promise = resolver.get_promise(scope);
@@ -1881,11 +1829,11 @@ fn service_worker_periodic_sync_manager_scope_from_this(
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_navigation_preload_manager_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    this: v8::Local<'_, v8::Object>,
+fn service_worker_navigation_preload_manager_scope_from_this<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    this: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value = object_own_hidden_value(
+    let value = get_private_value(
         scope,
         this,
         SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT,
@@ -1916,11 +1864,29 @@ fn service_worker_push_manager_subscribe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(options) = crate::context_bootstrap::push_interfaces::parse_options(scope, &args)
+    else {
+        return;
+    };
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
+
+    if options.has_application_server_key {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "Push encryption and application server keys are not supported.",
+            "NotSupportedError",
+        );
+        return;
+    }
 
     if service_worker_push_permission_state(scope) != "granted" {
         reject_service_worker_promise_with_dom_exception(
@@ -1947,7 +1913,7 @@ fn service_worker_push_manager_subscribe_callback<'s>(
         );
         return;
     };
-    let user_visible_only = service_worker_push_subscribe_user_visible_only(scope, args.get(0));
+    let user_visible_only = options.user_visible_only;
     let host = unsafe { &*host_ptr };
     let Some(subscription) = host.subscribe_service_worker_push(&scope_url, user_visible_only)
     else {
@@ -1969,6 +1935,10 @@ fn service_worker_push_manager_get_subscription_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2004,9 +1974,16 @@ fn service_worker_push_manager_get_subscription_callback<'s>(
 
 fn service_worker_push_manager_permission_state_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if crate::context_bootstrap::push_interfaces::parse_options(scope, &args).is_none() {
+        return;
+    }
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2035,18 +2012,6 @@ fn service_worker_push_permission_state(scope: &mut v8::PinScope<'_, '_>) -> Str
     .to_owned()
 }
 
-fn service_worker_push_subscribe_user_visible_only(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return false;
-    };
-    options
-        .get(scope, v8str(scope, "userVisibleOnly").into())
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
 pub(crate) fn settle_service_worker_unregister_completion<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
@@ -2067,19 +2032,17 @@ pub(crate) fn settle_service_worker_unregister_completion<'s>(
                     })
                     .is_some_and(|state| state.active_version_id() == active_version_id)
             });
-    if removed && !retained_controller {
-        if let Some(registration) = registration {
-            service_worker_registration_clear_workers(scope, registration);
-        }
-        if let Some(active_worker) = active_worker {
-            service_worker_worker_set_state(scope, active_worker, "redundant");
-            dispatch_service_worker_simple_event(
-                scope,
-                active_worker,
-                SERVICE_WORKER_WORKER_EVENTS_SLOT,
-                "statechange",
-            );
-        }
+    if removed
+        && !retained_controller
+        && let Some(active_worker) = active_worker
+    {
+        service_worker_worker_set_state(scope, active_worker, "redundant");
+        dispatch_service_worker_simple_event(
+            scope,
+            active_worker,
+            SERVICE_WORKER_WORKER_EVENTS_SLOT,
+            "statechange",
+        );
     }
     let _ = resolver.resolve(scope, v8::Boolean::new(scope, removed).into());
 }
@@ -2353,13 +2316,18 @@ fn build_service_worker_registration_object<'s>(
     script_url: &str,
     phase: ServiceWorkerRegistrationPhase<'_>,
 ) -> v8::Local<'s, v8::Object> {
-    ensure_service_worker_constructor(scope, "ServiceWorkerRegistration");
     let resolved = resolve_service_worker_registration_phase(scope, None, script_url, phase);
     let sync_manager = build_service_worker_sync_manager(scope, scope_url);
     let periodic_sync_manager = build_service_worker_periodic_sync_manager(scope, scope_url);
     let push_manager = build_service_worker_push_manager(scope, scope_url);
     let navigation_preload = build_service_worker_navigation_preload_manager(scope, scope_url);
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "ServiceWorkerRegistration",
+    )
+    .expect("ServiceWorkerRegistration intrinsic prototype should be available");
     let declaration = ServiceWorkerRegistrationObjectDeclaration::new(
+        prototype,
         scope_url.to_owned(),
         resolved.update_via_cache,
         sync_manager,
@@ -2369,14 +2337,6 @@ fn build_service_worker_registration_object<'s>(
     );
     let registration = bind_declared_service_worker_object(scope, &declaration);
     mark_service_worker_registration_event_target(scope, registration);
-    if let Some(scope_value) = v8_string(scope, scope_url) {
-        define_non_enumerable_value_property(
-            scope,
-            registration,
-            SERVICE_WORKER_REGISTRATION_SCOPE_SLOT,
-            scope_value.into(),
-        );
-    }
     service_worker_worker_set_owner_scope(scope, registration, owner);
     define_non_enumerable_value_property(
         scope,
@@ -2520,10 +2480,10 @@ fn update_service_worker_registration_object<'s>(
 ) {
     let resolved =
         resolve_service_worker_registration_phase(scope, Some(registration), script_url, phase);
-    set_service_worker_readonly_value(
+    set_private_value(
         scope,
         registration,
-        "updateViaCache",
+        REGISTRATION_UPDATE_VIA_CACHE,
         v8str(scope, resolved.update_via_cache).into(),
     );
     define_non_enumerable_value_property(
@@ -2596,10 +2556,9 @@ fn build_service_worker_push_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let declaration = ServiceWorkerPushManagerDeclaration::new();
-    let push_manager = bind_declared_service_worker_object(scope, &declaration);
+    let push_manager = crate::context_bootstrap::push_interfaces::build_manager(scope)?;
     let scope_value = v8_string(scope, scope_url)?;
-    define_non_enumerable_value_property(
+    set_private_value(
         scope,
         push_manager,
         SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT,
@@ -2612,11 +2571,15 @@ fn build_service_worker_navigation_preload_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    ensure_service_worker_constructor(scope, "NavigationPreloadManager");
-    let declaration = ServiceWorkerNavigationPreloadManagerDeclaration::new();
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "NavigationPreloadManager",
+    )
+    .ok()?;
+    let declaration = NavigationPreloadManagerObjectDeclaration::new(prototype);
     let navigation_preload = bind_declared_service_worker_object(scope, &declaration);
     let scope_value = v8_string(scope, scope_url)?;
-    define_non_enumerable_value_property(
+    set_private_value(
         scope,
         navigation_preload,
         SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT,
@@ -2641,23 +2604,10 @@ fn build_service_worker_push_subscription_object<'s>(
     scope_url: &url::Url,
     snapshot: &crate::service_worker_runtime::ServiceWorkerPushSubscriptionSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let options = ServiceWorkerPushSubscriptionOptionsDeclaration::new(
-        snapshot.user_visible_only,
-        v8::null(scope).into(),
-    )
-    .bind(scope)
-    .ok()?;
-    let subscription = ServiceWorkerPushSubscriptionDeclaration {
-        endpoint: snapshot.endpoint.clone(),
-        expiration_time: v8::null(scope).into(),
-        options,
-        unsubscribe: (),
-        to_json: (),
-    }
-    .bind(scope)
-    .ok()?;
+    let subscription =
+        crate::context_bootstrap::push_interfaces::build_subscription(scope, snapshot)?;
     let scope_value = v8_string(scope, scope_url.as_str())?;
-    define_non_enumerable_value_property(
+    set_private_value(
         scope,
         subscription,
         SERVICE_WORKER_PUSH_SUBSCRIPTION_SCOPE_SLOT,
@@ -2671,6 +2621,10 @@ fn service_worker_push_subscription_unsubscribe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2698,28 +2652,11 @@ fn service_worker_push_subscription_unsubscribe_callback<'s>(
     let _ = resolver.resolve(scope, v8::Boolean::new(scope, unsubscribed).into());
 }
 
-fn service_worker_push_subscription_to_json_callback<'s>(
+fn service_worker_registration_scope_from_this<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let object = ObjectLiteralDeclaration::bind(scope);
-    for name in ["endpoint", "expirationTime", "options"] {
-        let value = args
-            .this()
-            .get(scope, v8str(scope, name).into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        object.set_string_property(scope, name, value);
-    }
-    rv.set(object.into_value());
-}
-
-fn service_worker_registration_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    registration: v8::Local<'_, v8::Object>,
+    registration: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value =
-        object_own_hidden_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)?;
+    let value = get_private_value(scope, registration, SERVICE_WORKER_REGISTRATION_SCOPE_SLOT)?;
     let scope_string = value.to_string(scope)?.to_rust_string_lossy(scope);
     url::Url::parse(&scope_string).ok()
 }
@@ -2734,21 +2671,20 @@ fn service_worker_sync_manager_scope_from_this(
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_push_manager_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    push_manager: v8::Local<'_, v8::Object>,
+fn service_worker_push_manager_scope_from_this<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    push_manager: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value =
-        object_own_hidden_value(scope, push_manager, SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT)?;
+    let value = get_private_value(scope, push_manager, SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT)?;
     let scope_string = value.to_string(scope)?.to_rust_string_lossy(scope);
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_push_subscription_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    subscription: v8::Local<'_, v8::Object>,
+fn service_worker_push_subscription_scope_from_this<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    subscription: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value = object_own_hidden_value(
+    let value = get_private_value(
         scope,
         subscription,
         SERVICE_WORKER_PUSH_SUBSCRIPTION_SCOPE_SLOT,
@@ -2762,8 +2698,10 @@ fn build_service_worker_object<'s>(
     script_url: &str,
     state: &'static str,
 ) -> v8::Local<'s, v8::Object> {
-    ensure_service_worker_constructor(scope, "ServiceWorker");
-    let declaration = ServiceWorkerObjectDeclaration::new(script_url.to_owned(), state);
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")
+            .expect("ServiceWorker intrinsic prototype should be available");
+    let declaration = ServiceWorkerObjectDeclaration::new(prototype, script_url.to_owned(), state);
     let worker = bind_declared_service_worker_object(scope, &declaration);
     mark_service_worker_worker_event_target(scope, worker);
     worker
@@ -2778,35 +2716,6 @@ fn build_service_worker_object_for_version<'s>(
     worker
 }
 
-fn ensure_service_worker_constructor(scope: &mut v8::PinScope<'_, '_>, name: &'static str) {
-    let global = scope.get_current_context().global(scope);
-    if global
-        .get(scope, v8str(scope, name).into())
-        .is_some_and(|value| !value.is_undefined())
-    {
-        return;
-    }
-    let template = v8::FunctionTemplate::builder(illegal_constructor_callback)
-        .length(0)
-        .build(scope);
-    template.set_class_name(v8str(scope, name));
-    let Some(constructor) = template.get_function(scope) else {
-        return;
-    };
-    let _ = define_global_value(scope, global, name, constructor.into());
-    if let Some(prototype) = constructor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        let _ = prototype.define_own_property(
-            scope,
-            v8::Symbol::get_to_string_tag(scope).into(),
-            v8str(scope, name).into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        );
-    }
-}
-
 fn build_service_worker_controller_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &crate::runtime::ServiceWorkerControlState,
@@ -2817,12 +2726,6 @@ fn build_service_worker_controller_object<'s>(
         service_worker_worker_set_version_id(scope, controller, version_id);
     }
     service_worker_worker_set_owner_scope(scope, controller, owner);
-    set_service_worker_container_value(
-        scope,
-        controller,
-        "state",
-        v8str(scope, "activated").into(),
-    );
     controller
 }
 
@@ -2830,8 +2733,6 @@ pub(in crate::context_bootstrap) fn install_initial_service_worker_ready_promise
     scope: &mut v8::PinScope<'s, '_>,
     service_worker: v8::Local<'s, v8::Object>,
 ) {
-    ensure_service_worker_constructor(scope, "ServiceWorker");
-    ensure_service_worker_constructor(scope, "ServiceWorkerRegistration");
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2860,33 +2761,26 @@ pub(in crate::context_bootstrap) fn install_initial_service_worker_ready_promise
             host.watch_pending_service_worker_ready();
         }
     }
-    set_service_worker_container_value(scope, service_worker, "ready", promise.into());
+    set_private_value(scope, service_worker, CONTAINER_READY, promise.into());
 }
 
-fn set_service_worker_container_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: v8::Local<'_, v8::Value>,
+pub(in crate::context_bootstrap) fn navigator_service_worker_ready_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(name) = v8_string(scope, name) else {
-        return;
-    };
-    let _ = object.set(scope, name.into(), value);
+    if let Some(ready) = get_private_value(scope, args.this(), CONTAINER_READY) {
+        rv.set(ready);
+    }
 }
 
-fn set_service_worker_readonly_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &'static str,
-    value: v8::Local<'_, v8::Value>,
+pub(in crate::context_bootstrap) fn navigator_service_worker_start_messages_callback(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments<'_>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let _ = object.define_own_property(
-        scope,
-        v8str(scope, name).into(),
-        value,
-        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
-    );
+    // The current native client-message queue is enabled when the container is
+    // created. Calling startMessages again leaves that enabled state unchanged.
 }
 
 fn mark_service_worker_registration_event_target<'s>(
@@ -2894,6 +2788,7 @@ fn mark_service_worker_registration_event_target<'s>(
     registration: v8::Local<'s, v8::Object>,
 ) {
     mark_simple_event_target_slot(scope, registration, SERVICE_WORKER_REGISTRATION_EVENTS_SLOT);
+    install_simple_event_target_ordered_handlers(scope, registration);
 }
 
 fn mark_service_worker_worker_event_target<'s>(
@@ -2901,22 +2796,7 @@ fn mark_service_worker_worker_event_target<'s>(
     worker: v8::Local<'s, v8::Object>,
 ) {
     mark_simple_event_target_slot(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT);
-}
-
-fn service_worker_registration_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn service_worker_worker_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
+    install_simple_event_target_ordered_handlers(scope, worker);
 }
 
 fn service_worker_post_message_callback<'s>(
@@ -2955,7 +2835,7 @@ fn service_worker_worker_set_state<'s>(
     worker: v8::Local<'s, v8::Object>,
     state: &'static str,
 ) {
-    set_service_worker_readonly_value(scope, worker, "state", v8str(scope, state).into());
+    set_private_value(scope, worker, WORKER_STATE, v8str(scope, state).into());
 }
 
 fn service_worker_worker_set_version_id<'s>(
@@ -3136,32 +3016,6 @@ fn service_worker_registration_hidden_worker<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn service_worker_registration_clear_workers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-) {
-    let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
-    set_service_worker_registration_worker_values(
-        scope,
-        registration,
-        null_value,
-        null_value,
-        null_value,
-    );
-}
-
-fn set_service_worker_registration_worker_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-    installing: v8::Local<'s, v8::Value>,
-    waiting: v8::Local<'s, v8::Value>,
-    active: v8::Local<'s, v8::Value>,
-) {
-    set_service_worker_readonly_value(scope, registration, "installing", installing);
-    set_service_worker_readonly_value(scope, registration, "waiting", waiting);
-    set_service_worker_readonly_value(scope, registration, "active", active);
-}
-
 fn dispatch_service_worker_simple_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -3178,8 +3032,13 @@ fn dispatch_service_worker_simple_event<'s>(
         ServiceWorkerInternalEventCallbackDispatchEffect::CallbackBodyDispatched
     };
     let event = v8::Object::new(scope);
-    let _ =
-        ServiceWorkerSimpleEventDeclaration::new(v8str(scope, event_type)).initialize(scope, event);
+    if let Ok(prototype) =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Event")
+    {
+        let _ = event.set_prototype(scope, prototype.into());
+    }
+    crate::context_bootstrap::initialize_event_object(scope, event, event_type, false, false);
+    crate::context_bootstrap::mark_event_trusted(scope, event);
     dispatch_simple_event_target_event(scope, target, slot_name, event_type, event);
     callback_effect
 }
