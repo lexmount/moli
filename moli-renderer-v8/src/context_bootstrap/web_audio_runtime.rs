@@ -13,8 +13,12 @@ mod biquad;
 mod graph;
 mod listener;
 mod node;
+mod param_nodes;
 mod source;
 
+pub(in crate::context_bootstrap) use param_nodes::{
+    delay_constructor, gain_constructor, stereo_panner_constructor,
+};
 pub(in crate::context_bootstrap) use source::{
     audio_buffer_source_constructor_callback, constant_source_constructor_callback,
 };
@@ -395,6 +399,12 @@ struct BaseAudioContextPrototypeDeclaration {
     )]
     onstatechange: (),
 
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_gain)]
+    create_gain: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_delay)]
+    create_delay: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_stereo_panner)]
+    create_stereo_panner: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_buffer_source)]
     create_buffer_source: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_constant_source)]
@@ -465,6 +475,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     interface_name: &str,
 ) {
     node::install(scope, template, interface_name);
+    param_nodes::install(scope, template, interface_name);
     source::install(scope, template, interface_name);
     match interface_name {
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
