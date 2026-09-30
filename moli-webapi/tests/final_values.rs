@@ -20,8 +20,9 @@ fn with_values(test: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
         interfaces::PushSubscriptionOptions::DESCRIPTOR,
     ] {
         let template = v8::FunctionTemplate::new(scope, illegal_constructor);
-        if interface.name() == "EventCounts" {
-            event_counts::install(scope, template);
+        match interface.name() {
+            "EventCounts" => event_counts::install(scope, template),
+            name => push_values::install_subscription_template_bindings(scope, template, name),
         }
         finish_template(scope, interface, template);
     }
@@ -112,8 +113,9 @@ fn standalone_push_values_preserve_byte_snapshots_and_need_no_worker_host() {
         publish(scope, "message", message);
         let invalid = push_values::new_push_message_data(scope, &[0xff]).unwrap();
         publish(scope, "invalid", invalid);
-        let options =
-            push_values::new_subscription_options(scope, true, v8::null(scope).into()).unwrap();
+        let prototype =
+            moli_v8_util::global_constructor_prototype(scope, "PushSubscriptionOptions").unwrap();
+        let options = push_values::new_subscription_options(scope, prototype, true).unwrap();
         assert!(interfaces::PushSubscriptionOptions::is_instance(
             scope, options
         ));
@@ -126,7 +128,10 @@ fn standalone_push_values_preserve_byte_snapshots_and_need_no_worker_host() {
             if(message.text()!=='{"value":42}' || message.bytes()[0]!==123)throw 'byte snapshot';
             if(invalid.text()!=='\ufffd')throw 'utf8';
             try{invalid.json();throw 'invalid json accepted'}catch(e){if(!(e instanceof SyntaxError))throw e;}
-            if(!options.userVisibleOnly || options.applicationServerKey!==null || Object.getOwnPropertyDescriptor(options,'userVisibleOnly').writable)throw 'options';
+            const visibleOnly=Object.getOwnPropertyDescriptor(PushSubscriptionOptions.prototype,'userVisibleOnly');
+            if(!options.userVisibleOnly || options.applicationServerKey!==null ||
+                Object.hasOwn(options,'userVisibleOnly') || typeof visibleOnly.get!=='function' ||
+                visibleOnly.set!==undefined)throw 'options';
         "#,
         );
     });
