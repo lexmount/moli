@@ -3,6 +3,10 @@
 //! Initialization, runtime state and API implementations live in the child modules.
 //! This module retains the existing worker-facing exports and shared imports.
 
+use crate::context_bootstrap::service_worker_interfaces::{
+    NavigationPreloadManagerObjectDeclaration, ServiceWorkerObjectDeclaration,
+    ServiceWorkerRegistrationObjectDeclaration,
+};
 use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -136,6 +140,7 @@ pub(super) use self::service_worker_api::{
     build_service_worker_global_service_worker, dispatch_service_worker_registration_update_found,
 };
 pub(crate) use self::service_worker_api::{
+    install_service_worker_interface_template_bindings,
     service_worker_runtime_identity, worker_notification_permission_state,
 };
 

@@ -51,7 +51,7 @@ pub(crate) use service_worker::{
     settle_service_worker_unregister_completion,
 };
 pub(super) use service_worker::{
-    install_initial_service_worker_ready_promise,
+    install_initial_service_worker_ready_promise, install_service_worker_template_bindings,
     navigator_service_worker_controller_getter_callback,
     navigator_service_worker_controllerchange_handler_getter_callback,
     navigator_service_worker_controllerchange_handler_setter_callback,
@@ -61,7 +61,8 @@ pub(super) use service_worker::{
     navigator_service_worker_message_handler_setter_callback,
     navigator_service_worker_messageerror_handler_getter_callback,
     navigator_service_worker_messageerror_handler_setter_callback,
-    navigator_service_worker_register_callback, service_worker_object_set_owner_scope,
+    navigator_service_worker_ready_getter_callback, navigator_service_worker_register_callback,
+    navigator_service_worker_start_messages_callback, service_worker_object_set_owner_scope,
 };
 pub(super) use structured_clone::window_structured_clone_callback;
 

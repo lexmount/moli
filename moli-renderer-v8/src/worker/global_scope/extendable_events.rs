@@ -183,7 +183,6 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize ExtendableMessageEvent global: {error}"))?;
 
-    ensure_worker_interface_constructor(scope, "ServiceWorker")?;
     web_api_interfaces::WindowClient::DESCRIPTOR.register(scope)?;
     ensure_worker_interface_constructor(scope, "Client")?;
     ensure_worker_interface_constructor(scope, "WindowClient")?;

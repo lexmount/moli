@@ -51,28 +51,29 @@ fn build_service_worker_global_registration<'s>(
     .map_err(|error| anyhow!("failed to build service worker push manager: {error:?}"))?;
     let navigation_preload =
         build_service_worker_global_navigation_preload_manager(scope, scope_url)?;
-    let registration = ServiceWorkerGlobalRegistrationDeclaration {
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "ServiceWorkerRegistration",
+    )?;
+    let update_via_cache = worker_service_worker_runtime(scope)
+        .and_then(|runtime| runtime.registration_snapshot_by_id(registration_id))
+        .map(|snapshot| snapshot.update_via_cache().as_str())
+        .unwrap_or("imports");
+    let registration = ServiceWorkerRegistrationObjectDeclaration {
+        prototype,
         scope: scope_url.as_str().to_owned(),
-        onupdatefound: (),
-        installing: (),
-        waiting: (),
-        active: (),
-        unregister: (),
-        update: (),
-        show_notification: (),
-        get_notifications: (),
-        sync: sync_manager,
-        periodic_sync: periodic_sync_manager,
-        push_manager,
-        navigation_preload,
+        update_via_cache,
+        sync: Some(sync_manager),
+        periodic_sync: Some(periodic_sync_manager),
+        push_manager: Some(push_manager),
+        navigation_preload: Some(navigation_preload),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker registration: {error:?}"))?;
-    install_simple_event_target_methods(
+    crate::context_bootstrap::mark_simple_event_target_slot(
         scope,
         registration,
         SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
-        false,
     );
     install_simple_event_target_ordered_handlers(scope, registration);
     let scope_value = v8_string(scope, scope_url.as_str())
@@ -98,49 +99,6 @@ fn build_service_worker_global_registration<'s>(
         version_id_value.into(),
     );
     Ok(registration)
-}
-
-pub(super) fn service_worker_registration_onupdatefound_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(
-        get_private_value(
-            scope,
-            args.this(),
-            SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        )
-        .unwrap_or_else(|| v8::null(scope).into()),
-    );
-}
-
-pub(super) fn service_worker_registration_onupdatefound_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = args.get(0);
-    let active = value.is_object();
-    let value = if active {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(
-        scope,
-        args.this(),
-        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        value,
-    );
-    simple_object_event_set_ordered_handler(
-        scope,
-        args.this(),
-        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
-        "updatefound",
-        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        active,
-    );
 }
 
 pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
@@ -175,15 +133,13 @@ fn build_service_worker_global_navigation_preload_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &Url,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
-    let navigation_preload = ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
-        enable: (),
-        disable: (),
-        set_header_value: (),
-        get_state: (),
-    }
-    .bind(scope)
-    .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "NavigationPreloadManager",
+    )?;
+    let navigation_preload = NavigationPreloadManagerObjectDeclaration::new(prototype)
+        .bind(scope)
+        .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate navigation preload registration scope"))?;
     set_private_value(
@@ -261,11 +217,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "ServiceWorker")?;
-    let worker = ServiceWorkerGlobalServiceWorkerDeclaration {
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")?;
+    let worker = ServiceWorkerObjectDeclaration {
+        prototype,
         script_url: version.script_url().as_str().to_owned(),
-        state: version.state().to_owned(),
-        post_message: (),
+        state: version.state(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build worker ServiceWorker object: {error:?}"))?;
@@ -276,7 +233,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT, false);
+    crate::context_bootstrap::mark_simple_event_target_slot(
+        scope,
+        worker,
+        SERVICE_WORKER_WORKER_EVENTS_SLOT,
+    );
+    install_simple_event_target_ordered_handlers(scope, worker);
     Ok(worker)
 }
 
@@ -2051,81 +2013,54 @@ struct ServiceWorkerGlobalRuntimeDeclaration<'scope> {
     skip_waiting: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration,)]
-struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    scope: String,
-
-    #[webapi(
-        accessor_property = "onupdatefound",
-        getter = service_worker_registration_onupdatefound_getter,
-        setter = service_worker_registration_onupdatefound_setter
-    )]
-    onupdatefound: (),
-
-    #[webapi(
-        accessor_property = "installing",
-        getter = service_worker_registration_installing_getter
-    )]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration, enumerable, receiver)]
+struct ServiceWorkerRegistrationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = service_worker_registration_installing_getter)]
     installing: (),
-
-    #[webapi(
-        accessor_property = "waiting",
-        getter = service_worker_registration_waiting_getter
-    )]
+    #[webapi(accessor_property, getter = service_worker_registration_waiting_getter)]
     waiting: (),
-
-    #[webapi(
-        accessor_property = "active",
-        getter = service_worker_registration_active_getter
-    )]
+    #[webapi(accessor_property, getter = service_worker_registration_active_getter)]
     active: (),
-
-    #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
+    #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0, returns_promise)]
     unregister: (),
-
-    #[webapi(method, callback = service_worker_registration_update_callback, length = 0)]
+    #[webapi(method, callback = service_worker_registration_update_callback, length = 0, returns_promise)]
     update: (),
-
-    #[webapi(
-        method = "showNotification",
-        callback = service_worker_registration_show_notification_callback,
-        length = 1
-    )]
+    #[webapi(method, callback = service_worker_registration_show_notification_callback, length = 1, returns_promise)]
     show_notification: (),
-
-    #[webapi(
-        method = "getNotifications",
-        callback = service_worker_registration_get_notifications_callback,
-        length = 0
-    )]
+    #[webapi(method, callback = service_worker_registration_get_notifications_callback, length = 0, returns_promise)]
     get_notifications: (),
-
-    #[webapi(data_property, readonly)]
-    sync: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "periodicSync", readonly)]
-    periodic_sync: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "pushManager", readonly)]
-    push_manager: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property = "navigationPreload", readonly)]
-    navigation_preload: v8::Local<'scope, v8::Object>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorker,)]
-struct ServiceWorkerGlobalServiceWorkerDeclaration {
-    #[webapi(data_property = "scriptURL", readonly)]
-    script_url: String,
-
-    #[webapi(data_property, readonly)]
-    state: String,
-
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ServiceWorker, enumerable, receiver)]
+struct ServiceWorkerPrototypeDeclaration {
     #[webapi(method = "postMessage", callback = service_worker_worker_post_message_callback, length = 1)]
     post_message: (),
+}
+
+pub(crate) fn install_service_worker_interface_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
+) {
+    let prototype = template.prototype_template(scope);
+    match name {
+        "ServiceWorkerRegistration" => {
+            ServiceWorkerRegistrationPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "ServiceWorker" => {
+            ServiceWorkerPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "NavigationPreloadManager" => {
+            ServiceWorkerGlobalNavigationPreloadManagerDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        _ => {}
+    }
 }
 
 #[derive(WebApiObject)]
@@ -2196,12 +2131,13 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
     permission_state: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager, enumerable, receiver)]
 struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_enable_callback,
+        returns_promise,
         length = 0
     )]
     enable: (),
@@ -2209,6 +2145,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
         callback = service_worker_navigation_preload_manager_disable_callback,
+        returns_promise,
         length = 0
     )]
     disable: (),
@@ -2216,6 +2153,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "setHeaderValue",
         callback = service_worker_navigation_preload_manager_set_header_value_callback,
+        returns_promise,
         length = 1
     )]
     set_header_value: (),
@@ -2223,6 +2161,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method = "getState",
         callback = service_worker_navigation_preload_manager_get_state_callback,
+        returns_promise,
         length = 0
     )]
     get_state: (),
@@ -2336,5 +2275,3 @@ const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobal
 
 const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
 
-const SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT: &str =
-    "__moliServiceWorkerRegistrationOnUpdateFound";

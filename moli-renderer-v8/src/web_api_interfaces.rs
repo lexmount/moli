@@ -540,7 +540,7 @@ interfaces! {
     SecurityPolicyViolationEvent: Event;
     Selection;
     ServiceWorker: EventTarget;
-    ServiceWorkerContainer;
+    ServiceWorkerContainer: EventTarget;
     ServiceWorkerGlobalScope: WorkerGlobalScope;
     ServiceWorkerRegistration: EventTarget;
     ShadowRoot: DocumentFragment;
