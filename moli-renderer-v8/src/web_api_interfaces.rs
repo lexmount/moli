@@ -56,6 +56,10 @@ interfaces! {
     ConstantSourceNode: AudioScheduledSourceNode;
     DelayNode: AudioNode;
     GainNode: AudioNode;
+    Gamepad;
+    GamepadButton;
+    GamepadEvent: Event;
+    GamepadHapticActuator;
     StereoPannerNode: AudioNode;
     Blob;
     BlobEvent: Event;
