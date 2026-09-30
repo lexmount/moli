@@ -1,10 +1,8 @@
 use super::*;
+use crate::automation::{AutomationEvent, DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::{
     CdpCommandTaskStep, FetchInterceptionPattern, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
-};
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
 };
 use crate::domains::fetch::pending_subresource_auth_required_event;
 use moli_core::page::SubresourceResourceType;

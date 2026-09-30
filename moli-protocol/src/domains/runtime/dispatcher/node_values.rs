@@ -209,7 +209,7 @@ pub(super) fn json_pointer_matches_or_descends_from(pointer: &str, ancestor: &st
 
 pub(super) async fn materialize_devtools_script_node_remote_value_async(
     conn: &mut CdpConnection,
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
@@ -310,7 +310,7 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
 
 pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_values_async(
     conn: &mut CdpConnection,
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
@@ -373,7 +373,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
 
 pub(super) async fn materialize_devtools_script_dom_collection_remote_value_async(
     conn: &mut CdpConnection,
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
@@ -425,9 +425,9 @@ pub(super) async fn devtools_dom_collection_probe_async(
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
 ) -> Result<Option<BidiDomCollectionProbe>, DevToolsError> {
-    let command = DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    let command = AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: target.window_context_id.clone(),
             browser_context_id: None,
@@ -753,9 +753,9 @@ pub(super) async fn devtools_deep_serialized_path_remote_value_async(
     js_path: &[Value],
     serialization_options: Option<&DevToolsSerializationOptions>,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
-    let command = DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    let command = AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: target.window_context_id.clone(),
             browser_context_id: None,
@@ -905,9 +905,9 @@ pub(super) async fn devtools_detached_node_value_async(
     remote_object_id: String,
     node_options: &BidiNodeSerializationOptions,
 ) -> Result<Option<Value>, DevToolsError> {
-    let command = DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    let command = AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: target.window_context_id.clone(),
             browser_context_id: None,
@@ -1021,9 +1021,9 @@ pub(super) async fn devtools_attribute_node_value_async(
     target: &DevToolsRuntimeTarget,
     remote_object_id: String,
 ) -> Result<Option<Value>, DevToolsError> {
-    let command = DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    let command = AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: target.window_context_id.clone(),
             browser_context_id: None,

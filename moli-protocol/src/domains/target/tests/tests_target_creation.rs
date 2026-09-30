@@ -973,10 +973,10 @@ async fn window_open_emits_popup_target_created_from_runtime_work() {
     );
     let (targets_result, _) = ctx
         .conn
-        .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::GetTargets(
-            crate::devtools_runtime::DevToolsGetTargetsCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: crate::devtools_runtime::DevToolsProtocol::Cdp,
+        .execute_automation_command(crate::automation::AutomationCommand::GetTargets(
+            crate::automation::DevToolsGetTargetsCommand {
+                context: crate::automation::AutomationContext {
+                    protocol: crate::automation::FrontendProtocol::Cdp,
                     session_id: None,
                     target_id: None,
                     browser_context_id: None,
@@ -988,7 +988,7 @@ async fn window_open_emits_popup_target_created_from_runtime_work() {
         ))
         .await
         .into_parts();
-    let crate::devtools_runtime::DevToolsCommandResult::GetTargets(targets) =
+    let crate::automation::AutomationResult::GetTargets(targets) =
         targets_result.expect("GetTargets should return typed targets")
     else {
         panic!("GetTargets returned unexpected result");

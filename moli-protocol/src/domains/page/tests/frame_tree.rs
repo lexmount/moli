@@ -799,20 +799,22 @@ async fn get_frame_tree_targets_service_worker_as_synthetic_context() {
 
     let (result, scheduler_events) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
-                session_id: None,
-                target_id: Some(DevToolsTargetId::from("TID-service-worker")),
-                browser_context_id: None,
+        .execute_automation_command(AutomationCommand::GetFrameTree(
+            DevToolsGetFrameTreeCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: None,
+                    target_id: Some(DevToolsTargetId::from("TID-service-worker")),
+                    browser_context_id: None,
+                },
+                max_depth: None,
             },
-            max_depth: None,
-        }))
+        ))
         .await
         .into_parts();
 
     assert!(scheduler_events.is_empty());
-    let DevToolsCommandResult::GetFrameTree(result) =
+    let AutomationResult::GetFrameTree(result) =
         result.expect("GetFrameTree should target service worker")
     else {
         panic!("expected GetFrameTree result");
@@ -828,7 +830,7 @@ async fn get_frame_tree_targets_service_worker_as_synthetic_context() {
     );
     assert_eq!(
         result.target_info.as_ref().map(|info| info.kind),
-        Some(crate::devtools_runtime::DevToolsTargetKind::ServiceWorker)
+        Some(crate::automation::DevToolsTargetKind::ServiceWorker)
     );
 }
 
@@ -839,10 +841,10 @@ async fn get_frame_trees_includes_service_worker_target() {
 
     let (result, scheduler_events) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetFrameTrees(
+        .execute_automation_command(AutomationCommand::GetFrameTrees(
             DevToolsGetFrameTreesCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: None,
                     target_id: None,
                     browser_context_id: None,
@@ -854,7 +856,7 @@ async fn get_frame_trees_includes_service_worker_target() {
         .into_parts();
 
     assert!(scheduler_events.is_empty());
-    let DevToolsCommandResult::GetFrameTrees(result) =
+    let AutomationResult::GetFrameTrees(result) =
         result.expect("GetFrameTrees should include service worker targets")
     else {
         panic!("expected GetFrameTrees result");
@@ -873,6 +875,6 @@ async fn get_frame_trees_includes_service_worker_target() {
             .target_info
             .as_ref()
             .map(|info| info.kind),
-        Some(crate::devtools_runtime::DevToolsTargetKind::ServiceWorker)
+        Some(crate::automation::DevToolsTargetKind::ServiceWorker)
     );
 }

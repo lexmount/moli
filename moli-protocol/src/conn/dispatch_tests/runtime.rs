@@ -22,15 +22,15 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
         .runtime_slot
         .set_loaded_page_for_test(page);
 
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("SID-neutral-popup-opener")),
         target_id: Some(DevToolsTargetId::from("TID-neutral-popup-opener")),
         browser_context_id: None,
     };
     let (call_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
         .conn
-        .execute_devtools_command_with_protocol_events(DevToolsCommand::CallFunction(
+        .execute_automation_command_with_protocol_events(AutomationCommand::CallFunction(
             DevToolsCallFunctionCommand {
             context,
             realm_id: None,
@@ -83,11 +83,11 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
         .expect("popup target id")
         .to_owned();
     let popup_url = "data:text/html,<main>neutral popup</main>".to_owned();
-    let popup_navigate = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let popup_navigate = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("SID-neutral-popup-opener")),
                 target_id: Some(DevToolsTargetId::from(popup_target_id.clone())),
                 browser_context_id: None,
@@ -99,11 +99,11 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
     )
     .await;
     popup_navigate.expect("popup target navigate should load inline document");
-    let popup_eval_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let popup_eval_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("SID-neutral-popup-opener")),
                 target_id: Some(DevToolsTargetId::from(popup_target_id)),
                 browser_context_id: None,
@@ -131,8 +131,8 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
 #[tokio::test]
 async fn devtools_runtime_command_uses_background_initial_document_without_resolver_fallback() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
@@ -141,14 +141,14 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
     let (first_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
             &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
         );
-    let DevToolsCommandResult::CreateTarget(first_result) =
+    let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
@@ -157,15 +157,17 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
     ensure_initial_document_for_target_id_for_test(&mut conn, &first_target_id).await;
 
     let (second_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank#background".to_owned(),
-            browser_context_id: None,
-            activate: false,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank#background".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(second_result) =
+    let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
@@ -206,27 +208,29 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
     );
 
     let (name_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                target_id: Some(second_target_id.clone()),
-                ..context.clone()
+        .execute_automation_command(AutomationCommand::CallFunction(
+            DevToolsCallFunctionCommand {
+                context: AutomationContext {
+                    target_id: Some(second_target_id.clone()),
+                    ..context.clone()
+                },
+                realm_id: None,
+                world_name: None,
+                object_id: None,
+                this_parameter: None,
+                function_declaration:
+                    "function() { return [location.href, window.name, window.opener]; }".to_owned(),
+                arguments: Vec::new(),
+                await_promise: true,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                object_group: None,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: false,
+                serialization_options: None,
             },
-            realm_id: None,
-            world_name: None,
-            object_id: None,
-            this_parameter: None,
-            function_declaration:
-                "function() { return [location.href, window.name, window.opener]; }".to_owned(),
-            arguments: Vec::new(),
-            await_promise: true,
-            user_gesture: false,
-            webdriver_bidi_file_prompt_handler: None,
-            result_ownership: DevToolsResultOwnership::None,
-            object_group: None,
-            preserve_remote_metadata: false,
-            materialize_bidi_script_result: false,
-            serialization_options: None,
-        }))
+        ))
         .await
         .into_parts();
     let name_result = expect_script_value_result(
@@ -239,9 +243,9 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
     );
 
     let (surface_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
-                context: DevToolsCommandContext {
+                context: AutomationContext {
                     target_id: Some(second_target_id.clone()),
                     ..context.clone()
                 },
@@ -298,8 +302,8 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
 async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_completion() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let conn = &mut ctx.conn;
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-binding-owner-route")),
         target_id: None,
         browser_context_id: None,
@@ -308,14 +312,14 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     let (first_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
             conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
         );
-    let DevToolsCommandResult::CreateTarget(first_result) =
+    let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
@@ -324,15 +328,17 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     ensure_initial_document_for_target_id_for_test(conn, &first_target_id).await;
 
     let (second_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: false,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(second_result) =
+    let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
@@ -340,11 +346,11 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     let second_target_id = second_result.target_id;
     ensure_initial_document_for_target_id_for_test(conn, &second_target_id).await;
 
-    let first_context = DevToolsCommandContext {
+    let first_context = AutomationContext {
         target_id: Some(first_target_id.clone()),
         ..context.clone()
     };
-    let second_context = DevToolsCommandContext {
+    let second_context = AutomationContext {
         target_id: Some(second_target_id.clone()),
         ..context
     };
@@ -417,8 +423,8 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
 #[tokio::test]
 async fn runtime_enable_uses_background_initial_document_through_attached_session() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-runtime-enable-normal-route")),
         target_id: None,
         browser_context_id: None,
@@ -427,14 +433,14 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     let (first_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
             &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
         );
-    let DevToolsCommandResult::CreateTarget(first_result) =
+    let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
@@ -444,14 +450,14 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     let (second_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
             &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context,
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
         );
-    let DevToolsCommandResult::CreateTarget(second_result) =
+    let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
@@ -533,23 +539,25 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
 #[tokio::test]
 async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: true,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: true,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
@@ -568,8 +576,8 @@ async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
     );
 
     let (realms_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
                 target_id: Some(create_result.target_id.clone()),
                 ..context
             },
@@ -577,7 +585,7 @@ async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(realms_result) =
+    let AutomationResult::Realms(realms_result) =
         realms_result.expect("getRealms should observe initial about:blank")
     else {
         panic!("expected realms result");
@@ -623,9 +631,9 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
         .attach_active_session("SID-late-realms".to_owned());
 
     let (realms_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("SID-late-realms")),
                 target_id: Some(DevToolsTargetId::from("TID-late-realms")),
                 browser_context_id: None,
@@ -634,7 +642,7 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(realms_result) =
+    let AutomationResult::Realms(realms_result) =
         realms_result.expect("getRealms should not fail when realm uniqueId was never captured")
     else {
         panic!("expected realms result");
@@ -652,32 +660,34 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
 #[tokio::test]
 async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_fallback() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: true,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: true,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
 
     let (evaluate_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
-                context: DevToolsCommandContext {
+                context: AutomationContext {
                     target_id: Some(create_result.target_id.clone()),
                     ..context
                 },
@@ -712,10 +722,10 @@ async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let (evaluate_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("SID-no-page-runtime")),
                     target_id: Some(DevToolsTargetId::from("TID-no-page-runtime")),
                     browser_context_id: None,
@@ -750,31 +760,33 @@ async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback
 #[tokio::test]
 async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_message_sidecar() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: false,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id.clone()),
         ..context
     };
-    conn.execute_devtools_command(DevToolsCommand::Navigate(DevToolsNavigateCommand {
+    conn.execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
         context: target_context.clone(),
         url: "data:text/html,bidi-script-channel".to_owned(),
         referrer: None,
@@ -786,28 +798,30 @@ async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_mess
     .expect("navigate should succeed before script message channel call");
 
     let call = conn
-        .execute_devtools_command(DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-            context: target_context.clone(),
-            realm_id: None,
-            world_name: None,
-            object_id: None,
-            this_parameter: None,
-            function_declaration: "(channel) => channel('foo')".to_owned(),
-            arguments: vec![json!({
-                "type": "channel",
-                "value": {
-                    "channel": "channel_name"
-                }
-            })],
-            await_promise: false,
-            user_gesture: false,
-            webdriver_bidi_file_prompt_handler: None,
-            result_ownership: DevToolsResultOwnership::None,
-            object_group: None,
-            preserve_remote_metadata: false,
-            materialize_bidi_script_result: false,
-            serialization_options: None,
-        }))
+        .execute_automation_command(AutomationCommand::CallFunction(
+            DevToolsCallFunctionCommand {
+                context: target_context.clone(),
+                realm_id: None,
+                world_name: None,
+                object_id: None,
+                this_parameter: None,
+                function_declaration: "(channel) => channel('foo')".to_owned(),
+                arguments: vec![json!({
+                    "type": "channel",
+                    "value": {
+                        "channel": "channel_name"
+                    }
+                })],
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                object_group: None,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: false,
+                serialization_options: None,
+            },
+        ))
         .await;
     let (call_result, _, protocol_events, _renderer_output_predecessor) =
         call.into_complete_parts();

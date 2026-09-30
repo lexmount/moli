@@ -1,5 +1,5 @@
-use moli_protocol::devtools_runtime::{
-    DevToolsCallFunctionCommand, DevToolsCommand, DevToolsResultOwnership,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsCallFunctionCommand, DevToolsResultOwnership,
 };
 use serde_json::Value;
 
@@ -10,40 +10,43 @@ use super::parsing::{classic_script_arguments, required_string};
 pub fn execute_sync_command(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let script = required_string(params, "script")?;
-    Ok(DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: context.command_context(),
-        realm_id: None,
-        world_name: None,
-        object_id: None,
-        this_parameter: None,
-        function_declaration: format!("async function() {{\n{script}\n}}"),
-        arguments: classic_script_arguments(params)?,
-        await_promise: true,
-        user_gesture: false,
-        webdriver_bidi_file_prompt_handler: None,
-        result_ownership: DevToolsResultOwnership::None,
-        object_group: None,
-        preserve_remote_metadata: false,
-        materialize_bidi_script_result: false,
-        serialization_options: None,
-    }))
+    Ok(AutomationCommand::CallFunction(
+        DevToolsCallFunctionCommand {
+            context: context.command_context(),
+            realm_id: None,
+            world_name: None,
+            object_id: None,
+            this_parameter: None,
+            function_declaration: format!("async function() {{\n{script}\n}}"),
+            arguments: classic_script_arguments(params)?,
+            await_promise: true,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            object_group: None,
+            preserve_remote_metadata: false,
+            materialize_bidi_script_result: false,
+            serialization_options: None,
+        },
+    ))
 }
 
 pub fn execute_async_command(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let script = required_string(params, "script")?;
-    Ok(DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: context.command_context(),
-        realm_id: None,
-        world_name: None,
-        object_id: None,
-        this_parameter: None,
-        function_declaration: format!(
-            "function() {{\n\
+    Ok(AutomationCommand::CallFunction(
+        DevToolsCallFunctionCommand {
+            context: context.command_context(),
+            realm_id: None,
+            world_name: None,
+            object_id: None,
+            this_parameter: None,
+            function_declaration: format!(
+                "function() {{\n\
              const __moliUserFunction = async function() {{\n\
              {script}\n\
              }};\n\
@@ -74,15 +77,16 @@ pub fn execute_async_command(
              }}\n\
              }});\n\
              }}"
-        ),
-        arguments: classic_script_arguments(params)?,
-        await_promise: true,
-        user_gesture: false,
-        webdriver_bidi_file_prompt_handler: None,
-        result_ownership: DevToolsResultOwnership::None,
-        object_group: None,
-        preserve_remote_metadata: false,
-        materialize_bidi_script_result: false,
-        serialization_options: None,
-    }))
+            ),
+            arguments: classic_script_arguments(params)?,
+            await_promise: true,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            object_group: None,
+            preserve_remote_metadata: false,
+            materialize_bidi_script_result: false,
+            serialization_options: None,
+        },
+    ))
 }

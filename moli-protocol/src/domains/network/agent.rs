@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use moli_bounded_buffer::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 use moli_core::page::{ScriptNetworkOutputItem, SubresourceNetworkRequestHandle};
 
+use crate::automation::DevToolsNetworkDataType;
 use crate::conn::{CapturedBody, ConnectionNetworkRequestIdAllocator};
-use crate::devtools_runtime::DevToolsNetworkDataType;
 
 use super::{
     PendingNetworkBacklogDeliverySnapshot, PendingSubresourceNetworkActivity,

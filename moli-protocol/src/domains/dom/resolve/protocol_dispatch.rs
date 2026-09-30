@@ -16,7 +16,7 @@ pub(super) fn build_cdp_get_attributes_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsGetAttributesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference: DevToolsDomNodeReference::FrontendNodeId(cdp_node_id),
     })
 }
@@ -169,7 +169,7 @@ pub(super) fn build_cdp_push_nodes_by_backend_ids_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsPushNodesByBackendIdsCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         backend_node_ids,
     })
 }
@@ -206,7 +206,7 @@ pub(super) fn build_cdp_get_outer_html_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsGetOuterHtmlCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference: Some(reference),
         include_shadow_dom: params.include_shadow_dom,
     }))
@@ -214,8 +214,8 @@ pub(super) fn build_cdp_get_outer_html_command(
 
 pub(crate) async fn execute_devtools_dom_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     let context = devtools_dom_command_context(&command)?;
     let target_id = context
         .target_id
@@ -238,21 +238,21 @@ pub(crate) async fn execute_devtools_dom_command_async(
 }
 
 pub(super) fn devtools_dom_command_context(
-    command: &DevToolsCommand,
-) -> Result<&crate::devtools_runtime::DevToolsCommandContext, DevToolsError> {
+    command: &AutomationCommand,
+) -> Result<&crate::automation::AutomationContext, DevToolsError> {
     let context = match command {
-        DevToolsCommand::QuerySelector(command) => &command.context,
-        DevToolsCommand::GetAttributes(command) => &command.context,
-        DevToolsCommand::GetText(command) => &command.context,
-        DevToolsCommand::GetProperty(command) => &command.context,
-        DevToolsCommand::PushNodesByBackendIds(command) => &command.context,
-        DevToolsCommand::GetOuterHtml(command) => &command.context,
-        DevToolsCommand::DescribeNode(command) => &command.context,
-        DevToolsCommand::GetFrameOwner(command) => &command.context,
-        DevToolsCommand::GetNodeForLocation(command) => &command.context,
-        DevToolsCommand::ResolveNode(command) => &command.context,
-        DevToolsCommand::ScrollIntoViewIfNeeded(command) => &command.context,
-        DevToolsCommand::DomObjectReference(command)
+        AutomationCommand::QuerySelector(command) => &command.context,
+        AutomationCommand::GetAttributes(command) => &command.context,
+        AutomationCommand::GetText(command) => &command.context,
+        AutomationCommand::GetProperty(command) => &command.context,
+        AutomationCommand::PushNodesByBackendIds(command) => &command.context,
+        AutomationCommand::GetOuterHtml(command) => &command.context,
+        AutomationCommand::DescribeNode(command) => &command.context,
+        AutomationCommand::GetFrameOwner(command) => &command.context,
+        AutomationCommand::GetNodeForLocation(command) => &command.context,
+        AutomationCommand::ResolveNode(command) => &command.context,
+        AutomationCommand::ScrollIntoViewIfNeeded(command) => &command.context,
+        AutomationCommand::DomObjectReference(command)
             if matches!(
                 command.operation,
                 DevToolsDomObjectReferenceOperation::GetBoxModel
@@ -261,8 +261,8 @@ pub(super) fn devtools_dom_command_context(
         {
             &command.context
         }
-        DevToolsCommand::SetFileInputFiles(command) => &command.context,
-        DevToolsCommand::DomGeometry(command) => &command.context,
+        AutomationCommand::SetFileInputFiles(command) => &command.context,
+        AutomationCommand::DomGeometry(command) => &command.context,
         _ => {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Unsupported,
@@ -276,139 +276,140 @@ pub(super) fn devtools_dom_command_context(
 pub(super) async fn execute_devtools_dom_command_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     match command {
-        DevToolsCommand::QuerySelector(command) => {
+        AutomationCommand::QuerySelector(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::QuerySelector(command),
+                AutomationCommand::QuerySelector(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::GetAttributes(command) => {
+        AutomationCommand::GetAttributes(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::GetAttributes(command),
+                AutomationCommand::GetAttributes(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::GetText(command) => {
+        AutomationCommand::GetText(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::GetText(command),
+                AutomationCommand::GetText(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::GetProperty(command) => {
+        AutomationCommand::GetProperty(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::GetProperty(command),
+                AutomationCommand::GetProperty(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::PushNodesByBackendIds(command) => {
+        AutomationCommand::PushNodesByBackendIds(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::PushNodesByBackendIds(command),
+                AutomationCommand::PushNodesByBackendIds(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::GetOuterHtml(command) => {
+        AutomationCommand::GetOuterHtml(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::GetOuterHtml(command),
+                AutomationCommand::GetOuterHtml(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::DescribeNode(command) => {
+        AutomationCommand::DescribeNode(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::DescribeNode(command),
+                AutomationCommand::DescribeNode(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::GetFrameOwner(command) => {
+        AutomationCommand::GetFrameOwner(command) => {
             let immediate_command = command.clone();
             let Some(pending) = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::GetFrameOwner(command),
+                AutomationCommand::GetFrameOwner(command),
             )
             .map_err(DevToolsError::from)?
             else {
                 let result = complete_devtools_dom_command(
                     conn,
-                    DevToolsCommand::GetFrameOwner(immediate_command),
+                    AutomationCommand::GetFrameOwner(immediate_command),
                 )
                 .map_err(DevToolsError::from)?;
                 return devtools_get_frame_owner_result_from_value(&result)
-                    .map(DevToolsCommandResult::GetFrameOwner);
+                    .map(AutomationResult::GetFrameOwner);
             };
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::ResolveNode(command) => {
+        AutomationCommand::ResolveNode(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::ResolveNode(command),
+                AutomationCommand::ResolveNode(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::ScrollIntoViewIfNeeded(command) => {
+        AutomationCommand::ScrollIntoViewIfNeeded(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::ScrollIntoViewIfNeeded(command),
+                AutomationCommand::ScrollIntoViewIfNeeded(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        command @ (DevToolsCommand::DomGeometry(_) | DevToolsCommand::GetNodeForLocation(_)) => {
+        command
+        @ (AutomationCommand::DomGeometry(_) | AutomationCommand::GetNodeForLocation(_)) => {
             let pending = start_devtools_dom_command_for_owner(conn, None, owner, command)
                 .map_err(DevToolsError::from)?
                 .ok_or_else(|| {
@@ -417,7 +418,7 @@ pub(super) async fn execute_devtools_dom_command_for_owner(
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::DomObjectReference(command)
+        AutomationCommand::DomObjectReference(command)
             if matches!(
                 command.operation,
                 DevToolsDomObjectReferenceOperation::GetBoxModel
@@ -428,19 +429,19 @@ pub(super) async fn execute_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::DomObjectReference(command),
+                AutomationCommand::DomObjectReference(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        DevToolsCommand::SetFileInputFiles(command) => {
+        AutomationCommand::SetFileInputFiles(command) => {
             let pending = start_devtools_dom_command_for_owner(
                 conn,
                 None,
                 owner,
-                DevToolsCommand::SetFileInputFiles(command),
+                AutomationCommand::SetFileInputFiles(command),
             )
             .map_err(DevToolsError::from)?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
@@ -457,7 +458,7 @@ pub(super) async fn execute_devtools_dom_command_for_owner(
 pub(super) async fn await_pending_devtools_dom_command_result(
     conn: &mut CdpConnection,
     mut pending: PendingDomCommandDispatch,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     loop {
         let completed = Box::pin(pending.wait()).await;
         match complete_pending_dom_command_result(conn, completed) {
@@ -541,7 +542,7 @@ pub(super) fn build_cdp_scroll_into_view_if_needed_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsScrollIntoViewIfNeededCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference,
         rect,
     }))

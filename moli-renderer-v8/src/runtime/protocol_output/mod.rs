@@ -23,7 +23,7 @@ pub use item::{
     RendererProtocolObservation,
 };
 pub use native_response::{
-    RendererNativeCommand, RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererCdpCall, RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
     RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
     RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,

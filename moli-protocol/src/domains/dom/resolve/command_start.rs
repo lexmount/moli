@@ -35,7 +35,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetDocument(command),
+            AutomationCommand::GetDocument(command),
         );
     }
     if action == DomAction::GetFlattenedDocument {
@@ -48,7 +48,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetDocument(command),
+            AutomationCommand::GetDocument(command),
         );
     }
     if action == DomAction::RequestChildNodes {
@@ -57,7 +57,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::RequestChildNodes(command),
+            AutomationCommand::RequestChildNodes(command),
         );
     }
     if action == DomAction::QuerySelector {
@@ -66,7 +66,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::QuerySelector(command),
+            AutomationCommand::QuerySelector(command),
         );
     }
     if action == DomAction::QuerySelectorAll {
@@ -75,7 +75,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::QuerySelector(command),
+            AutomationCommand::QuerySelector(command),
         );
     }
     if action == DomAction::PerformSearch {
@@ -84,7 +84,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::PerformSearch(command),
+            AutomationCommand::PerformSearch(command),
         );
     }
     if action == DomAction::GetSearchResults {
@@ -93,7 +93,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetSearchResults(command),
+            AutomationCommand::GetSearchResults(command),
         );
     }
     if action == DomAction::DiscardSearchResults {
@@ -104,7 +104,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::DiscardSearchResults(command),
+            AutomationCommand::DiscardSearchResults(command),
         );
     }
     if action == DomAction::SetNodeStackTracesEnabled {
@@ -119,7 +119,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::ResolveNode(command),
+            AutomationCommand::ResolveNode(command),
         );
     }
     if action == DomAction::GetFrameOwner {
@@ -128,7 +128,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetFrameOwner(command),
+            AutomationCommand::GetFrameOwner(command),
         );
     }
     if action == DomAction::GetAttributes {
@@ -137,7 +137,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetAttributes(command),
+            AutomationCommand::GetAttributes(command),
         );
     }
     if action == DomAction::GetNodeForLocation {
@@ -146,7 +146,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetNodeForLocation(command),
+            AutomationCommand::GetNodeForLocation(command),
         );
     }
     if action == DomAction::RequestNode {
@@ -160,7 +160,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::DomObjectReference(command),
+            AutomationCommand::DomObjectReference(command),
         );
     }
     if action == DomAction::DescribeNode {
@@ -182,14 +182,14 @@ pub(super) fn start_pending_dom_command(
                 conn,
                 cmd.id,
                 &owner,
-                DevToolsCommand::DomObjectReference(command),
+                AutomationCommand::DomObjectReference(command),
             );
         };
         return start_devtools_dom_command_for_owner(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::DescribeNode(command),
+            AutomationCommand::DescribeNode(command),
         );
     }
     if action == DomAction::GetOuterHtml {
@@ -212,7 +212,7 @@ pub(super) fn start_pending_dom_command(
                 conn,
                 cmd.id,
                 &owner,
-                DevToolsCommand::DomObjectReference(command),
+                AutomationCommand::DomObjectReference(command),
             );
         }
         let Some(command) = build_cdp_get_outer_html_command(conn, cmd)? else {
@@ -222,7 +222,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::GetOuterHtml(command),
+            AutomationCommand::GetOuterHtml(command),
         );
     }
     if action == DomAction::ScrollIntoViewIfNeeded {
@@ -244,7 +244,7 @@ pub(super) fn start_pending_dom_command(
                 conn,
                 cmd.id,
                 &owner,
-                DevToolsCommand::DomObjectReference(command),
+                AutomationCommand::DomObjectReference(command),
             );
         }
         let Some(command) = build_cdp_scroll_into_view_if_needed_command(conn, cmd)? else {
@@ -254,7 +254,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::ScrollIntoViewIfNeeded(command),
+            AutomationCommand::ScrollIntoViewIfNeeded(command),
         );
     }
     if action == DomAction::Focus {
@@ -269,7 +269,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::SetFileInputFiles(command),
+            AutomationCommand::SetFileInputFiles(command),
         );
     }
     if matches!(
@@ -294,7 +294,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::PushNodesByBackendIds(command),
+            AutomationCommand::PushNodesByBackendIds(command),
         );
     }
     if matches!(action, DomAction::GetBoxModel | DomAction::GetContentQuads) {
@@ -315,14 +315,14 @@ pub(super) fn start_pending_dom_command(
                 conn,
                 cmd.id,
                 &owner,
-                DevToolsCommand::DomObjectReference(command),
+                AutomationCommand::DomObjectReference(command),
             );
         };
         return start_devtools_dom_command_for_owner(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::DomGeometry(command),
+            AutomationCommand::DomGeometry(command),
         );
     }
     if action == DomAction::RemoveNode {
@@ -333,7 +333,7 @@ pub(super) fn start_pending_dom_command(
             conn,
             cmd.id,
             &owner,
-            DevToolsCommand::RemoveNode(command),
+            AutomationCommand::RemoveNode(command),
         );
     }
 
@@ -525,7 +525,7 @@ pub(super) fn build_cdp_remove_node_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsRemoveNodeCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference,
     }))
 }
@@ -575,7 +575,7 @@ pub(super) fn build_cdp_dom_geometry_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsDomGeometryCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference,
         operation,
     }))
@@ -631,7 +631,7 @@ pub(super) fn build_cdp_describe_node_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsDescribeNodeCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference,
         depth: params.depth,
         pierce: params.pierce,
@@ -712,7 +712,7 @@ pub(super) fn build_cdp_request_child_nodes_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsRequestChildNodesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference: DevToolsDomNodeReference::FrontendNodeId(cdp_node_id_value),
         depth,
         pierce: params.pierce.unwrap_or(false),
@@ -844,7 +844,7 @@ pub(super) fn build_cdp_query_selector_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsQuerySelectorCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         root: Some(DevToolsDomNodeReference::FrontendNodeId(cdp_node_id_value)),
         selector,
         multiple,
@@ -957,7 +957,7 @@ pub(super) fn build_cdp_get_document_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsGetDocumentCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         depth,
         pierce: params.pierce.unwrap_or(false),
         flattened: matches!(
@@ -971,69 +971,69 @@ pub(super) fn start_devtools_dom_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     match command {
-        DevToolsCommand::GetFrameOwner(command) => {
+        AutomationCommand::GetFrameOwner(command) => {
             start_devtools_get_frame_owner_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetAttributes(command) => {
+        AutomationCommand::GetAttributes(command) => {
             start_devtools_get_attributes_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetText(command) => {
+        AutomationCommand::GetText(command) => {
             start_devtools_get_text_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetProperty(command) => {
+        AutomationCommand::GetProperty(command) => {
             start_devtools_get_property_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetDocument(command) => {
+        AutomationCommand::GetDocument(command) => {
             start_devtools_get_document_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::RequestChildNodes(command) => {
+        AutomationCommand::RequestChildNodes(command) => {
             start_devtools_request_child_nodes_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::QuerySelector(command) => {
+        AutomationCommand::QuerySelector(command) => {
             start_devtools_query_selector_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::PerformSearch(command) => {
+        AutomationCommand::PerformSearch(command) => {
             search::start_devtools_perform_search_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetSearchResults(command) => {
+        AutomationCommand::GetSearchResults(command) => {
             search::start_devtools_get_search_results_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DiscardSearchResults(command) => {
+        AutomationCommand::DiscardSearchResults(command) => {
             search::start_devtools_discard_search_results_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetNodeForLocation(command) => {
+        AutomationCommand::GetNodeForLocation(command) => {
             start_devtools_get_node_for_location_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::ResolveNode(command) => {
+        AutomationCommand::ResolveNode(command) => {
             start_devtools_resolve_node_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DescribeNode(command) => {
+        AutomationCommand::DescribeNode(command) => {
             start_devtools_describe_node_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DomObjectReference(command) => {
+        AutomationCommand::DomObjectReference(command) => {
             start_devtools_dom_object_reference_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::SetFileInputFiles(command) => {
+        AutomationCommand::SetFileInputFiles(command) => {
             set_file_input::start_devtools_set_file_input_files_command(
                 conn, command_id, owner, command,
             )
         }
-        DevToolsCommand::PushNodesByBackendIds(command) => {
+        AutomationCommand::PushNodesByBackendIds(command) => {
             start_devtools_push_nodes_by_backend_ids_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::GetOuterHtml(command) => {
+        AutomationCommand::GetOuterHtml(command) => {
             start_devtools_get_outer_html_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DomGeometry(command) => {
+        AutomationCommand::DomGeometry(command) => {
             start_devtools_dom_geometry_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::ScrollIntoViewIfNeeded(command) => {
+        AutomationCommand::ScrollIntoViewIfNeeded(command) => {
             start_devtools_scroll_into_view_if_needed_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::RemoveNode(command) => {
+        AutomationCommand::RemoveNode(command) => {
             start_devtools_remove_node_command(conn, command_id, owner, command)
         }
         _ => Err(PendingDomCommandStartError {
@@ -1045,25 +1045,25 @@ pub(super) fn start_devtools_dom_command_for_owner(
 
 pub(super) fn complete_devtools_dom_command(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Value, PendingDomCommandStartError> {
     match command {
-        DevToolsCommand::GetFrameOwner(command) => {
+        AutomationCommand::GetFrameOwner(command) => {
             complete_devtools_get_frame_owner_command(conn, command)
         }
-        DevToolsCommand::GetAttributes(_)
-        | DevToolsCommand::GetText(_)
-        | DevToolsCommand::GetProperty(_) => Err(PendingDomCommandStartError {
+        AutomationCommand::GetAttributes(_)
+        | AutomationCommand::GetText(_)
+        | AutomationCommand::GetProperty(_) => Err(PendingDomCommandStartError {
             code: -32000,
             message: "MissingDomCommand".to_owned(),
         }),
-        DevToolsCommand::PushNodesByBackendIds(_) => Err(PendingDomCommandStartError {
+        AutomationCommand::PushNodesByBackendIds(_) => Err(PendingDomCommandStartError {
             code: -32000,
             message: "MissingDomCommand".to_owned(),
         }),
-        DevToolsCommand::DescribeNode(_)
-        | DevToolsCommand::GetOuterHtml(_)
-        | DevToolsCommand::ScrollIntoViewIfNeeded(_) => Err(PendingDomCommandStartError {
+        AutomationCommand::DescribeNode(_)
+        | AutomationCommand::GetOuterHtml(_)
+        | AutomationCommand::ScrollIntoViewIfNeeded(_) => Err(PendingDomCommandStartError {
             code: -32000,
             message: "MissingDomCommand".to_owned(),
         }),
@@ -1127,7 +1127,7 @@ pub(super) fn build_cdp_get_frame_owner_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsGetFrameOwnerCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         frame_id: DevToolsFrameId::new(params.frame_id.as_ref()),
     })
 }
@@ -1180,7 +1180,7 @@ pub(super) fn build_cdp_get_node_for_location_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsGetNodeForLocationCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         x: params.x as f64,
         y: params.y as f64,
         include_user_agent_shadow_dom: params.include_user_agent_shadow_dom.unwrap_or(false),
@@ -1247,7 +1247,7 @@ pub(super) fn build_cdp_resolve_node_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsResolveNodeCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         reference,
         execution_context_id: params.execution_context_id,
         object_group: params.object_group,
@@ -1391,7 +1391,7 @@ pub(super) fn build_cdp_dom_object_reference_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsDomObjectReferenceCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         object_id: DevToolsRemoteHandleId::from(object_id),
         operation,
     }))

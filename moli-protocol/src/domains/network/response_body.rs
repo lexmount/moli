@@ -2,12 +2,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::{Value, json};
 
 use super::{CapturedRequestBody, CapturedResponseBody, collectors::CollectedNetworkDataBody};
-use crate::conn::{CdpConnection, Cmd, TargetRuntimeSlot};
-use crate::devtools_runtime::{
-    DevToolsCommandResult, DevToolsDisownNetworkDataCommand, DevToolsError, DevToolsErrorKind,
+use crate::automation::{
+    AutomationResult, DevToolsDisownNetworkDataCommand, DevToolsError, DevToolsErrorKind,
     DevToolsGetNetworkDataCommand, DevToolsNetworkDataBytesType, DevToolsNetworkDataCollectorId,
     DevToolsNetworkDataResult, DevToolsNetworkDataType, DevToolsRequestId,
 };
+use crate::conn::{CdpConnection, Cmd, TargetRuntimeSlot};
 use crate::domains::command_output::CommandOutputPlan;
 
 fn network_events_enabled_for_session(
@@ -116,7 +116,7 @@ pub(super) fn get_request_post_data_command_output_plan(
 pub(crate) fn get_network_data_result(
     conn: &mut CdpConnection,
     command: DevToolsGetNetworkDataCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     if command.disown {
         let Some(collector) = command.collector.as_ref() else {
             return Err(DevToolsError::new(
@@ -173,15 +173,13 @@ pub(crate) fn get_network_data_result(
     ) {
         return Err(no_such_network_data());
     }
-    Ok(DevToolsCommandResult::NetworkData(network_data_result(
-        body,
-    )))
+    Ok(AutomationResult::NetworkData(network_data_result(body)))
 }
 
 pub(crate) fn disown_network_data_result(
     conn: &mut CdpConnection,
     command: DevToolsDisownNetworkDataCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     conn.network_data_collectors
         .ensure_collector_exists(&command.collector_id)?;
     let body_was_collected_by_collector = {
@@ -211,7 +209,7 @@ pub(crate) fn disown_network_data_result(
         command.data_type,
         &command.collector_id,
     )?;
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 enum NetworkDataBody<'a> {

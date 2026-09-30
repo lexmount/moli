@@ -1,8 +1,8 @@
-//! Protocol-neutral DevTools runtime types.
+//! Protocol-neutral automation requests and results.
 //!
 //! This module is the shared data-shape boundary for CDP, WebDriver Classic,
-//! and WebDriver BiDi. It intentionally contains data shapes only; ownership
-//! and behavior stay in the DevTools protocol owner layer.
+//! and WebDriver BiDi. It intentionally contains data shapes only; Browser and renderer ownership
+//! stays in the execution layer; frontend adapters parse and project wire data.
 
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -137,7 +137,7 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DevToolsProtocol {
+pub enum FrontendProtocol {
     Cdp,
     WebDriverClassic,
     WebDriverBidi,
@@ -200,15 +200,15 @@ pub enum DevToolsNavigationWait {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DevToolsCommandContext {
-    pub protocol: DevToolsProtocol,
+pub struct AutomationContext {
+    pub protocol: FrontendProtocol,
     pub session_id: Option<DevToolsSessionId>,
     pub target_id: Option<DevToolsTargetId>,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DevToolsCommand {
+pub enum AutomationCommand {
     Navigate(DevToolsNavigateCommand),
     Reload(DevToolsReloadCommand),
     GetNavigationHistory(DevToolsGetNavigationHistoryCommand),
@@ -293,91 +293,91 @@ pub enum DevToolsCommand {
     FulfillInterceptedRequest(DevToolsFulfillInterceptedRequestCommand),
 }
 
-impl DevToolsCommand {
-    pub fn context(&self) -> &DevToolsCommandContext {
+impl AutomationCommand {
+    pub fn context(&self) -> &AutomationContext {
         match self {
-            DevToolsCommand::Navigate(command) => &command.context,
-            DevToolsCommand::Reload(command) => &command.context,
-            DevToolsCommand::GetNavigationHistory(command) => &command.context,
-            DevToolsCommand::TraverseHistory(command) => &command.context,
-            DevToolsCommand::GetRealms(command) => &command.context,
-            DevToolsCommand::EvaluateScript(command) => &command.context,
-            DevToolsCommand::CallFunction(command) => &command.context,
-            DevToolsCommand::TerminateExecution(command) => &command.context,
-            DevToolsCommand::ReleaseObjects(command) => &command.context,
-            DevToolsCommand::CreateTarget(command) => &command.context,
-            DevToolsCommand::CloseTarget(command) => &command.context,
-            DevToolsCommand::ActivateTarget(command) => &command.context,
-            DevToolsCommand::GetTargets(command) => &command.context,
-            DevToolsCommand::GetServiceWorkerLogs(command) => &command.context,
-            DevToolsCommand::GetClientWindows(command) => &command.context,
-            DevToolsCommand::SetClientWindowState(command) => &command.context,
-            DevToolsCommand::CreateBrowserContext(command) => &command.context,
-            DevToolsCommand::GetBrowserContexts(command) => &command.context,
-            DevToolsCommand::RemoveBrowserContext(command) => &command.context,
-            DevToolsCommand::SetDownloadBehavior(command) => &command.context,
-            DevToolsCommand::SetPermission(command) => &command.context,
-            DevToolsCommand::GetTargetInfo(command) => &command.context,
-            DevToolsCommand::GetFrameTree(command) => &command.context,
-            DevToolsCommand::GetFrameTrees(command) => &command.context,
-            DevToolsCommand::GetLayoutMetrics(command) => &command.context,
-            DevToolsCommand::GetJavaScriptDialog(command) => &command.context,
-            DevToolsCommand::SetJavaScriptDialogPromptText(command) => &command.context,
-            DevToolsCommand::HandleJavaScriptDialog(command) => &command.context,
-            DevToolsCommand::CaptureScreenshot(command) => &command.context,
-            DevToolsCommand::PrintToPdf(command) => &command.context,
-            DevToolsCommand::SetViewport(command) => &command.context,
-            DevToolsCommand::SetWindowState(command) => &command.context,
-            DevToolsCommand::SetUserAgentOverride(command) => &command.context,
-            DevToolsCommand::SetLocaleOverride(command) => &command.context,
-            DevToolsCommand::SetTimezoneOverride(command) => &command.context,
-            DevToolsCommand::SetGeolocationOverride(command) => &command.context,
-            DevToolsCommand::SetNetworkConditions(command) => &command.context,
-            DevToolsCommand::GetFrameOwner(command) => &command.context,
-            DevToolsCommand::LocateNodes(command) => &command.context,
-            DevToolsCommand::GetDocument(command) => &command.context,
-            DevToolsCommand::RequestChildNodes(command) => &command.context,
-            DevToolsCommand::QuerySelector(command) => &command.context,
-            DevToolsCommand::PerformSearch(command) => &command.context,
-            DevToolsCommand::GetSearchResults(command) => &command.context,
-            DevToolsCommand::DiscardSearchResults(command) => &command.context,
-            DevToolsCommand::GetNodeForLocation(command) => &command.context,
-            DevToolsCommand::ResolveNode(command) => &command.context,
-            DevToolsCommand::GetAttributes(command) => &command.context,
-            DevToolsCommand::GetText(command) => &command.context,
-            DevToolsCommand::GetProperty(command) => &command.context,
-            DevToolsCommand::PushNodesByBackendIds(command) => &command.context,
-            DevToolsCommand::DescribeNode(command) => &command.context,
-            DevToolsCommand::DomObjectReference(command) => &command.context,
-            DevToolsCommand::SetFileInputFiles(command) => &command.context,
-            DevToolsCommand::GetOuterHtml(command) => &command.context,
-            DevToolsCommand::ScrollIntoViewIfNeeded(command) => &command.context,
-            DevToolsCommand::DomGeometry(command) => &command.context,
-            DevToolsCommand::RemoveNode(command) => &command.context,
-            DevToolsCommand::AddPreloadScript(command) => &command.context,
-            DevToolsCommand::RemovePreloadScript(command) => &command.context,
-            DevToolsCommand::ElementClick(command) => &command.context,
-            DevToolsCommand::DispatchMouseEvent(command) => &command.context,
-            DevToolsCommand::DispatchKeyEvent(command) => &command.context,
-            DevToolsCommand::DispatchTouchEvent(command) => &command.context,
-            DevToolsCommand::DispatchDragEvent(command) => &command.context,
-            DevToolsCommand::SynthesizeTapGesture(command) => &command.context,
-            DevToolsCommand::GetCookies(command) => &command.context,
-            DevToolsCommand::DeleteCookies(command) => &command.context,
-            DevToolsCommand::SetCookies(command) => &command.context,
-            DevToolsCommand::AddNetworkIntercept(command) => &command.context,
-            DevToolsCommand::RemoveNetworkIntercept(command) => &command.context,
-            DevToolsCommand::AddNetworkDataCollector(command) => &command.context,
-            DevToolsCommand::RemoveNetworkDataCollector(command) => &command.context,
-            DevToolsCommand::DisownNetworkData(command) => &command.context,
-            DevToolsCommand::SetCacheBehavior(command) => &command.context,
-            DevToolsCommand::SetExtraHeaders(command) => &command.context,
-            DevToolsCommand::GetNetworkData(command) => &command.context,
-            DevToolsCommand::ContinueInterceptedRequest(command) => &command.context,
-            DevToolsCommand::ContinueInterceptedResponse(command) => &command.context,
-            DevToolsCommand::ContinueWithAuth(command) => &command.context,
-            DevToolsCommand::FailInterceptedRequest(command) => &command.context,
-            DevToolsCommand::FulfillInterceptedRequest(command) => &command.context,
+            AutomationCommand::Navigate(command) => &command.context,
+            AutomationCommand::Reload(command) => &command.context,
+            AutomationCommand::GetNavigationHistory(command) => &command.context,
+            AutomationCommand::TraverseHistory(command) => &command.context,
+            AutomationCommand::GetRealms(command) => &command.context,
+            AutomationCommand::EvaluateScript(command) => &command.context,
+            AutomationCommand::CallFunction(command) => &command.context,
+            AutomationCommand::TerminateExecution(command) => &command.context,
+            AutomationCommand::ReleaseObjects(command) => &command.context,
+            AutomationCommand::CreateTarget(command) => &command.context,
+            AutomationCommand::CloseTarget(command) => &command.context,
+            AutomationCommand::ActivateTarget(command) => &command.context,
+            AutomationCommand::GetTargets(command) => &command.context,
+            AutomationCommand::GetServiceWorkerLogs(command) => &command.context,
+            AutomationCommand::GetClientWindows(command) => &command.context,
+            AutomationCommand::SetClientWindowState(command) => &command.context,
+            AutomationCommand::CreateBrowserContext(command) => &command.context,
+            AutomationCommand::GetBrowserContexts(command) => &command.context,
+            AutomationCommand::RemoveBrowserContext(command) => &command.context,
+            AutomationCommand::SetDownloadBehavior(command) => &command.context,
+            AutomationCommand::SetPermission(command) => &command.context,
+            AutomationCommand::GetTargetInfo(command) => &command.context,
+            AutomationCommand::GetFrameTree(command) => &command.context,
+            AutomationCommand::GetFrameTrees(command) => &command.context,
+            AutomationCommand::GetLayoutMetrics(command) => &command.context,
+            AutomationCommand::GetJavaScriptDialog(command) => &command.context,
+            AutomationCommand::SetJavaScriptDialogPromptText(command) => &command.context,
+            AutomationCommand::HandleJavaScriptDialog(command) => &command.context,
+            AutomationCommand::CaptureScreenshot(command) => &command.context,
+            AutomationCommand::PrintToPdf(command) => &command.context,
+            AutomationCommand::SetViewport(command) => &command.context,
+            AutomationCommand::SetWindowState(command) => &command.context,
+            AutomationCommand::SetUserAgentOverride(command) => &command.context,
+            AutomationCommand::SetLocaleOverride(command) => &command.context,
+            AutomationCommand::SetTimezoneOverride(command) => &command.context,
+            AutomationCommand::SetGeolocationOverride(command) => &command.context,
+            AutomationCommand::SetNetworkConditions(command) => &command.context,
+            AutomationCommand::GetFrameOwner(command) => &command.context,
+            AutomationCommand::LocateNodes(command) => &command.context,
+            AutomationCommand::GetDocument(command) => &command.context,
+            AutomationCommand::RequestChildNodes(command) => &command.context,
+            AutomationCommand::QuerySelector(command) => &command.context,
+            AutomationCommand::PerformSearch(command) => &command.context,
+            AutomationCommand::GetSearchResults(command) => &command.context,
+            AutomationCommand::DiscardSearchResults(command) => &command.context,
+            AutomationCommand::GetNodeForLocation(command) => &command.context,
+            AutomationCommand::ResolveNode(command) => &command.context,
+            AutomationCommand::GetAttributes(command) => &command.context,
+            AutomationCommand::GetText(command) => &command.context,
+            AutomationCommand::GetProperty(command) => &command.context,
+            AutomationCommand::PushNodesByBackendIds(command) => &command.context,
+            AutomationCommand::DescribeNode(command) => &command.context,
+            AutomationCommand::DomObjectReference(command) => &command.context,
+            AutomationCommand::SetFileInputFiles(command) => &command.context,
+            AutomationCommand::GetOuterHtml(command) => &command.context,
+            AutomationCommand::ScrollIntoViewIfNeeded(command) => &command.context,
+            AutomationCommand::DomGeometry(command) => &command.context,
+            AutomationCommand::RemoveNode(command) => &command.context,
+            AutomationCommand::AddPreloadScript(command) => &command.context,
+            AutomationCommand::RemovePreloadScript(command) => &command.context,
+            AutomationCommand::ElementClick(command) => &command.context,
+            AutomationCommand::DispatchMouseEvent(command) => &command.context,
+            AutomationCommand::DispatchKeyEvent(command) => &command.context,
+            AutomationCommand::DispatchTouchEvent(command) => &command.context,
+            AutomationCommand::DispatchDragEvent(command) => &command.context,
+            AutomationCommand::SynthesizeTapGesture(command) => &command.context,
+            AutomationCommand::GetCookies(command) => &command.context,
+            AutomationCommand::DeleteCookies(command) => &command.context,
+            AutomationCommand::SetCookies(command) => &command.context,
+            AutomationCommand::AddNetworkIntercept(command) => &command.context,
+            AutomationCommand::RemoveNetworkIntercept(command) => &command.context,
+            AutomationCommand::AddNetworkDataCollector(command) => &command.context,
+            AutomationCommand::RemoveNetworkDataCollector(command) => &command.context,
+            AutomationCommand::DisownNetworkData(command) => &command.context,
+            AutomationCommand::SetCacheBehavior(command) => &command.context,
+            AutomationCommand::SetExtraHeaders(command) => &command.context,
+            AutomationCommand::GetNetworkData(command) => &command.context,
+            AutomationCommand::ContinueInterceptedRequest(command) => &command.context,
+            AutomationCommand::ContinueInterceptedResponse(command) => &command.context,
+            AutomationCommand::ContinueWithAuth(command) => &command.context,
+            AutomationCommand::FailInterceptedRequest(command) => &command.context,
+            AutomationCommand::FulfillInterceptedRequest(command) => &command.context,
         }
     }
 
@@ -387,10 +387,10 @@ impl DevToolsCommand {
     ) {
         let handler = handler.map(str::to_owned);
         match self {
-            DevToolsCommand::EvaluateScript(command) => {
+            AutomationCommand::EvaluateScript(command) => {
                 command.webdriver_bidi_file_prompt_handler = handler;
             }
-            DevToolsCommand::CallFunction(command) => {
+            AutomationCommand::CallFunction(command) => {
                 command.webdriver_bidi_file_prompt_handler = handler;
             }
             _ => {}
@@ -400,7 +400,7 @@ impl DevToolsCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsNavigateCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub url: String,
     pub referrer: Option<String>,
     pub wait: DevToolsNavigationWait,
@@ -408,7 +408,7 @@ pub struct DevToolsNavigateCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsReloadCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub ignore_cache: bool,
     pub script_to_evaluate_on_load: Option<String>,
     pub wait: DevToolsNavigationWait,
@@ -416,12 +416,12 @@ pub struct DevToolsReloadCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetNavigationHistoryCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsTraverseHistoryCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub destination: DevToolsHistoryTraversalDestination,
     pub wait: DevToolsNavigationWait,
 }
@@ -434,13 +434,13 @@ pub enum DevToolsHistoryTraversalDestination {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetRealmsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub realm_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsEvaluateScriptCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub realm_id: Option<DevToolsRealmId>,
     pub world_name: Option<String>,
     pub expression: String,
@@ -455,7 +455,7 @@ pub struct DevToolsEvaluateScriptCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsCallFunctionCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub realm_id: Option<DevToolsRealmId>,
     pub world_name: Option<String>,
     pub object_id: Option<DevToolsRemoteHandleId>,
@@ -474,7 +474,7 @@ pub struct DevToolsCallFunctionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsTerminateExecutionCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,7 +486,7 @@ pub struct DevToolsSerializationOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsReleaseObjectsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub realm_id: Option<DevToolsRealmId>,
     pub world_name: Option<String>,
     pub handles: Vec<DevToolsRemoteHandleId>,
@@ -494,7 +494,7 @@ pub struct DevToolsReleaseObjectsCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsCreateTargetCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub url: String,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub activate: bool,
@@ -502,19 +502,19 @@ pub struct DevToolsCreateTargetCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsCloseTargetCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_id: DevToolsTargetId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsActivateTargetCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_id: DevToolsTargetId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetTargetsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub root: Option<DevToolsTargetId>,
     pub max_depth: Option<u32>,
     pub filter: Option<Vec<DevToolsTargetFilterEntry>>,
@@ -528,18 +528,18 @@ pub struct DevToolsTargetFilterEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetServiceWorkerLogsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_id: Option<DevToolsTargetId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetClientWindowsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsCreateBrowserContextCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub accept_insecure_certs: Option<bool>,
     pub proxy_server: Option<String>,
@@ -551,25 +551,25 @@ pub struct DevToolsCreateBrowserContextCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetBrowserContextsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRemoveBrowserContextCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_id: DevToolsBrowserContextId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetDownloadBehaviorCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub behavior: Option<DevToolsDownloadBehaviorSetting>,
     pub user_contexts: Option<Vec<DevToolsBrowserContextId>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetPermissionCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub permission: Value,
     pub setting: String,
     pub origin: String,
@@ -586,48 +586,48 @@ pub struct DevToolsDownloadBehaviorSetting {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetTargetInfoCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_id: Option<DevToolsTargetId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetFrameTreeCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub max_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetFrameTreesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub max_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetLayoutMetricsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetJavaScriptDialogCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetJavaScriptDialogPromptTextCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub prompt_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsHandleJavaScriptDialogCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub accept: bool,
     pub prompt_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsCaptureScreenshotCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub format: Option<String>,
     pub quality: Option<u8>,
     pub clip: Option<DevToolsCaptureScreenshotClip>,
@@ -657,7 +657,7 @@ pub struct DevToolsScreenshotElementClip {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsPrintToPdfCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub landscape: Option<bool>,
     pub print_background: Option<bool>,
     pub scale: Option<f64>,
@@ -680,7 +680,7 @@ pub enum DevToolsPrintToPdfTransferMode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetViewportCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub viewport: DevToolsViewportSetting,
     pub device_pixel_ratio: DevToolsDevicePixelRatioSetting,
@@ -709,13 +709,13 @@ impl DevToolsWindowState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetWindowStateCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub state: DevToolsWindowState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetClientWindowStateCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub client_window: DevToolsTargetId,
     pub state: DevToolsWindowState,
     pub width: Option<u32>,
@@ -726,7 +726,7 @@ pub struct DevToolsSetClientWindowStateCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetUserAgentOverrideCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub user_agent: Option<String>,
@@ -734,7 +734,7 @@ pub struct DevToolsSetUserAgentOverrideCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetLocaleOverrideCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub locale: Option<String>,
@@ -742,7 +742,7 @@ pub struct DevToolsSetLocaleOverrideCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetTimezoneOverrideCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub timezone: Option<String>,
@@ -767,7 +767,7 @@ pub enum DevToolsGeolocationOverrideState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetGeolocationOverrideCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub override_state: Option<DevToolsGeolocationOverrideState>,
@@ -786,7 +786,7 @@ impl DevToolsNetworkConditions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetNetworkConditionsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub network_conditions: Option<DevToolsNetworkConditions>,
@@ -808,7 +808,7 @@ pub enum DevToolsDevicePixelRatioSetting {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetCookiesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub urls: Option<Vec<String>>,
     pub filter: Option<DevToolsCookieFilter>,
@@ -816,7 +816,7 @@ pub struct DevToolsGetCookiesCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDeleteCookiesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub name: Option<String>,
     pub url: Option<String>,
@@ -828,7 +828,7 @@ pub struct DevToolsDeleteCookiesCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub cookies: Vec<DevToolsCookieParam>,
 }
@@ -866,13 +866,13 @@ pub struct DevToolsCookieFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetFrameOwnerCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub frame_id: DevToolsFrameId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsLocateNodesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub locator: DevToolsLocateNodesLocator,
     pub max_node_count: Option<u64>,
     pub start_nodes: Vec<Value>,
@@ -910,7 +910,7 @@ pub enum DevToolsLocateNodesTextMatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetDocumentCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub depth: Option<i32>,
     pub pierce: bool,
     pub flattened: bool,
@@ -924,7 +924,7 @@ pub enum DevToolsDomNodeReference {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRequestChildNodesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
     pub depth: i32,
     pub pierce: bool,
@@ -932,7 +932,7 @@ pub struct DevToolsRequestChildNodesCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsQuerySelectorCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub root: Option<DevToolsDomNodeReference>,
     pub selector: String,
     pub multiple: bool,
@@ -940,14 +940,14 @@ pub struct DevToolsQuerySelectorCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsPerformSearchCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub query: String,
     pub include_user_agent_shadow_dom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetSearchResultsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub search_id: String,
     pub from_index: usize,
     pub to_index: usize,
@@ -955,13 +955,13 @@ pub struct DevToolsGetSearchResultsCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDiscardSearchResultsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub search_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsGetNodeForLocationCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub x: f64,
     pub y: f64,
     pub include_user_agent_shadow_dom: bool,
@@ -977,7 +977,7 @@ pub struct DevToolsGetNodeForLocationResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsResolveNodeCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
     pub execution_context_id: Option<i64>,
     pub object_group: Option<String>,
@@ -985,26 +985,26 @@ pub struct DevToolsResolveNodeCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetAttributesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetTextCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetPropertyCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
     pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsPushNodesByBackendIdsCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub backend_node_ids: Vec<u32>,
 }
 
@@ -1015,7 +1015,7 @@ pub struct DevToolsPushNodesByBackendIdsResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDescribeNodeCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: Option<DevToolsDomNodeReference>,
     pub depth: i32,
     pub pierce: bool,
@@ -1033,7 +1033,7 @@ pub enum DevToolsDomObjectReferenceOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsElementClickCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub operation: DevToolsElementClickOperation,
 }
 
@@ -1045,14 +1045,14 @@ pub enum DevToolsElementClickOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsDomObjectReferenceCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub object_id: DevToolsRemoteHandleId,
     pub operation: DevToolsDomObjectReferenceOperation,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetFileInputFilesCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub object_id: DevToolsRemoteHandleId,
     pub files: Vec<SelectedFile>,
     pub append: bool,
@@ -1060,14 +1060,14 @@ pub struct DevToolsSetFileInputFilesCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetOuterHtmlCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: Option<DevToolsDomNodeReference>,
     pub include_shadow_dom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsScrollIntoViewIfNeededCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: Option<DevToolsDomNodeReference>,
     pub rect: Option<DomScrollIntoViewRect>,
 }
@@ -1080,20 +1080,20 @@ pub enum DevToolsDomGeometryOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDomGeometryCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
     pub operation: DevToolsDomGeometryOperation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRemoveNodeCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub reference: DevToolsDomNodeReference,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsAddPreloadScriptCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub source: DevToolsPreloadScriptSource,
     pub world_name: Option<String>,
     pub target_ids: Option<Vec<DevToolsTargetId>>,
@@ -1113,7 +1113,7 @@ pub enum DevToolsPreloadScriptSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRemovePreloadScriptCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub script_id: DevToolsPreloadScriptId,
 }
 
@@ -1133,7 +1133,7 @@ pub enum DevToolsPointerType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsDispatchMouseEventCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub event_type: DevToolsMouseEventType,
     pub pointer_type: DevToolsPointerType,
     pub x: f64,
@@ -1160,7 +1160,7 @@ pub enum DevToolsKeyEventType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDispatchKeyEventCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub event_type: DevToolsKeyEventType,
     pub key: String,
     pub code: String,
@@ -1187,7 +1187,7 @@ pub struct DevToolsTouchPoint {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsDispatchTouchEventCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub event_type: DevToolsTouchEventType,
     pub touch_points: Vec<DevToolsTouchPoint>,
 }
@@ -1217,7 +1217,7 @@ pub struct DevToolsDragData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsDispatchDragEventCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub event_type: DevToolsDragEventType,
     pub x: f64,
     pub y: f64,
@@ -1227,7 +1227,7 @@ pub struct DevToolsDispatchDragEventCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSynthesizeTapGestureCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub x: f64,
     pub y: f64,
 }
@@ -1253,7 +1253,7 @@ pub struct DevToolsNetworkInterceptPattern {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsAddNetworkInterceptCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub intercept_id: DevToolsNetworkInterceptId,
     pub phases: Vec<DevToolsNetworkInterceptPhase>,
     pub url_patterns: Vec<DevToolsNetworkInterceptPattern>,
@@ -1261,20 +1261,20 @@ pub struct DevToolsAddNetworkInterceptCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRemoveNetworkInterceptCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub intercept_id: DevToolsNetworkInterceptId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetCacheBehaviorCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub cache_disabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsSetExtraHeadersCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
     pub headers: moli_fetch::RequestHeaders,
@@ -1288,7 +1288,7 @@ pub enum DevToolsNetworkDataType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsAddNetworkDataCollectorCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub collector_id: DevToolsNetworkDataCollectorId,
     pub data_types: Vec<DevToolsNetworkDataType>,
     pub max_encoded_data_size: u64,
@@ -1298,13 +1298,13 @@ pub struct DevToolsAddNetworkDataCollectorCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRemoveNetworkDataCollectorCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub collector_id: DevToolsNetworkDataCollectorId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDisownNetworkDataCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub data_type: DevToolsNetworkDataType,
     pub collector_id: DevToolsNetworkDataCollectorId,
@@ -1312,7 +1312,7 @@ pub struct DevToolsDisownNetworkDataCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetNetworkDataCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub data_type: DevToolsNetworkDataType,
     pub collector: Option<DevToolsNetworkDataCollectorId>,
@@ -1321,7 +1321,7 @@ pub struct DevToolsGetNetworkDataCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsContinueInterceptedRequestCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub url: Option<String>,
     pub method: Option<String>,
@@ -1332,7 +1332,7 @@ pub struct DevToolsContinueInterceptedRequestCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsContinueInterceptedResponseCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub response_code: Option<u16>,
     pub response_headers: Option<Vec<(String, Vec<u8>)>>,
@@ -1355,7 +1355,7 @@ pub enum DevToolsAuthChallengeAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsContinueWithAuthCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub action: DevToolsAuthChallengeAction,
     pub username: Option<String>,
@@ -1382,14 +1382,14 @@ impl std::error::Error for DevToolsRequestFailure {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsFailInterceptedRequestCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub failure: DevToolsRequestFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsFulfillInterceptedRequestCommand {
-    pub context: DevToolsCommandContext,
+    pub context: AutomationContext,
     pub request_id: DevToolsRequestId,
     pub response_code: u16,
     pub response_headers: Vec<(String, Vec<u8>)>,
@@ -1398,7 +1398,7 @@ pub struct DevToolsFulfillInterceptedRequestCommand {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DevToolsCommandResult {
+pub enum AutomationResult {
     ElementClickPreparation(
         Result<
             moli_core::page::RendererElementClickTarget,

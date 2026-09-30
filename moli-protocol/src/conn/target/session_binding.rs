@@ -1,7 +1,7 @@
+use crate::automation::DevToolsTargetInfo;
 #[cfg(test)]
 use crate::conn::BrowserContext;
 use crate::conn::CdpConnection;
-use crate::devtools_runtime::DevToolsTargetInfo;
 
 use super::{
     CdpSessionRoute, PreparedTargetAttach, SessionDisposalPlan, SessionDisposalTarget,

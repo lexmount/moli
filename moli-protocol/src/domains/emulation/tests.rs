@@ -1,12 +1,12 @@
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsBrowserContextId,
+    DevToolsSessionId, DevToolsSetExtraHeadersCommand, DevToolsSetLocaleOverrideCommand,
+    DevToolsSetUserAgentOverrideCommand, DevToolsTargetId, FrontendProtocol,
+};
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, EmulatedGeolocationOverride,
     EmulatedGeolocationOverrideState, PageTargetHost, PendingCdpCommandDispatch,
     TargetIdentityState, TargetPageSlot,
-};
-use crate::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsProtocol, DevToolsSessionId, DevToolsSetExtraHeadersCommand,
-    DevToolsSetLocaleOverrideCommand, DevToolsSetUserAgentOverrideCommand, DevToolsTargetId,
 };
 use crate::testing::{TestContext, wait_until_message};
 use axum::{Router, extract::State, http::HeaderMap, response::IntoResponse, routing::get};
@@ -160,9 +160,9 @@ async fn install_session_page_for_emulation_test(
         .await;
 }
 
-fn bidi_command_context() -> DevToolsCommandContext {
-    DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+fn bidi_command_context() -> AutomationContext {
+    AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
@@ -177,7 +177,7 @@ async fn execute_set_extra_headers_for_test(
 ) {
     let outcome = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::SetExtraHeaders(
+        .execute_automation_command(AutomationCommand::SetExtraHeaders(
             DevToolsSetExtraHeadersCommand {
                 context: bidi_command_context(),
                 target_ids: target_ids.into_iter().map(DevToolsTargetId::from).collect(),
@@ -198,7 +198,7 @@ async fn execute_set_extra_headers_for_test(
     assert!(events.is_empty());
     assert!(protocol_events.is_empty());
     assert!(renderer_output_predecessor.is_none());
-    assert!(matches!(result, Ok(DevToolsCommandResult::Empty)));
+    assert!(matches!(result, Ok(AutomationResult::Empty)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -511,7 +511,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         },
     )
     .expect("the stored target policy should be replayed into the replacement document");
-    assert!(matches!(result, DevToolsCommandResult::Empty));
+    assert!(matches!(result, AutomationResult::Empty));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2814,23 +2814,23 @@ async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfa
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for command in [
-        DevToolsCommand::SetUserAgentOverride(DevToolsSetUserAgentOverrideCommand {
+        AutomationCommand::SetUserAgentOverride(DevToolsSetUserAgentOverrideCommand {
             context: bidi_command_context(),
             target_ids: Vec::new(),
             browser_context_ids: vec![DevToolsBrowserContextId::from("BID-1")],
             user_agent: Some("MoliBiDi/1.0".to_owned()),
         }),
-        DevToolsCommand::SetLocaleOverride(DevToolsSetLocaleOverrideCommand {
+        AutomationCommand::SetLocaleOverride(DevToolsSetLocaleOverrideCommand {
             context: bidi_command_context(),
             target_ids: Vec::new(),
             browser_context_ids: vec![DevToolsBrowserContextId::from("BID-1")],
             locale: Some("fr-FR".to_owned()),
         }),
     ] {
-        let outcome = ctx.conn.execute_devtools_command(command).await;
+        let outcome = ctx.conn.execute_automation_command(command).await;
         let (result, events, protocol_events, renderer_output_predecessor) =
             outcome.into_complete_parts();
-        assert!(matches!(result, Ok(DevToolsCommandResult::Empty)));
+        assert!(matches!(result, Ok(AutomationResult::Empty)));
         assert!(events.is_empty());
         assert!(protocol_events.is_empty());
         assert!(renderer_output_predecessor.is_none());

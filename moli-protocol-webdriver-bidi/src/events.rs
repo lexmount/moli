@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsStackTrace, LogEntryEvent,
     PageFileChooserOpenedEvent, PageJavaScriptDialogOpeningEvent, RuntimeConsoleEvent,
     RuntimeExecutionContextEvent, RuntimeExecutionContextsClearedEvent, ScriptExceptionEvent,
@@ -245,7 +245,7 @@ fn browsing_context_context_event(method: &str, params: Value) -> Value {
 
 fn browsing_context_navigation_lifecycle_event(
     method: &str,
-    event: &moli_protocol::devtools_runtime::NavigationLifecycleEvent,
+    event: &moli_protocol::automation::NavigationLifecycleEvent,
 ) -> Option<Value> {
     Some(browsing_context_navigation_event(
         method,

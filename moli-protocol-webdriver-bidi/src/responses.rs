@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use moli_protocol::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
+use moli_protocol::automation::{
+    AutomationResult, DevToolsBrowserContextId, DevToolsError, DevToolsErrorKind,
     DevToolsNetworkDataBytesType, DevToolsScriptResult, RuntimeConsoleEvent,
 };
 use serde_json::{Value, json};
@@ -39,11 +39,10 @@ pub fn error_response(id: Option<u64>, code: BidiErrorCode, message: &str) -> Va
     response
 }
 
-pub fn bidi_response_from_devtools_result(id: u64, result: DevToolsCommandResult) -> Value {
+pub fn bidi_response_from_devtools_result(id: u64, result: AutomationResult) -> Value {
     if matches!(
         result,
-        DevToolsCommandResult::ElementClickPreparation(_)
-            | DevToolsCommandResult::ElementClickDispatch(_)
+        AutomationResult::ElementClickPreparation(_) | AutomationResult::ElementClickDispatch(_)
     ) {
         return error_response(
             Some(id),
@@ -51,14 +50,14 @@ pub fn bidi_response_from_devtools_result(id: u64, result: DevToolsCommandResult
             "element click results are internal to WebDriver Classic",
         );
     }
-    if matches!(result, DevToolsCommandResult::GetNodeForLocation(_)) {
+    if matches!(result, AutomationResult::GetNodeForLocation(_)) {
         return error_response(
             Some(id),
             BidiErrorCode::UnsupportedOperation,
             "DOM.getNodeForLocation results are not part of the WebDriver BiDi surface",
         );
     }
-    if let DevToolsCommandResult::SetCookies(result) = &result
+    if let AutomationResult::SetCookies(result) = &result
         && !result.success
     {
         return error_response(
@@ -78,21 +77,21 @@ pub fn bidi_response_from_devtools_error(id: u64, error: DevToolsError) -> Value
     )
 }
 
-fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Value {
+fn bidi_result_payload_from_devtools_result(result: AutomationResult) -> Value {
     match result {
-        DevToolsCommandResult::ElementClickPreparation(_)
-        | DevToolsCommandResult::ElementClickDispatch(_) => {
+        AutomationResult::ElementClickPreparation(_)
+        | AutomationResult::ElementClickDispatch(_) => {
             unreachable!("element click results have no WebDriver BiDi success projection")
         }
-        DevToolsCommandResult::Empty | DevToolsCommandResult::TraverseHistory(_) => json!({}),
-        DevToolsCommandResult::Navigate(result) => json!({
+        AutomationResult::Empty | AutomationResult::TraverseHistory(_) => json!({}),
+        AutomationResult::Navigate(result) => json!({
             "navigation": result
                 .navigation_id
                 .map(|navigation_id| Value::String(navigation_id.into_string()))
                 .unwrap_or(Value::Null),
             "url": result.url,
         }),
-        DevToolsCommandResult::GetNavigationHistory(result) => json!({
+        AutomationResult::GetNavigationHistory(result) => json!({
             "currentIndex": result.current_index,
             "entries": result
                 .entries
@@ -107,54 +106,52 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 })
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::CreateTarget(result) => json!({
+        AutomationResult::CreateTarget(result) => json!({
             "context": result.target_id.into_string(),
         }),
-        DevToolsCommandResult::CloseTarget(_) => json!({}),
-        DevToolsCommandResult::GetTargets(result) => json!({
+        AutomationResult::CloseTarget(_) => json!({}),
+        AutomationResult::GetTargets(result) => json!({
             "contexts": result
                 .targets
                 .into_iter()
                 .filter_map(bidi_browsing_context_info)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ServiceWorkerLogs(result) => json!({
+        AutomationResult::ServiceWorkerLogs(result) => json!({
             "entries": result
                 .entries
                 .into_iter()
                 .map(bidi_service_worker_log_entry)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ClientWindows(result) => json!({
+        AutomationResult::ClientWindows(result) => json!({
             "clientWindows": result
                 .client_windows
                 .into_iter()
                 .map(bidi_client_window_info)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ClientWindow(result) => {
-            bidi_client_window_info(result.client_window)
-        }
-        DevToolsCommandResult::CreateBrowserContext(result) => json!({
+        AutomationResult::ClientWindow(result) => bidi_client_window_info(result.client_window),
+        AutomationResult::CreateBrowserContext(result) => json!({
             "userContext": result.browser_context_id.into_string(),
         }),
-        DevToolsCommandResult::GetBrowserContexts(result) => json!({
+        AutomationResult::GetBrowserContexts(result) => json!({
             "userContexts": bidi_user_contexts_from_browser_contexts(result.browser_context_ids),
         }),
-        DevToolsCommandResult::GetFrameTree(result) => json!({
+        AutomationResult::GetFrameTree(result) => json!({
             "contexts": bidi_browsing_context_infos_from_frame_tree_result(&result),
         }),
-        DevToolsCommandResult::GetFrameTrees(result) => json!({
+        AutomationResult::GetFrameTrees(result) => json!({
             "contexts": result
                 .frame_trees
                 .iter()
                 .flat_map(bidi_browsing_context_infos_from_frame_tree_result)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::GetTargetInfo(result) => {
+        AutomationResult::GetTargetInfo(result) => {
             bidi_browsing_context_info(result.target_info).unwrap_or_else(|| json!({}))
         }
-        DevToolsCommandResult::GetCookies(result) => json!({
+        AutomationResult::GetCookies(result) => json!({
             "cookies": result
                 .cookies
                 .into_iter()
@@ -162,22 +159,22 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 .collect::<Vec<_>>(),
             "partitionKey": {},
         }),
-        DevToolsCommandResult::DeleteCookies(result) => json!({
+        AutomationResult::DeleteCookies(result) => json!({
             "partitionKey": result.partition_key,
         }),
-        DevToolsCommandResult::SetCookies(result) => json!({
+        AutomationResult::SetCookies(result) => json!({
             "partitionKey": result.partition_key,
         }),
-        DevToolsCommandResult::AddPreloadScript(result) => json!({
+        AutomationResult::AddPreloadScript(result) => json!({
             "script": result.script_id.into_string(),
         }),
-        DevToolsCommandResult::AddNetworkIntercept(result) => json!({
+        AutomationResult::AddNetworkIntercept(result) => json!({
             "intercept": result.intercept_id.into_string(),
         }),
-        DevToolsCommandResult::AddNetworkDataCollector(result) => json!({
+        AutomationResult::AddNetworkDataCollector(result) => json!({
             "collector": result.collector_id.into_string(),
         }),
-        DevToolsCommandResult::NetworkData(result) => json!({
+        AutomationResult::NetworkData(result) => json!({
             "bytes": {
                 "type": match result.bytes_type {
                     DevToolsNetworkDataBytesType::String => "string",
@@ -186,10 +183,10 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 "value": result.value,
             },
         }),
-        DevToolsCommandResult::Realms(result) => json!({
+        AutomationResult::Realms(result) => json!({
             "realms": bidi_script_realm_infos(result.realms),
         }),
-        DevToolsCommandResult::Script(result) => match *result {
+        AutomationResult::Script(result) => match *result {
             DevToolsScriptResult::Value(value) => {
                 let realm = value.realm.clone();
                 let mut payload = json!({
@@ -230,28 +227,28 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 payload
             }
         },
-        DevToolsCommandResult::LocateNodes(result) => json!({
+        AutomationResult::LocateNodes(result) => json!({
             "nodes": result
                 .nodes
                 .into_iter()
                 .map(bidi_remote_value_from_devtools)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::DescribeNode(result) => json!({
+        AutomationResult::DescribeNode(result) => json!({
             "node": result.node,
         }),
-        DevToolsCommandResult::GetFrameOwner(result) => json!({
+        AutomationResult::GetFrameOwner(result) => json!({
             "nodeId": result.node_id,
             "backendNodeId": result.backend_node_id,
         }),
-        DevToolsCommandResult::QuerySelector(result) => json!({
+        AutomationResult::QuerySelector(result) => json!({
             "nodeIds": result.node_ids,
             "multiple": result.multiple,
         }),
-        DevToolsCommandResult::ResolveNode(result) => json!({
+        AutomationResult::ResolveNode(result) => json!({
             "object": result.object,
         }),
-        DevToolsCommandResult::GetAttributes(result) => json!({
+        AutomationResult::GetAttributes(result) => json!({
             "attributes": result
                 .attributes
                 .into_iter()
@@ -261,25 +258,25 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 }))
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::GetText(result) => json!({
+        AutomationResult::GetText(result) => json!({
             "text": result.text,
         }),
-        DevToolsCommandResult::GetProperty(result) => json!({
+        AutomationResult::GetProperty(result) => json!({
             "value": result.value,
         }),
-        DevToolsCommandResult::PushNodesByBackendIds(result) => json!({
+        AutomationResult::PushNodesByBackendIds(result) => json!({
             "nodeIds": result.node_ids,
         }),
-        DevToolsCommandResult::GetOuterHtml(result) => json!({
+        AutomationResult::GetOuterHtml(result) => json!({
             "outerHTML": result.outer_html,
         }),
         // The public projection rejects this CDP-only variant before reaching
         // the BiDi success mapper. Keep the arm explicit so adding a BiDi
         // command cannot silently expose a CDP response shape.
-        DevToolsCommandResult::GetNodeForLocation(_) => unreachable!(
+        AutomationResult::GetNodeForLocation(_) => unreachable!(
             "get-node-for-location results must be rejected before BiDi success projection"
         ),
-        DevToolsCommandResult::DomGeometry(result) => json!({
+        AutomationResult::DomGeometry(result) => json!({
             "quads": result
                 .quads
                 .into_iter()
@@ -288,7 +285,7 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
             "width": result.width,
             "height": result.height,
         }),
-        DevToolsCommandResult::LayoutMetrics(result) => json!({
+        AutomationResult::LayoutMetrics(result) => json!({
             "layoutViewport": {
                 "clientWidth": result.layout_viewport_width,
                 "clientHeight": result.layout_viewport_height,
@@ -298,12 +295,12 @@ fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Va
                 "height": result.content_height,
             },
         }),
-        DevToolsCommandResult::JavaScriptDialog(result) => json!({
+        AutomationResult::JavaScriptDialog(result) => json!({
             "type": result.dialog_type,
             "message": result.message,
             "defaultValue": result.default_prompt,
         }),
-        DevToolsCommandResult::CaptureScreenshot(result) => json!({
+        AutomationResult::CaptureScreenshot(result) => json!({
             "data": BASE64_STANDARD.encode(result.bytes.as_ref()),
         }),
     }
@@ -336,7 +333,7 @@ fn bidi_service_worker_log_entry(entry: RuntimeConsoleEvent) -> Value {
 }
 
 fn bidi_script_realm_infos(
-    realms: Vec<moli_protocol::devtools_runtime::RuntimeExecutionContextEvent>,
+    realms: Vec<moli_protocol::automation::RuntimeExecutionContextEvent>,
 ) -> Vec<Value> {
     let mut realms = realms
         .into_iter()
@@ -372,9 +369,7 @@ fn bidi_realm_string_field<'a>(realm: &'a Value, field: &str) -> &'a str {
     realm.get(field).and_then(Value::as_str).unwrap_or("")
 }
 
-fn bidi_client_window_info(
-    window: moli_protocol::devtools_runtime::DevToolsClientWindowInfo,
-) -> Value {
+fn bidi_client_window_info(window: moli_protocol::automation::DevToolsClientWindowInfo) -> Value {
     json!({
         "clientWindow": window.client_window.into_string(),
         "active": window.active,

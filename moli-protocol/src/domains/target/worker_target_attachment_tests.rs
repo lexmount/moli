@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{
+    automation::AutomationEvent,
     conn::{BrowserContext, CdpTargetFilter, CommandDispatchContext, CommandOwnerScope},
-    devtools_runtime::AutomationEvent,
     domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
 };
 

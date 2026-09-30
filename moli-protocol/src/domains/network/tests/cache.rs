@@ -789,13 +789,11 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
 
     let result = ctx
         .conn
-        .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::SetCacheBehavior(
-            crate::devtools_runtime::DevToolsSetCacheBehaviorCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
-                    session_id: Some(crate::devtools_runtime::DevToolsSessionId::from(
-                        "bidi-session-1",
-                    )),
+        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+            crate::automation::DevToolsSetCacheBehaviorCommand {
+                context: crate::automation::AutomationContext {
+                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
                     target_id: None,
                     browser_context_id: None,
                 },
@@ -807,10 +805,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
         .into_parts()
         .0
         .expect("global BiDi cache behavior should succeed");
-    assert_eq!(
-        result,
-        crate::devtools_runtime::DevToolsCommandResult::Empty
-    );
+    assert_eq!(result, crate::automation::AutomationResult::Empty);
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(bc.active_page_target().effective_policy().cache_disabled());
@@ -842,19 +837,15 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.conn
-        .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::SetCacheBehavior(
-            crate::devtools_runtime::DevToolsSetCacheBehaviorCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
-                    session_id: Some(crate::devtools_runtime::DevToolsSessionId::from(
-                        "bidi-session-1",
-                    )),
+        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+            crate::automation::DevToolsSetCacheBehaviorCommand {
+                context: crate::automation::AutomationContext {
+                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
                     target_id: None,
                     browser_context_id: None,
                 },
-                target_ids: vec![crate::devtools_runtime::DevToolsTargetId::from(
-                    "TID-background",
-                )],
+                target_ids: vec![crate::automation::DevToolsTargetId::from("TID-background")],
                 cache_disabled: true,
             },
         ))
@@ -886,19 +877,15 @@ async fn devtools_set_cache_behavior_rejects_unknown_context() {
 
     let error = ctx
         .conn
-        .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::SetCacheBehavior(
-            crate::devtools_runtime::DevToolsSetCacheBehaviorCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
-                    session_id: Some(crate::devtools_runtime::DevToolsSessionId::from(
-                        "bidi-session-1",
-                    )),
+        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+            crate::automation::DevToolsSetCacheBehaviorCommand {
+                context: crate::automation::AutomationContext {
+                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
                     target_id: None,
                     browser_context_id: None,
                 },
-                target_ids: vec![crate::devtools_runtime::DevToolsTargetId::from(
-                    "TID-missing",
-                )],
+                target_ids: vec![crate::automation::DevToolsTargetId::from("TID-missing")],
                 cache_disabled: true,
             },
         ))
@@ -909,7 +896,7 @@ async fn devtools_set_cache_behavior_rejects_unknown_context() {
 
     assert_eq!(
         error.kind,
-        crate::devtools_runtime::DevToolsErrorKind::NoSuchTarget
+        crate::automation::DevToolsErrorKind::NoSuchTarget
     );
     assert_eq!(error.message, "NoSuchTarget");
 }
@@ -919,13 +906,11 @@ async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
     let mut ctx = TestContext::new();
 
     ctx.conn
-        .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::SetCacheBehavior(
-            crate::devtools_runtime::DevToolsSetCacheBehaviorCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
-                    session_id: Some(crate::devtools_runtime::DevToolsSessionId::from(
-                        "bidi-session-1",
-                    )),
+        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+            crate::automation::DevToolsSetCacheBehaviorCommand {
+                context: crate::automation::AutomationContext {
+                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
                     target_id: None,
                     browser_context_id: None,
                 },

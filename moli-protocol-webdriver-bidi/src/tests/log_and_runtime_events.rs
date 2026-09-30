@@ -605,15 +605,13 @@ fn session_unsubscribe_subscription_ids_take_precedence_over_events() {
 fn serializes_devtools_navigate_result_to_bidi_response() {
     let response = super::super::bidi_response_from_devtools_result(
         7,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Navigate(
-            moli_protocol::devtools_runtime::DevToolsNavigateResult {
-                navigation_id: Some(moli_protocol::devtools_runtime::DevToolsNavigationId::from(
+        moli_protocol::automation::AutomationResult::Navigate(
+            moli_protocol::automation::DevToolsNavigateResult {
+                navigation_id: Some(moli_protocol::automation::DevToolsNavigationId::from(
                     "NAV-1",
                 )),
-                frame_id: Some(moli_protocol::devtools_runtime::DevToolsFrameId::from(
-                    "FRAME-1",
-                )),
-                loader_id: Some(moli_protocol::devtools_runtime::DevToolsLoaderId::from(
+                frame_id: Some(moli_protocol::automation::DevToolsFrameId::from("FRAME-1")),
+                loader_id: Some(moli_protocol::automation::DevToolsLoaderId::from(
                     "LOADER-1",
                 )),
                 url: "https://example.test/".to_owned(),
@@ -634,8 +632,8 @@ fn serializes_devtools_navigate_result_to_bidi_response() {
 fn projects_screenshot_bytes_as_bidi_base64_data() {
     let response = super::super::bidi_response_from_devtools_result(
         8,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::CaptureScreenshot(
-            moli_protocol::devtools_runtime::DevToolsCaptureScreenshotResult {
+        moli_protocol::automation::AutomationResult::CaptureScreenshot(
+            moli_protocol::automation::DevToolsCaptureScreenshotResult {
                 mime_type: "image/png".to_owned(),
                 width: 1,
                 height: 1,
@@ -653,10 +651,10 @@ fn projects_screenshot_bytes_as_bidi_base64_data() {
 fn rejects_cdp_node_for_location_result_at_bidi_projection_boundary() {
     let response = super::super::bidi_response_from_devtools_result(
         9,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetNodeForLocation(
-            moli_protocol::devtools_runtime::DevToolsGetNodeForLocationResult {
+        moli_protocol::automation::AutomationResult::GetNodeForLocation(
+            moli_protocol::automation::DevToolsGetNodeForLocationResult {
                 backend_node_id: 42,
-                frame_id: moli_protocol::devtools_runtime::DevToolsFrameId::from("FRAME-1"),
+                frame_id: moli_protocol::automation::DevToolsFrameId::from("FRAME-1"),
                 node_id: Some(7),
             },
         ),
@@ -671,9 +669,9 @@ fn rejects_cdp_node_for_location_result_at_bidi_projection_boundary() {
 fn serializes_browser_user_context_results_to_bidi_response() {
     let create = super::super::bidi_response_from_devtools_result(
         8,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::CreateBrowserContext(
-            moli_protocol::devtools_runtime::DevToolsCreateBrowserContextResult {
-                browser_context_id: moli_protocol::devtools_runtime::DevToolsBrowserContextId::from(
+        moli_protocol::automation::AutomationResult::CreateBrowserContext(
+            moli_protocol::automation::DevToolsCreateBrowserContextResult {
+                browser_context_id: moli_protocol::automation::DevToolsBrowserContextId::from(
                     "user-context-1",
                 ),
             },
@@ -684,14 +682,12 @@ fn serializes_browser_user_context_results_to_bidi_response() {
 
     let get = super::super::bidi_response_from_devtools_result(
         9,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetBrowserContexts(
-            moli_protocol::devtools_runtime::DevToolsGetBrowserContextsResult {
+        moli_protocol::automation::AutomationResult::GetBrowserContexts(
+            moli_protocol::automation::DevToolsGetBrowserContextsResult {
                 browser_context_ids: vec![
-                    moli_protocol::devtools_runtime::DevToolsBrowserContextId::from("BID-default"),
-                    moli_protocol::devtools_runtime::DevToolsBrowserContextId::from("BID-2"),
-                    moli_protocol::devtools_runtime::DevToolsBrowserContextId::from(
-                        "user-context-1",
-                    ),
+                    moli_protocol::automation::DevToolsBrowserContextId::from("BID-default"),
+                    moli_protocol::automation::DevToolsBrowserContextId::from("BID-2"),
+                    moli_protocol::automation::DevToolsBrowserContextId::from("user-context-1"),
                 ],
             },
         ),
@@ -709,20 +705,18 @@ fn serializes_browser_user_context_results_to_bidi_response() {
 fn serializes_devtools_script_value_to_bidi_remote_value() {
     let response = super::super::bidi_response_from_devtools_result(
         8,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-            moli_protocol::devtools_runtime::DevToolsScriptResult::Value(
-                moli_protocol::devtools_runtime::DevToolsRemoteValue {
+        moli_protocol::automation::AutomationResult::Script(Box::new(
+            moli_protocol::automation::DevToolsScriptResult::Value(
+                moli_protocol::automation::DevToolsRemoteValue {
                     value: json!("Moli"),
-                    handle: Some(
-                        moli_protocol::devtools_runtime::DevToolsRemoteHandleId::from("HANDLE-1"),
-                    ),
+                    handle: Some(moli_protocol::automation::DevToolsRemoteHandleId::from(
+                        "HANDLE-1",
+                    )),
                     shared_id: None,
                     node_id: None,
                     backend_node_id: None,
                     window_context: None,
-                    realm: Some(moli_protocol::devtools_runtime::DevToolsRealmId::from(
-                        "REALM-1",
-                    )),
+                    realm: Some(moli_protocol::automation::DevToolsRealmId::from("REALM-1")),
                     remote_type: None,
                     remote_subtype: None,
                     unserializable_value: None,
@@ -748,13 +742,13 @@ fn serializes_devtools_script_value_to_bidi_remote_value() {
 fn serializes_devtools_deep_serialized_value_to_bidi_remote_value() {
     let response = super::super::bidi_response_from_devtools_result(
         9,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-            moli_protocol::devtools_runtime::DevToolsScriptResult::Value(
-                moli_protocol::devtools_runtime::DevToolsRemoteValue {
+        moli_protocol::automation::AutomationResult::Script(Box::new(
+            moli_protocol::automation::DevToolsScriptResult::Value(
+                moli_protocol::automation::DevToolsRemoteValue {
                     value: json!({}),
-                    handle: Some(
-                        moli_protocol::devtools_runtime::DevToolsRemoteHandleId::from("HANDLE-2"),
-                    ),
+                    handle: Some(moli_protocol::automation::DevToolsRemoteHandleId::from(
+                        "HANDLE-2",
+                    )),
                     shared_id: None,
                     node_id: None,
                     backend_node_id: None,
@@ -799,8 +793,8 @@ fn serializes_devtools_deep_serialized_value_to_bidi_remote_value() {
 fn serializes_storage_cookie_results_to_bidi_cookie_shape() {
     let response = super::super::bidi_response_from_devtools_result(
         19,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetCookies(
-            moli_protocol::devtools_runtime::DevToolsGetCookiesResult {
+        moli_protocol::automation::AutomationResult::GetCookies(
+            moli_protocol::automation::DevToolsGetCookiesResult {
                 cookies: vec![json!({
                     "name": "sid",
                     "value": "abc",
@@ -846,8 +840,8 @@ fn serializes_storage_cookie_results_to_bidi_cookie_shape() {
 fn serializes_failed_storage_set_cookie_to_bidi_error() {
     let response = super::super::bidi_response_from_devtools_result(
         20,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::SetCookies(
-            moli_protocol::devtools_runtime::DevToolsSetCookiesResult {
+        moli_protocol::automation::AutomationResult::SetCookies(
+            moli_protocol::automation::DevToolsSetCookiesResult {
                 success: false,
                 cookie_reports: vec![json!({
                     "rejectionReasons": ["DomainMismatch"]
@@ -866,9 +860,9 @@ fn serializes_failed_storage_set_cookie_to_bidi_error() {
 fn serializes_devtools_create_target_result_to_bidi_response() {
     let response = super::super::bidi_response_from_devtools_result(
         11,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::CreateTarget(
-            moli_protocol::devtools_runtime::DevToolsCreateTargetResult {
-                target_id: moli_protocol::devtools_runtime::DevToolsTargetId::from("TARGET-1"),
+        moli_protocol::automation::AutomationResult::CreateTarget(
+            moli_protocol::automation::DevToolsCreateTargetResult {
+                target_id: moli_protocol::automation::DevToolsTargetId::from("TARGET-1"),
             },
         ),
     );
@@ -882,8 +876,8 @@ fn serializes_devtools_create_target_result_to_bidi_response() {
 fn serializes_devtools_close_target_result_to_empty_bidi_response() {
     let response = super::super::bidi_response_from_devtools_result(
         12,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::CloseTarget(
-            moli_protocol::devtools_runtime::DevToolsCloseTargetResult { success: true },
+        moli_protocol::automation::AutomationResult::CloseTarget(
+            moli_protocol::automation::DevToolsCloseTargetResult { success: true },
         ),
     );
 
@@ -896,30 +890,28 @@ fn serializes_devtools_close_target_result_to_empty_bidi_response() {
 fn serializes_devtools_get_targets_result_to_bidi_contexts() {
     let response = super::super::bidi_response_from_devtools_result(
         14,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetTargets(
-            moli_protocol::devtools_runtime::DevToolsGetTargetsResult {
+        moli_protocol::automation::AutomationResult::GetTargets(
+            moli_protocol::automation::DevToolsGetTargetsResult {
                 targets: vec![
-                    moli_protocol::devtools_runtime::DevToolsTargetInfo {
-                        target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                    moli_protocol::automation::DevToolsTargetInfo {
+                        target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                             "TARGET-1",
                         )),
-                        kind: moli_protocol::devtools_runtime::DevToolsTargetKind::Page,
+                        kind: moli_protocol::automation::DevToolsTargetKind::Page,
                         title: "Title".to_owned(),
                         url: "https://example.test/".to_owned(),
                         attached: true,
-                        opener_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                        opener_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                             "OPENER-1",
                         )),
                         opener_frame_id: None,
                         can_access_opener: true,
                         browser_context_id: Some(
-                            moli_protocol::devtools_runtime::DevToolsBrowserContextId::from(
-                                "BID-1",
-                            ),
+                            moli_protocol::automation::DevToolsBrowserContextId::from("BID-1"),
                         ),
                         moli_popup_id: None,
                     },
-                    moli_protocol::devtools_runtime::DevToolsTargetInfo {
+                    moli_protocol::automation::DevToolsTargetInfo {
                         target_id: Some(DevToolsTargetId::from("WORKER-1")),
                         kind: DevToolsTargetKind::Worker,
                         title: "dedicated worker".to_owned(),
@@ -931,7 +923,7 @@ fn serializes_devtools_get_targets_result_to_bidi_contexts() {
                         browser_context_id: None,
                         moli_popup_id: None,
                     },
-                    moli_protocol::devtools_runtime::DevToolsTargetInfo {
+                    moli_protocol::automation::DevToolsTargetInfo {
                         target_id: Some(DevToolsTargetId::from("TAB-TARGET-1")),
                         kind: DevToolsTargetKind::Tab,
                         title: String::new(),
@@ -1003,26 +995,26 @@ fn serializes_devtools_client_windows_result_to_bidi_response() {
     // webdriver/tests/bidi/browser/get_client_windows/get_client_windows.py.
     let response = super::super::bidi_response_from_devtools_result(
         15,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::ClientWindows(
-            moli_protocol::devtools_runtime::DevToolsGetClientWindowsResult {
+        moli_protocol::automation::AutomationResult::ClientWindows(
+            moli_protocol::automation::DevToolsGetClientWindowsResult {
                 client_windows: vec![
-                    moli_protocol::devtools_runtime::DevToolsClientWindowInfo {
-                        client_window: moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                    moli_protocol::automation::DevToolsClientWindowInfo {
+                        client_window: moli_protocol::automation::DevToolsTargetId::from(
                             "WINDOW-1",
                         ),
                         active: true,
-                        state: moli_protocol::devtools_runtime::DevToolsWindowState::Normal,
+                        state: moli_protocol::automation::DevToolsWindowState::Normal,
                         width: 800,
                         height: 600,
                         x: 10,
                         y: 20,
                     },
-                    moli_protocol::devtools_runtime::DevToolsClientWindowInfo {
-                        client_window: moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                    moli_protocol::automation::DevToolsClientWindowInfo {
+                        client_window: moli_protocol::automation::DevToolsTargetId::from(
                             "WINDOW-2",
                         ),
                         active: false,
-                        state: moli_protocol::devtools_runtime::DevToolsWindowState::Minimized,
+                        state: moli_protocol::automation::DevToolsWindowState::Minimized,
                         width: 0,
                         height: 0,
                         x: 0,
@@ -1068,13 +1060,13 @@ fn serializes_devtools_client_windows_result_to_bidi_response() {
 fn serializes_devtools_get_target_info_result_to_single_bidi_context() {
     let response = super::super::bidi_response_from_devtools_result(
         15,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetTargetInfo(
-            moli_protocol::devtools_runtime::DevToolsGetTargetInfoResult {
-                target_info: moli_protocol::devtools_runtime::DevToolsTargetInfo {
-                    target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+        moli_protocol::automation::AutomationResult::GetTargetInfo(
+            moli_protocol::automation::DevToolsGetTargetInfoResult {
+                target_info: moli_protocol::automation::DevToolsTargetInfo {
+                    target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                         "TARGET-1",
                     )),
-                    kind: moli_protocol::devtools_runtime::DevToolsTargetKind::Page,
+                    kind: moli_protocol::automation::DevToolsTargetKind::Page,
                     title: String::new(),
                     url: "https://example.test/".to_owned(),
                     attached: true,
@@ -1099,8 +1091,8 @@ fn serializes_devtools_get_target_info_result_to_single_bidi_context() {
 fn serializes_devtools_get_target_info_result_to_service_worker_bidi_context() {
     let response = super::super::bidi_response_from_devtools_result(
         16,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetTargetInfo(
-            moli_protocol::devtools_runtime::DevToolsGetTargetInfoResult {
+        moli_protocol::automation::AutomationResult::GetTargetInfo(
+            moli_protocol::automation::DevToolsGetTargetInfoResult {
                 target_info: service_worker_target_info(),
             },
         ),
@@ -1128,8 +1120,8 @@ fn serializes_devtools_get_target_info_result_to_service_worker_bidi_context() {
 fn serializes_devtools_get_target_info_result_to_shared_worker_bidi_context() {
     let response = super::super::bidi_response_from_devtools_result(
         16,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetTargetInfo(
-            moli_protocol::devtools_runtime::DevToolsGetTargetInfoResult {
+        moli_protocol::automation::AutomationResult::GetTargetInfo(
+            moli_protocol::automation::DevToolsGetTargetInfoResult {
                 target_info: shared_worker_target_info(),
             },
         ),
@@ -1157,41 +1149,39 @@ fn serializes_devtools_get_target_info_result_to_shared_worker_bidi_context() {
 fn serializes_devtools_get_frame_trees_result_to_bidi_contexts_with_children() {
     let response = super::super::bidi_response_from_devtools_result(
         16,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetFrameTrees(
-            moli_protocol::devtools_runtime::DevToolsGetFrameTreesResult {
-                frame_trees: vec![
-                    moli_protocol::devtools_runtime::DevToolsGetFrameTreeResult {
-                        frame_tree: json!({
-                            "frame": {
-                                "id": "TARGET-1",
-                                "url": "https://example.test/"
-                            },
-                            "childFrames": [
-                                {
-                                    "frame": {
-                                        "id": "IFRAME-1",
-                                        "url": "https://example.test/frame.html"
-                                    }
+        moli_protocol::automation::AutomationResult::GetFrameTrees(
+            moli_protocol::automation::DevToolsGetFrameTreesResult {
+                frame_trees: vec![moli_protocol::automation::DevToolsGetFrameTreeResult {
+                    frame_tree: json!({
+                        "frame": {
+                            "id": "TARGET-1",
+                            "url": "https://example.test/"
+                        },
+                        "childFrames": [
+                            {
+                                "frame": {
+                                    "id": "IFRAME-1",
+                                    "url": "https://example.test/frame.html"
                                 }
-                            ]
-                        }),
-                        target_info: Some(moli_protocol::devtools_runtime::DevToolsTargetInfo {
-                            target_id: Some(
-                                moli_protocol::devtools_runtime::DevToolsTargetId::from("TARGET-1"),
-                            ),
-                            kind: moli_protocol::devtools_runtime::DevToolsTargetKind::Page,
-                            title: String::new(),
-                            url: "https://example.test/".to_owned(),
-                            attached: true,
-                            opener_id: None,
-                            opener_frame_id: None,
-                            can_access_opener: false,
-                            browser_context_id: None,
-                            moli_popup_id: None,
-                        }),
-                        max_depth: None,
-                    },
-                ],
+                            }
+                        ]
+                    }),
+                    target_info: Some(moli_protocol::automation::DevToolsTargetInfo {
+                        target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
+                            "TARGET-1",
+                        )),
+                        kind: moli_protocol::automation::DevToolsTargetKind::Page,
+                        title: String::new(),
+                        url: "https://example.test/".to_owned(),
+                        attached: true,
+                        opener_id: None,
+                        opener_frame_id: None,
+                        can_access_opener: false,
+                        browser_context_id: None,
+                        moli_popup_id: None,
+                    }),
+                    max_depth: None,
+                }],
             },
         ),
     );
@@ -1216,20 +1206,18 @@ fn serializes_devtools_get_frame_trees_result_to_bidi_contexts_with_children() {
 fn serializes_devtools_get_frame_trees_result_to_service_worker_bidi_context() {
     let response = super::super::bidi_response_from_devtools_result(
         17,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::GetFrameTrees(
-            moli_protocol::devtools_runtime::DevToolsGetFrameTreesResult {
-                frame_trees: vec![
-                    moli_protocol::devtools_runtime::DevToolsGetFrameTreeResult {
-                        frame_tree: json!({
-                            "frame": {
-                                "id": "TID-service-worker",
-                                "url": "https://example.test/service-worker.js"
-                            }
-                        }),
-                        target_info: Some(service_worker_target_info()),
-                        max_depth: None,
-                    },
-                ],
+        moli_protocol::automation::AutomationResult::GetFrameTrees(
+            moli_protocol::automation::DevToolsGetFrameTreesResult {
+                frame_trees: vec![moli_protocol::automation::DevToolsGetFrameTreeResult {
+                    frame_tree: json!({
+                        "frame": {
+                            "id": "TID-service-worker",
+                            "url": "https://example.test/service-worker.js"
+                        }
+                    }),
+                    target_info: Some(service_worker_target_info()),
+                    max_depth: None,
+                }],
             },
         ),
     );
@@ -1255,11 +1243,9 @@ fn serializes_devtools_get_frame_trees_result_to_service_worker_bidi_context() {
 fn serializes_devtools_add_preload_script_result_to_bidi_response() {
     let response = super::super::bidi_response_from_devtools_result(
         13,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::AddPreloadScript(
-            moli_protocol::devtools_runtime::DevToolsAddPreloadScriptResult {
-                script_id: moli_protocol::devtools_runtime::DevToolsPreloadScriptId::from(
-                    "SCRIPT-1",
-                ),
+        moli_protocol::automation::AutomationResult::AddPreloadScript(
+            moli_protocol::automation::DevToolsAddPreloadScriptResult {
+                script_id: moli_protocol::automation::DevToolsPreloadScriptId::from("SCRIPT-1"),
             },
         ),
     );
@@ -1273,14 +1259,14 @@ fn serializes_devtools_add_preload_script_result_to_bidi_response() {
 fn serializes_devtools_script_exception_to_bidi_exception_result() {
     let response = super::super::bidi_response_from_devtools_result(
         9,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-            moli_protocol::devtools_runtime::DevToolsScriptResult::Exception(
-                moli_protocol::devtools_runtime::DevToolsScriptException {
+        moli_protocol::automation::AutomationResult::Script(Box::new(
+            moli_protocol::automation::DevToolsScriptResult::Exception(
+                moli_protocol::automation::DevToolsScriptException {
                     exception_id: Some(7),
                     script_id: None,
                     text: "boom".to_owned(),
                     value: Some(
-                        moli_protocol::devtools_runtime::DevToolsRemoteValue::from_json_value(
+                        moli_protocol::automation::DevToolsRemoteValue::from_json_value(
                             json!({"name": "Error"}),
                         ),
                     ),
@@ -1310,8 +1296,8 @@ fn serializes_devtools_script_exception_to_bidi_exception_result() {
 fn serializes_devtools_error_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         10,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchTarget,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchTarget,
             "target not found",
         ),
     );
@@ -1326,8 +1312,8 @@ fn serializes_devtools_error_to_bidi_error_response() {
 fn serializes_internal_navigation_failure_to_bidi_unknown_error() {
     let response = super::super::bidi_response_from_devtools_error(
         18,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::Internal,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::Internal,
             "Navigation to a local file URL requires an explicitly granted browser capability.",
         ),
     );
@@ -1348,8 +1334,8 @@ fn serializes_internal_navigation_failure_to_bidi_unknown_error() {
 fn serializes_devtools_no_such_handle_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         11,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchHandle,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchHandle,
             "Cannot find object with given id",
         ),
     );
@@ -1367,8 +1353,8 @@ fn serializes_devtools_no_such_handle_to_bidi_error_response() {
 fn serializes_devtools_no_such_script_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         12,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchScript,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchScript,
             "NoSuchScript",
         ),
     );
@@ -1383,8 +1369,8 @@ fn serializes_devtools_no_such_script_to_bidi_error_response() {
 fn serializes_devtools_no_such_history_entry_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         13,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchHistoryEntry,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchHistoryEntry,
             "NoSuchHistoryEntry",
         ),
     );
@@ -1399,8 +1385,8 @@ fn serializes_devtools_no_such_history_entry_to_bidi_error_response() {
 fn serializes_devtools_no_such_request_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         15,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchRequest,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchRequest,
             "RequestNotFound",
         ),
     );
@@ -1415,8 +1401,8 @@ fn serializes_devtools_no_such_request_to_bidi_error_response() {
 fn serializes_devtools_network_data_errors_to_bidi_error_response() {
     let response = super::super::bidi_response_from_devtools_error(
         16,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchNetworkData,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchNetworkData,
             "no such network data",
         ),
     );
@@ -1427,8 +1413,8 @@ fn serializes_devtools_network_data_errors_to_bidi_error_response() {
 
     let response = super::super::bidi_response_from_devtools_error(
         17,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchNetworkCollector,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchNetworkCollector,
             "no such network collector",
         ),
     );
@@ -1442,8 +1428,8 @@ fn serializes_devtools_network_data_errors_to_bidi_error_response() {
 fn serializes_devtools_unknown_browser_context_to_bidi_no_such_user_context() {
     let response = super::super::bidi_response_from_devtools_error(
         14,
-        moli_protocol::devtools_runtime::DevToolsError::new(
-            moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchTarget,
+        moli_protocol::automation::DevToolsError::new(
+            moli_protocol::automation::DevToolsErrorKind::NoSuchTarget,
             "UnknownBrowserContextId",
         ),
     );
@@ -1605,7 +1591,7 @@ fn attached_connection_dispatches_without_session_new() {
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
     assert_eq!(outcome.session_id.as_deref(), Some("classic-session-1"));
     let dispatch = outcome
-        .devtools_command
+        .automation_command
         .expect("attached BiDi command should carry shared DevTools command");
     assert_eq!(dispatch.session_id, "classic-session-1");
 }
@@ -1643,7 +1629,7 @@ fn session_new_rejects_existing_session() {
 }
 
 #[test]
-fn bound_devtools_command_outcome_carries_shared_command() {
+fn bound_automation_command_outcome_carries_shared_command() {
     let mut connection = super::super::BidiConnectionState::new();
     let _ = connection.handle_message(json!({
         "id": 1,
@@ -1665,22 +1651,21 @@ fn bound_devtools_command_outcome_carries_shared_command() {
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
     assert_eq!(outcome.session_id.as_deref(), Some("bidi-session-1"));
     let dispatch = outcome
-        .devtools_command
+        .automation_command
         .expect("BiDi command should carry shared DevTools command");
     assert_eq!(dispatch.id, 2);
     assert_eq!(dispatch.session_id, "bidi-session-1");
-    let moli_protocol::devtools_runtime::DevToolsCommand::Navigate(command) = dispatch.command
-    else {
+    let moli_protocol::automation::AutomationCommand::Navigate(command) = dispatch.command else {
         panic!("expected Navigate command");
     };
     assert_eq!(
         command.context.protocol,
-        moli_protocol::devtools_runtime::DevToolsProtocol::WebDriverBidi
+        moli_protocol::automation::FrontendProtocol::WebDriverBidi
     );
     assert_eq!(command.url, "https://example.test/");
     assert_eq!(
         command.wait,
-        moli_protocol::devtools_runtime::DevToolsNavigationWait::DomContentLoaded
+        moli_protocol::automation::DevToolsNavigationWait::DomContentLoaded
     );
 }
 
@@ -1708,7 +1693,7 @@ fn bound_input_perform_actions_outcome_carries_input_dispatch() {
 
     assert_eq!(outcome.response["type"], json!("error"));
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
-    assert!(outcome.devtools_command.is_none());
+    assert!(outcome.automation_command.is_none());
     let dispatch = outcome
         .input_command
         .expect("BiDi input command should carry input dispatch");
@@ -1740,7 +1725,7 @@ fn bound_input_release_actions_outcome_carries_input_dispatch() {
 
     assert_eq!(outcome.response["type"], json!("error"));
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
-    assert!(outcome.devtools_command.is_none());
+    assert!(outcome.automation_command.is_none());
     let dispatch = outcome
         .input_command
         .expect("BiDi input command should carry input dispatch");
@@ -1774,7 +1759,7 @@ fn bound_input_set_files_outcome_carries_input_dispatch() {
 
     assert_eq!(outcome.response["type"], json!("error"));
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
-    assert!(outcome.devtools_command.is_none());
+    assert!(outcome.automation_command.is_none());
     let dispatch = outcome
         .input_command
         .expect("BiDi input command should carry input dispatch");
@@ -1849,20 +1834,20 @@ fn bound_network_add_intercept_carries_shared_fetch_command() {
     assert_eq!(outcome.response["type"], json!("error"));
     assert_eq!(outcome.response["error"], json!("unsupported operation"));
     let dispatch = outcome
-        .devtools_command
+        .automation_command
         .expect("network.addIntercept should carry shared Fetch command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddNetworkIntercept(command) =
+    let moli_protocol::automation::AutomationCommand::AddNetworkIntercept(command) =
         dispatch.command
     else {
         panic!("expected AddNetworkIntercept command");
     };
     assert_eq!(
         command.context.protocol,
-        moli_protocol::devtools_runtime::DevToolsProtocol::WebDriverBidi
+        moli_protocol::automation::FrontendProtocol::WebDriverBidi
     );
     assert_eq!(
         command.phases,
-        vec![moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::BeforeRequestSent]
+        vec![moli_protocol::automation::DevToolsNetworkInterceptPhase::BeforeRequestSent]
     );
     assert_eq!(command.url_patterns, vec![]);
     assert_eq!(
@@ -1890,9 +1875,9 @@ fn bound_network_add_intercept_keeps_phases_before_subscription() {
     }));
 
     let dispatch = outcome
-        .devtools_command
+        .automation_command
         .expect("network.addIntercept should carry shared Fetch command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddNetworkIntercept(command) =
+    let moli_protocol::automation::AutomationCommand::AddNetworkIntercept(command) =
         dispatch.command
     else {
         panic!("expected AddNetworkIntercept command");
@@ -1900,8 +1885,8 @@ fn bound_network_add_intercept_keeps_phases_before_subscription() {
     assert_eq!(
         command.phases,
         vec![
-            moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::BeforeRequestSent,
-            moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::AuthRequired
+            moli_protocol::automation::DevToolsNetworkInterceptPhase::BeforeRequestSent,
+            moli_protocol::automation::DevToolsNetworkInterceptPhase::AuthRequired
         ]
     );
     assert_eq!(
@@ -1947,16 +1932,16 @@ fn bound_network_add_intercept_keeps_subscribed_auth_required_phase() {
     }));
 
     let dispatch = outcome
-        .devtools_command
+        .automation_command
         .expect("authRequired intercept should carry shared Fetch command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddNetworkIntercept(command) =
+    let moli_protocol::automation::AutomationCommand::AddNetworkIntercept(command) =
         dispatch.command
     else {
         panic!("expected AddNetworkIntercept command");
     };
     assert_eq!(
         command.phases,
-        vec![moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::AuthRequired]
+        vec![moli_protocol::automation::DevToolsNetworkInterceptPhase::AuthRequired]
     );
     assert_eq!(command.url_patterns.len(), 1);
 }
@@ -1990,9 +1975,9 @@ fn bound_network_add_intercept_keeps_context_phases_independent_of_subscription(
         }
     }));
     let dispatch = matching
-        .devtools_command
+        .automation_command
         .expect("matching context intercept should carry shared Fetch command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddNetworkIntercept(command) =
+    let moli_protocol::automation::AutomationCommand::AddNetworkIntercept(command) =
         dispatch.command
     else {
         panic!("expected AddNetworkIntercept command");
@@ -2000,8 +1985,8 @@ fn bound_network_add_intercept_keeps_context_phases_independent_of_subscription(
     assert_eq!(
         command.phases,
         vec![
-            moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::BeforeRequestSent,
-            moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::ResponseStarted
+            moli_protocol::automation::DevToolsNetworkInterceptPhase::BeforeRequestSent,
+            moli_protocol::automation::DevToolsNetworkInterceptPhase::ResponseStarted
         ]
     );
 
@@ -2015,15 +2000,15 @@ fn bound_network_add_intercept_keeps_context_phases_independent_of_subscription(
         }
     }));
     let dispatch = non_matching
-        .devtools_command
+        .automation_command
         .expect("non-matching context intercept should still carry shared Fetch command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddNetworkIntercept(command) =
+    let moli_protocol::automation::AutomationCommand::AddNetworkIntercept(command) =
         dispatch.command
     else {
         panic!("expected AddNetworkIntercept command");
     };
     assert_eq!(
         command.phases,
-        vec![moli_protocol::devtools_runtime::DevToolsNetworkInterceptPhase::BeforeRequestSent]
+        vec![moli_protocol::automation::DevToolsNetworkInterceptPhase::BeforeRequestSent]
     );
 }

@@ -216,7 +216,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             set_file_input::complete_set_file_input_files_result(page, completion)
-                .map(|()| DevToolsCommandResult::Empty)
+                .map(|()| AutomationResult::Empty)
         }
         PendingDomCommandKind::SetFileInputFilesObjectReference => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -226,7 +226,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             set_file_input::complete_set_file_input_files_object_reference_result(page, completion)
-                .map(|()| DevToolsCommandResult::Empty)
+                .map(|()| AutomationResult::Empty)
         }
         PendingDomCommandKind::GetNodeForLocation { top_frame_id } => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -236,7 +236,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             finish_document_hit_test(page, completion, top_frame_id)
-                .map(DevToolsCommandResult::GetNodeForLocation)
+                .map(AutomationResult::GetNodeForLocation)
         }
         PendingDomCommandKind::RendererBackendNodeClientRect { operation } => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -250,7 +250,7 @@ pub(super) fn complete_pending_dom_command_result(
                 operation,
                 "Could not resolve node geometry",
             )
-            .map(DevToolsCommandResult::DomGeometry)
+            .map(AutomationResult::DomGeometry)
         }
         PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -260,7 +260,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_renderer_backend_node_scroll_into_view_if_needed_result(page, completion)
-                .map(|()| DevToolsCommandResult::Empty)
+                .map(|()| AutomationResult::Empty)
         }
         PendingDomCommandKind::PushNodesByBackendIdsToFrontend {
             backend_node_ids,
@@ -280,7 +280,7 @@ pub(super) fn complete_pending_dom_command_result(
                 node_ids,
                 renderer_backend_positions,
             ) {
-                Ok(result) => Ok(DevToolsCommandResult::PushNodesByBackendIds(result)),
+                Ok(result) => Ok(AutomationResult::PushNodesByBackendIds(result)),
                 Err(error) => Err(error),
             }
         }
@@ -292,7 +292,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_get_frame_owner_result(page, completion, &frame_id)
-                .map(DevToolsCommandResult::GetFrameOwner)
+                .map(AutomationResult::GetFrameOwner)
         }
         PendingDomCommandKind::QuerySelectorLive { multiple } => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -302,7 +302,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_query_selector_live_result(page, completion, multiple)
-                .map(DevToolsCommandResult::QuerySelector)
+                .map(AutomationResult::QuerySelector)
         }
         PendingDomCommandKind::QuerySelectorSetChildNodesLive { multiple, .. } => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -312,7 +312,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_query_selector_set_child_nodes_live_result(page, completion, multiple)
-                .map(DevToolsCommandResult::QuerySelector)
+                .map(AutomationResult::QuerySelector)
         }
         PendingDomCommandKind::GetAttributesLive => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -322,7 +322,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_get_attributes_live_result(page, completion)
-                .map(DevToolsCommandResult::GetAttributes)
+                .map(AutomationResult::GetAttributes)
         }
         PendingDomCommandKind::GetTextLive => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -331,7 +331,7 @@ pub(super) fn complete_pending_dom_command_result(
                     "NoDocumentLoaded",
                 )));
             };
-            complete_get_text_live_result(page, completion).map(DevToolsCommandResult::GetText)
+            complete_get_text_live_result(page, completion).map(AutomationResult::GetText)
         }
         PendingDomCommandKind::GetPropertyLive => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -340,8 +340,7 @@ pub(super) fn complete_pending_dom_command_result(
                     "NoDocumentLoaded",
                 )));
             };
-            complete_get_property_live_result(page, completion)
-                .map(DevToolsCommandResult::GetProperty)
+            complete_get_property_live_result(page, completion).map(AutomationResult::GetProperty)
         }
         PendingDomCommandKind::ResolveNode {
             object_group,
@@ -397,9 +396,12 @@ pub(super) fn complete_pending_dom_command_result(
                     ))),
                 };
             }
-            Ok(DevToolsCommandResult::ResolveNode(
-                register_resolve_node_result(conn, &owner_scope, remote_object, object_group),
-            ))
+            Ok(AutomationResult::ResolveNode(register_resolve_node_result(
+                conn,
+                &owner_scope,
+                remote_object,
+                object_group,
+            )))
         }
         PendingDomCommandKind::ResolveNodeCacheSnapshot {
             remote_object,
@@ -431,9 +433,12 @@ pub(super) fn complete_pending_dom_command_result(
                     }
                 }
             }
-            Ok(DevToolsCommandResult::ResolveNode(
-                register_resolve_node_result(conn, &owner_scope, *remote_object, object_group),
-            ))
+            Ok(AutomationResult::ResolveNode(register_resolve_node_result(
+                conn,
+                &owner_scope,
+                *remote_object,
+                object_group,
+            )))
         }
         PendingDomCommandKind::ResolveNodeExecutionContextFrame {
             reference,
@@ -470,7 +475,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_object_reference_live_client_rect_result(page, completion, operation)
-                .map(DevToolsCommandResult::DomGeometry)
+                .map(AutomationResult::DomGeometry)
         }
         PendingDomCommandKind::GetOuterHtmlObjectReference => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -480,7 +485,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_get_outer_html_object_reference_result(page, completion)
-                .map(DevToolsCommandResult::GetOuterHtml)
+                .map(AutomationResult::GetOuterHtml)
         }
         PendingDomCommandKind::GetOuterHtmlDocument => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -490,7 +495,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_get_outer_html_document_result(page, completion)
-                .map(DevToolsCommandResult::GetOuterHtml)
+                .map(AutomationResult::GetOuterHtml)
         }
         PendingDomCommandKind::GetOuterHtmlBackendNodeReference => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -500,7 +505,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_get_outer_html_backend_node_reference_result(page, completion)
-                .map(DevToolsCommandResult::GetOuterHtml)
+                .map(AutomationResult::GetOuterHtml)
         }
         PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -510,7 +515,7 @@ pub(super) fn complete_pending_dom_command_result(
                 )));
             };
             complete_scroll_into_view_if_needed_object_reference_result(page, completion)
-                .map(|()| DevToolsCommandResult::Empty)
+                .map(|()| AutomationResult::Empty)
         }
         PendingDomCommandKind::DescribeNodeObjectReference {
             cached_object_node,
@@ -528,7 +533,7 @@ pub(super) fn complete_pending_dom_command_result(
                 cached_object_node,
                 top_frame_id,
             )
-            .map(DevToolsCommandResult::DescribeNode)
+            .map(AutomationResult::DescribeNode)
         }
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,

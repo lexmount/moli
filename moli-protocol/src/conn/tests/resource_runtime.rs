@@ -1630,12 +1630,12 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     );
     assert_eq!(accepted, vec![started, dcl]);
 
-    let context = crate::devtools_runtime::DevToolsCommandContext {
-        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
-        session_id: Some(crate::devtools_runtime::DevToolsSessionId::from(
+    let context = crate::automation::AutomationContext {
+        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+        session_id: Some(crate::automation::DevToolsSessionId::from(
             "SID-lifecycle-wait",
         )),
-        target_id: Some(crate::devtools_runtime::DevToolsTargetId::from(
+        target_id: Some(crate::automation::DevToolsTargetId::from(
             "TID-lifecycle-wait",
         )),
         browser_context_id: None,
@@ -1772,12 +1772,10 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
         .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
     conn.install_browser_context_fixture_for_test(browser_context);
 
-    let context = crate::devtools_runtime::DevToolsCommandContext {
-        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+    let context = crate::automation::AutomationContext {
+        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
         session_id: None,
-        target_id: Some(crate::devtools_runtime::DevToolsTargetId::from(
-            "TID-background",
-        )),
+        target_id: Some(crate::automation::DevToolsTargetId::from("TID-background")),
         browser_context_id: None,
     };
 

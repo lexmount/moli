@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::devtools_runtime::{DevToolsCloseTargetResult, DevToolsTargetId};
+use crate::automation::{DevToolsCloseTargetResult, DevToolsTargetId};
 
 use super::*;
 
@@ -28,7 +28,7 @@ pub(super) fn start_close_target_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::CloseTarget(command),
+        AutomationCommand::CloseTarget(command),
     )
 }
 
@@ -37,7 +37,7 @@ pub(super) fn build_cdp_close_target_command(
     params: CloseTargetParams,
 ) -> DevToolsCloseTargetCommand {
     DevToolsCloseTargetCommand {
-        context: cmd.devtools_command_context(Some(params.target_id.as_str()), None::<&str>),
+        context: cmd.automation_context(Some(params.target_id.as_str()), None::<&str>),
         target_id: DevToolsTargetId::from(params.target_id),
     }
 }
@@ -66,7 +66,7 @@ pub(super) async fn complete_close_target_command_async(
     {
         Ok(result) => {
             let mut plan =
-                CommandOutputPlan::from_devtools_result(DevToolsCommandResult::CloseTarget(result));
+                CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(result));
             plan.extend(side_effects.into_plan());
             plan
         }

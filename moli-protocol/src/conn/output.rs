@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent, DevToolsFrameId,
     DevToolsNetworkResourceType, DevToolsRealmId, DevToolsRemoteHandleId, DevToolsTargetInfo,
     DomSetChildNodesEvent, LogEntryEvent, NavigationFrameEvent, NavigationFrameEventKind,
@@ -495,12 +495,12 @@ impl BackgroundProtocolEventPayload {
                 .event
                 .parent_session_id
                 .as_ref()
-                .map(crate::devtools_runtime::DevToolsSessionId::as_str),
+                .map(crate::automation::DevToolsSessionId::as_str),
             Self::TargetDetached(event) => event
                 .event
                 .parent_session_id
                 .as_ref()
-                .map(crate::devtools_runtime::DevToolsSessionId::as_str),
+                .map(crate::automation::DevToolsSessionId::as_str),
             Self::TargetDestroyed(event) => event.session_id.as_deref(),
             Self::TargetCrashed(event) => event.session_id.as_deref(),
             Self::TargetReceivedMessageFromTarget(_) | Self::AutomationOnly(_) => None,
@@ -4234,9 +4234,7 @@ fn runtime_exception_thrown_protocol_params(event: ScriptExceptionEvent) -> Valu
     })
 }
 
-fn runtime_exception_remote_object(
-    exception: crate::devtools_runtime::DevToolsScriptException,
-) -> Value {
+fn runtime_exception_remote_object(exception: crate::automation::DevToolsScriptException) -> Value {
     exception
         .value
         .map(crate::cdp_projection::remote_object_from_devtools)
@@ -4368,7 +4366,7 @@ pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Val
 
 #[cfg(test)]
 mod tests {
-    use crate::devtools_runtime::{
+    use crate::automation::{
         AutomationEvent, DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId,
         DevToolsNetworkResourceType, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
         DevToolsTargetKind, NavigationFrameEvent, NavigationFrameEventKind,
@@ -5484,7 +5482,7 @@ mod tests {
             ),
             BackgroundProtocolEvent::page_javascript_dialog_opening(
                 Some("SID-page"),
-                crate::devtools_runtime::PageJavaScriptDialogOpeningEvent {
+                crate::automation::PageJavaScriptDialogOpeningEvent {
                     frame_id: Some(DevToolsFrameId::from("FRAME-dialog")),
                     url: "https://example.test/dialog".to_owned(),
                     message: "confirm?".to_owned(),
@@ -5542,7 +5540,7 @@ mod tests {
 
     #[test]
     fn background_event_waits_for_navigation_completion_only_for_non_document_network() {
-        use crate::devtools_runtime::{DevToolsRequestId, NetworkRequestEvent};
+        use crate::automation::{DevToolsRequestId, NetworkRequestEvent};
 
         let network_event = |resource_type: Option<DevToolsNetworkResourceType>| {
             AutomationEvent::NetworkResponseStarted(NetworkRequestEvent {

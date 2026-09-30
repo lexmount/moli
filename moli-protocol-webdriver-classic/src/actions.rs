@@ -3,8 +3,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use moli_protocol::devtools_runtime::{
-    DevToolsCallFunctionCommand, DevToolsCommand, DevToolsDispatchKeyEventCommand,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsCallFunctionCommand, DevToolsDispatchKeyEventCommand,
     DevToolsDispatchMouseEventCommand, DevToolsDispatchTouchEventCommand,
     DevToolsDomGeometryResult, DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
     DevToolsRemoteHandleId, DevToolsResultOwnership, DevToolsTouchEventType, DevToolsTouchPoint,
@@ -42,7 +42,7 @@ pub type ClassicElementOriginViewportPoints = BTreeMap<String, ClassicViewportPo
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassicActionTick {
-    pub commands: Vec<DevToolsCommand>,
+    pub commands: Vec<AutomationCommand>,
     pub duration_ms: u64,
 }
 
@@ -165,7 +165,7 @@ enum ClassicActionCancel {
 pub fn element_click_input_commands(
     context: &ClassicDevToolsCommandContext,
     point: ClassicViewportPoint,
-) -> Vec<DevToolsCommand> {
+) -> Vec<AutomationCommand> {
     vec![
         dispatch_mouse_event_command(
             context,
@@ -228,7 +228,7 @@ pub fn element_send_keys_text(params: &Value) -> Result<String, ClassicError> {
 pub fn element_send_keys_input_commands(
     context: &ClassicDevToolsCommandContext,
     text: &str,
-) -> Vec<DevToolsCommand> {
+) -> Vec<AutomationCommand> {
     let mut commands = Vec::new();
     let mut pressed_modifiers: Vec<ClassicWebDriverKey> = Vec::new();
     let mut pressed_modifier_keys: BTreeSet<String> = BTreeSet::new();
@@ -301,7 +301,7 @@ pub fn element_send_keys_input_commands(
 
 fn element_send_keys_release_modifiers(
     context: &ClassicDevToolsCommandContext,
-    commands: &mut Vec<DevToolsCommand>,
+    commands: &mut Vec<AutomationCommand>,
     pressed_modifiers: &mut Vec<ClassicWebDriverKey>,
     pressed_modifier_keys: &mut BTreeSet<String>,
     modifiers: &mut u8,
@@ -329,8 +329,8 @@ pub fn element_send_keys_prepare_text_control_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
     text: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -390,7 +390,7 @@ pub fn element_send_keys_prepare_text_control_command(
 pub fn perform_actions_commands(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
-) -> Result<Vec<DevToolsCommand>, ClassicError> {
+) -> Result<Vec<AutomationCommand>, ClassicError> {
     perform_actions_commands_with_element_origins(
         context,
         params,
@@ -402,7 +402,7 @@ pub fn perform_actions_commands_with_element_origins(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
     element_origins: &ClassicElementOriginViewportPoints,
-) -> Result<Vec<DevToolsCommand>, ClassicError> {
+) -> Result<Vec<AutomationCommand>, ClassicError> {
     let mut action_state = ClassicActionState::default();
     perform_actions_commands_with_state(context, params, element_origins, &mut action_state)
 }
@@ -412,7 +412,7 @@ pub fn perform_actions_commands_with_state(
     params: &Value,
     element_origins: &ClassicElementOriginViewportPoints,
     action_state: &mut ClassicActionState,
-) -> Result<Vec<DevToolsCommand>, ClassicError> {
+) -> Result<Vec<AutomationCommand>, ClassicError> {
     perform_actions_commands_with_state_and_viewport(
         context,
         params,
@@ -428,7 +428,7 @@ pub fn perform_actions_commands_with_state_and_viewport(
     element_origins: &ClassicElementOriginViewportPoints,
     viewport_bounds: Option<ClassicViewportBounds>,
     action_state: &mut ClassicActionState,
-) -> Result<Vec<DevToolsCommand>, ClassicError> {
+) -> Result<Vec<AutomationCommand>, ClassicError> {
     Ok(perform_actions_ticks_with_state_and_viewport(
         context,
         params,
@@ -535,12 +535,14 @@ fn assign_touch_identifiers(
     }
 }
 
-fn coalesce_tick_touch_dispatch_commands(commands: Vec<DevToolsCommand>) -> Vec<DevToolsCommand> {
+fn coalesce_tick_touch_dispatch_commands(
+    commands: Vec<AutomationCommand>,
+) -> Vec<AutomationCommand> {
     let Some(last_touch_index) = commands
         .iter()
         .enumerate()
         .filter_map(|(index, command)| match command {
-            DevToolsCommand::DispatchTouchEvent(_) => Some(index),
+            AutomationCommand::DispatchTouchEvent(_) => Some(index),
             _ => None,
         })
         .next_back()
@@ -550,7 +552,7 @@ fn coalesce_tick_touch_dispatch_commands(commands: Vec<DevToolsCommand>) -> Vec<
 
     let mut touch_commands: Vec<DevToolsDispatchTouchEventCommand> = Vec::new();
     for command in &commands {
-        let DevToolsCommand::DispatchTouchEvent(command) = command else {
+        let AutomationCommand::DispatchTouchEvent(command) = command else {
             continue;
         };
         match touch_commands.last_mut() {
@@ -573,10 +575,10 @@ fn coalesce_tick_touch_dispatch_commands(commands: Vec<DevToolsCommand>) -> Vec<
                 touch_commands
                     .iter()
                     .cloned()
-                    .map(DevToolsCommand::DispatchTouchEvent),
+                    .map(AutomationCommand::DispatchTouchEvent),
             );
         }
-        if !matches!(command, DevToolsCommand::DispatchTouchEvent(_)) {
+        if !matches!(command, AutomationCommand::DispatchTouchEvent(_)) {
             coalesced.push(command);
         }
     }
@@ -586,7 +588,7 @@ fn coalesce_tick_touch_dispatch_commands(commands: Vec<DevToolsCommand>) -> Vec<
 pub fn release_actions_commands(
     context: &ClassicDevToolsCommandContext,
     action_state: &mut ClassicActionState,
-) -> Vec<DevToolsCommand> {
+) -> Vec<AutomationCommand> {
     let mut commands = Vec::new();
     let cancel_list = std::mem::take(&mut action_state.cancel_list);
     for cancel in cancel_list.into_iter().rev() {
@@ -780,7 +782,7 @@ impl ClassicActionSource {
         &mut self,
         context: &ClassicDevToolsCommandContext,
         action: &Value,
-        commands: &mut Vec<DevToolsCommand>,
+        commands: &mut Vec<AutomationCommand>,
         element_origins: &ClassicElementOriginViewportPoints,
         viewport_bounds: Option<ClassicViewportBounds>,
         cancel_list: &mut Vec<ClassicActionCancel>,
@@ -954,7 +956,7 @@ impl ClassicPointerActionSource {
         &mut self,
         context: &ClassicDevToolsCommandContext,
         action: &Value,
-        commands: &mut Vec<DevToolsCommand>,
+        commands: &mut Vec<AutomationCommand>,
         element_origins: &ClassicElementOriginViewportPoints,
         viewport_bounds: Option<ClassicViewportBounds>,
         cancel_list: &mut Vec<ClassicActionCancel>,
@@ -1180,7 +1182,7 @@ impl ClassicKeyActionSource {
         &mut self,
         context: &ClassicDevToolsCommandContext,
         action: &Value,
-        commands: &mut Vec<DevToolsCommand>,
+        commands: &mut Vec<AutomationCommand>,
         cancel_list: &mut Vec<ClassicActionCancel>,
     ) -> Result<(), ClassicError> {
         let object = action.as_object().ok_or_else(|| {
@@ -1276,7 +1278,7 @@ impl ClassicWheelActionSource {
         &mut self,
         context: &ClassicDevToolsCommandContext,
         action: &Value,
-        commands: &mut Vec<DevToolsCommand>,
+        commands: &mut Vec<AutomationCommand>,
         element_origins: &ClassicElementOriginViewportPoints,
         viewport_bounds: Option<ClassicViewportBounds>,
     ) -> Result<(), ClassicError> {
@@ -1347,7 +1349,7 @@ fn dispatch_mouse_event_command(
     y: f64,
     button: i32,
     buttons: Option<i32>,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     dispatch_mouse_event_command_with_pointer_properties(
         context,
         event_type,
@@ -1369,7 +1371,7 @@ fn dispatch_mouse_event_command_with_pointer_properties(
     button: i32,
     buttons: Option<i32>,
     properties: ClassicPointerEventProperties,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     dispatch_mouse_event_command_with_pointer_properties_and_click_count(
         context,
         event_type,
@@ -1393,7 +1395,7 @@ fn dispatch_mouse_event_command_with_pointer_properties_and_click_count(
     buttons: Option<i32>,
     properties: ClassicPointerEventProperties,
     click_count: i32,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     dispatch_mouse_event_command_with_delta_and_pointer_properties(
         context,
         event_type,
@@ -1419,7 +1421,7 @@ fn dispatch_mouse_event_command_with_delta(
     buttons: Option<i32>,
     delta_x: f64,
     delta_y: f64,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     dispatch_mouse_event_command_with_delta_and_pointer_properties(
         context,
         event_type,
@@ -1447,8 +1449,8 @@ fn dispatch_mouse_event_command_with_delta_and_pointer_properties(
     delta_x: f64,
     delta_y: f64,
     properties: ClassicPointerEventProperties,
-) -> DevToolsCommand {
-    DevToolsCommand::DispatchMouseEvent(DevToolsDispatchMouseEventCommand {
+) -> AutomationCommand {
+    AutomationCommand::DispatchMouseEvent(DevToolsDispatchMouseEventCommand {
         context: context.command_context(),
         event_type,
         pointer_type,
@@ -1481,8 +1483,8 @@ fn dispatch_touch_event_command(
     id: i32,
     x: f64,
     y: f64,
-) -> DevToolsCommand {
-    DevToolsCommand::DispatchTouchEvent(DevToolsDispatchTouchEventCommand {
+) -> AutomationCommand {
+    AutomationCommand::DispatchTouchEvent(DevToolsDispatchTouchEventCommand {
         context: context.command_context(),
         event_type,
         touch_points: vec![DevToolsTouchPoint { id, x, y }],
@@ -1498,8 +1500,8 @@ fn dispatch_key_event_command_with_modifiers(
     modifiers: u8,
     auto_repeat: bool,
     should_insert_text: bool,
-) -> DevToolsCommand {
-    DevToolsCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+) -> AutomationCommand {
+    AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
         context: context.command_context(),
         event_type,
         key: key.to_owned(),

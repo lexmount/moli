@@ -1,4 +1,4 @@
-use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::automation::DevToolsDomNodeReference;
 pub(super) use crate::domains::native::NodeReferenceParams;
 
 pub(super) fn devtools_node_reference_from_ids(

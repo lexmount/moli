@@ -1,4 +1,4 @@
-use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::automation::DevToolsDomNodeReference;
 use moli_core::page::{CompletedPageCommand, Page, RendererDomFrontendNodeBindingResolution};
 
 pub(super) fn finish_reference(

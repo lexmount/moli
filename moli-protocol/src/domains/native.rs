@@ -137,7 +137,7 @@ pub(crate) fn start_operation(
         Err(error) => return NativeCommandStep::Complete(CommandOutputPlan::error(-32000, error)),
     };
     let command_id = cmd.id.expect("a native frontend command has a call id");
-    match page.start_native_frontend_command(command_id, cmd.session_id, operation) {
+    match page.start_cdp_call(command_id, cmd.session_id, operation) {
         Ok((pending, guard)) => NativeCommandStep::Pending(PendingNativeCommand {
             session_id: cmd.session_id.map(str::to_owned),
             residence,
@@ -352,8 +352,7 @@ mod tests {
         let (event, sidecar) = events.next().unwrap().into_parts();
         assert_eq!(event["method"], "DOM.setChildNodes");
         assert_eq!(event["sessionId"], "SID-native");
-        let Some(crate::devtools_runtime::AutomationEvent::DomSetChildNodes(sidecar)) = sidecar
-        else {
+        let Some(crate::automation::AutomationEvent::DomSetChildNodes(sidecar)) = sidecar else {
             panic!("native DOM notifications retain their typed automation event");
         };
         assert_eq!(sidecar.parent_node_id, 3);

@@ -1,11 +1,11 @@
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
     DevToolsGetNavigationHistoryCommand, DevToolsGetNavigationHistoryResult,
     DevToolsHistoryTraversalDestination, DevToolsLoaderId, DevToolsNavigateCommand,
     DevToolsNavigateResult, DevToolsNavigationHistoryEntry, DevToolsNavigationId,
-    DevToolsNavigationWait, DevToolsProtocol, DevToolsReloadCommand, DevToolsTargetId,
-    DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, SameDocumentNavigationEvent,
-    webdriver_bidi_navigation_id_from_loader_id,
+    DevToolsNavigationWait, DevToolsReloadCommand, DevToolsTargetId,
+    DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, FrontendProtocol,
+    SameDocumentNavigationEvent, webdriver_bidi_navigation_id_from_loader_id,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
@@ -211,7 +211,7 @@ const CHILD_FRAME_NAVIGATION_LOAD_GATE_TIMEOUT: std::time::Duration =
 
 #[derive(Debug, Clone)]
 struct DirectNavigationResult {
-    protocol: DevToolsProtocol,
+    protocol: FrontendProtocol,
     result_kind: DevToolsNavigationCommandResultKind,
     url: String,
     frame_id: Option<DevToolsFrameId>,
@@ -223,12 +223,12 @@ struct DirectNavigationResult {
 
 impl DirectNavigationResult {
     fn navigate(
-        protocol: DevToolsProtocol,
+        protocol: FrontendProtocol,
         frame_id: Option<&str>,
         loader_id: Option<&str>,
         url: impl Into<String>,
     ) -> Self {
-        let navigation_id = if protocol == DevToolsProtocol::WebDriverBidi {
+        let navigation_id = if protocol == FrontendProtocol::WebDriverBidi {
             loader_id.map(webdriver_bidi_navigation_id_from_loader_id)
         } else {
             None
@@ -237,12 +237,12 @@ impl DirectNavigationResult {
             protocol,
             result_kind: DevToolsNavigationCommandResultKind::Navigate,
             url: url.into(),
-            frame_id: if protocol == DevToolsProtocol::WebDriverBidi {
+            frame_id: if protocol == FrontendProtocol::WebDriverBidi {
                 None
             } else {
                 frame_id.map(DevToolsFrameId::from)
             },
-            loader_id: if protocol == DevToolsProtocol::WebDriverBidi {
+            loader_id: if protocol == FrontendProtocol::WebDriverBidi {
                 None
             } else {
                 loader_id.map(DevToolsLoaderId::from)
@@ -255,7 +255,7 @@ impl DirectNavigationResult {
 
     fn empty() -> Self {
         Self {
-            protocol: DevToolsProtocol::Cdp,
+            protocol: FrontendProtocol::Cdp,
             result_kind: DevToolsNavigationCommandResultKind::Empty,
             url: String::new(),
             frame_id: None,
@@ -266,7 +266,7 @@ impl DirectNavigationResult {
         }
     }
 
-    fn traverse_history(protocol: DevToolsProtocol, same_document: bool) -> Self {
+    fn traverse_history(protocol: FrontendProtocol, same_document: bool) -> Self {
         Self {
             protocol,
             result_kind: DevToolsNavigationCommandResultKind::TraverseHistory { same_document },
@@ -290,11 +290,11 @@ impl DirectNavigationResult {
     }
 
     fn set_navigation_identity(&mut self, frame_id: &str, loader_id: &str) {
-        if self.protocol != DevToolsProtocol::WebDriverBidi {
+        if self.protocol != FrontendProtocol::WebDriverBidi {
             self.frame_id = Some(DevToolsFrameId::from(frame_id));
             self.loader_id = Some(DevToolsLoaderId::from(loader_id));
         }
-        self.navigation_id = (self.protocol == DevToolsProtocol::WebDriverBidi)
+        self.navigation_id = (self.protocol == FrontendProtocol::WebDriverBidi)
             .then(|| webdriver_bidi_navigation_id_from_loader_id(loader_id));
     }
 
@@ -317,16 +317,14 @@ impl DirectNavigationResult {
         }
     }
 
-    fn into_result(self) -> DevToolsCommandResult {
+    fn into_result(self) -> AutomationResult {
         match self.result_kind {
-            DevToolsNavigationCommandResultKind::Empty => DevToolsCommandResult::Empty,
+            DevToolsNavigationCommandResultKind::Empty => AutomationResult::Empty,
             DevToolsNavigationCommandResultKind::TraverseHistory { same_document } => {
-                DevToolsCommandResult::TraverseHistory(DevToolsTraverseHistoryResult {
-                    same_document,
-                })
+                AutomationResult::TraverseHistory(DevToolsTraverseHistoryResult { same_document })
             }
             DevToolsNavigationCommandResultKind::Navigate => {
-                DevToolsCommandResult::Navigate(DevToolsNavigateResult {
+                AutomationResult::Navigate(DevToolsNavigateResult {
                     navigation_id: self.navigation_id,
                     frame_id: self.frame_id,
                     loader_id: self.loader_id,
@@ -702,7 +700,7 @@ pub(super) fn try_start_navigate_command_dispatch(
     start_devtools_page_command(
         conn,
         cmd.id,
-        DevToolsCommand::Navigate(shared_command),
+        AutomationCommand::Navigate(shared_command),
         DevToolsNavigationStartOptions {
             owner,
             result_projection,
@@ -719,7 +717,7 @@ fn build_cdp_navigate_command(
     referrer: Option<&str>,
 ) -> DevToolsNavigateCommand {
     DevToolsNavigateCommand {
-        context: cmd.devtools_command_context(target_id, Option::<&str>::None),
+        context: cmd.automation_context(target_id, Option::<&str>::None),
         url: url.to_owned(),
         referrer: referrer.map(str::to_owned),
         wait: DevToolsNavigationWait::DocumentInstalled,
@@ -732,16 +730,14 @@ fn cdp_navigate_result_payload(
     loader_id: Option<&str>,
     url: &str,
 ) -> Value {
-    CommandOutputPlan::devtools_result_payload(DevToolsCommandResult::Navigate(
-        DevToolsNavigateResult {
-            navigation_id: navigation_id.map(Into::into),
-            frame_id: frame_id.map(DevToolsFrameId::from),
-            loader_id: loader_id.map(DevToolsLoaderId::from),
-            url: url.to_owned(),
-            error_text: None,
-            is_download: None,
-        },
-    ))
+    CommandOutputPlan::devtools_result_payload(AutomationResult::Navigate(DevToolsNavigateResult {
+        navigation_id: navigation_id.map(Into::into),
+        frame_id: frame_id.map(DevToolsFrameId::from),
+        loader_id: loader_id.map(DevToolsLoaderId::from),
+        url: url.to_owned(),
+        error_text: None,
+        is_download: None,
+    }))
 }
 
 fn webdriver_bidi_navigate_result_payload(loader_id: Option<&str>, url: &str) -> Value {
@@ -755,12 +751,12 @@ fn webdriver_bidi_navigate_result_payload(loader_id: Option<&str>, url: &str) ->
 }
 
 fn protocol_neutral_navigate_result_payload(
-    protocol: DevToolsProtocol,
+    protocol: FrontendProtocol,
     frame_id: Option<&str>,
     loader_id: Option<&str>,
     url: &str,
 ) -> Value {
-    if protocol == DevToolsProtocol::WebDriverBidi {
+    if protocol == FrontendProtocol::WebDriverBidi {
         webdriver_bidi_navigate_result_payload(loader_id, url)
     } else {
         cdp_navigate_result_payload(None, frame_id, loader_id, url)
@@ -777,13 +773,13 @@ fn update_navigation_result_payload_identity(
         return;
     };
     match protocol {
-        DevToolsProtocol::Cdp | DevToolsProtocol::WebDriverClassic => {
+        FrontendProtocol::Cdp | FrontendProtocol::WebDriverClassic => {
             if payload.contains_key("frameId") {
                 payload.insert("frameId".to_owned(), json!(frame_id));
                 payload.insert("loaderId".to_owned(), json!(loader_id));
             }
         }
-        DevToolsProtocol::WebDriverBidi => {
+        FrontendProtocol::WebDriverBidi => {
             if payload.contains_key("navigation") {
                 payload.insert(
                     "navigation".to_owned(),
@@ -804,11 +800,11 @@ struct DevToolsNavigationStartOptions {
 fn start_devtools_page_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     options: DevToolsNavigationStartOptions,
 ) -> PageCommandTaskStep {
     match command {
-        DevToolsCommand::Navigate(command) => {
+        AutomationCommand::Navigate(command) => {
             let start = start_devtools_navigate_command(
                 conn,
                 command_id,
@@ -825,10 +821,10 @@ fn start_devtools_page_command(
                 &options.reloaded_after_crash_session_ids,
             )
         }
-        DevToolsCommand::Reload(command) => {
+        AutomationCommand::Reload(command) => {
             start_devtools_reload_command(conn, command_id, &command, options)
         }
-        DevToolsCommand::TraverseHistory(command) => {
+        AutomationCommand::TraverseHistory(command) => {
             start_devtools_traverse_history_command(conn, command_id, &command, options)
         }
         _ => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -840,10 +836,10 @@ fn start_devtools_page_command(
 
 pub(crate) async fn execute_devtools_navigation_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     background_command_id: Option<u64>,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
     Option<moli_core::RendererOutputFence>,
 ) {
@@ -897,7 +893,7 @@ pub(crate) async fn execute_devtools_navigation_command_async_with_protocol_even
 pub(crate) fn execute_devtools_get_navigation_history_command(
     conn: &mut CdpConnection,
     command: DevToolsGetNavigationHistoryCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let target_id = command
         .context
         .target_id
@@ -914,7 +910,7 @@ pub(crate) fn execute_devtools_get_navigation_history_command(
             "NoSuchTarget",
         ));
     };
-    Ok(DevToolsCommandResult::GetNavigationHistory(
+    Ok(AutomationResult::GetNavigationHistory(
         DevToolsGetNavigationHistoryResult {
             current_index,
             entries: entries
@@ -933,24 +929,24 @@ pub(crate) fn execute_devtools_get_navigation_history_command(
 
 fn devtools_navigation_target_route(
     conn: &CdpConnection,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<CdpSessionRoute, DevToolsError> {
     let target_id = match command {
-        DevToolsCommand::Navigate(command) => command.context.target_id.as_ref(),
-        DevToolsCommand::Reload(command) => command.context.target_id.as_ref(),
-        DevToolsCommand::TraverseHistory(command) => command.context.target_id.as_ref(),
+        AutomationCommand::Navigate(command) => command.context.target_id.as_ref(),
+        AutomationCommand::Reload(command) => command.context.target_id.as_ref(),
+        AutomationCommand::TraverseHistory(command) => command.context.target_id.as_ref(),
         _ => None,
     }
     .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
     if let Some(route) = conn.target_session_route_for_target_id(target_id.as_str()) {
         return Ok(route);
     }
-    if matches!(command, DevToolsCommand::Navigate(_))
+    if matches!(command, AutomationCommand::Navigate(_))
         && let Some(route) = conn.target_session_route_for_child_frame_id(target_id.as_str())
     {
         return Ok(route);
     }
-    if matches!(command, DevToolsCommand::TraverseHistory(_))
+    if matches!(command, AutomationCommand::TraverseHistory(_))
         && conn.has_attached_child_frame_id(target_id.as_str())
     {
         return Err(DevToolsError::new(
@@ -967,7 +963,7 @@ fn devtools_navigation_target_route(
 fn start_protocol_neutral_navigation_command(
     conn: &mut CdpConnection,
     route: CdpSessionRoute,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     background_command_id: Option<u64>,
 ) -> (
     PageCommandTaskStep,
@@ -975,8 +971,8 @@ fn start_protocol_neutral_navigation_command(
 ) {
     let wait = devtools_navigation_wait(&command);
     let result_url = match &command {
-        DevToolsCommand::Navigate(command) => command.url.clone(),
-        DevToolsCommand::Reload(_) => {
+        AutomationCommand::Navigate(command) => command.url.clone(),
+        AutomationCommand::Reload(_) => {
             let owner = CommandOwnerScope::for_route(route.clone());
             match conn.runtime_session_owner_target_url_for_owner(&owner) {
                 Some(url) => url,
@@ -992,12 +988,12 @@ fn start_protocol_neutral_navigation_command(
                 }
             }
         }
-        DevToolsCommand::TraverseHistory(_) => String::new(),
+        AutomationCommand::TraverseHistory(_) => String::new(),
         _ => String::new(),
     };
     let result_kind = DevToolsNavigationCommandResultKind::Navigate;
     let mut direct_result = match &command {
-        DevToolsCommand::Navigate(command) => {
+        AutomationCommand::Navigate(command) => {
             let loader_id = if child_frame_navigation_target_id(conn, command).is_some() {
                 None
             } else {
@@ -1014,17 +1010,17 @@ fn start_protocol_neutral_navigation_command(
                 command.url.clone(),
             )
         }
-        DevToolsCommand::Reload(command) => DirectNavigationResult::navigate(
+        AutomationCommand::Reload(command) => DirectNavigationResult::navigate(
             command.context.protocol,
             None,
             Some(LOADER_ID),
             result_url.clone(),
         ),
-        DevToolsCommand::TraverseHistory(command) => {
+        AutomationCommand::TraverseHistory(command) => {
             DirectNavigationResult::traverse_history(command.context.protocol, false)
         }
         _ => DirectNavigationResult {
-            protocol: DevToolsProtocol::Cdp,
+            protocol: FrontendProtocol::Cdp,
             result_kind,
             url: result_url.clone(),
             frame_id: None,
@@ -1037,7 +1033,7 @@ fn start_protocol_neutral_navigation_command(
     let command_owner = CommandOwnerScope::for_route(route.clone());
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, &command_owner);
     let step = match command {
-        DevToolsCommand::Navigate(command) => {
+        AutomationCommand::Navigate(command) => {
             if Url::parse(&command.url).is_err() {
                 let error =
                     DevToolsError::new(DevToolsErrorKind::Internal, "Invalid navigation URL");
@@ -1064,7 +1060,7 @@ fn start_protocol_neutral_navigation_command(
             start_devtools_page_command(
                 conn,
                 background_command_id,
-                DevToolsCommand::Navigate(command),
+                AutomationCommand::Navigate(command),
                 DevToolsNavigationStartOptions {
                     owner: command_owner.clone(),
                     result_projection,
@@ -1073,7 +1069,7 @@ fn start_protocol_neutral_navigation_command(
                 },
             )
         }
-        DevToolsCommand::Reload(mut command) => {
+        AutomationCommand::Reload(mut command) => {
             let result_payload = protocol_neutral_navigate_result_payload(
                 command.context.protocol,
                 None,
@@ -1086,7 +1082,7 @@ fn start_protocol_neutral_navigation_command(
             start_devtools_page_command(
                 conn,
                 background_command_id,
-                DevToolsCommand::Reload(command),
+                AutomationCommand::Reload(command),
                 DevToolsNavigationStartOptions {
                     owner: command_owner.clone(),
                     result_projection,
@@ -1095,7 +1091,7 @@ fn start_protocol_neutral_navigation_command(
                 },
             )
         }
-        DevToolsCommand::TraverseHistory(mut command) => {
+        AutomationCommand::TraverseHistory(mut command) => {
             let result_protocol = command.context.protocol;
             command.context.session_id = None;
             match resolve_devtools_history_traversal_destination(
@@ -1106,7 +1102,7 @@ fn start_protocol_neutral_navigation_command(
                 Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
                     return (
                         PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-                            DevToolsCommandResult::Empty,
+                            AutomationResult::Empty,
                         )),
                         Ok(DirectNavigationResult::empty()),
                     );
@@ -1134,7 +1130,7 @@ fn start_protocol_neutral_navigation_command(
             start_devtools_page_command(
                 conn,
                 background_command_id,
-                DevToolsCommand::TraverseHistory(command),
+                AutomationCommand::TraverseHistory(command),
                 DevToolsNavigationStartOptions {
                     owner: command_owner,
                     result_projection: NavigationResultProjection::new(result_protocol, json!({})),
@@ -1164,11 +1160,11 @@ enum DevToolsNavigationCommandResultKind {
     TraverseHistory { same_document: bool },
 }
 
-fn devtools_navigation_wait(command: &DevToolsCommand) -> DevToolsNavigationWait {
+fn devtools_navigation_wait(command: &AutomationCommand) -> DevToolsNavigationWait {
     match command {
-        DevToolsCommand::Navigate(command) => command.wait,
-        DevToolsCommand::Reload(command) => command.wait,
-        DevToolsCommand::TraverseHistory(command) => command.wait,
+        AutomationCommand::Navigate(command) => command.wait,
+        AutomationCommand::Reload(command) => command.wait,
+        AutomationCommand::TraverseHistory(command) => command.wait,
         _ => DevToolsNavigationWait::Load,
     }
 }
@@ -1250,7 +1246,7 @@ fn direct_navigation_result_from_completed_load(
     match &completed.navigation {
         Ok(navigation) => {
             result.set_navigation_identity(&completed.state.frame_id, &completed.state.loader_id);
-            if result.protocol != DevToolsProtocol::WebDriverBidi
+            if result.protocol != FrontendProtocol::WebDriverBidi
                 && matches!(navigation, NavigationLoadOutcome::Download(_))
             {
                 result.loader_id = None;
@@ -1300,7 +1296,7 @@ fn direct_navigation_result_from_fetch_continuation(
 }
 
 fn superseded_cdp_page_navigate_payload(state: &NavigationDispatchState) -> Option<Value> {
-    if state.result_projection.protocol() != DevToolsProtocol::Cdp {
+    if state.result_projection.protocol() != FrontendProtocol::Cdp {
         return None;
     }
     let mut result = state.result_projection.payload().clone();
@@ -1572,7 +1568,7 @@ pub(super) fn try_start_reload_command_dispatch(
     start_devtools_page_command(
         conn,
         cmd.id,
-        DevToolsCommand::Reload(shared_command),
+        AutomationCommand::Reload(shared_command),
         DevToolsNavigationStartOptions {
             owner,
             result_projection,
@@ -1588,7 +1584,7 @@ fn build_cdp_reload_command(
     params: ReloadParams,
 ) -> DevToolsReloadCommand {
     DevToolsReloadCommand {
-        context: cmd.devtools_command_context(target_id, Option::<&str>::None),
+        context: cmd.automation_context(target_id, Option::<&str>::None),
         ignore_cache: params.ignore_cache.unwrap_or(false),
         script_to_evaluate_on_load: params.script_to_evaluate_on_load,
         wait: DevToolsNavigationWait::DocumentInstalled,
@@ -1663,7 +1659,7 @@ pub(super) fn try_start_navigate_to_history_entry_command_dispatch(
     start_devtools_page_command(
         conn,
         cmd.id,
-        DevToolsCommand::TraverseHistory(shared_command),
+        AutomationCommand::TraverseHistory(shared_command),
         DevToolsNavigationStartOptions {
             owner,
             result_projection,
@@ -1680,7 +1676,7 @@ fn build_cdp_traverse_history_command(
     url: String,
 ) -> DevToolsTraverseHistoryCommand {
     DevToolsTraverseHistoryCommand {
-        context: cmd.devtools_command_context(target_id, Option::<&str>::None),
+        context: cmd.automation_context(target_id, Option::<&str>::None),
         destination: DevToolsHistoryTraversalDestination::Entry { entry_id, url },
         wait: DevToolsNavigationWait::DocumentInstalled,
     }
@@ -1817,7 +1813,7 @@ pub(super) fn complete_pending_same_document_history_traversal_command(
         .and_then(|page| page.finish_top_level_history_traversal_by_delta(completion));
     match result {
         Ok(true) => PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-            DevToolsCommandResult::Empty,
+            AutomationResult::Empty,
         )),
         Ok(false) => start_history_traversal_url_fallback(conn, command_id, fallback),
         Err(error) => {
@@ -1955,7 +1951,7 @@ fn start_devtools_traverse_history_command(
     ) {
         Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-                DevToolsCommandResult::Empty,
+                AutomationResult::Empty,
             ));
         }
         Ok(ResolvedDevToolsHistoryTraversal::Entry {
@@ -3534,9 +3530,9 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
 
 #[cfg(test)]
 mod child_frame_attachment_tests {
-    use crate::devtools_runtime::{
-        DevToolsCommand, DevToolsHistoryTraversalDestination, DevToolsNavigationWait,
-        DevToolsProtocol,
+    use crate::automation::{
+        AutomationCommand, DevToolsHistoryTraversalDestination, DevToolsNavigationWait,
+        FrontendProtocol,
     };
     use serde_json::{Value, json};
 
@@ -3600,7 +3596,7 @@ mod child_frame_attachment_tests {
             Some("https://referrer.test/"),
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-1")
@@ -3633,7 +3629,7 @@ mod child_frame_attachment_tests {
         let step = start_devtools_page_command(
             &mut conn,
             cmd.id,
-            DevToolsCommand::Navigate(command),
+            AutomationCommand::Navigate(command),
             DevToolsNavigationStartOptions {
                 owner,
                 result_projection: NavigationResultProjection::Cdp(json!({})),
@@ -3671,7 +3667,7 @@ mod child_frame_attachment_tests {
 
         let command = build_cdp_reload_command(&cmd, Some("TID-3"), params);
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-3")
@@ -3705,7 +3701,7 @@ mod child_frame_attachment_tests {
         let step = start_devtools_page_command(
             &mut conn,
             cmd.id,
-            DevToolsCommand::Reload(command),
+            AutomationCommand::Reload(command),
             DevToolsNavigationStartOptions {
                 owner,
                 result_projection: NavigationResultProjection::Cdp(json!({})),
@@ -3741,7 +3737,7 @@ mod child_frame_attachment_tests {
             "https://example.test/history".to_owned(),
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-5")
@@ -3782,7 +3778,7 @@ mod child_frame_attachment_tests {
         let step = start_devtools_page_command(
             &mut conn,
             cmd.id,
-            DevToolsCommand::TraverseHistory(command),
+            AutomationCommand::TraverseHistory(command),
             DevToolsNavigationStartOptions {
                 owner,
                 result_projection: NavigationResultProjection::Cdp(json!({})),

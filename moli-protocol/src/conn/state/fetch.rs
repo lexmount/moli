@@ -19,7 +19,7 @@ pub(super) use super::super::fetch_support::{
 use super::DocumentNavigationToken;
 use super::navigation_outcome::NavigationDispatchState;
 use super::runtime_slot::TargetRuntimeSlot;
-use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use moli_fetch::url_pattern_matches;
 
 #[derive(Debug, Default)]

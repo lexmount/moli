@@ -9,15 +9,14 @@ use super::{
         text_result_from_renderer_resolution,
     },
 };
-use crate::conn::{CdpConnection, CommandOwnerScope};
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandResult, DevToolsDescribeNodeCommand,
-    DevToolsDescribeNodeResult, DevToolsDomGeometryCommand, DevToolsDomGeometryResult,
-    DevToolsDomNodeReference, DevToolsGetAttributesResult, DevToolsGetOuterHtmlCommand,
-    DevToolsGetOuterHtmlResult, DevToolsGetPropertyResult, DevToolsGetTextResult,
-    DevToolsQuerySelectorResult, DevToolsResolveNodeCommand, DevToolsResolveNodeResult,
-    DevToolsScrollIntoViewIfNeededCommand,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsDescribeNodeCommand, DevToolsDescribeNodeResult,
+    DevToolsDomGeometryCommand, DevToolsDomGeometryResult, DevToolsDomNodeReference,
+    DevToolsGetAttributesResult, DevToolsGetOuterHtmlCommand, DevToolsGetOuterHtmlResult,
+    DevToolsGetPropertyResult, DevToolsGetTextResult, DevToolsQuerySelectorResult,
+    DevToolsResolveNodeCommand, DevToolsResolveNodeResult, DevToolsScrollIntoViewIfNeededCommand,
 };
+use crate::conn::{CdpConnection, CommandOwnerScope};
 use moli_core::page::{
     DocumentNodeRuntimeObjectResolution, Page, PendingPageCommand, RendererDocumentNodeGeometry,
     RendererDocumentNodeReference,
@@ -42,10 +41,10 @@ pub(super) async fn execute_devtools_dom_command(
     conn: &mut CdpConnection,
     frame_id: &str,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, PendingDomCommandStartError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, PendingDomCommandStartError> {
     match command {
-        DevToolsCommand::QuerySelector(command) => {
+        AutomationCommand::QuerySelector(command) => {
             let result = query_selector_command(
                 conn,
                 owner,
@@ -55,21 +54,21 @@ pub(super) async fn execute_devtools_dom_command(
                 command.multiple,
             )
             .await?;
-            Ok(DevToolsCommandResult::QuerySelector(result))
+            Ok(AutomationResult::QuerySelector(result))
         }
-        DevToolsCommand::GetAttributes(command) => {
+        AutomationCommand::GetAttributes(command) => {
             let result = attributes_command(conn, owner, command.reference).await?;
-            Ok(DevToolsCommandResult::GetAttributes(result))
+            Ok(AutomationResult::GetAttributes(result))
         }
-        DevToolsCommand::GetText(command) => {
+        AutomationCommand::GetText(command) => {
             let result = text_command(conn, owner, command.reference).await?;
-            Ok(DevToolsCommandResult::GetText(result))
+            Ok(AutomationResult::GetText(result))
         }
-        DevToolsCommand::GetProperty(command) => {
+        AutomationCommand::GetProperty(command) => {
             let result = property_command(conn, owner, command.reference, &command.name).await?;
-            Ok(DevToolsCommandResult::GetProperty(result))
+            Ok(AutomationResult::GetProperty(result))
         }
-        DevToolsCommand::GetOuterHtml(command) => {
+        AutomationCommand::GetOuterHtml(command) => {
             let DevToolsGetOuterHtmlCommand {
                 context: _,
                 reference,
@@ -77,25 +76,25 @@ pub(super) async fn execute_devtools_dom_command(
             } = command;
             let outer_html =
                 outer_html_command(conn, owner, frame_id, reference, include_shadow_dom).await?;
-            Ok(DevToolsCommandResult::GetOuterHtml(
-                DevToolsGetOuterHtmlResult { outer_html },
-            ))
+            Ok(AutomationResult::GetOuterHtml(DevToolsGetOuterHtmlResult {
+                outer_html,
+            }))
         }
-        DevToolsCommand::DescribeNode(command) => {
+        AutomationCommand::DescribeNode(command) => {
             let result = describe_node_command(conn, owner, frame_id, command).await?;
-            Ok(DevToolsCommandResult::DescribeNode(result))
+            Ok(AutomationResult::DescribeNode(result))
         }
-        DevToolsCommand::ResolveNode(command) => {
+        AutomationCommand::ResolveNode(command) => {
             let result = resolve_node_command(conn, owner, command).await?;
-            Ok(DevToolsCommandResult::ResolveNode(result))
+            Ok(AutomationResult::ResolveNode(result))
         }
-        DevToolsCommand::DomGeometry(command) => {
+        AutomationCommand::DomGeometry(command) => {
             let result = dom_geometry_command(conn, owner, command).await?;
-            Ok(DevToolsCommandResult::DomGeometry(result))
+            Ok(AutomationResult::DomGeometry(result))
         }
-        DevToolsCommand::ScrollIntoViewIfNeeded(command) => {
+        AutomationCommand::ScrollIntoViewIfNeeded(command) => {
             scroll_into_view_if_needed_command(conn, owner, command).await?;
-            Ok(DevToolsCommandResult::Empty)
+            Ok(AutomationResult::Empty)
         }
         _ => Err(PendingDomCommandStartError::no_such_target()),
     }

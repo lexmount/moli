@@ -124,9 +124,9 @@ pub(super) async fn bidi_preload_channel_proxy_handle_async(
     let value = devtools_probe_remote_value_async(
         conn,
         target.clone(),
-        DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -277,9 +277,9 @@ pub(super) async fn create_bidi_channel_proxy_async(
     let value = Box::pin(devtools_probe_remote_value_async(
         conn,
         call_target,
-        DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: command_target_id,
                 browser_context_id: None,

@@ -24,11 +24,9 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::json;
 use url::Url;
 
-use crate::devtools_runtime::{DevToolsNetworkResourceType, RuntimeExecutionContextsClearedEvent};
+use crate::automation::{DevToolsNetworkResourceType, RuntimeExecutionContextsClearedEvent};
 #[cfg(test)]
-use crate::devtools_runtime::{
-    DevToolsTargetInfo, DevToolsTargetKind, RuntimeExecutionContextEvent,
-};
+use crate::automation::{DevToolsTargetInfo, DevToolsTargetKind, RuntimeExecutionContextEvent};
 use crate::{
     conn::{
         BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope,

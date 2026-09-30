@@ -7,7 +7,7 @@ use moli_core::page::{
 };
 use serde_json::Value;
 
-use crate::devtools_runtime::RuntimeExecutionContextEvent;
+use crate::automation::RuntimeExecutionContextEvent;
 
 use super::service_worker_lifetime::{
     TargetServiceWorkerProtocolAttachmentIdentity, TargetServiceWorkerProtocolAttachmentRetirement,

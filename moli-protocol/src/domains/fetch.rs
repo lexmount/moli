@@ -8,14 +8,14 @@ mod patterns;
 mod state;
 mod subresource;
 
-use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DevToolsCommandExecutionOutput,
-    FetchInterceptionPattern, FetchRequestStage as ConnFetchRequestStage,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsAddNetworkInterceptCommand,
+    DevToolsAddNetworkInterceptResult, DevToolsError, DevToolsErrorKind,
+    DevToolsNetworkInterceptPhase, FrontendProtocol,
 };
-use crate::devtools_runtime::{
-    DevToolsAddNetworkInterceptCommand, DevToolsAddNetworkInterceptResult, DevToolsCommand,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsNetworkInterceptPhase,
-    DevToolsProtocol,
+use crate::conn::{
+    AutomationExecutionOutput, BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope,
+    FetchInterceptionPattern, FetchRequestStage as ConnFetchRequestStage,
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
@@ -267,8 +267,8 @@ impl FetchCommandOutput {
 
     fn into_devtools_result_and_background_events(
         mut self,
-        success_result: DevToolsCommandResult,
-    ) -> DevToolsCommandExecutionOutput {
+        success_result: AutomationResult,
+    ) -> AutomationExecutionOutput {
         let status = self.command_status.unwrap_or_else(|| {
             Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
@@ -277,7 +277,7 @@ impl FetchCommandOutput {
         });
         let renderer_output_predecessor = self.plan.take_renderer_output_predecessor();
         let (_, events) = self.plan.into_command_status_and_background_events();
-        DevToolsCommandExecutionOutput::from_parts(
+        AutomationExecutionOutput::from_parts(
             status.map(|()| success_result),
             events,
             renderer_output_predecessor,
@@ -414,19 +414,19 @@ pub(crate) fn try_start_fetch_command_dispatch(
 
 pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> DevToolsCommandExecutionOutput {
+    command: AutomationCommand,
+) -> AutomationExecutionOutput {
     let success_result = devtools_fetch_success_result(&command);
-    let owner = match fetch_devtools_command_owner(conn, &command) {
+    let owner = match fetch_automation_command_owner(conn, &command) {
         Ok(owner) => owner,
-        Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+        Err(error) => return AutomationExecutionOutput::new(Err(error)),
     };
     let step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
     match step {
         FetchCommandTaskStep::Complete(mut plan) => {
             let renderer_output_predecessor = plan.take_renderer_output_predecessor();
             let (status, events) = plan.into_command_status_and_background_events();
-            DevToolsCommandExecutionOutput::from_parts(
+            AutomationExecutionOutput::from_parts(
                 status
                     .unwrap_or_else(|| {
                         Err(DevToolsError::new(
@@ -448,14 +448,14 @@ pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
     }
 }
 
-fn devtools_fetch_success_result(command: &DevToolsCommand) -> DevToolsCommandResult {
+fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResult {
     match command {
-        DevToolsCommand::AddNetworkIntercept(command) => {
-            DevToolsCommandResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
+        AutomationCommand::AddNetworkIntercept(command) => {
+            AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
                 intercept_id: command.intercept_id.clone(),
             })
         }
-        _ => DevToolsCommandResult::Empty,
+        _ => AutomationResult::Empty,
     }
 }
 
@@ -463,19 +463,19 @@ fn start_devtools_fetch_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> FetchCommandTaskStep {
     match &command {
-        DevToolsCommand::AddNetworkIntercept(command) => {
+        AutomationCommand::AddNetworkIntercept(command) => {
             start_devtools_add_network_intercept_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::RemoveNetworkIntercept(command) => {
+        AutomationCommand::RemoveNetworkIntercept(command) => {
             start_devtools_remove_network_intercept_command(
                 conn,
                 command_id,
                 owner,
                 command.intercept_id.as_str(),
-                command.context.protocol != DevToolsProtocol::Cdp
+                command.context.protocol != FrontendProtocol::Cdp
                     && command.context.target_id.is_none(),
             )
         }
@@ -483,35 +483,35 @@ fn start_devtools_fetch_command_for_owner(
     }
 }
 
-fn fetch_devtools_command_owner(
+fn fetch_automation_command_owner(
     conn: &CdpConnection,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<CommandOwnerScope, DevToolsError> {
     let (context, request_id) = match command {
-        DevToolsCommand::AddNetworkIntercept(command) => {
-            return fetch_config_devtools_command_owner(conn, &command.context);
+        AutomationCommand::AddNetworkIntercept(command) => {
+            return fetch_config_automation_command_owner(conn, &command.context);
         }
-        DevToolsCommand::RemoveNetworkIntercept(command) => {
-            return fetch_config_devtools_command_owner(conn, &command.context);
+        AutomationCommand::RemoveNetworkIntercept(command) => {
+            return fetch_config_automation_command_owner(conn, &command.context);
         }
-        DevToolsCommand::ContinueInterceptedRequest(command) => {
+        AutomationCommand::ContinueInterceptedRequest(command) => {
             (&command.context, command.request_id.as_str())
         }
-        DevToolsCommand::ContinueInterceptedResponse(command) => {
+        AutomationCommand::ContinueInterceptedResponse(command) => {
             (&command.context, command.request_id.as_str())
         }
-        DevToolsCommand::ContinueWithAuth(command) => {
+        AutomationCommand::ContinueWithAuth(command) => {
             (&command.context, command.request_id.as_str())
         }
-        DevToolsCommand::FailInterceptedRequest(command) => {
+        AutomationCommand::FailInterceptedRequest(command) => {
             (&command.context, command.request_id.as_str())
         }
-        DevToolsCommand::FulfillInterceptedRequest(command) => {
+        AutomationCommand::FulfillInterceptedRequest(command) => {
             (&command.context, command.request_id.as_str())
         }
         _ => return Ok(CommandOwnerScope::capture(conn, None)),
     };
-    if context.protocol == DevToolsProtocol::Cdp {
+    if context.protocol == FrontendProtocol::Cdp {
         return Ok(CommandOwnerScope::capture(
             conn,
             context.session_id.as_ref().map(|session| session.as_str()),
@@ -523,11 +523,11 @@ fn fetch_devtools_command_owner(
         .unwrap_or_else(|| CommandOwnerScope::capture(conn, None)))
 }
 
-fn fetch_config_devtools_command_owner(
+fn fetch_config_automation_command_owner(
     conn: &CdpConnection,
-    context: &crate::devtools_runtime::DevToolsCommandContext,
+    context: &crate::automation::AutomationContext,
 ) -> Result<CommandOwnerScope, DevToolsError> {
-    if context.protocol == DevToolsProtocol::Cdp {
+    if context.protocol == FrontendProtocol::Cdp {
         return Ok(CommandOwnerScope::capture(
             conn,
             context.session_id.as_ref().map(|session| session.as_str()),
@@ -593,7 +593,7 @@ fn start_devtools_add_network_intercept_command(
 ) -> FetchCommandTaskStep {
     let (handle_auth_requests, auth_url_patterns, patterns) =
         network_intercept_fetch_config(command);
-    let intercept_session_id = if command.context.protocol == DevToolsProtocol::Cdp {
+    let intercept_session_id = if command.context.protocol == FrontendProtocol::Cdp {
         owner.session_id().map(str::to_owned)
     } else {
         command
@@ -621,7 +621,7 @@ fn start_devtools_add_network_intercept_command(
             ))
         }
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-            DevToolsCommandResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
+            AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
                 intercept_id: command.intercept_id.clone(),
             }),
         )),
@@ -758,7 +758,7 @@ async fn complete_pending_fetch_command_inner(
             out.extend_plan_as_command_response(complete_fetch_config_update_command(
                 conn,
                 completed,
-                DevToolsCommandResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
+                AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
                     intercept_id: result_intercept_id.into(),
                 }),
             ));
@@ -767,7 +767,7 @@ async fn complete_pending_fetch_command_inner(
             out.extend_plan_as_command_response(complete_fetch_config_update_command(
                 conn,
                 completed,
-                DevToolsCommandResult::Empty,
+                AutomationResult::Empty,
             ));
         }
         PendingFetchCommandKind::Disable {
@@ -866,13 +866,13 @@ fn complete_enable_command(
     conn: &mut CdpConnection,
     completed: CompletedFetchCommandDispatch,
 ) -> CommandOutputPlan {
-    complete_fetch_config_update_command(conn, completed, DevToolsCommandResult::Empty)
+    complete_fetch_config_update_command(conn, completed, AutomationResult::Empty)
 }
 
 fn complete_fetch_config_update_command(
     conn: &mut CdpConnection,
     completed: CompletedFetchCommandDispatch,
-    result: DevToolsCommandResult,
+    result: AutomationResult,
 ) -> CommandOutputPlan {
     let owner_scope = completed.owner_scope.clone();
     let Some(completed_page_command) = completed.completed.into_page_completion() else {

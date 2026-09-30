@@ -1,10 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use moli_protocol::devtools_runtime::{
-    DevToolsActivateTargetCommand, DevToolsAddNetworkDataCollectorCommand,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsActivateTargetCommand, DevToolsAddNetworkDataCollectorCommand,
     DevToolsAddNetworkInterceptCommand, DevToolsAddPreloadScriptCommand,
     DevToolsAuthChallengeAction, DevToolsAuthCredentials, DevToolsBrowserContextId,
     DevToolsCallFunctionCommand, DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
-    DevToolsCloseTargetCommand, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
+    DevToolsCloseTargetCommand, DevToolsContinueInterceptedRequestCommand,
     DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
     DevToolsCreateBrowserContextCommand, DevToolsDevicePixelRatioSetting,
     DevToolsDisownNetworkDataCommand, DevToolsDownloadBehaviorSetting,
@@ -42,34 +42,34 @@ const CENTIMETERS_PER_INCH: f64 = 2.54;
 const MIN_PRINT_PAGE_SIZE_CM: f64 = CENTIMETERS_PER_INCH / 72.0;
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-pub fn devtools_command_from_bidi_command(
+pub fn automation_command_from_bidi_command(
     command: &BidiCommand,
     context: &BidiDevToolsCommandContext,
-) -> Result<DevToolsCommand, BidiError> {
+) -> Result<AutomationCommand, BidiError> {
     match command.method.as_str() {
-        "browser.createUserContext" => Ok(DevToolsCommand::CreateBrowserContext(
+        "browser.createUserContext" => Ok(AutomationCommand::CreateBrowserContext(
             bidi_create_user_context_command(command, context)?,
         )),
-        "browser.getUserContexts" => Ok(DevToolsCommand::GetBrowserContexts(
+        "browser.getUserContexts" => Ok(AutomationCommand::GetBrowserContexts(
             DevToolsGetBrowserContextsCommand {
                 context: context.command_context(None),
             },
         )),
-        "browser.getClientWindows" => Ok(DevToolsCommand::GetClientWindows(
+        "browser.getClientWindows" => Ok(AutomationCommand::GetClientWindows(
             DevToolsGetClientWindowsCommand {
                 context: context.command_context(None),
             },
         )),
-        "browser.setClientWindowState" => Ok(DevToolsCommand::SetClientWindowState(
+        "browser.setClientWindowState" => Ok(AutomationCommand::SetClientWindowState(
             bidi_set_client_window_state_command(command, context)?,
         )),
-        "browser.removeUserContext" => Ok(DevToolsCommand::RemoveBrowserContext(
+        "browser.removeUserContext" => Ok(AutomationCommand::RemoveBrowserContext(
             bidi_remove_user_context_command(command, context)?,
         )),
-        "browser.setDownloadBehavior" => Ok(DevToolsCommand::SetDownloadBehavior(
+        "browser.setDownloadBehavior" => Ok(AutomationCommand::SetDownloadBehavior(
             bidi_set_download_behavior_command(command, context)?,
         )),
-        "permissions.setPermission" => Ok(DevToolsCommand::SetPermission(
+        "permissions.setPermission" => Ok(AutomationCommand::SetPermission(
             bidi_set_permission_command(command, context)?,
         )),
         "browsingContext.create" => {
@@ -88,8 +88,8 @@ pub fn devtools_command_from_bidi_command(
                 context,
                 reference_context.as_ref(),
             )?;
-            Ok(DevToolsCommand::CreateTarget(
-                moli_protocol::devtools_runtime::DevToolsCreateTargetCommand {
+            Ok(AutomationCommand::CreateTarget(
+                moli_protocol::automation::DevToolsCreateTargetCommand {
                     context: context.command_context_with_browser_context_id(
                         reference_context.clone(),
                         browser_context_id.clone(),
@@ -103,14 +103,14 @@ pub fn devtools_command_from_bidi_command(
         "browsingContext.close" => {
             let target_id = required_string(&command.params, "context")?;
             validate_optional_bool(&command.params, "promptUnload")?;
-            Ok(DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
+            Ok(AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
                 context: context.command_context(Some(DevToolsTargetId::from(target_id))),
                 target_id: DevToolsTargetId::from(target_id),
             }))
         }
         "browsingContext.activate" => {
             let target_id = required_string(&command.params, "context")?;
-            Ok(DevToolsCommand::ActivateTarget(
+            Ok(AutomationCommand::ActivateTarget(
                 DevToolsActivateTargetCommand {
                     context: context.command_context(Some(DevToolsTargetId::from(target_id))),
                     target_id: DevToolsTargetId::from(target_id),
@@ -118,15 +118,15 @@ pub fn devtools_command_from_bidi_command(
             ))
         }
         "browsingContext.getTree" => bidi_get_tree_command(command, context),
-        "browsingContext.locateNodes" => Ok(DevToolsCommand::LocateNodes(
+        "browsingContext.locateNodes" => Ok(AutomationCommand::LocateNodes(
             bidi_locate_nodes_command(command, context)?,
         )),
         "browsingContext.navigate" => {
             let target_id = required_string(&command.params, "context")?;
             let url = required_string(&command.params, "url")?;
             validate_bidi_navigation_url(url)?;
-            Ok(DevToolsCommand::Navigate(
-                moli_protocol::devtools_runtime::DevToolsNavigateCommand {
+            Ok(AutomationCommand::Navigate(
+                moli_protocol::automation::DevToolsNavigateCommand {
                     context: context.command_context(Some(DevToolsTargetId::from(target_id))),
                     url: url.to_owned(),
                     referrer: None,
@@ -136,107 +136,107 @@ pub fn devtools_command_from_bidi_command(
         }
         "browsingContext.reload" => {
             let target_id = required_string(&command.params, "context")?;
-            Ok(DevToolsCommand::Reload(DevToolsReloadCommand {
+            Ok(AutomationCommand::Reload(DevToolsReloadCommand {
                 context: context.command_context(Some(DevToolsTargetId::from(target_id))),
                 ignore_cache: optional_bool(&command.params, "ignoreCache")?.unwrap_or(false),
                 script_to_evaluate_on_load: None,
                 wait: bidi_navigation_wait(command.params.get("wait"))?,
             }))
         }
-        "browsingContext.traverseHistory" => Ok(DevToolsCommand::TraverseHistory(
+        "browsingContext.traverseHistory" => Ok(AutomationCommand::TraverseHistory(
             bidi_traverse_history_command(command, context)?,
         )),
-        "browsingContext.handleUserPrompt" => Ok(DevToolsCommand::HandleJavaScriptDialog(
+        "browsingContext.handleUserPrompt" => Ok(AutomationCommand::HandleJavaScriptDialog(
             bidi_handle_user_prompt_command(command, context)?,
         )),
-        "browsingContext.captureScreenshot" => Ok(DevToolsCommand::CaptureScreenshot(
+        "browsingContext.captureScreenshot" => Ok(AutomationCommand::CaptureScreenshot(
             bidi_capture_screenshot_command(command, context)?,
         )),
-        "browsingContext.print" => Ok(DevToolsCommand::PrintToPdf(bidi_print_command(
+        "browsingContext.print" => Ok(AutomationCommand::PrintToPdf(bidi_print_command(
             command, context,
         )?)),
-        "browsingContext.setViewport" => Ok(DevToolsCommand::SetViewport(
+        "browsingContext.setViewport" => Ok(AutomationCommand::SetViewport(
             bidi_set_viewport_command(command, context)?,
         )),
-        "emulation.setUserAgentOverride" => Ok(DevToolsCommand::SetUserAgentOverride(
+        "emulation.setUserAgentOverride" => Ok(AutomationCommand::SetUserAgentOverride(
             bidi_set_user_agent_override_command(command, context)?,
         )),
-        "emulation.setLocaleOverride" => Ok(DevToolsCommand::SetLocaleOverride(
+        "emulation.setLocaleOverride" => Ok(AutomationCommand::SetLocaleOverride(
             bidi_set_locale_override_command(command, context)?,
         )),
-        "emulation.setTimezoneOverride" => Ok(DevToolsCommand::SetTimezoneOverride(
+        "emulation.setTimezoneOverride" => Ok(AutomationCommand::SetTimezoneOverride(
             bidi_set_timezone_override_command(command, context)?,
         )),
-        "emulation.setGeolocationOverride" => Ok(DevToolsCommand::SetGeolocationOverride(
+        "emulation.setGeolocationOverride" => Ok(AutomationCommand::SetGeolocationOverride(
             bidi_set_geolocation_override_command(command, context)?,
         )),
-        "emulation.setNetworkConditions" => Ok(DevToolsCommand::SetNetworkConditions(
+        "emulation.setNetworkConditions" => Ok(AutomationCommand::SetNetworkConditions(
             bidi_set_network_conditions_command(command, context)?,
         )),
-        "network.addIntercept" => Ok(DevToolsCommand::AddNetworkIntercept(
+        "network.addIntercept" => Ok(AutomationCommand::AddNetworkIntercept(
             bidi_network_add_intercept_command(command, context)?,
         )),
-        "network.removeIntercept" => Ok(DevToolsCommand::RemoveNetworkIntercept(
+        "network.removeIntercept" => Ok(AutomationCommand::RemoveNetworkIntercept(
             bidi_network_remove_intercept_command(command, context)?,
         )),
-        "network.addDataCollector" => Ok(DevToolsCommand::AddNetworkDataCollector(
+        "network.addDataCollector" => Ok(AutomationCommand::AddNetworkDataCollector(
             bidi_network_add_data_collector_command(command, context)?,
         )),
-        "network.removeDataCollector" => Ok(DevToolsCommand::RemoveNetworkDataCollector(
+        "network.removeDataCollector" => Ok(AutomationCommand::RemoveNetworkDataCollector(
             bidi_network_remove_data_collector_command(command, context)?,
         )),
-        "network.disownData" => Ok(DevToolsCommand::DisownNetworkData(
+        "network.disownData" => Ok(AutomationCommand::DisownNetworkData(
             bidi_network_disown_data_command(command, context)?,
         )),
-        "network.getData" => Ok(DevToolsCommand::GetNetworkData(
+        "network.getData" => Ok(AutomationCommand::GetNetworkData(
             bidi_network_get_data_command(command, context)?,
         )),
-        "network.setCacheBehavior" => Ok(DevToolsCommand::SetCacheBehavior(
+        "network.setCacheBehavior" => Ok(AutomationCommand::SetCacheBehavior(
             bidi_network_set_cache_behavior_command(command, context)?,
         )),
-        "network.setExtraHeaders" => Ok(DevToolsCommand::SetExtraHeaders(
+        "network.setExtraHeaders" => Ok(AutomationCommand::SetExtraHeaders(
             bidi_network_set_extra_headers_command(command, context)?,
         )),
-        "network.continueRequest" => Ok(DevToolsCommand::ContinueInterceptedRequest(
+        "network.continueRequest" => Ok(AutomationCommand::ContinueInterceptedRequest(
             bidi_network_continue_request_command(command, context)?,
         )),
-        "network.continueResponse" => Ok(DevToolsCommand::ContinueInterceptedResponse(
+        "network.continueResponse" => Ok(AutomationCommand::ContinueInterceptedResponse(
             bidi_network_continue_response_command(command, context)?,
         )),
-        "network.continueWithAuth" => Ok(DevToolsCommand::ContinueWithAuth(
+        "network.continueWithAuth" => Ok(AutomationCommand::ContinueWithAuth(
             bidi_network_continue_with_auth_command(command, context)?,
         )),
-        "network.failRequest" => Ok(DevToolsCommand::FailInterceptedRequest(
+        "network.failRequest" => Ok(AutomationCommand::FailInterceptedRequest(
             bidi_network_fail_request_command(command, context)?,
         )),
-        "network.provideResponse" => Ok(DevToolsCommand::FulfillInterceptedRequest(
+        "network.provideResponse" => Ok(AutomationCommand::FulfillInterceptedRequest(
             bidi_network_provide_response_command(command, context)?,
         )),
-        "storage.getCookies" => Ok(DevToolsCommand::GetCookies(bidi_get_cookies_command(
+        "storage.getCookies" => Ok(AutomationCommand::GetCookies(bidi_get_cookies_command(
             command, context,
         )?)),
-        "storage.setCookie" => Ok(DevToolsCommand::SetCookies(bidi_set_cookie_command(
+        "storage.setCookie" => Ok(AutomationCommand::SetCookies(bidi_set_cookie_command(
             command, context,
         )?)),
-        "storage.deleteCookies" => Ok(DevToolsCommand::DeleteCookies(bidi_delete_cookies_command(
-            command, context,
-        )?)),
-        "script.evaluate" => Ok(DevToolsCommand::EvaluateScript(
+        "storage.deleteCookies" => Ok(AutomationCommand::DeleteCookies(
+            bidi_delete_cookies_command(command, context)?,
+        )),
+        "script.evaluate" => Ok(AutomationCommand::EvaluateScript(
             bidi_evaluate_script_command(command, context)?,
         )),
-        "script.callFunction" => Ok(DevToolsCommand::CallFunction(bidi_call_function_command(
+        "script.callFunction" => Ok(AutomationCommand::CallFunction(bidi_call_function_command(
             command, context,
         )?)),
-        "script.getRealms" => Ok(DevToolsCommand::GetRealms(bidi_get_realms_command(
+        "script.getRealms" => Ok(AutomationCommand::GetRealms(bidi_get_realms_command(
             command, context,
         )?)),
-        "script.disown" => Ok(DevToolsCommand::ReleaseObjects(bidi_disown_command(
+        "script.disown" => Ok(AutomationCommand::ReleaseObjects(bidi_disown_command(
             command, context,
         )?)),
-        "script.addPreloadScript" => Ok(DevToolsCommand::AddPreloadScript(
+        "script.addPreloadScript" => Ok(AutomationCommand::AddPreloadScript(
             bidi_add_preload_script_command(command, context)?,
         )),
-        "script.removePreloadScript" => Ok(DevToolsCommand::RemovePreloadScript(
+        "script.removePreloadScript" => Ok(AutomationCommand::RemovePreloadScript(
             bidi_remove_preload_script_command(command, context)?,
         )),
         method => Err(BidiError::new(BidiErrorCode::UnknownCommand, method)),
@@ -1508,16 +1508,18 @@ fn bidi_create_user_context_browser_context_id(
 fn bidi_get_tree_command(
     command: &BidiCommand,
     context: &BidiDevToolsCommandContext,
-) -> Result<DevToolsCommand, BidiError> {
+) -> Result<AutomationCommand, BidiError> {
     let root = optional_nullable_string(&command.params, "root")?.map(DevToolsTargetId::from);
     let max_depth = bidi_get_tree_max_depth(&command.params)?;
     if let Some(root) = root {
-        return Ok(DevToolsCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
-            context: context.command_context(Some(root)),
-            max_depth,
-        }));
+        return Ok(AutomationCommand::GetFrameTree(
+            DevToolsGetFrameTreeCommand {
+                context: context.command_context(Some(root)),
+                max_depth,
+            },
+        ));
     }
-    Ok(DevToolsCommand::GetFrameTrees(
+    Ok(AutomationCommand::GetFrameTrees(
         DevToolsGetFrameTreesCommand {
             context: context.command_context(None),
             max_depth,

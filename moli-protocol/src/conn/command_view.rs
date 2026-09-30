@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 use tracing::debug;
 
 use crate::{
-    DevToolsBrowserContextId, DevToolsCommandContext, DevToolsProtocol, DevToolsSessionId,
-    DevToolsTargetId,
+    AutomationContext, DevToolsBrowserContextId, DevToolsSessionId, DevToolsTargetId,
+    FrontendProtocol,
 };
 
 /// Ephemeral view of the current in-flight protocol command.
@@ -114,13 +114,13 @@ impl<'a> Cmd<'a> {
     /// Build the protocol-neutral command context for shared DevTools command
     /// dispatch. Existing domain handlers still own target/browser-context
     /// resolution; those IDs can be filled by the caller once resolved.
-    pub fn devtools_command_context(
+    pub fn automation_context(
         &self,
         target_id: Option<impl Into<DevToolsTargetId>>,
         browser_context_id: Option<impl Into<DevToolsBrowserContextId>>,
-    ) -> DevToolsCommandContext {
-        DevToolsCommandContext {
-            protocol: DevToolsProtocol::Cdp,
+    ) -> AutomationContext {
+        AutomationContext {
+            protocol: FrontendProtocol::Cdp,
             session_id: self.session_id.map(DevToolsSessionId::from),
             target_id: target_id.map(Into::into),
             browser_context_id: browser_context_id.map(Into::into),
@@ -175,9 +175,9 @@ mod tests {
             r#"{"id":7,"method":"Runtime.evaluate"}"#,
         );
 
-        let context = cmd.devtools_command_context(Some("target-1"), Some("context-1"));
+        let context = cmd.automation_context(Some("target-1"), Some("context-1"));
 
-        assert_eq!(context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             context.session_id.as_ref().map(DevToolsSessionId::as_str),
             Some("session-1")

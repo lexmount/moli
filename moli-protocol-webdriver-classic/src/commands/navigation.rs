@@ -1,5 +1,5 @@
-use moli_protocol::devtools_runtime::{
-    DevToolsCommand, DevToolsEvaluateScriptCommand, DevToolsGetNavigationHistoryCommand,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsEvaluateScriptCommand, DevToolsGetNavigationHistoryCommand,
     DevToolsGetNavigationHistoryResult, DevToolsGetOuterHtmlCommand, DevToolsGetTargetsCommand,
     DevToolsHistoryTraversalDestination, DevToolsNavigateCommand, DevToolsNavigationWait,
     DevToolsReloadCommand, DevToolsResultOwnership, DevToolsTargetId,
@@ -16,7 +16,7 @@ pub fn navigate_command(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
     wait: DevToolsNavigationWait,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let url = required_string(params, "url")?;
     if Url::parse(url).is_err() {
         return Err(ClassicError::new(
@@ -24,7 +24,7 @@ pub fn navigate_command(
             "url must be a valid absolute URL",
         ));
     }
-    Ok(DevToolsCommand::Navigate(DevToolsNavigateCommand {
+    Ok(AutomationCommand::Navigate(DevToolsNavigateCommand {
         context: context.command_context(),
         url: url.to_owned(),
         referrer: None,
@@ -32,8 +32,8 @@ pub fn navigate_command(
     }))
 }
 
-pub fn current_url_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
-    DevToolsCommand::GetTargets(DevToolsGetTargetsCommand {
+pub fn current_url_command(context: &ClassicDevToolsCommandContext) -> AutomationCommand {
+    AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
         context: context.command_context(),
         root: context.target_id.as_deref().map(DevToolsTargetId::from),
         max_depth: None,
@@ -41,8 +41,8 @@ pub fn current_url_command(context: &ClassicDevToolsCommandContext) -> DevToolsC
     })
 }
 
-pub fn title_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
-    DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+pub fn title_command(context: &ClassicDevToolsCommandContext) -> AutomationCommand {
+    AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -57,8 +57,8 @@ pub fn title_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand
     })
 }
 
-pub fn page_source_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
-    DevToolsCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
+pub fn page_source_command(context: &ClassicDevToolsCommandContext) -> AutomationCommand {
+    AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
         context: context.command_context(),
         reference: None,
         include_shadow_dom: false,
@@ -68,8 +68,8 @@ pub fn page_source_command(context: &ClassicDevToolsCommandContext) -> DevToolsC
 pub fn refresh_command(
     context: &ClassicDevToolsCommandContext,
     wait: DevToolsNavigationWait,
-) -> DevToolsCommand {
-    DevToolsCommand::Reload(DevToolsReloadCommand {
+) -> AutomationCommand {
+    AutomationCommand::Reload(DevToolsReloadCommand {
         context: context.command_context(),
         ignore_cache: false,
         script_to_evaluate_on_load: None,
@@ -77,8 +77,8 @@ pub fn refresh_command(
     })
 }
 
-pub fn navigation_history_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
-    DevToolsCommand::GetNavigationHistory(DevToolsGetNavigationHistoryCommand {
+pub fn navigation_history_command(context: &ClassicDevToolsCommandContext) -> AutomationCommand {
+    AutomationCommand::GetNavigationHistory(DevToolsGetNavigationHistoryCommand {
         context: context.command_context(),
     })
 }
@@ -100,8 +100,8 @@ pub fn traverse_history_command(
     entry_id: i32,
     url: impl Into<String>,
     wait: DevToolsNavigationWait,
-) -> DevToolsCommand {
-    DevToolsCommand::TraverseHistory(DevToolsTraverseHistoryCommand {
+) -> AutomationCommand {
+    AutomationCommand::TraverseHistory(DevToolsTraverseHistoryCommand {
         context: context.command_context(),
         destination: DevToolsHistoryTraversalDestination::Entry {
             entry_id,

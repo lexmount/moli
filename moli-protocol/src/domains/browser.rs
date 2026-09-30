@@ -5,11 +5,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::str::FromStr;
 
-use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd};
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind,
     DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
 };
+use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd};
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
@@ -350,10 +350,10 @@ pub(crate) fn set_download_behavior_command_output_plan(
 
 pub(crate) fn execute_devtools_browser_command(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     match command {
-        DevToolsCommand::SetDownloadBehavior(command) => {
+        AutomationCommand::SetDownloadBehavior(command) => {
             execute_devtools_set_download_behavior(conn, command)
         }
         _ => Err(DevToolsError::new(
@@ -365,10 +365,10 @@ pub(crate) fn execute_devtools_browser_command(
 
 pub(crate) async fn execute_devtools_browser_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     match command {
-        DevToolsCommand::SetPermission(command) => {
+        AutomationCommand::SetPermission(command) => {
             execute_devtools_set_permission_command_async(conn, command).await
         }
         _ => Err(DevToolsError::new(
@@ -381,7 +381,7 @@ pub(crate) async fn execute_devtools_browser_command_async(
 fn execute_devtools_set_download_behavior(
     conn: &mut CdpConnection,
     command: DevToolsSetDownloadBehaviorCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let target_contexts = match command.user_contexts {
         Some(user_contexts) => {
             if user_contexts.is_empty() {
@@ -413,7 +413,7 @@ fn execute_devtools_set_download_behavior(
             }
             None => conn.download_behavior.reset_global(),
         }
-        return Ok(DevToolsCommandResult::Empty);
+        return Ok(AutomationResult::Empty);
     };
 
     if !is_valid_download_behavior(behavior.behavior.as_str()) {
@@ -440,13 +440,13 @@ fn execute_devtools_set_download_behavior(
             behavior.events_enabled,
         ),
     }
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 async fn execute_devtools_set_permission_command_async(
     conn: &mut CdpConnection,
     command: DevToolsSetPermissionCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let browser_context_id = command.browser_context_id.as_ref().map(|id| id.as_str());
     if validate_browser_context_id(conn, browser_context_id).is_err() {
         return Err(DevToolsError::new(
@@ -476,7 +476,7 @@ async fn execute_devtools_set_permission_command_async(
     let pending = start_loaded_page_permission_override_commands(conn)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     if pending.is_empty() {
-        return Ok(DevToolsCommandResult::Empty);
+        return Ok(AutomationResult::Empty);
     }
     let completed = PendingBrowserCommandDispatch {
         command_id: None,
@@ -501,7 +501,7 @@ async fn execute_devtools_set_permission_command_async(
         finish_pending_permission_override_command(conn, command.target, completion)
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     }
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 fn cancel_download(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {

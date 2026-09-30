@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::conn::CapturedBody;
-use crate::devtools_runtime::{
-    DevToolsAddNetworkDataCollectorCommand, DevToolsAddNetworkDataCollectorResult,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsNetworkDataCollectorId,
-    DevToolsNetworkDataType,
+use crate::automation::{
+    AutomationResult, DevToolsAddNetworkDataCollectorCommand,
+    DevToolsAddNetworkDataCollectorResult, DevToolsError, DevToolsErrorKind,
+    DevToolsNetworkDataCollectorId, DevToolsNetworkDataType,
 };
+use crate::conn::CapturedBody;
 
 const MAX_TOTAL_COLLECTED_SIZE: u64 = 200_000_000;
 
@@ -34,7 +34,7 @@ impl NetworkDataCollectorStore {
     pub(crate) fn add_collector(
         &mut self,
         command: DevToolsAddNetworkDataCollectorCommand,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         if command.max_encoded_data_size < 1
             || command.max_encoded_data_size > MAX_TOTAL_COLLECTED_SIZE
         {
@@ -61,7 +61,7 @@ impl NetworkDataCollectorStore {
                     .collect(),
             },
         );
-        Ok(DevToolsCommandResult::AddNetworkDataCollector(
+        Ok(AutomationResult::AddNetworkDataCollector(
             DevToolsAddNetworkDataCollectorResult {
                 collector_id: DevToolsNetworkDataCollectorId::from(collector_id),
             },

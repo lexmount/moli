@@ -3,13 +3,13 @@ use std::fmt;
 use moli_core::RendererOutputTransportMessage;
 
 use crate::{
+    automation::AutomationContext,
     conn::{
         BidiChannelOwnerAction, CdpConnection, DeferredMainDocumentLoadCompletionOutputAction,
         DeferredMainDocumentLoadCompletionOutputInterest,
         PendingDeferredMainDocumentLoadCompletion, PopupTargetActivationAction,
         PopupTargetNavigationOwnerAction, TopLevelLocationNavigationOwnerAction,
     },
-    devtools_runtime::DevToolsCommandContext,
 };
 
 use super::{
@@ -412,7 +412,7 @@ impl ProtocolSchedulerWork {
     pub fn observes_main_document_load_for_devtools_context(
         &self,
         conn: &CdpConnection,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
     ) -> bool {
         let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
         else {

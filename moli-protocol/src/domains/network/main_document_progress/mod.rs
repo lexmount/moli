@@ -16,12 +16,12 @@ use moli_fetch::{
 use std::sync::Arc;
 use url::Url;
 
+use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
     NavigationLoadOutcome, NavigationRequestBlocked, ResponseCommitReady, TargetRuntimeSlot,
 };
-use crate::devtools_runtime::DevToolsRequestFailure;
 
 #[cfg(test)]
 use gate::MainDocumentProgressDrain;
@@ -459,11 +459,11 @@ fn completed_document_body_progress_queue(
             let encoded_data_length = body.len();
             let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
                 owner_session_id,
-                crate::devtools_runtime::DevToolsNetworkDataType::Response,
+                crate::automation::DevToolsNetworkDataType::Response,
                 encoded_data_length,
             );
             let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-                crate::devtools_runtime::DevToolsNetworkDataType::Response,
+                crate::automation::DevToolsNetworkDataType::Response,
             );
             if network_observed
                 && !synthetic
@@ -471,7 +471,7 @@ fn completed_document_body_progress_queue(
             {
                 conn.record_collected_network_data_body(
                     request_id,
-                    crate::devtools_runtime::DevToolsNetworkDataType::Response,
+                    crate::automation::DevToolsNetworkDataType::Response,
                     body.clone(),
                     collector_ids.iter().cloned(),
                     collection_was_gated,
@@ -1424,7 +1424,7 @@ fn record_child_document_response_body(
     session_ids: &[Option<String>],
     response_body: Option<&moli_core::page::SubresourceResponseBody>,
 ) {
-    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
+    let data_type = crate::automation::DevToolsNetworkDataType::Response;
     let encoded_data_length = response_body.map_or(0, |body| body.len());
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         owner_session_id,
@@ -2209,11 +2209,11 @@ fn record_pending_main_document_response_body(
     };
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         state.session_id.as_deref(),
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
     );
     if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
         runtime_slot.record_pending_response_body_with_collector_scope(
@@ -2239,7 +2239,7 @@ pub(crate) fn record_main_document_request_body(
         return;
     };
     let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
-    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
+    let data_type = crate::automation::DevToolsNetworkDataType::Request;
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         state.session_id.as_deref(),
         data_type,
@@ -2287,11 +2287,11 @@ pub(crate) fn record_failed_main_document_response_body(
     let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         state.session_id.as_deref(),
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
     );
     if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
         runtime_slot.record_failed_response_body_with_collector_scope(
@@ -2314,11 +2314,11 @@ pub(crate) fn record_completed_main_document_response_body(
     let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         state.session_id.as_deref(),
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
         response_body.len(),
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
     );
     if network_enabled
         && !synthetic
@@ -2326,7 +2326,7 @@ pub(crate) fn record_completed_main_document_response_body(
     {
         conn.record_collected_network_data_body(
             request_id,
-            crate::devtools_runtime::DevToolsNetworkDataType::Response,
+            crate::automation::DevToolsNetworkDataType::Response,
             response_body.clone(),
             collector_ids.iter().cloned(),
             collection_was_gated,

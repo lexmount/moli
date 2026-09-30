@@ -3,11 +3,11 @@ use moli_core::page::{
     RendererPendingFileChooserActivation,
 };
 
+use crate::automation::{
+    DevToolsRemoteHandleId, webdriver_bidi_node_shared_id_for_backend_node_id,
+};
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity,
-};
-use crate::devtools_runtime::{
-    DevToolsRemoteHandleId, webdriver_bidi_node_shared_id_for_backend_node_id,
 };
 
 /// A renderer file-chooser activation bound to the exact Page residence from

@@ -7,21 +7,19 @@ async fn devtools_fetch_control_command_routes_through_fetch_owner() {
         "BID-fetch-control",
         "TID-fetch-control",
     ));
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let outcome = conn
-        .execute_devtools_command(DevToolsCommand::FailInterceptedRequest(
+        .execute_automation_command(AutomationCommand::FailInterceptedRequest(
             DevToolsFailInterceptedRequestCommand {
                 context: context.clone(),
                 request_id: DevToolsRequestId::from("INT-99"),
-                failure: crate::devtools_runtime::DevToolsRequestFailure::Failed(
-                    "Failed".to_owned(),
-                ),
+                failure: crate::automation::DevToolsRequestFailure::Failed("Failed".to_owned()),
             },
         ))
         .await;
@@ -33,7 +31,7 @@ async fn devtools_fetch_control_command_routes_through_fetch_owner() {
     assert_eq!(error.message, "RequestNotFound");
 
     let outcome = conn
-        .execute_devtools_command(DevToolsCommand::ContinueWithAuth(
+        .execute_automation_command(AutomationCommand::ContinueWithAuth(
             DevToolsContinueWithAuthCommand {
                 context,
                 request_id: DevToolsRequestId::from("foo"),
@@ -53,17 +51,17 @@ async fn devtools_fetch_control_command_routes_through_fetch_owner() {
 }
 
 #[tokio::test]
-async fn devtools_command_navigates_explicit_about_blank_without_fetch() {
+async fn automation_command_navigates_explicit_about_blank_without_fetch() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let create_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let create_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context: context.clone(),
             url: "about:blank".to_owned(),
             browser_context_id: None,
@@ -71,20 +69,20 @@ async fn devtools_command_navigates_explicit_about_blank_without_fetch() {
         }),
     )
     .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
     let target_id = create_result.target_id.clone();
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(target_id),
         ..context
     };
 
-    let data_navigate = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let data_navigate = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "data:text/html,<script>window.marker='old'</script><p>old</p>".to_owned(),
             referrer: None,
@@ -105,9 +103,9 @@ async fn devtools_command_navigates_explicit_about_blank_without_fetch() {
         "old"
     );
 
-    let blank_navigate = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let blank_navigate = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "about:blank".to_owned(),
             referrer: None,
@@ -115,7 +113,7 @@ async fn devtools_command_navigates_explicit_about_blank_without_fetch() {
         }),
     )
     .await;
-    let DevToolsCommandResult::Navigate(blank_navigate) =
+    let AutomationResult::Navigate(blank_navigate) =
         blank_navigate.expect("about:blank navigate should succeed")
     else {
         panic!("expected navigate result");
@@ -144,17 +142,17 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     let mut browser_context = BrowserContext::new("BID-bidi-intercept".to_owned());
     browser_context.set_active_target_id("TID-bidi-intercept".to_owned());
     conn.install_browser_context_fixture_for_test(browser_context);
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (unknown_target_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
+        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
+                context: AutomationContext {
                     target_id: Some(DevToolsTargetId::from("missing-target")),
                     ..context.clone()
                 },
@@ -183,7 +181,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     );
 
     let (result, _) = conn
-        .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
+        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
                 context: context.clone(),
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-1"),
@@ -199,7 +197,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         ))
         .await
         .into_parts();
-    let DevToolsCommandResult::AddNetworkIntercept(result) =
+    let AutomationResult::AddNetworkIntercept(result) =
         result.expect("add intercept should succeed")
     else {
         panic!("expected AddNetworkIntercept result");
@@ -225,7 +223,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     );
 
     let (result, _) = conn
-        .execute_devtools_command(DevToolsCommand::RemoveNetworkIntercept(
+        .execute_automation_command(AutomationCommand::RemoveNetworkIntercept(
             DevToolsRemoveNetworkInterceptCommand {
                 context: context.clone(),
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-1"),
@@ -235,7 +233,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         .into_parts();
     assert_eq!(
         result.expect("remove intercept should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert!(
         !conn
@@ -256,9 +254,9 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
             "https://example.test/background".to_owned(),
         ));
     let (result, _) = conn
-        .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
+        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
+                context: AutomationContext {
                     target_id: Some(DevToolsTargetId::from("TID-bidi-intercept-background")),
                     ..context.clone()
                 },
@@ -281,7 +279,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     );
 
     let (result, _) = conn
-        .execute_devtools_command(DevToolsCommand::RemoveNetworkIntercept(
+        .execute_automation_command(AutomationCommand::RemoveNetworkIntercept(
             DevToolsRemoveNetworkInterceptCommand {
                 context: context.clone(),
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-background"),
@@ -291,7 +289,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         .into_parts();
     assert_eq!(
         result.expect("target-less remove should find background intercept"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert!(
         conn.browser_context
@@ -304,9 +302,9 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     );
 
     let (auth_only_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
+        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
+                context: AutomationContext {
                     target_id: Some(DevToolsTargetId::from("TID-bidi-intercept")),
                     ..context.clone()
                 },

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsScriptException, DevToolsStackCallFrame, DevToolsStackTrace, DevToolsTargetId,
     LogEntryEvent, RuntimeConsoleEvent, ScriptExceptionEvent,
 };
@@ -605,8 +605,8 @@ fn parse_stack_location(location: &str) -> Option<(&str, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    use crate::automation::AutomationEvent;
     use crate::conn::BackgroundProtocolEvent;
-    use crate::devtools_runtime::AutomationEvent;
     use serde_json::json;
 
     use super::ObservableOutputItem;
@@ -767,7 +767,7 @@ Error: Console
 
     #[test]
     fn runtime_console_background_event_preserves_sidecar_and_message() {
-        let target_id = crate::devtools_runtime::DevToolsTargetId::from("TID-1");
+        let target_id = crate::automation::DevToolsTargetId::from("TID-1");
         let event = super::runtime_console_api_called_background_event(
             Some("SID-1"),
             Some(&target_id),
@@ -808,7 +808,7 @@ Error: Console
 
     #[test]
     fn runtime_exception_background_event_preserves_sidecar_and_message() {
-        let target_id = crate::devtools_runtime::DevToolsTargetId::from("TID-1");
+        let target_id = crate::automation::DevToolsTargetId::from("TID-1");
         let event = super::runtime_exception_thrown_background_event(
             Some("SID-1"),
             Some(&target_id),

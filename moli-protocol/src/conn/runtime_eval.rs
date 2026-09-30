@@ -5,7 +5,7 @@ use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Map, Value, json};
 
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsRemoteValue,
     DevToolsResultOwnership, DevToolsTargetId, RuntimeExecutionContextEvent, ScriptMessageEvent,
 };

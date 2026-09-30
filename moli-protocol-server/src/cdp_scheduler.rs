@@ -21,10 +21,8 @@ use moli_protocol::{
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
     ProtocolSchedulerWorkKind, RuntimeCommandOutputBarriers,
+    automation::{AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait},
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
-    devtools_runtime::{
-        DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsNavigationWait,
-    },
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -87,13 +85,13 @@ pub(crate) enum CommandTaskStep {
     Complete(Box<CommandTurnOutput>),
 }
 
-pub(crate) struct DevToolsCommandExecution {
-    pub(crate) result: Result<DevToolsCommandResult, DevToolsError>,
+pub(crate) struct AutomationExecution {
+    pub(crate) result: Result<AutomationResult, DevToolsError>,
     pub(crate) protocol_output: ProtocolOutputSequence,
 }
 
-pub(crate) struct DevToolsPageCommandExecution {
-    pub(crate) execution: DevToolsCommandExecution,
+pub(crate) struct AutomationPageExecution {
+    pub(crate) execution: AutomationExecution,
     pub(crate) page_residence: Option<DevToolsPageResidenceIdentity>,
 }
 
@@ -128,7 +126,7 @@ enum DefaultTargetRuntimeInitialization {
 impl CdpScheduler {
     pub(crate) fn page_residence_identity_for_devtools_context(
         &mut self,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> Option<DevToolsPageResidenceIdentity> {
         self.conn
             .page_residence_identity_for_devtools_context(context)
@@ -944,26 +942,26 @@ impl CdpScheduler {
         self.conn.snapshot_profile_backed_cookies()
     }
 
-    pub(crate) async fn execute_devtools_command_with_protocol_messages(
+    pub(crate) async fn execute_automation_command_with_protocol_messages(
         &mut self,
-        command: DevToolsCommand,
-    ) -> DevToolsCommandExecution {
-        self.execute_devtools_command_with_protocol_messages_inner(None, command, true, None)
+        command: AutomationCommand,
+    ) -> AutomationExecution {
+        self.execute_automation_command_with_protocol_messages_inner(None, command, true, None)
             .await
     }
 
-    async fn execute_devtools_command_with_protocol_messages_inner(
+    async fn execute_automation_command_with_protocol_messages_inner(
         &mut self,
         receivers: Option<&mut CdpSchedulerEventReceivers>,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         drain_load_completion: bool,
         background_command_id: Option<u64>,
-    ) -> DevToolsCommandExecution {
+    ) -> AutomationExecution {
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_context = command.context().clone();
         let outcome = self
             .conn
-            .execute_devtools_command_with_protocol_events_with_background_command_id(
+            .execute_automation_command_with_protocol_events_with_background_command_id(
                 command,
                 background_command_id,
             )
@@ -998,7 +996,7 @@ impl CdpScheduler {
                 );
             } else {
                 result = Err(DevToolsError::new(
-                    moli_protocol::devtools_runtime::DevToolsErrorKind::Internal,
+                    moli_protocol::automation::DevToolsErrorKind::Internal,
                     "DevTools command produced renderer output without an ingress receiver",
                 ));
             }
@@ -1014,7 +1012,7 @@ impl CdpScheduler {
                     .await,
             );
         }
-        DevToolsCommandExecution {
+        AutomationExecution {
             result,
             protocol_output,
         }
@@ -1105,37 +1103,37 @@ impl CdpScheduler {
         self.conn.replace_root_target_discovery_enabled(enabled)
     }
 
-    pub(crate) async fn execute_devtools_command_with_external_load_wait(
+    pub(crate) async fn execute_automation_command_with_external_load_wait(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages(
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
+        self.execute_automation_command_with_external_load_wait_and_protocol_messages(
             receivers, command,
         )
         .await
         .result
     }
 
-    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages(
+    pub(crate) async fn execute_automation_command_with_external_load_wait_and_protocol_messages(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
-    ) -> DevToolsCommandExecution {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
+        command: AutomationCommand,
+    ) -> AutomationExecution {
+        self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
             receivers, command, None, None, None,
         )
         .await
         .execution
     }
 
-    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages_background_command_id(
+    pub(crate) async fn execute_automation_command_with_external_load_wait_and_protocol_messages_background_command_id(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         background_command_id: Option<u64>,
-    ) -> DevToolsCommandExecution {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
+    ) -> AutomationExecution {
+        self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
             receivers,
             command,
             None,
@@ -1146,14 +1144,14 @@ impl CdpScheduler {
         .execution
     }
 
-    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_page_residence(
+    pub(crate) async fn execute_automation_command_with_external_load_wait_and_page_residence(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<std::time::Duration>,
         expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> DevToolsPageCommandExecution {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
+    ) -> AutomationPageExecution {
+        self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
             receivers,
             command,
             timeout,
@@ -1163,14 +1161,14 @@ impl CdpScheduler {
         .await
     }
 
-    async fn execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
+    async fn execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<std::time::Duration>,
         background_command_id: Option<u64>,
         expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> DevToolsPageCommandExecution {
+    ) -> AutomationPageExecution {
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_lifecycle_milestone =
             devtools_navigation_lifecycle_milestone(navigation_wait);
@@ -1191,8 +1189,8 @@ impl CdpScheduler {
             Ok(output) => output,
             Err(failure) => {
                 let (protocol_output, error) = failure.into_parts();
-                return DevToolsPageCommandExecution {
-                    execution: DevToolsCommandExecution {
+                return AutomationPageExecution {
+                    execution: AutomationExecution {
                         result: Err(error),
                         protocol_output,
                     },
@@ -1206,10 +1204,10 @@ impl CdpScheduler {
         // dispatched to the replacement Page.
         let page_residence = self.page_residence_identity_for_devtools_context(&navigation_context);
         if expected_page.is_some_and(|expected| page_residence.as_ref() != Some(expected)) {
-            return DevToolsPageCommandExecution {
-                execution: DevToolsCommandExecution {
+            return AutomationPageExecution {
+                execution: AutomationExecution {
                     result: Err(DevToolsError::new(
-                        moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchNode,
+                        moli_protocol::automation::DevToolsErrorKind::NoSuchNode,
                         "DOM reference belongs to a replaced Page",
                     )),
                     protocol_output,
@@ -1219,7 +1217,7 @@ impl CdpScheduler {
         }
         let navigation_command_output_start = protocol_output.len();
         let mut execution =
-            if runtime_dispatch::devtools_command_uses_interleaved_runtime_dispatch(&command) {
+            if runtime_dispatch::automation_command_uses_interleaved_runtime_dispatch(&command) {
                 match timeout {
                     Some(timeout) => {
                         self.execute_devtools_runtime_command_with_interleaved_progress_timeout(
@@ -1239,7 +1237,7 @@ impl CdpScheduler {
                     Some(timeout) => {
                         match tokio::time::timeout(
                             timeout,
-                            self.execute_devtools_command_with_protocol_messages_inner(
+                            self.execute_automation_command_with_protocol_messages_inner(
                                 Some(&mut *receivers),
                                 command,
                                 false,
@@ -1249,9 +1247,9 @@ impl CdpScheduler {
                         .await
                         {
                             Ok(execution) => execution,
-                            Err(_) => DevToolsCommandExecution {
+                            Err(_) => AutomationExecution {
                                 result: Err(DevToolsError::new(
-                                    moli_protocol::devtools_runtime::DevToolsErrorKind::Timeout,
+                                    moli_protocol::automation::DevToolsErrorKind::Timeout,
                                     "script timed out",
                                 )),
                                 protocol_output: ProtocolOutputSequence::empty(),
@@ -1259,7 +1257,7 @@ impl CdpScheduler {
                         }
                     }
                     None => {
-                        self.execute_devtools_command_with_protocol_messages_inner(
+                        self.execute_automation_command_with_protocol_messages_inner(
                             Some(&mut *receivers),
                             command,
                             false,
@@ -1402,7 +1400,7 @@ impl CdpScheduler {
                     .devtools_context_routes_to_top_level_target(&navigation_context)
                 {
                     execution.result = Err(DevToolsError::new(
-                        moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchTarget,
+                        moli_protocol::automation::DevToolsErrorKind::NoSuchTarget,
                         "Target closed before navigation load",
                     ));
                 }
@@ -1415,7 +1413,7 @@ impl CdpScheduler {
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.finish());
-        DevToolsPageCommandExecution {
+        AutomationPageExecution {
             execution,
             page_residence,
         }
@@ -1424,7 +1422,7 @@ impl CdpScheduler {
     async fn drain_inflight_background_navigation_before_internal_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
         while self
@@ -1451,7 +1449,7 @@ impl CdpScheduler {
     async fn wait_for_document_lifecycle_observer(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
         key: &moli_protocol::DevToolsDocumentLifecycleWaitKey,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
@@ -1487,11 +1485,11 @@ impl CdpScheduler {
     pub(crate) async fn wait_for_devtools_context_document_lifecycle(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
         milestone: RendererDocumentLifecycleMilestone,
         timeout: Option<std::time::Duration>,
-    ) -> DevToolsCommandExecution {
-        use moli_protocol::devtools_runtime::DevToolsErrorKind;
+    ) -> AutomationExecution {
+        use moli_protocol::automation::DevToolsErrorKind;
         use moli_protocol::{DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState};
 
         let started = Instant::now();
@@ -1503,7 +1501,7 @@ impl CdpScheduler {
                 .devtools_context_document_navigation_state(context);
             let loader_id = match navigation_state.clone() {
                 DevToolsDocumentNavigationState::Unavailable => {
-                    return DevToolsCommandExecution {
+                    return AutomationExecution {
                         result: Err(DevToolsError::new(
                             DevToolsErrorKind::NoSuchTarget,
                             "Target closed while waiting for document navigation",
@@ -1536,7 +1534,7 @@ impl CdpScheduler {
                         Err(failure) => {
                             let (progress, error) = failure.into_parts();
                             protocol_output.append(progress);
-                            return DevToolsCommandExecution {
+                            return AutomationExecution {
                                 result: Err(error),
                                 protocol_output,
                             };
@@ -1580,7 +1578,7 @@ impl CdpScheduler {
                     Err(failure) => {
                         let (progress, error) = failure.into_parts();
                         protocol_output.append(progress);
-                        return DevToolsCommandExecution {
+                        return AutomationExecution {
                             result: Err(error),
                             protocol_output,
                         };
@@ -1597,8 +1595,8 @@ impl CdpScheduler {
                     DevToolsDocumentLifecycleWaitState::Reached => {
                         self.conn
                             .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
-                            result: Ok(DevToolsCommandResult::Empty),
+                        return AutomationExecution {
+                            result: Ok(AutomationResult::Empty),
                             protocol_output,
                         };
                     }
@@ -1611,7 +1609,7 @@ impl CdpScheduler {
                     | DevToolsDocumentLifecycleWaitState::Unavailable => {
                         self.conn
                             .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
+                        return AutomationExecution {
                             result: Err(devtools_document_lifecycle_wait_error(
                                 wait_state, milestone,
                             )
@@ -1647,7 +1645,7 @@ impl CdpScheduler {
                         protocol_output.append(progress);
                         self.conn
                             .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
+                        return AutomationExecution {
                             result: Err(error),
                             protocol_output,
                         };
@@ -1663,7 +1661,7 @@ impl CdpScheduler {
         started: Instant,
         timeout: Option<std::time::Duration>,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        use moli_protocol::devtools_runtime::DevToolsErrorKind;
+        use moli_protocol::automation::DevToolsErrorKind;
 
         let input = match timeout {
             Some(timeout) => {
@@ -1698,7 +1696,7 @@ impl CdpScheduler {
 
     async fn drain_deferred_main_document_load_completion_for_wait(
         &mut self,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> ProtocolOutputSequence {
         let mut out = ProtocolOutputSequence::empty();
         loop {
@@ -1740,7 +1738,7 @@ impl CdpScheduler {
     async fn drain_deferred_main_document_load_completion_until_complete(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
         loop {
@@ -2023,7 +2021,7 @@ impl CdpScheduler {
 
     fn front_protocol_residence_is_main_document_load_action_for_context(
         &self,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> bool {
         matches!(
             self.queues.protocol_residences.front(),
@@ -2035,7 +2033,7 @@ impl CdpScheduler {
 
     fn has_deferred_main_document_load_completion_for_devtools_context(
         &self,
-        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+        context: &moli_protocol::automation::AutomationContext,
     ) -> bool {
         self.queues.protocol_residences.iter().any(|residence| {
             matches!(
@@ -2875,16 +2873,16 @@ fn renderer_output_transport_terminal_error(
         "closed"
     };
     DevToolsError::new(
-        moli_protocol::devtools_runtime::DevToolsErrorKind::Internal,
+        moli_protocol::automation::DevToolsErrorKind::Internal,
         format!("Renderer output transport {reason} before {boundary}"),
     )
 }
 
-fn devtools_navigation_wait(command: &DevToolsCommand) -> Option<DevToolsNavigationWait> {
+fn devtools_navigation_wait(command: &AutomationCommand) -> Option<DevToolsNavigationWait> {
     match command {
-        DevToolsCommand::Navigate(command) => Some(command.wait),
-        DevToolsCommand::Reload(command) => Some(command.wait),
-        DevToolsCommand::TraverseHistory(command) => Some(command.wait),
+        AutomationCommand::Navigate(command) => Some(command.wait),
+        AutomationCommand::Reload(command) => Some(command.wait),
+        AutomationCommand::TraverseHistory(command) => Some(command.wait),
         _ => None,
     }
 }
@@ -2902,9 +2900,9 @@ fn devtools_navigation_lifecycle_milestone(
 }
 
 fn devtools_navigation_result_loader_id(
-    result: &Result<DevToolsCommandResult, DevToolsError>,
+    result: &Result<AutomationResult, DevToolsError>,
 ) -> Option<String> {
-    let Ok(DevToolsCommandResult::Navigate(result)) = result else {
+    let Ok(AutomationResult::Navigate(result)) = result else {
         return None;
     };
     result
@@ -2925,7 +2923,7 @@ fn devtools_document_lifecycle_wait_error(
     milestone: RendererDocumentLifecycleMilestone,
 ) -> Option<DevToolsError> {
     use moli_protocol::DevToolsDocumentLifecycleWaitState;
-    use moli_protocol::devtools_runtime::DevToolsErrorKind;
+    use moli_protocol::automation::DevToolsErrorKind;
 
     let milestone_name = match milestone {
         RendererDocumentLifecycleMilestone::DomContentLoaded => "DOMContentLoaded",

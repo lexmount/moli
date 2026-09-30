@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     AutomationEvent, DevToolsNetworkInterceptId, NetworkRedirectResponseEvent, NetworkRequestEvent,
     webdriver_bidi_navigation_id_from_loader_id,
 };
@@ -1183,7 +1183,7 @@ fn json_number_as_u64(value: &Value) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use moli_protocol::devtools_runtime::{
+    use moli_protocol::automation::{
         AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkInterceptId,
         DevToolsNetworkResourceType, DevToolsRequestId, DevToolsTargetId, NetworkRequestEvent,
     };

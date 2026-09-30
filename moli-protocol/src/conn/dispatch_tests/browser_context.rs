@@ -15,15 +15,15 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
         &initial_storage_owner,
     );
     let mut conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, create_events) = conn
-        .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
+        .execute_automation_command(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context,
                 browser_context_id: None,
@@ -39,7 +39,7 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
         .into_parts();
 
     assert!(create_events.is_empty());
-    let DevToolsCommandResult::CreateBrowserContext(create_result) =
+    let AutomationResult::CreateBrowserContext(create_result) =
         create_result.expect("create browser context should succeed")
     else {
         panic!("expected create browser context result");
@@ -67,15 +67,15 @@ async fn devtools_browser_context_create_rejects_persistent_partition_id() {
         ("tenant/a", "InvalidPersistentBrowserContextId"),
     ] {
         let mut conn = CdpConnection::new();
-        let context = DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+        let context = AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: Some(DevToolsSessionId::from("bidi-session-1")),
             target_id: None,
             browser_context_id: None,
         };
 
         let (create_result, create_events) = conn
-            .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
+            .execute_automation_command(AutomationCommand::CreateBrowserContext(
                 DevToolsCreateBrowserContextCommand {
                     context,
                     browser_context_id: None,
@@ -104,15 +104,15 @@ async fn devtools_browser_context_create_rejects_persistent_partition_id() {
 #[tokio::test]
 async fn devtools_browser_context_commands_create_list_and_remove_user_context() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, create_events) = conn
-        .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
+        .execute_automation_command(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context: context.clone(),
                 browser_context_id: None,
@@ -127,7 +127,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         .await
         .into_parts();
     assert!(create_events.is_empty());
-    let DevToolsCommandResult::CreateBrowserContext(create_result) =
+    let AutomationResult::CreateBrowserContext(create_result) =
         create_result.expect("create browser context should succeed")
     else {
         panic!("expected create browser context result");
@@ -152,14 +152,14 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
     assert_eq!(created_context.proxy_socks_version, None);
 
     let (get_contexts_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetBrowserContexts(
+        .execute_automation_command(AutomationCommand::GetBrowserContexts(
             DevToolsGetBrowserContextsCommand {
                 context: context.clone(),
             },
         ))
         .await
         .into_parts();
-    let DevToolsCommandResult::GetBrowserContexts(get_contexts_result) =
+    let AutomationResult::GetBrowserContexts(get_contexts_result) =
         get_contexts_result.expect("get browser contexts should succeed")
     else {
         panic!("expected get browser contexts result");
@@ -172,22 +172,24 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
     );
 
     let (create_target_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: Some(create_result.browser_context_id.clone()),
-            activate: true,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: Some(create_result.browser_context_id.clone()),
+                activate: true,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_target_result) =
+    let AutomationResult::CreateTarget(create_target_result) =
         create_target_result.expect("create target in user context should succeed")
     else {
         panic!("expected create target result");
     };
 
     let (remove_result, _, remove_events) = conn
-        .execute_devtools_command_with_protocol_events(DevToolsCommand::RemoveBrowserContext(
+        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: create_result.browser_context_id,
@@ -197,7 +199,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         .into_parts_with_protocol_events();
     assert_eq!(
         remove_result.expect("remove browser context should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert!(!conn.has_browser_context_id("user-context-1"));
     assert!(
@@ -232,15 +234,15 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
 #[tokio::test]
 async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_metadata() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, create_events) = conn
-        .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
+        .execute_automation_command(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context,
                 browser_context_id: None,
@@ -255,7 +257,7 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
         .await
         .into_parts();
     assert!(create_events.is_empty());
-    let DevToolsCommandResult::CreateBrowserContext(create_result) =
+    let AutomationResult::CreateBrowserContext(create_result) =
         create_result.expect("create browser context should succeed")
     else {
         panic!("expected create browser context result");
@@ -277,14 +279,14 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
 #[tokio::test]
 async fn devtools_remove_browser_context_rejects_unknown_user_context() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (remove_result, _, remove_events) = conn
-        .execute_devtools_command_with_protocol_events(DevToolsCommand::RemoveBrowserContext(
+        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: DevToolsBrowserContextId::from("missing-user-context"),
@@ -306,20 +308,22 @@ async fn devtools_create_target_explicit_default_browser_context_materializes_de
     conn.insert_browser_context(user_context);
 
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: None,
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: None,
+                    browser_context_id: Some(DevToolsBrowserContextId::from("BID-default")),
+                },
+                url: "about:blank".to_owned(),
                 browser_context_id: Some(DevToolsBrowserContextId::from("BID-default")),
+                activate: true,
             },
-            url: "about:blank".to_owned(),
-            browser_context_id: Some(DevToolsBrowserContextId::from("BID-default")),
-            activate: true,
-        }))
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target in explicit default context should succeed")
     else {
         panic!("expected create target result");
@@ -354,21 +358,23 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
     conn.insert_browser_context(reference_context);
 
     let (create_result, create_events) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: Some(DevToolsTargetId::from("TID-reference")),
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: Some(DevToolsTargetId::from("TID-reference")),
+                    browser_context_id: None,
+                },
+                url: "about:blank".to_owned(),
                 browser_context_id: None,
+                activate: true,
             },
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: true,
-        }))
+        ))
         .await
         .into_parts();
     assert!(create_events.is_empty());
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target from reference context should succeed")
     else {
         panic!("expected create target result");
@@ -412,21 +418,23 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
     conn.insert_browser_context(explicit_context);
 
     let (create_result, create_events) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: Some(DevToolsTargetId::from("TID-reference")),
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: Some(DevToolsTargetId::from("TID-reference")),
+                    browser_context_id: Some(DevToolsBrowserContextId::from("BID-explicit")),
+                },
+                url: "about:blank".to_owned(),
                 browser_context_id: Some(DevToolsBrowserContextId::from("BID-explicit")),
+                activate: true,
             },
-            url: "about:blank".to_owned(),
-            browser_context_id: Some(DevToolsBrowserContextId::from("BID-explicit")),
-            activate: true,
-        }))
+        ))
         .await
         .into_parts();
     assert!(create_events.is_empty());
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("explicit browser context target creation should succeed")
     else {
         panic!("expected create target result");
@@ -459,21 +467,21 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
 }
 
 #[tokio::test]
-async fn devtools_command_preserves_remove_browser_context_detached_typed_sidecar() {
+async fn automation_command_preserves_remove_browser_context_detached_typed_sidecar() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("user-context-detach-sidecar".to_owned());
     browser_context.set_active_target_id("TID-dispose-sidecar".to_owned());
     browser_context.attach_active_session("SID-dispose-sidecar".to_owned());
     conn.insert_browser_context(browser_context);
 
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (result, scheduler_events, protocol_events) = conn
-        .execute_devtools_command_with_protocol_events(DevToolsCommand::RemoveBrowserContext(
+        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: DevToolsBrowserContextId::from("user-context-detach-sidecar"),
@@ -485,7 +493,7 @@ async fn devtools_command_preserves_remove_browser_context_detached_typed_sideca
     assert!(scheduler_events.is_empty());
     assert_eq!(
         result.expect("remove browser context should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     let mut saw_detached = false;
     for event in protocol_events {
@@ -508,18 +516,18 @@ async fn devtools_command_preserves_remove_browser_context_detached_typed_sideca
 }
 
 #[tokio::test]
-async fn devtools_command_rejects_missing_user_context_viewport_override() {
+async fn automation_command_rejects_missing_user_context_viewport_override() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (viewport_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::SetViewport(DevToolsSetViewportCommand {
+        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
             context: context.clone(),
-            browser_context_ids: vec![crate::devtools_runtime::DevToolsBrowserContextId::from(
+            browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
                 "custom-user-context",
             )],
             viewport: DevToolsViewportSetting::Dimensions {
@@ -539,20 +547,20 @@ async fn devtools_command_rejects_missing_user_context_viewport_override() {
 }
 
 #[tokio::test]
-async fn devtools_command_applies_known_user_context_viewport_default() {
+async fn automation_command_applies_known_user_context_viewport_default() {
     let mut conn = CdpConnection::new();
     let browser_context = conn.new_browser_context("custom-user-context".to_owned());
     conn.insert_browser_context(browser_context);
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (viewport_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::SetViewport(DevToolsSetViewportCommand {
+        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
             context: context.clone(),
-            browser_context_ids: vec![crate::devtools_runtime::DevToolsBrowserContextId::from(
+            browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
                 "custom-user-context",
             )],
             viewport: DevToolsViewportSetting::Dimensions {
@@ -568,7 +576,7 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
 
     assert_eq!(
         viewport_result.expect("known userContext setViewport should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     let browser_context = conn
         .browser_context_by_id("custom-user-context")
@@ -586,15 +594,17 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
     assert_eq!(default_metrics.device_scale_factor, 2.0);
 
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: Some(DevToolsBrowserContextId::from("custom-user-context")),
-            activate: true,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: Some(DevToolsBrowserContextId::from("custom-user-context")),
+                activate: true,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target in userContext should succeed")
     else {
         panic!("expected create target result");
@@ -627,24 +637,24 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     conn.install_browser_context_fixture_for_test(default_context);
     conn.push_inactive_browser_context_fixture_for_test(custom_context);
 
-    let base_context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let base_context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let default_target_context = DevToolsCommandContext {
+    let default_target_context = AutomationContext {
         target_id: Some(DevToolsTargetId::from("TID-default")),
         ..base_context.clone()
     };
-    let custom_target_context = DevToolsCommandContext {
+    let custom_target_context = AutomationContext {
         target_id: Some(DevToolsTargetId::from("TID-custom")),
         ..base_context
     };
     let cookie_url = "https://example.com/path".to_owned();
 
     let (set_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::SetCookies(DevToolsSetCookiesCommand {
+        .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
             context: custom_target_context.clone(),
             browser_context_id: None,
             cookies: vec![DevToolsCookieParam {
@@ -666,7 +676,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::SetCookies(set_result) =
+    let AutomationResult::SetCookies(set_result) =
         set_result.expect("custom target setCookies should succeed")
     else {
         panic!("expected set cookies result");
@@ -674,7 +684,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     assert!(set_result.success);
 
     let (custom_get, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetCookies(DevToolsGetCookiesCommand {
+        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: custom_target_context,
             browser_context_id: None,
             urls: Some(vec![cookie_url.clone()]),
@@ -682,7 +692,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::GetCookies(custom_get) =
+    let AutomationResult::GetCookies(custom_get) =
         custom_get.expect("custom target getCookies should succeed")
     else {
         panic!("expected get cookies result");
@@ -692,7 +702,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     assert_eq!(custom_get.cookies[0]["value"], json!("custom"));
 
     let (default_get, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetCookies(DevToolsGetCookiesCommand {
+        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: default_target_context,
             browser_context_id: None,
             urls: Some(vec![cookie_url]),
@@ -700,7 +710,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::GetCookies(default_get) =
+    let AutomationResult::GetCookies(default_get) =
         default_get.expect("default target getCookies should succeed")
     else {
         panic!("expected get cookies result");
@@ -709,7 +719,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
 }
 
 #[tokio::test]
-async fn devtools_command_executes_user_context_preload_without_default_leakage() {
+async fn automation_command_executes_user_context_preload_without_default_leakage() {
     let mut ctx = crate::testing::TestContext::new();
     let default_context_id = ctx.conn.default_browser_context_id().to_owned();
     let default_browser_context = ctx.conn.new_browser_context(default_context_id.clone());
@@ -722,16 +732,16 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
         .conn
         .new_browser_context("second-user-context".to_owned());
     ctx.conn.insert_browser_context(second_browser_context);
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
 
-    let add_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let add_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::AddPreloadScript(DevToolsAddPreloadScriptCommand {
+        AutomationCommand::AddPreloadScript(DevToolsAddPreloadScriptCommand {
             context: context.clone(),
             source: DevToolsPreloadScriptSource::FunctionDeclaration {
                 function_declaration: "() => { globalThis.__bidiUserContextPreload = 'custom'; }"
@@ -749,7 +759,7 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
         }),
     )
     .await;
-    let DevToolsCommandResult::AddPreloadScript(add_result) =
+    let AutomationResult::AddPreloadScript(add_result) =
         add_result.expect("userContext addPreloadScript should succeed")
     else {
         panic!("expected add preload script result");
@@ -781,13 +791,13 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
             .any(|script| script.source.contains("__bidiUserContextPreload")),
         "custom userContext target navigation inputs should retain its context preload script"
     );
-    let custom_context = DevToolsCommandContext {
+    let custom_context = AutomationContext {
         target_id: Some(custom_target.clone()),
         ..context.clone()
     };
-    execute_direct_devtools_command_through_renderer_fence_for_test(
+    execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: custom_context.clone(),
             url: "data:text/html,user-context-preload".to_owned(),
             referrer: None,
@@ -820,13 +830,13 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
         "second userContext target",
     )
     .await;
-    let second_context = DevToolsCommandContext {
+    let second_context = AutomationContext {
         target_id: Some(second_target.clone()),
         ..context.clone()
     };
-    execute_direct_devtools_command_through_renderer_fence_for_test(
+    execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: second_context.clone(),
             url: "data:text/html,second-user-context-preload".to_owned(),
             referrer: None,
@@ -851,13 +861,13 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
         "default userContext target",
     )
     .await;
-    let default_context = DevToolsCommandContext {
+    let default_context = AutomationContext {
         target_id: Some(default_target),
         ..context.clone()
     };
-    execute_direct_devtools_command_through_renderer_fence_for_test(
+    execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: default_context.clone(),
             url: "data:text/html,default-context-preload".to_owned(),
             referrer: None,
@@ -875,9 +885,9 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
     .await;
     assert_eq!(default_value, "undefined");
 
-    let remove_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let remove_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::RemovePreloadScript(DevToolsRemovePreloadScriptCommand {
+        AutomationCommand::RemovePreloadScript(DevToolsRemovePreloadScriptCommand {
             context,
             script_id: script_id.clone(),
         }),
@@ -885,7 +895,7 @@ async fn devtools_command_executes_user_context_preload_without_default_leakage(
     .await;
     assert_eq!(
         remove_result.expect("userContext removePreloadScript should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     for browser_context_id in ["custom-user-context", "second-user-context"] {
         assert!(

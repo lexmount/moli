@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use moli_protocol::devtools_runtime::AutomationEvent;
+use moli_protocol::automation::AutomationEvent;
 use serde_json::{Value, json};
 
 use crate::commands::{
-    devtools_command_from_bidi_command, optional_non_empty_string_array,
+    automation_command_from_bidi_command, optional_non_empty_string_array,
     required_non_empty_string_array, required_supported_event_array, unroll_bidi_events,
 };
 use crate::events::{
@@ -24,7 +24,7 @@ use super::types::{
     BidiCommand, BidiCommandOutcome, BidiDevToolsCommandContext, BidiDevToolsCommandDispatch,
     BidiError, BidiErrorCode, BidiInputCommand, BidiInputCommandDispatch, BidiSessionRegistry,
     BidiSubscription, bidi_event_subscribed_channels, bidi_message_with_channel,
-    is_devtools_command, is_event_subscribed_by, is_known_session_command, parse_bidi_command,
+    is_automation_command, is_event_subscribed_by, is_known_session_command, parse_bidi_command,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,7 +300,7 @@ impl BidiConnectionState {
             "input.performActions" | "input.releaseActions" | "input.setFiles" => {
                 self.dispatch_input_command(command)
             }
-            method if is_devtools_command(method) => self.dispatch_devtools_command(command),
+            method if is_automation_command(method) => self.dispatch_automation_command(command),
             method if is_known_session_command(method) => BidiCommandOutcome::respond(
                 error_response(
                     Some(command.id),
@@ -319,7 +319,7 @@ impl BidiConnectionState {
         outcome
     }
 
-    fn dispatch_devtools_command(&self, command: BidiCommand) -> BidiCommandOutcome {
+    fn dispatch_automation_command(&self, command: BidiCommand) -> BidiCommandOutcome {
         let Some(session_id) = self.session_id.as_deref() else {
             return BidiCommandOutcome::respond(
                 error_response(
@@ -331,8 +331,8 @@ impl BidiConnectionState {
             );
         };
         let context = BidiDevToolsCommandContext::new(session_id);
-        match devtools_command_from_bidi_command(&command, &context) {
-            Ok(devtools_command) => BidiCommandOutcome {
+        match automation_command_from_bidi_command(&command, &context) {
+            Ok(automation_command) => BidiCommandOutcome {
                 response: error_response(
                     Some(command.id),
                     BidiErrorCode::UnsupportedOperation,
@@ -341,10 +341,10 @@ impl BidiConnectionState {
                 session_id: self.session_id.clone(),
                 channel: None,
                 close_connection: false,
-                devtools_command: Some(BidiDevToolsCommandDispatch {
+                automation_command: Some(BidiDevToolsCommandDispatch {
                     id: command.id,
                     session_id: session_id.to_owned(),
-                    command: devtools_command,
+                    command: automation_command,
                 }),
                 input_command: None,
             },
@@ -403,7 +403,7 @@ impl BidiConnectionState {
             session_id: self.session_id.clone(),
             channel: None,
             close_connection: false,
-            devtools_command: None,
+            automation_command: None,
             input_command: Some(BidiInputCommandDispatch {
                 id: command.id,
                 session_id: session_id.to_owned(),

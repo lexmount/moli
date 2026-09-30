@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use moli_protocol::devtools_runtime::DevToolsDomNodeReference;
+use moli_protocol::automation::DevToolsDomNodeReference;
 use serde_json::{Map, Value};
 
 use super::{
@@ -242,7 +242,7 @@ fn backend_node_id_from_described_node(node: &Value) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use moli_protocol::devtools_runtime::DevToolsDomNodeReference;
+    use moli_protocol::automation::DevToolsDomNodeReference;
     use serde_json::json;
 
     use super::*;

@@ -6,7 +6,7 @@ use moli_core::{
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 
-use crate::devtools_runtime::RuntimeExecutionContextEvent;
+use crate::automation::RuntimeExecutionContextEvent;
 
 #[cfg(test)]
 use super::session::InspectorSessionState;
@@ -755,7 +755,7 @@ impl SharedWorkerTargetState {
 #[cfg(test)]
 mod tests {
     use super::SharedWorkerTargetState;
-    use crate::devtools_runtime::RuntimeExecutionContextEvent;
+    use crate::automation::RuntimeExecutionContextEvent;
     use moli_core::{RendererOwnerLocalHostId, page::RendererSharedWorkerConsoleMessage};
     use moli_shared_worker::SharedWorkerInstanceId;
 

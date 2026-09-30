@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType};
+use crate::automation::{AutomationEvent, DevToolsNetworkResourceType};
 use moli_cookie_jar::{
     StoredCookieQueryReport, StoredCookieSetRejectionReason, StoredCookieSetStatus,
 };
@@ -20,7 +20,7 @@ use super::*;
 
 #[test]
 fn aborted_navigation_preserves_the_document_without_hiding_other_failures() {
-    use crate::devtools_runtime::DevToolsRequestFailure;
+    use crate::automation::DevToolsRequestFailure;
 
     for error in [
         anyhow::Error::new(moli_fetch::FetchCancelled),

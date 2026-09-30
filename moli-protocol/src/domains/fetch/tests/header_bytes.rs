@@ -389,9 +389,9 @@ async fn navigation_header_override_expires_on_redirect_before_auth_retry() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
-    use crate::devtools_runtime::{
-        DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsProtocol,
-        DevToolsSessionId, DevToolsSetExtraHeadersCommand, DevToolsTargetId,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, AutomationResult, DevToolsSessionId,
+        DevToolsSetExtraHeadersCommand, DevToolsTargetId, FrontendProtocol,
     };
     async fn echo_headers(headers: HeaderMap) -> String {
         ["x-extra", "x-utf8"]
@@ -429,10 +429,10 @@ async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
     enable_runtime_async(&mut ctx, "SID-1", 70400).await;
     let outcome = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::SetExtraHeaders(
+        .execute_automation_command(AutomationCommand::SetExtraHeaders(
             DevToolsSetExtraHeadersCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                     target_id: None,
                     browser_context_id: None,
@@ -448,7 +448,7 @@ async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
         .await;
     assert!(matches!(
         outcome.into_complete_parts().0,
-        Ok(DevToolsCommandResult::Empty)
+        Ok(AutomationResult::Empty)
     ));
     for script in [FETCH, XHR, WORKER] {
         ctx.process_async(json!({"id": 70401, "sessionId": "SID-1", "method": "Runtime.evaluate", "params": {"expression": script.replace("/start", "/echo")}})).await;

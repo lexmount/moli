@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsTargetId,
     RuntimeExecutionContextEvent, RuntimeExecutionContextsClearedEvent,
 };
@@ -496,9 +496,9 @@ fn mark_child_default_context_event_emitted(
 
 #[cfg(test)]
 mod tests {
+    use crate::automation::AutomationEvent;
     use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
     use crate::conn::{ServiceWorkerTargetState, SharedWorkerTargetState};
-    use crate::devtools_runtime::AutomationEvent;
     use moli_core::{RendererOwnerLocalHostId, page::RendererServiceWorkerVersionStatus};
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;

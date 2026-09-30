@@ -1,7 +1,7 @@
 use moli_core::page::InspectorIssueSnapshot;
 
+use crate::automation::{DevToolsError, DevToolsErrorKind};
 use crate::conn::{CdpConnection, Cmd};
-use crate::devtools_runtime::{DevToolsError, DevToolsErrorKind};
 use crate::domains::actions::AuditsAction;
 use crate::domains::command_output::CommandOutputPlan;
 

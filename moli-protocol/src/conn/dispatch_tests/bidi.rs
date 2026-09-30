@@ -52,20 +52,18 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
     ));
 
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let outcome = conn
-        .execute_devtools_command(DevToolsCommand::FailInterceptedRequest(
+        .execute_automation_command(AutomationCommand::FailInterceptedRequest(
             DevToolsFailInterceptedRequestCommand {
                 context,
                 request_id: DevToolsRequestId::from("FETCH-background"),
-                failure: crate::devtools_runtime::DevToolsRequestFailure::Failed(
-                    "Failed".to_owned(),
-                ),
+                failure: crate::automation::DevToolsRequestFailure::Failed("Failed".to_owned()),
             },
         ))
         .await;
@@ -73,7 +71,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
 
     assert_eq!(
         result.expect("BiDi failRequest should resolve background owner"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert!(
         conn.pending_fetch_request_session_route("FETCH-background")
@@ -93,7 +91,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
 #[tokio::test]
 async fn bidi_fetch_request_actions_resolve_background_request_owner() {
     assert_bidi_fetch_action_consumes_background_request(
-        DevToolsCommand::ContinueInterceptedRequest(DevToolsContinueInterceptedRequestCommand {
+        AutomationCommand::ContinueInterceptedRequest(DevToolsContinueInterceptedRequestCommand {
             context: bidi_fetch_command_context(),
             request_id: DevToolsRequestId::from("FETCH-background-continue-request"),
             url: None,
@@ -107,20 +105,22 @@ async fn bidi_fetch_request_actions_resolve_background_request_owner() {
     .await;
 
     assert_bidi_fetch_action_consumes_background_request(
-        DevToolsCommand::ContinueInterceptedResponse(DevToolsContinueInterceptedResponseCommand {
-            context: bidi_fetch_command_context(),
-            request_id: DevToolsRequestId::from("FETCH-background-continue-response"),
-            response_code: None,
-            response_headers: None,
-            response_phrase: None,
-            auth_credentials: None,
-        }),
+        AutomationCommand::ContinueInterceptedResponse(
+            DevToolsContinueInterceptedResponseCommand {
+                context: bidi_fetch_command_context(),
+                request_id: DevToolsRequestId::from("FETCH-background-continue-response"),
+                response_code: None,
+                response_headers: None,
+                response_phrase: None,
+                auth_credentials: None,
+            },
+        ),
         "FETCH-background-continue-response",
     )
     .await;
 
     assert_bidi_fetch_action_consumes_background_request(
-        DevToolsCommand::FulfillInterceptedRequest(DevToolsFulfillInterceptedRequestCommand {
+        AutomationCommand::FulfillInterceptedRequest(DevToolsFulfillInterceptedRequestCommand {
             context: bidi_fetch_command_context(),
             request_id: DevToolsRequestId::from("FETCH-background-provide-response"),
             response_code: 204,
@@ -136,23 +136,25 @@ async fn bidi_fetch_request_actions_resolve_background_request_owner() {
 #[tokio::test]
 async fn bidi_create_target_installs_initial_about_blank_page_without_default_preload() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-lifecycle-create")),
         target_id: None,
         browser_context_id: None,
     };
 
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context,
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: true,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context,
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: true,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(_) =
+    let AutomationResult::CreateTarget(_) =
         create_result.expect("active target create should succeed")
     else {
         panic!("expected create target result");
@@ -169,15 +171,15 @@ async fn bidi_create_target_installs_initial_about_blank_page_without_default_pr
 #[tokio::test]
 async fn devtools_call_function_node_shared_id_failure_precedes_handle() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let create_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let create_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context: context.clone(),
             url: "about:blank".to_owned(),
             browser_context_id: None,
@@ -185,19 +187,19 @@ async fn devtools_call_function_node_shared_id_failure_precedes_handle() {
         }),
     )
     .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id),
         ..context
     };
 
-    let navigate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let navigate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "data:text/html,<img id='target'>".to_owned(),
             referrer: None,
@@ -207,9 +209,9 @@ async fn devtools_call_function_node_shared_id_failure_precedes_handle() {
     .await;
     navigate_result.expect("navigate should succeed");
 
-    let evaluate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let evaluate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+        AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
             context: target_context.clone(),
             realm_id: None,
             world_name: None,
@@ -224,7 +226,7 @@ async fn devtools_call_function_node_shared_id_failure_precedes_handle() {
         }),
     )
     .await;
-    let DevToolsCommandResult::Script(evaluate_result) =
+    let AutomationResult::Script(evaluate_result) =
         evaluate_result.expect("node evaluate should succeed")
     else {
         panic!("expected script result");
@@ -238,9 +240,9 @@ async fn devtools_call_function_node_shared_id_failure_precedes_handle() {
         "node remote value should expose sharedId"
     );
 
-    let call_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let call_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+        AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
             context: target_context,
             realm_id: None,
             world_name: None,
@@ -301,9 +303,9 @@ async fn bidi_node_remote_value_registers_renderer_shared_node_binding() {
 async fn bidi_node_remote_value_reuses_renderer_frontend_node_id() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = bidi_fetch_command_context();
-    let create_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let create_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context: context.clone(),
             url: "about:blank".to_owned(),
             browser_context_id: None,
@@ -311,20 +313,20 @@ async fn bidi_node_remote_value_reuses_renderer_frontend_node_id() {
         }),
     )
     .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
     let target_id = create_result.target_id.as_str().to_owned();
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id),
         ..context
     };
 
-    let navigate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let navigate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "data:text/html,<main id='target'>target</main>".to_owned(),
             referrer: None,
@@ -332,8 +334,7 @@ async fn bidi_node_remote_value_reuses_renderer_frontend_node_id() {
         }),
     )
     .await;
-    let DevToolsCommandResult::Navigate(navigation) =
-        navigate_result.expect("navigate should succeed")
+    let AutomationResult::Navigate(navigation) = navigate_result.expect("navigate should succeed")
     else {
         panic!("expected navigate result");
     };
@@ -347,9 +348,9 @@ async fn bidi_node_remote_value_reuses_renderer_frontend_node_id() {
         .expect("WebDriver BiDi navigation id should encode the loader id");
     crate::testing::wait_until_renderer_document_load(&mut ctx, None, &target_id, loader_id).await;
 
-    let query_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let query_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::QuerySelector(DevToolsQuerySelectorCommand {
+        AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
             context: target_context.clone(),
             root: None,
             selector: "#target".to_owned(),
@@ -357,16 +358,16 @@ async fn bidi_node_remote_value_reuses_renderer_frontend_node_id() {
         }),
     )
     .await;
-    let DevToolsCommandResult::QuerySelector(query_result) =
+    let AutomationResult::QuerySelector(query_result) =
         query_result.expect("query selector should succeed")
     else {
         panic!("expected query selector result");
     };
     let frontend_node_id = query_result.node_ids[0];
 
-    let evaluate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let evaluate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+        AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
             context: target_context,
             realm_id: None,
             world_name: None,
@@ -411,8 +412,8 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
     .await;
 
     let evaluate_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context: target_context.clone(),
                 realm_id: None,
                 world_name: None,
@@ -428,8 +429,8 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
                     max_dom_depth: Some(1),
                     include_shadow_tree: None,
                 }),
-            },
-        ))
+            }),
+        )
         .await;
     let remote_value = expect_script_value_result(
         evaluate_result.expect("node evaluate should succeed"),
@@ -461,8 +462,8 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
     );
 
     let call_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::CallFunction(
-            DevToolsCallFunctionCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
                 context: target_context,
                 realm_id: None,
                 world_name: None,
@@ -481,8 +482,8 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
+            }),
+        )
         .await;
     let remote_value = expect_script_value_result(
         call_result.expect("callFunction should resolve child sharedId via renderer binding"),
@@ -498,7 +499,7 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
         materialize_bidi_target_input_node_for_test(&mut ctx, "<input id='target' type='file'>")
             .await;
     let fake_shared_id =
-        crate::devtools_runtime::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
+        crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
     ctx.conn
         .register_document_bidi_node_binding_for_owner_async(
@@ -511,8 +512,8 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
 
     let upload_bytes = b"from renderer registry";
     let set_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::SetFileInputFiles(DevToolsSetFileInputFilesCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::SetFileInputFiles(DevToolsSetFileInputFilesCommand {
                 context: target_context.clone(),
                 object_id: fake_shared_id,
                 files: vec![moli_core::page::SelectedFile {
@@ -528,7 +529,7 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
     set_result.expect("setFileInputFiles should use renderer shared-node binding");
 
     let evaluate_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::EvaluateScript(
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context: target_context,
                 realm_id: None,
@@ -564,7 +565,7 @@ async fn locate_nodes_start_node_shared_id_uses_renderer_binding_without_protoco
     )
     .await;
     let fake_shared_id =
-        crate::devtools_runtime::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
+        crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
     ctx.conn
         .register_document_bidi_node_binding_for_owner_async(
@@ -576,7 +577,7 @@ async fn locate_nodes_start_node_shared_id_uses_renderer_binding_without_protoco
         .expect("renderer fake shared-node binding registration should run");
 
     let locate_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::LocateNodes(
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::LocateNodes(
             DevToolsLocateNodesCommand {
                 context: target_context,
                 locator: DevToolsLocateNodesLocator::Css("a".to_owned()),
@@ -590,7 +591,7 @@ async fn locate_nodes_start_node_shared_id_uses_renderer_binding_without_protoco
             },
         ))
         .await;
-    let DevToolsCommandResult::LocateNodes(locate_result) =
+    let AutomationResult::LocateNodes(locate_result) =
         locate_result.expect("locateNodes should use renderer shared-node binding")
     else {
         panic!("expected locateNodes result");
@@ -613,7 +614,7 @@ async fn call_function_shared_id_uses_renderer_binding_without_protocol_registry
     )
     .await;
     let fake_shared_id =
-        crate::devtools_runtime::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
+        crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
     ctx.conn
         .register_document_bidi_node_binding_for_owner_async(
@@ -625,8 +626,8 @@ async fn call_function_shared_id_uses_renderer_binding_without_protocol_registry
         .expect("renderer fake shared-node binding registration should run");
 
     let call_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::CallFunction(
-            DevToolsCallFunctionCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
                 context: target_context,
                 realm_id: None,
                 world_name: None,
@@ -646,8 +647,8 @@ async fn call_function_shared_id_uses_renderer_binding_without_protocol_registry
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
+            }),
+        )
         .await;
     let remote_value = expect_script_value_result(
         call_result.expect("callFunction should use renderer shared-node binding"),

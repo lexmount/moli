@@ -1,14 +1,14 @@
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsDispatchDragEventCommand,
+    DevToolsDispatchKeyEventCommand, DevToolsDispatchMouseEventCommand,
+    DevToolsDispatchTouchEventCommand, DevToolsDragData, DevToolsDragDataItem,
+    DevToolsDragEventType, DevToolsElementClickOperation, DevToolsError, DevToolsErrorKind,
+    DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
+    DevToolsSynthesizeTapGestureCommand, DevToolsTouchEventType, DevToolsTouchPoint,
+};
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
     TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceToken,
-};
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsDispatchDragEventCommand, DevToolsDispatchKeyEventCommand,
-    DevToolsDispatchMouseEventCommand, DevToolsDispatchTouchEventCommand, DevToolsDragData,
-    DevToolsDragDataItem, DevToolsDragEventType, DevToolsElementClickOperation, DevToolsError,
-    DevToolsErrorKind, DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
-    DevToolsSynthesizeTapGestureCommand, DevToolsTouchEventType, DevToolsTouchPoint,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -85,7 +85,7 @@ pub(crate) enum InputCommandDispatchStep {
 }
 
 struct CompletedInputCommandResult {
-    result: Result<DevToolsCommandResult, DevToolsError>,
+    result: Result<AutomationResult, DevToolsError>,
     protocol_events: Vec<BackgroundProtocolEvent>,
 }
 
@@ -621,7 +621,7 @@ fn start_pending_input_command(
                 conn,
                 cmd.id,
                 &owner,
-                DevToolsCommand::DispatchKeyEvent(command),
+                AutomationCommand::DispatchKeyEvent(command),
             )
         }
         InputAction::DispatchMouseEvent
@@ -667,7 +667,7 @@ fn build_cdp_dispatch_key_event_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     DevToolsDispatchKeyEventCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         event_type: parsed.event_type,
         key: parsed.key,
         code: parsed.code,
@@ -678,12 +678,12 @@ fn build_cdp_dispatch_key_event_command(
     }
 }
 
-fn cdp_input_command_context(conn: &CdpConnection, cmd: &Cmd<'_>) -> DevToolsCommandContext {
+fn cdp_input_command_context(conn: &CdpConnection, cmd: &Cmd<'_>) -> AutomationContext {
     let (browser_context_id, target_id) = conn
         .target_owner_identity_for_session(cmd.session_id)
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
-    cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref())
+    cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref())
 }
 
 fn cdp_modifiers(value: Option<i64>) -> Result<u8, PendingInputCommandStartError> {
@@ -708,7 +708,7 @@ fn build_cdp_coordinate_input_command(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     action: InputAction,
-) -> Result<DevToolsCommand, PendingInputCommandStartError> {
+) -> Result<AutomationCommand, PendingInputCommandStartError> {
     let context = cdp_input_command_context(conn, cmd);
     match action {
         InputAction::DispatchMouseEvent => {
@@ -734,7 +734,7 @@ fn build_cdp_coordinate_input_command(
                         y: params.y,
                     }]
                 };
-                return Ok(DevToolsCommand::DispatchTouchEvent(
+                return Ok(AutomationCommand::DispatchTouchEvent(
                     DevToolsDispatchTouchEventCommand {
                         context,
                         event_type,
@@ -742,7 +742,7 @@ fn build_cdp_coordinate_input_command(
                     },
                 ));
             }
-            Ok(DevToolsCommand::DispatchMouseEvent(
+            Ok(AutomationCommand::DispatchMouseEvent(
                 DevToolsDispatchMouseEventCommand {
                     context,
                     event_type: match params.r#type {
@@ -791,7 +791,7 @@ fn build_cdp_coordinate_input_command(
                     y: point.y,
                 })
                 .collect();
-            Ok(DevToolsCommand::DispatchTouchEvent(
+            Ok(AutomationCommand::DispatchTouchEvent(
                 DevToolsDispatchTouchEventCommand {
                     context,
                     event_type: match params.r#type {
@@ -810,7 +810,7 @@ fn build_cdp_coordinate_input_command(
                 .map_err(|_| PendingInputCommandStartError::invalid_params())?
                 .ok_or_else(PendingInputCommandStartError::invalid_params)?;
             if params.r#type == CdpEmulateTouchFromMouseEventType::MouseWheel {
-                return Ok(DevToolsCommand::DispatchMouseEvent(
+                return Ok(AutomationCommand::DispatchMouseEvent(
                     DevToolsDispatchMouseEventCommand {
                         context,
                         event_type: DevToolsMouseEventType::Wheel,
@@ -846,7 +846,7 @@ fn build_cdp_coordinate_input_command(
                     y: params.y as f64,
                 }]
             };
-            Ok(DevToolsCommand::DispatchTouchEvent(
+            Ok(AutomationCommand::DispatchTouchEvent(
                 DevToolsDispatchTouchEventCommand {
                     context,
                     event_type,
@@ -859,7 +859,7 @@ fn build_cdp_coordinate_input_command(
                 .get_params::<CdpSynthesizeTapGestureParams>()
                 .map_err(|_| PendingInputCommandStartError::invalid_params())?
                 .ok_or_else(PendingInputCommandStartError::invalid_params)?;
-            Ok(DevToolsCommand::SynthesizeTapGesture(
+            Ok(AutomationCommand::SynthesizeTapGesture(
                 DevToolsSynthesizeTapGestureCommand {
                     context,
                     x: params.x,
@@ -872,7 +872,7 @@ fn build_cdp_coordinate_input_command(
                 .get_params::<CdpDispatchDragEventParams>()
                 .map_err(|_| PendingInputCommandStartError::invalid_params())?
                 .ok_or_else(PendingInputCommandStartError::invalid_params)?;
-            Ok(DevToolsCommand::DispatchDragEvent(
+            Ok(AutomationCommand::DispatchDragEvent(
                 DevToolsDispatchDragEventCommand {
                     context,
                     event_type: match params.r#type {
@@ -912,9 +912,9 @@ fn build_cdp_coordinate_input_command(
 
 pub(crate) async fn execute_devtools_input_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     let (target_id, command_session_id) = match devtools_input_command_route(&command) {
@@ -941,15 +941,15 @@ pub(crate) async fn execute_devtools_input_command_async_with_protocol_events(
 }
 
 fn devtools_input_command_route(
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<(Option<String>, Option<String>), DevToolsError> {
     let context = match command {
-        DevToolsCommand::ElementClick(command) => &command.context,
-        DevToolsCommand::DispatchMouseEvent(command) => &command.context,
-        DevToolsCommand::DispatchKeyEvent(command) => &command.context,
-        DevToolsCommand::DispatchTouchEvent(command) => &command.context,
-        DevToolsCommand::DispatchDragEvent(command) => &command.context,
-        DevToolsCommand::SynthesizeTapGesture(command) => &command.context,
+        AutomationCommand::ElementClick(command) => &command.context,
+        AutomationCommand::DispatchMouseEvent(command) => &command.context,
+        AutomationCommand::DispatchKeyEvent(command) => &command.context,
+        AutomationCommand::DispatchTouchEvent(command) => &command.context,
+        AutomationCommand::DispatchDragEvent(command) => &command.context,
+        AutomationCommand::SynthesizeTapGesture(command) => &command.context,
         _ => {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Unsupported,
@@ -972,14 +972,14 @@ fn devtools_input_command_route(
 async fn execute_devtools_input_command_for_owner_with_protocol_events(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     let pending = match start_devtools_input_command_for_owner(conn, None, owner, command) {
         Ok(Some(pending)) => pending,
-        Ok(None) => return (Ok(DevToolsCommandResult::Empty), Vec::new()),
+        Ok(None) => return (Ok(AutomationResult::Empty), Vec::new()),
         Err(error) => {
             return (
                 Err(devtools_error_from_input_start_error(error)),
@@ -1281,17 +1281,19 @@ fn start_devtools_input_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let coordinate_unsupported = match &command {
-        DevToolsCommand::ElementClick(crate::devtools_runtime::DevToolsElementClickCommand {
+        AutomationCommand::ElementClick(crate::automation::DevToolsElementClickCommand {
             operation: DevToolsElementClickOperation::Dispatch(_),
             ..
         })
-        | DevToolsCommand::DispatchMouseEvent(_) => Some(DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE),
-        DevToolsCommand::DispatchTouchEvent(_) => Some(DISPATCH_TOUCH_EVENT_UNSUPPORTED_MESSAGE),
-        DevToolsCommand::DispatchDragEvent(_) => Some(DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE),
-        DevToolsCommand::SynthesizeTapGesture(_) => {
+        | AutomationCommand::DispatchMouseEvent(_) => {
+            Some(DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE)
+        }
+        AutomationCommand::DispatchTouchEvent(_) => Some(DISPATCH_TOUCH_EVENT_UNSUPPORTED_MESSAGE),
+        AutomationCommand::DispatchDragEvent(_) => Some(DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE),
+        AutomationCommand::SynthesizeTapGesture(_) => {
             Some(SYNTHESIZE_TAP_GESTURE_UNSUPPORTED_MESSAGE)
         }
         _ => None,
@@ -1305,7 +1307,7 @@ fn start_devtools_input_command_for_owner(
         }
     }
     match command {
-        DevToolsCommand::ElementClick(command) => match command.operation {
+        AutomationCommand::ElementClick(command) => match command.operation {
             DevToolsElementClickOperation::Prepare { object_id } => start_page_input_command(
                 conn,
                 command_id,
@@ -1326,19 +1328,19 @@ fn start_devtools_input_command_for_owner(
                 |page| page.start_dispatch_prepared_element_click(click),
             ),
         },
-        DevToolsCommand::DispatchMouseEvent(command) => {
+        AutomationCommand::DispatchMouseEvent(command) => {
             start_devtools_dispatch_mouse_event_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DispatchTouchEvent(command) => {
+        AutomationCommand::DispatchTouchEvent(command) => {
             start_devtools_dispatch_touch_event_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DispatchDragEvent(command) => {
+        AutomationCommand::DispatchDragEvent(command) => {
             start_devtools_dispatch_drag_event_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::SynthesizeTapGesture(command) => {
+        AutomationCommand::SynthesizeTapGesture(command) => {
             start_devtools_synthesize_tap_gesture_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::DispatchKeyEvent(command) => {
+        AutomationCommand::DispatchKeyEvent(command) => {
             start_devtools_dispatch_key_event_command(conn, command_id, owner, command)
         }
         _ => Err(PendingInputCommandStartError {
@@ -1363,7 +1365,7 @@ async fn complete_pending_input_command(
             // retires an outstanding mouse/key ACK as protocol success even
             // when the old renderer never publishes its normal completion.
             return CompletedInputCommandResult {
-                result: Ok(DevToolsCommandResult::Empty),
+                result: Ok(AutomationResult::Empty),
                 protocol_events: Vec::new(),
             };
         }
@@ -1389,7 +1391,7 @@ async fn complete_pending_input_command(
                         settle_completed_input_page_command(conn, &owner, result, command_context);
                     if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
                         decode_element_click_preparation_completion(completion)
-                            .map(DevToolsCommandResult::ElementClickPreparation)
+                            .map(AutomationResult::ElementClickPreparation)
                             .map_err(|error| {
                                 DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
                             })
@@ -1400,7 +1402,7 @@ async fn complete_pending_input_command(
                                 error.to_string(),
                             )),
                             Ok(Err(error)) => {
-                                Ok(DevToolsCommandResult::ElementClickDispatch(Err(error)))
+                                Ok(AutomationResult::ElementClickDispatch(Err(error)))
                             }
                             Ok(Ok(outcome)) => handle_input_dispatch_outcome_async(
                                 conn,
@@ -1411,7 +1413,7 @@ async fn complete_pending_input_command(
                                 command_context,
                             )
                             .await
-                            .map(|()| DevToolsCommandResult::ElementClickDispatch(Ok(())))
+                            .map(|()| AutomationResult::ElementClickDispatch(Ok(())))
                             .map_err(|error| {
                                 DevToolsError::new(DevToolsErrorKind::Internal, error)
                             }),
@@ -1467,7 +1469,7 @@ async fn complete_pending_input_command(
                             protocol_events,
                         };
                     }
-                    Ok(DevToolsCommandResult::Empty)
+                    Ok(AutomationResult::Empty)
                 }
                 Err(error) => Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
@@ -1508,7 +1510,7 @@ async fn complete_pending_input_command(
                             protocol_events,
                         };
                     }
-                    Ok(DevToolsCommandResult::Empty)
+                    Ok(AutomationResult::Empty)
                 }
                 Err(error) => Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
@@ -1531,7 +1533,7 @@ async fn complete_pending_input_command(
                 settle_completed_input_page_command(conn, &owner, result, command_context);
             let result = decode_insert_text_completion(completion);
             match result {
-                Ok(_) => Ok(DevToolsCommandResult::Empty),
+                Ok(_) => Ok(AutomationResult::Empty),
                 Err(error) => Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
                     error.to_string(),
@@ -1802,12 +1804,12 @@ pub(in crate::domains) async fn emit_file_chooser_activity_background_events_asy
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::{
-        DevToolsCommand, DevToolsCommandContext, DevToolsDispatchDragEventCommand,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, DevToolsDispatchDragEventCommand,
         DevToolsDispatchMouseEventCommand, DevToolsDispatchTouchEventCommand, DevToolsDragData,
         DevToolsDragEventType, DevToolsErrorKind, DevToolsKeyEventType, DevToolsMouseEventType,
-        DevToolsPointerType, DevToolsProtocol, DevToolsSynthesizeTapGestureCommand,
-        DevToolsTouchEventType, DevToolsTouchPoint,
+        DevToolsPointerType, DevToolsSynthesizeTapGestureCommand, DevToolsTouchEventType,
+        DevToolsTouchPoint, FrontendProtocol,
     };
     use serde_json::Value;
 
@@ -1832,16 +1834,16 @@ mod protocol_neutral_tests {
         conn: &mut CdpConnection,
         command_id: Option<u64>,
         session_id: Option<&str>,
-        command: DevToolsCommand,
+        command: AutomationCommand,
     ) -> Result<Option<super::PendingInputCommandDispatch>, super::PendingInputCommandStartError>
     {
         let owner = CommandOwnerScope::capture(conn, session_id);
         super::start_devtools_input_command_for_owner(conn, command_id, &owner, command)
     }
 
-    fn cdp_context(session_id: &str) -> DevToolsCommandContext {
-        DevToolsCommandContext {
-            protocol: DevToolsProtocol::Cdp,
+    fn cdp_context(session_id: &str) -> AutomationContext {
+        AutomationContext {
+            protocol: FrontendProtocol::Cdp,
             session_id: Some(session_id.to_owned().into()),
             target_id: None,
             browser_context_id: None,
@@ -1906,7 +1908,7 @@ mod protocol_neutral_tests {
             &mut conn,
             Some(42),
             Some("SID-mouse"),
-            DevToolsCommand::DispatchMouseEvent(coordinate_mouse_command("SID-mouse")),
+            AutomationCommand::DispatchMouseEvent(coordinate_mouse_command("SID-mouse")),
         );
 
         assert_coordinate_routes_to_document_owner(result);
@@ -1935,7 +1937,7 @@ mod protocol_neutral_tests {
 
         let command = super::build_cdp_dispatch_key_event_command(&conn, &cmd, parsed);
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-key")
@@ -1977,7 +1979,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::DispatchKeyEvent(command),
+            AutomationCommand::DispatchKeyEvent(command),
         );
 
         let Err(error) = result else {
@@ -1994,7 +1996,7 @@ mod protocol_neutral_tests {
             &mut conn,
             Some(46),
             Some("SID-touch"),
-            DevToolsCommand::DispatchTouchEvent(coordinate_touch_command("SID-touch")),
+            AutomationCommand::DispatchTouchEvent(coordinate_touch_command("SID-touch")),
         );
 
         assert_coordinate_routes_to_document_owner(result);
@@ -2007,7 +2009,7 @@ mod protocol_neutral_tests {
             &mut conn,
             Some(48),
             Some("SID-drag"),
-            DevToolsCommand::DispatchDragEvent(coordinate_drag_command("SID-drag", 1)),
+            AutomationCommand::DispatchDragEvent(coordinate_drag_command("SID-drag", 1)),
         );
 
         assert_coordinate_routes_to_document_owner(result);
@@ -2020,7 +2022,7 @@ mod protocol_neutral_tests {
             &mut conn,
             Some(49),
             Some("SID-drag"),
-            DevToolsCommand::DispatchDragEvent(coordinate_drag_command("SID-drag", 0)),
+            AutomationCommand::DispatchDragEvent(coordinate_drag_command("SID-drag", 0)),
         );
 
         assert_coordinate_routes_to_document_owner(result);
@@ -2033,7 +2035,7 @@ mod protocol_neutral_tests {
             &mut conn,
             Some(51),
             Some("SID-tap"),
-            DevToolsCommand::SynthesizeTapGesture(DevToolsSynthesizeTapGestureCommand {
+            AutomationCommand::SynthesizeTapGesture(DevToolsSynthesizeTapGestureCommand {
                 context: cdp_context("SID-tap"),
                 x: 1.0,
                 y: 2.0,
@@ -2054,13 +2056,13 @@ mod producer_tests {
     };
     use serde_json::json;
 
+    use crate::automation::{
+        AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
+        DevToolsFrameId, webdriver_bidi_node_shared_id_for_backend_node_id,
+    };
     use crate::conn::{
         BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandDispatchContext,
         CommandOwnerScope, TargetPageResidenceIdentity, build_event,
-    };
-    use crate::devtools_runtime::{
-        AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
-        DevToolsFrameId, webdriver_bidi_node_shared_id_for_backend_node_id,
     };
     use crate::domains::activity::ProtocolOutputPayloads;
 

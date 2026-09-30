@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use moli_protocol::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsProtocol,
-    DevToolsSessionId, DevToolsTargetId,
+use moli_protocol::automation::{
+    AutomationCommand, AutomationContext, DevToolsBrowserContextId, DevToolsSessionId,
+    DevToolsTargetId, FrontendProtocol,
 };
 use serde_json::{Value, json};
 
@@ -104,10 +104,7 @@ impl BidiDevToolsCommandContext {
         }
     }
 
-    pub(crate) fn command_context(
-        &self,
-        target_id: Option<DevToolsTargetId>,
-    ) -> DevToolsCommandContext {
+    pub(crate) fn command_context(&self, target_id: Option<DevToolsTargetId>) -> AutomationContext {
         self.command_context_with_browser_context_id(
             target_id,
             self.browser_context_id
@@ -120,9 +117,9 @@ impl BidiDevToolsCommandContext {
         &self,
         target_id: Option<DevToolsTargetId>,
         browser_context_id: Option<DevToolsBrowserContextId>,
-    ) -> DevToolsCommandContext {
-        DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    ) -> AutomationContext {
+        AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: Some(DevToolsSessionId::from(self.session_id.as_str())),
             target_id,
             browser_context_id,
@@ -134,7 +131,7 @@ impl BidiDevToolsCommandContext {
 pub struct BidiDevToolsCommandDispatch {
     pub id: u64,
     pub session_id: String,
-    pub command: DevToolsCommand,
+    pub command: AutomationCommand,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,7 +155,7 @@ pub struct BidiCommandOutcome {
     pub session_id: Option<String>,
     pub channel: Option<String>,
     pub close_connection: bool,
-    pub devtools_command: Option<BidiDevToolsCommandDispatch>,
+    pub automation_command: Option<BidiDevToolsCommandDispatch>,
     pub input_command: Option<BidiInputCommandDispatch>,
 }
 
@@ -222,7 +219,7 @@ impl BidiCommandOutcome {
             session_id,
             channel: None,
             close_connection: false,
-            devtools_command: None,
+            automation_command: None,
             input_command: None,
         }
     }
@@ -436,7 +433,7 @@ pub(super) fn is_known_session_command(method: &str) -> bool {
     )
 }
 
-pub(super) fn is_devtools_command(method: &str) -> bool {
+pub(super) fn is_automation_command(method: &str) -> bool {
     matches!(
         method,
         "browser.createUserContext"

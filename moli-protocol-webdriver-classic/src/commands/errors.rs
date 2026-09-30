@@ -1,4 +1,4 @@
-use moli_protocol::devtools_runtime::{DevToolsError, DevToolsErrorKind};
+use moli_protocol::automation::{DevToolsError, DevToolsErrorKind};
 
 use crate::{ClassicError, ClassicErrorCode};
 

@@ -1,6 +1,6 @@
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsCommand, DevToolsDomGeometryOperation, DevToolsDomNodeReference,
-    DevToolsDomObjectReferenceOperation, DevToolsErrorKind, DevToolsProtocol,
+use crate::automation::{
+    AutomationCommand, AutomationEvent, DevToolsDomGeometryOperation, DevToolsDomNodeReference,
+    DevToolsDomObjectReferenceOperation, DevToolsErrorKind, FrontendProtocol,
 };
 use moli_page_types::DocumentSnapshotNodeId;
 use serde_json::{Value, json};
@@ -11,7 +11,7 @@ fn start_devtools_dom_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Option<super::PendingDomCommandDispatch>, super::PendingDomCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, command_session_id);
     super::start_devtools_dom_command_for_owner(conn, command_id, &owner, command)
@@ -92,7 +92,7 @@ fn cdp_get_document_builds_protocol_neutral_document_command() {
         panic!("valid getDocument command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -125,7 +125,7 @@ fn cdp_get_flattened_document_builds_protocol_neutral_document_command() {
         panic!("valid getFlattenedDocument command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(command.depth, Some(-1));
     assert!(!command.pierce);
     assert!(command.flattened);
@@ -155,7 +155,7 @@ fn devtools_dom_entry_routes_document_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::GetDocument(command),
+        AutomationCommand::GetDocument(command),
     );
 
     let Err(error) = result else {
@@ -184,7 +184,7 @@ fn cdp_get_frame_owner_builds_protocol_neutral_command() {
         panic!("valid getFrameOwner command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(command.frame_id.as_str(), "TID-child");
 }
 
@@ -210,7 +210,7 @@ fn devtools_dom_entry_routes_get_frame_owner_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::GetFrameOwner(command),
+        AutomationCommand::GetFrameOwner(command),
     );
 
     let Err(error) = result else {
@@ -244,7 +244,7 @@ fn cdp_request_child_nodes_builds_protocol_neutral_command() {
         panic!("valid requestChildNodes command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         DevToolsDomNodeReference::FrontendNodeId(24)
@@ -275,7 +275,7 @@ fn devtools_dom_entry_routes_request_child_nodes_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::RequestChildNodes(command),
+        AutomationCommand::RequestChildNodes(command),
     );
 
     let Err(error) = result else {
@@ -339,7 +339,7 @@ fn cdp_get_node_for_location_builds_protocol_neutral_command() {
         panic!("valid getNodeForLocation command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(command.x, 12.0);
     assert_eq!(command.y, 34.0);
     assert!(command.include_user_agent_shadow_dom);
@@ -369,7 +369,7 @@ fn devtools_dom_entry_routes_get_node_for_location_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::GetNodeForLocation(command),
+        AutomationCommand::GetNodeForLocation(command),
     );
 
     let Err(error) = result else {
@@ -430,7 +430,7 @@ fn cdp_query_selector_builds_protocol_neutral_dom_query_command() {
         panic!("valid querySelector command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -463,7 +463,7 @@ fn cdp_query_selector_all_builds_protocol_neutral_dom_query_command() {
         panic!("valid querySelectorAll command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.root,
         Some(DevToolsDomNodeReference::FrontendNodeId(8))
@@ -495,7 +495,7 @@ fn devtools_dom_entry_routes_query_selector_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::QuerySelector(command),
+        AutomationCommand::QuerySelector(command),
     );
 
     let Err(error) = result else {
@@ -526,7 +526,7 @@ fn cdp_resolve_node_builds_protocol_neutral_dom_resolve_command() {
         panic!("valid resolveNode command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -604,9 +604,9 @@ fn pending_dom_start_error_preserves_invalid_param_as_invalid_argument() {
         message: "The selector is not a valid selector".to_owned(),
     };
 
-    let singular: crate::devtools_runtime::DevToolsError = singular.into();
-    let plural: crate::devtools_runtime::DevToolsError = plural.into();
-    let selector: crate::devtools_runtime::DevToolsError = selector.into();
+    let singular: crate::automation::DevToolsError = singular.into();
+    let plural: crate::automation::DevToolsError = plural.into();
+    let selector: crate::automation::DevToolsError = selector.into();
 
     assert_eq!(singular.kind, DevToolsErrorKind::InvalidArgument);
     assert_eq!(plural.kind, DevToolsErrorKind::InvalidArgument);
@@ -635,7 +635,7 @@ fn devtools_dom_entry_routes_resolve_node_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ResolveNode(command),
+        AutomationCommand::ResolveNode(command),
     );
 
     let Err(error) = result else {
@@ -664,7 +664,7 @@ fn cdp_get_attributes_builds_protocol_neutral_dom_attributes_command() {
         panic!("valid getAttributes command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -694,7 +694,7 @@ fn devtools_dom_complete_entry_requires_pending_get_attributes_command() {
     };
 
     let result =
-        super::complete_devtools_dom_command(&mut conn, DevToolsCommand::GetAttributes(command));
+        super::complete_devtools_dom_command(&mut conn, AutomationCommand::GetAttributes(command));
 
     let Err(error) = result else {
         panic!("getAttributes sync completion should require a pending DOM command");
@@ -722,7 +722,7 @@ fn cdp_push_nodes_by_backend_ids_builds_protocol_neutral_command() {
         panic!("valid pushNodesByBackendIds command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -750,7 +750,7 @@ fn devtools_dom_complete_entry_requires_pending_push_nodes_by_backend_ids_comman
 
     let result = super::complete_devtools_dom_command(
         &mut conn,
-        DevToolsCommand::PushNodesByBackendIds(command),
+        AutomationCommand::PushNodesByBackendIds(command),
     );
 
     let Err(error) = result else {
@@ -783,7 +783,7 @@ fn cdp_request_node_builds_protocol_neutral_object_reference_command() {
         panic!("valid requestNode object reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")
@@ -842,7 +842,7 @@ fn cdp_get_outer_html_builds_protocol_neutral_node_reference_command() {
         panic!("valid getOuterHTML typed node reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         Some(DevToolsDomNodeReference::FrontendNodeId(15))
@@ -909,7 +909,7 @@ fn devtools_dom_complete_entry_requires_pending_get_outer_html_command() {
     };
 
     let result =
-        super::complete_devtools_dom_command(&mut conn, DevToolsCommand::GetOuterHtml(command));
+        super::complete_devtools_dom_command(&mut conn, AutomationCommand::GetOuterHtml(command));
 
     let Err(error) = result else {
         panic!("getOuterHTML sync completion should require a pending DOM command");
@@ -938,7 +938,7 @@ fn cdp_scroll_into_view_builds_protocol_neutral_node_reference_command() {
         panic!("valid scrollIntoViewIfNeeded typed node reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         Some(DevToolsDomNodeReference::BackendNodeId(17))
@@ -1028,7 +1028,7 @@ fn devtools_dom_start_entry_routes_scroll_command_to_renderer_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ScrollIntoViewIfNeeded(command),
+        AutomationCommand::ScrollIntoViewIfNeeded(command),
     );
 
     let Err(error) = result else {
@@ -1061,7 +1061,7 @@ fn cdp_get_box_model_builds_protocol_neutral_geometry_command() {
         panic!("valid getBoxModel typed node reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         DevToolsDomNodeReference::BackendNodeId(19)
@@ -1120,7 +1120,7 @@ fn devtools_dom_entry_routes_geometry_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::DomGeometry(command),
+        AutomationCommand::DomGeometry(command),
     );
 
     let Err(error) = result else {
@@ -1149,7 +1149,7 @@ fn cdp_remove_node_builds_protocol_neutral_command() {
         panic!("valid removeNode command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         DevToolsDomNodeReference::BackendNodeId(21)
@@ -1178,7 +1178,7 @@ fn devtools_dom_entry_routes_remove_node_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::RemoveNode(command),
+        AutomationCommand::RemoveNode(command),
     );
 
     let Err(error) = result else {
@@ -1209,7 +1209,7 @@ fn cdp_describe_node_builds_protocol_neutral_node_reference_command() {
         panic!("valid describeNode typed node reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.reference,
         Some(DevToolsDomNodeReference::BackendNodeId(21))
@@ -1261,7 +1261,7 @@ fn devtools_dom_entry_routes_describe_node_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::DescribeNode(command),
+        AutomationCommand::DescribeNode(command),
     );
 
     let Err(error) = result else {
@@ -1290,7 +1290,7 @@ fn devtools_dom_complete_entry_requires_pending_describe_node_command() {
     };
 
     let result =
-        super::complete_devtools_dom_command(&mut conn, DevToolsCommand::DescribeNode(command));
+        super::complete_devtools_dom_command(&mut conn, AutomationCommand::DescribeNode(command));
 
     let Err(error) = result else {
         panic!("describeNode sync completion should require a pending DOM command");
@@ -1327,7 +1327,7 @@ fn cdp_describe_node_object_id_builds_protocol_neutral_object_reference_command(
         panic!("valid describeNode object reference command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(command.object_id.as_str(), "remote-object-3");
     assert_eq!(
         command.operation,
@@ -1364,7 +1364,7 @@ fn devtools_dom_entry_routes_object_reference_command_to_dom_owner() {
         &mut conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::DomObjectReference(command),
+        AutomationCommand::DomObjectReference(command),
     );
 
     let Err(error) = result else {
@@ -1397,7 +1397,7 @@ fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
         panic!("valid setFileInputFiles object command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-dom")

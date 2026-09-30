@@ -8,8 +8,8 @@ pub(super) fn metrics_from_cdp(
     params: SetDeviceMetricsOverrideParams,
     previous: Option<&EmulatedDeviceMetrics>,
     base: &crate::conn::EmulatedViewportSurface,
-) -> Result<EmulatedDeviceMetrics, crate::devtools_runtime::DevToolsError> {
-    use crate::devtools_runtime::{DevToolsError, DevToolsErrorKind};
+) -> Result<EmulatedDeviceMetrics, crate::automation::DevToolsError> {
+    use crate::automation::{DevToolsError, DevToolsErrorKind};
     let invalid = || DevToolsError::new(DevToolsErrorKind::InvalidArgument, "InvalidParams");
     let size = |value: i64| {
         if (0..=10_000_000).contains(&value) {

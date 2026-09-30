@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsGetTargetInfoCommand, DevToolsGetTargetInfoResult, DevToolsTargetId,
 };
 
@@ -28,7 +28,7 @@ pub(super) fn get_target_info(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comman
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::GetTargetInfo(command),
+        AutomationCommand::GetTargetInfo(command),
     ) {
         TargetCommandTaskStep::Complete(plan) => plan,
         TargetCommandTaskStep::Pending(_) => {
@@ -42,7 +42,7 @@ fn build_cdp_get_target_info_command(
     params: GetTargetInfoParams,
 ) -> DevToolsGetTargetInfoCommand {
     DevToolsGetTargetInfoCommand {
-        context: cmd.devtools_command_context(params.target_id.as_deref(), None::<&str>),
+        context: cmd.automation_context(params.target_id.as_deref(), None::<&str>),
         target_id: params.target_id.map(DevToolsTargetId::from),
     }
 }
@@ -53,7 +53,7 @@ pub(super) fn start_devtools_get_target_info_command(
 ) -> CommandOutputPlan {
     match execute_devtools_get_target_info_command(conn, command) {
         Ok(result) => {
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::GetTargetInfo(result))
+            CommandOutputPlan::from_devtools_result(AutomationResult::GetTargetInfo(result))
         }
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }

@@ -3,19 +3,19 @@ use serde_json::json;
 
 use moli_browser_profile::{DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId};
 
-use crate::conn::{
-    BackgroundProtocolEvent, TargetOwnerState, TargetWindowSurfaceState,
-    monotonic_timestamp_seconds,
-};
-use crate::devtools_runtime::{
-    DevToolsClientWindowInfo, DevToolsCommand, DevToolsCommandResult,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsClientWindowInfo,
     DevToolsCreateBrowserContextCommand, DevToolsCreateBrowserContextResult, DevToolsError,
     DevToolsErrorKind, DevToolsGetBrowserContextsCommand, DevToolsGetBrowserContextsResult,
     DevToolsGetClientWindowsCommand, DevToolsGetClientWindowsResult,
     DevToolsGetServiceWorkerLogsCommand, DevToolsGetServiceWorkerLogsResult,
-    DevToolsGetTargetsCommand, DevToolsGetTargetsResult, DevToolsProtocol,
-    DevToolsRemoveBrowserContextCommand, DevToolsTargetFilterEntry, DevToolsTargetId,
-    DevToolsTargetInfo, DevToolsTargetKind, DevToolsWindowState, RuntimeConsoleEvent,
+    DevToolsGetTargetsCommand, DevToolsGetTargetsResult, DevToolsRemoveBrowserContextCommand,
+    DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
+    DevToolsWindowState, FrontendProtocol, RuntimeConsoleEvent,
+};
+use crate::conn::{
+    BackgroundProtocolEvent, TargetOwnerState, TargetWindowSurfaceState,
+    monotonic_timestamp_seconds,
 };
 use crate::domains::observable_output::runtime_console_message_type_and_text;
 
@@ -33,7 +33,7 @@ pub(super) fn start_get_targets_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::GetTargets(command),
+        AutomationCommand::GetTargets(command),
     )
 }
 
@@ -54,7 +54,7 @@ struct GetTargetsFilterEntry {
 fn build_cdp_get_targets_command(cmd: &Cmd<'_>) -> Option<DevToolsGetTargetsCommand> {
     let params: Option<GetTargetsParams> = cmd.get_params().ok()?;
     Some(DevToolsGetTargetsCommand {
-        context: cmd.devtools_command_context(None::<&str>, None::<&str>),
+        context: cmd.automation_context(None::<&str>, None::<&str>),
         root: None,
         max_depth: None,
         filter: params.and_then(|params| {
@@ -76,9 +76,7 @@ pub(super) fn start_devtools_get_targets_command(
     command: DevToolsGetTargetsCommand,
 ) -> CommandOutputPlan {
     match execute_devtools_get_targets_command(conn, &command) {
-        Ok(result) => {
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::GetTargets(result))
-        }
+        Ok(result) => CommandOutputPlan::from_devtools_result(AutomationResult::GetTargets(result)),
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
 }
@@ -284,7 +282,7 @@ pub(super) fn execute_devtools_create_browser_context_command(
         .as_ref()
         .map(|id| id.as_str().to_owned())
         .unwrap_or_else(|| match command.context.protocol {
-            DevToolsProtocol::WebDriverBidi => conn.gen_user_browser_context_id(),
+            FrontendProtocol::WebDriverBidi => conn.gen_user_browser_context_id(),
             _ => conn.gen_bc_id(),
         });
     if conn.has_browser_context_id(&id) {
@@ -304,7 +302,7 @@ pub(super) fn execute_devtools_create_browser_context_command(
     browser_context.proxy_socks_version = command.proxy_socks_version;
     conn.insert_browser_context(browser_context);
     Ok(DevToolsCreateBrowserContextResult {
-        browser_context_id: crate::devtools_runtime::DevToolsBrowserContextId::from(id),
+        browser_context_id: crate::automation::DevToolsBrowserContextId::from(id),
     })
 }
 
@@ -315,9 +313,7 @@ pub(super) fn devtools_get_browser_contexts_result(
     DevToolsGetBrowserContextsResult {
         browser_context_ids: conn
             .browser_contexts()
-            .map(|context| {
-                crate::devtools_runtime::DevToolsBrowserContextId::from(context.id.as_str())
-            })
+            .map(|context| crate::automation::DevToolsBrowserContextId::from(context.id.as_str()))
             .collect(),
     }
 }
@@ -326,11 +322,11 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
     conn: &mut CdpConnection,
     command: DevToolsRemoveBrowserContextCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
 ) {
     let should_emit_internal_lifecycle =
-        command.context.protocol == DevToolsProtocol::WebDriverBidi;
+        command.context.protocol == FrontendProtocol::WebDriverBidi;
     let browser_context_id = command.browser_context_id.into_string();
     if browser_context_id == conn.default_browser_context_id() {
         return (
@@ -372,7 +368,7 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
     }
     protocol_events.extend(side_effects.into_background_events());
     protocol_events.extend(command_context.take_protocol_events());
-    (Ok(DevToolsCommandResult::Empty), protocol_events)
+    (Ok(AutomationResult::Empty), protocol_events)
 }
 
 pub(super) const DEVTOOLS_BROWSER_TARGET_ID: &str = "browser";

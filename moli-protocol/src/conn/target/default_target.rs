@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
 

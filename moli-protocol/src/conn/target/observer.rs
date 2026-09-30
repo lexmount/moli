@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::conn::{BackgroundProtocolEvent, CdpTargetFilter};
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo,
     TargetLifecycleEvent,
 };
+use crate::conn::{BackgroundProtocolEvent, CdpTargetFilter};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetHandlerState {
@@ -289,10 +289,10 @@ fn target_lifecycle_event(target_info: DevToolsTargetInfo) -> Option<TargetLifec
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::{CdpTargetFilter, CdpTargetFilterEntry};
-    use crate::devtools_runtime::{
+    use crate::automation::{
         AutomationEvent, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
     };
+    use crate::conn::{CdpTargetFilter, CdpTargetFilterEntry};
 
     use super::TargetHandlerStore;
 

@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
-use moli_protocol::devtools_runtime::DevToolsCommandResult;
+use moli_protocol::automation::AutomationResult;
 use moli_protocol_webdriver_classic::{
     ClassicError, ClassicErrorCode, alert_handle_command, alert_send_text_command,
     alert_text_command, classic_error_from_devtools_error,
@@ -91,7 +91,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_send_alert_text(
         Err(error) => return classic_error_into_response(error),
     };
     match binding.runtime.execute(command).await {
-        Ok(DevToolsCommandResult::Empty) => classic_success_into_response(Value::Null),
+        Ok(AutomationResult::Empty) => classic_success_into_response(Value::Null),
         Ok(_) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "send alert text returned an unexpected result",
@@ -120,7 +120,7 @@ async fn handle_alert(session_id: String, state: AppState, accept: bool) -> Resp
         .execute(alert_handle_command(&context, accept))
         .await
     {
-        Ok(DevToolsCommandResult::Empty) => classic_success_into_response(Value::Null),
+        Ok(AutomationResult::Empty) => classic_success_into_response(Value::Null),
         Ok(_) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "handle alert returned an unexpected result",
@@ -139,7 +139,7 @@ async fn get_alert_dialog(
 ) -> Result<ClassicAlertDialog, ClassicError> {
     let context = classic_browsing_context(binding);
     match binding.runtime.execute(alert_text_command(&context)).await {
-        Ok(DevToolsCommandResult::JavaScriptDialog(result)) => Ok(ClassicAlertDialog {
+        Ok(AutomationResult::JavaScriptDialog(result)) => Ok(ClassicAlertDialog {
             dialog_type: result.dialog_type,
             message: result.message,
         }),

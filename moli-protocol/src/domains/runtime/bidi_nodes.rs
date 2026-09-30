@@ -4,11 +4,11 @@ use moli_core::page::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::conn::{CdpConnection, CommandOwnerScope};
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsError, DevToolsErrorKind, DevToolsRemoteHandleId, DevToolsRemoteValue,
     DevToolsSerializationOptions, webdriver_bidi_node_shared_id_for_backend_node_id,
 };
+use crate::conn::{CdpConnection, CommandOwnerScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BidiIncludeShadowTree {
@@ -716,7 +716,7 @@ mod tests {
     use moli_page_types::{DocumentNodeSnapshot, DocumentSnapshotNodeId};
     use serde_json::{Value, json};
 
-    use crate::devtools_runtime::{DevToolsRemoteHandleId, DevToolsRemoteValue};
+    use crate::automation::{DevToolsRemoteHandleId, DevToolsRemoteValue};
 
     use super::{
         BidiIncludeShadowTree, BidiNodeSerializationOptions,

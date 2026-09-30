@@ -1505,11 +1505,11 @@ mod tests {
     use moli_fetch::FetchCancelHandle;
 
     use crate::{
+        automation::AutomationEvent,
         conn::{
             BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope,
             PageTargetHost,
         },
-        devtools_runtime::AutomationEvent,
     };
 
     use super::{

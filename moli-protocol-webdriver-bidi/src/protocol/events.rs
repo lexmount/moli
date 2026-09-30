@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     AutomationEvent, NavigationFrameEventKind, webdriver_bidi_navigation_id_from_loader_id,
 };
 use serde_json::{Value, json};

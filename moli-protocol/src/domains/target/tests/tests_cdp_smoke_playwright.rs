@@ -140,7 +140,7 @@ async fn arm_popup_route(
         .expect("popup target Fetch configuration");
     let matching_sessions = fetch_snapshot.matching_request_stage_pause_sessions(
         Some(popup_session_id),
-        crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+        crate::automation::DevToolsNetworkResourceType::Document,
         &url::Url::parse(popup_url).expect("popup URL"),
     );
     assert_eq!(
@@ -196,7 +196,7 @@ async fn fulfill_popup_document_and_evaluate(
         .expect("popup target Fetch configuration after debugger resume");
     let matching_sessions = fetch_snapshot.matching_request_stage_pause_sessions(
         Some(popup_session_id),
-        crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+        crate::automation::DevToolsNetworkResourceType::Document,
         &url::Url::parse(popup_url).expect("popup URL"),
     );
     assert_eq!(

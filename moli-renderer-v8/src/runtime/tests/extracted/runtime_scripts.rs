@@ -2587,7 +2587,7 @@ __lm_snapshot_revocable_array.revoke();
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn native_terminals_publish_before_waiters_are_polled() {
-    use super::{RendererNativeCommand, RendererNativeOperation, RendererNativeProtocolResponse};
+    use super::{RendererCdpCall, RendererNativeOperation, RendererNativeProtocolResponse};
     use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId};
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
@@ -2605,7 +2605,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
     let mut pending = Vec::new();
     let mut guards = Vec::new();
     for command_id in [100, 101, 102] {
-        let (command, guard) = RendererNativeCommand::new(
+        let (command, guard) = RendererCdpCall::new(
             moli_page_types::FrontendCommandId::new(command_id),
             DevToolsSessionKey::Attached("session-a".to_owned()),
             attachment,
@@ -2733,7 +2733,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn projected_native_success_and_error_publish_without_adapter_receipt() {
-    use super::{RendererNativeCommand, RendererNativeOperation, RendererNativeProtocolResponse};
+    use super::{RendererCdpCall, RendererNativeOperation, RendererNativeProtocolResponse};
     use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
@@ -2751,7 +2751,7 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
     let mut waiters = Vec::new();
     let mut guards = Vec::new();
     for id in [1, 2] {
-        let (command, guard) = RendererNativeCommand::new(
+        let (command, guard) = RendererCdpCall::new(
             FrontendCommandId::new(id),
             DevToolsSessionKey::Attached("native".to_owned()),
             attachment,

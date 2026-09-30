@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::devtools_runtime::DevToolsTargetId;
+use crate::automation::DevToolsTargetId;
 
 use super::*;
 
@@ -25,7 +25,7 @@ pub(super) fn start_activate_target_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ActivateTarget(command),
+        AutomationCommand::ActivateTarget(command),
     )
 }
 
@@ -34,8 +34,7 @@ pub(super) fn build_cdp_activate_target_command(
     params: ActivateTargetParams,
 ) -> DevToolsActivateTargetCommand {
     DevToolsActivateTargetCommand {
-        context: cmd
-            .devtools_command_context(Some(params.target_id.as_str()), Option::<&str>::None),
+        context: cmd.automation_context(Some(params.target_id.as_str()), Option::<&str>::None),
         target_id: DevToolsTargetId::from(params.target_id),
     }
 }

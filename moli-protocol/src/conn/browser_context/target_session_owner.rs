@@ -1,4 +1,5 @@
 use super::*;
+use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
@@ -14,7 +15,6 @@ use crate::conn::{
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
 };
-use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 #[cfg(test)]
 use moli_core::page::RendererServiceWorkerVersionStatus;

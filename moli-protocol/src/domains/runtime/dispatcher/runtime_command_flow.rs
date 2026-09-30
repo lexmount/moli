@@ -54,7 +54,7 @@ pub(super) fn build_cdp_evaluate_script_command(
     await_promise: bool,
 ) -> DevToolsEvaluateScriptCommand {
     DevToolsEvaluateScriptCommand {
-        context: cmd.devtools_command_context(target_id, browser_context_id),
+        context: cmd.automation_context(target_id, browser_context_id),
         realm_id: None,
         world_name: None,
         expression: cdp_evaluate_expression_from_params(cmd.params).unwrap_or_default(),
@@ -130,7 +130,7 @@ pub(super) fn build_cdp_call_function_command(
     browser_context_id: Option<&str>,
 ) -> DevToolsCallFunctionCommand {
     DevToolsCallFunctionCommand {
-        context: cmd.devtools_command_context(target_id, browser_context_id),
+        context: cmd.automation_context(target_id, browser_context_id),
         realm_id: cdp_call_function_realm_id_from_params(cmd.params),
         world_name: None,
         object_id: runtime_object_id_from_params(cmd.params).map(DevToolsRemoteHandleId::from),

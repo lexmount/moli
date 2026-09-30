@@ -11,7 +11,7 @@ use super::{
     CommandResponseFlushContext, NavigationBackgroundEvent, NavigationDispatchState,
     NavigationResultProjection, ServiceWorkerTargetState, SharedWorkerTargetState, build_event,
 };
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsTargetFilterEntry,
     DevToolsTargetId, NavigationFrameEvent, NavigationFrameEventKind,
 };

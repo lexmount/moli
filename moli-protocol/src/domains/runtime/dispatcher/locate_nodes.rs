@@ -3,16 +3,16 @@ use super::*;
 pub(super) async fn execute_devtools_locate_nodes_command_async(
     conn: &mut CdpConnection,
     mut command: DevToolsLocateNodesCommand,
-) -> DevToolsCommandExecutionOutput {
+) -> AutomationExecutionOutput {
     if matches!(&command.locator, DevToolsLocateNodesLocator::Context(_)) {
         return execute_devtools_locate_nodes_context_command_async(conn, command).await;
     }
     let target =
-        match devtools_runtime_target_async(conn, &DevToolsCommand::LocateNodes(command.clone()))
+        match devtools_runtime_target_async(conn, &AutomationCommand::LocateNodes(command.clone()))
             .await
         {
             Ok(target) => target,
-            Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+            Err(error) => return AutomationExecutionOutput::new(Err(error)),
         };
     let context = command.context.clone();
     let locator = command.locator.clone();
@@ -27,17 +27,17 @@ pub(super) async fn execute_devtools_locate_nodes_command_async(
     .await
     {
         Ok(inputs) => inputs,
-        Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+        Err(error) => return AutomationExecutionOutput::new(Err(error)),
     };
     let (start_node_arguments, start_node_handles) =
         match resolve_locate_nodes_start_node_inputs(conn, &context, start_node_inputs).await {
             Ok(arguments) => arguments,
-            Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+            Err(error) => return AutomationExecutionOutput::new(Err(error)),
         };
     let call_function = locate_nodes_call_function_command(command, start_node_arguments);
     let output = Box::pin(execute_devtools_runtime_command_async_with_protocol_events(
         conn,
-        DevToolsCommand::CallFunction(call_function),
+        AutomationCommand::CallFunction(call_function),
     ))
     .await;
     let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
@@ -48,13 +48,13 @@ pub(super) async fn execute_devtools_locate_nodes_command_async(
         }
         Err(error) => Err(error),
     };
-    DevToolsCommandExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
+    AutomationExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
 }
 
 pub(super) async fn execute_devtools_locate_nodes_context_command_async(
     conn: &mut CdpConnection,
     command: DevToolsLocateNodesCommand,
-) -> DevToolsCommandExecutionOutput {
+) -> AutomationExecutionOutput {
     let DevToolsLocateNodesCommand {
         context,
         locator,
@@ -64,13 +64,13 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
         ..
     } = command;
     let DevToolsLocateNodesLocator::Context(ref frame_id) = locator else {
-        return DevToolsCommandExecutionOutput::new(Err(DevToolsError::new(
+        return AutomationExecutionOutput::new(Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedLocateNodesContextLocator",
         )));
     };
     if !start_nodes.is_empty() || !start_node_references.is_empty() {
-        return DevToolsCommandExecutionOutput::new(Err(DevToolsError::new(
+        return AutomationExecutionOutput::new(Err(DevToolsError::new(
             DevToolsErrorKind::InvalidArgument,
             "Start nodes are not supported",
         )));
@@ -78,7 +78,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
 
     let owner_result = match crate::domains::dom::execute_devtools_dom_command_async(
         conn,
-        DevToolsCommand::GetFrameOwner(DevToolsGetFrameOwnerCommand {
+        AutomationCommand::GetFrameOwner(DevToolsGetFrameOwnerCommand {
             context: context.clone(),
             frame_id: frame_id.clone(),
         }),
@@ -87,10 +87,10 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
     .map_err(locate_nodes_context_owner_error)
     {
         Ok(result) => result,
-        Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+        Err(error) => return AutomationExecutionOutput::new(Err(error)),
     };
-    let DevToolsCommandResult::GetFrameOwner(owner_result) = owner_result else {
-        return DevToolsCommandExecutionOutput::new(Err(DevToolsError::new(
+    let AutomationResult::GetFrameOwner(owner_result) = owner_result else {
+        return AutomationExecutionOutput::new(Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedLocateNodesFrameOwnerResult",
         )));
@@ -112,7 +112,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
         .map_err(locate_nodes_context_owner_error)
         {
             Ok(arguments) => arguments,
-            Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+            Err(error) => return AutomationExecutionOutput::new(Err(error)),
         };
     let call_function_context = context.clone();
     let call_function = DevToolsCallFunctionCommand {
@@ -146,14 +146,14 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
     };
     let output = Box::pin(execute_devtools_runtime_command_async_with_protocol_events(
         conn,
-        DevToolsCommand::CallFunction(call_function),
+        AutomationCommand::CallFunction(call_function),
     ))
     .await;
     let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
     release_locate_nodes_start_node_handles(conn, context, start_node_handles).await;
     let result = result.and_then(|result| {
         let mut result = locate_nodes_result_from_script_result(result, &locator)?;
-        if let DevToolsCommandResult::LocateNodes(result) = &mut result
+        if let AutomationResult::LocateNodes(result) = &mut result
             && result.node_ids.is_empty()
         {
             result.node_ids.push(owner_node_id);
@@ -163,7 +163,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
         }
         Ok(result)
     });
-    DevToolsCommandExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
+    AutomationExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
 }
 
 pub(super) fn locate_nodes_context_owner_error(error: DevToolsError) -> DevToolsError {
@@ -286,7 +286,7 @@ pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_asy
 
 pub(super) async fn resolve_locate_nodes_start_node_inputs(
     conn: &mut CdpConnection,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
     inputs: Vec<LocateNodesStartNodeInput>,
 ) -> Result<(Vec<Value>, Vec<DevToolsRemoteHandleId>), DevToolsError> {
     let mut arguments = Vec::with_capacity(inputs.len());
@@ -319,7 +319,7 @@ pub(super) async fn resolve_locate_nodes_start_node_inputs(
 
 pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
     conn: &mut CdpConnection,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
     references: Vec<DevToolsDomNodeReference>,
 ) -> Result<(Vec<Value>, Vec<DevToolsRemoteHandleId>), DevToolsError> {
     let mut arguments = Vec::with_capacity(references.len());
@@ -327,7 +327,7 @@ pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
     for reference in references {
         let result = crate::domains::dom::execute_devtools_dom_command_async(
             conn,
-            DevToolsCommand::ResolveNode(DevToolsResolveNodeCommand {
+            AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
                 context: context.clone(),
                 reference,
                 execution_context_id: None,
@@ -342,7 +342,7 @@ pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
                 return Err(error);
             }
         };
-        let DevToolsCommandResult::ResolveNode(result) = result else {
+        let AutomationResult::ResolveNode(result) = result else {
             release_locate_nodes_start_node_handles(conn, context.clone(), handles).await;
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
@@ -369,7 +369,7 @@ pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
 
 pub(super) async fn release_locate_nodes_start_node_handles(
     conn: &mut CdpConnection,
-    context: DevToolsCommandContext,
+    context: AutomationContext,
     handles: Vec<DevToolsRemoteHandleId>,
 ) {
     if handles.is_empty() {
@@ -660,11 +660,11 @@ pub(super) fn locate_nodes_function_declaration(
 pub(super) async fn locate_nodes_result_from_script_result_async(
     conn: &mut CdpConnection,
     target: &DevToolsRuntimeTarget,
-    result: DevToolsCommandResult,
+    result: AutomationResult,
     locator: &DevToolsLocateNodesLocator,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let mut result = locate_nodes_result_from_script_result(result, locator)?;
-    if let DevToolsCommandResult::LocateNodes(result) = &mut result {
+    if let AutomationResult::LocateNodes(result) = &mut result {
         materialize_locate_nodes_result_node_ids_async(conn, target, result).await;
     }
     Ok(result)
@@ -730,10 +730,10 @@ pub(super) fn frontend_node_id_for_locate_node_snapshot(
 }
 
 pub(super) fn locate_nodes_result_from_script_result(
-    result: DevToolsCommandResult,
+    result: AutomationResult,
     locator: &DevToolsLocateNodesLocator,
-) -> Result<DevToolsCommandResult, DevToolsError> {
-    let DevToolsCommandResult::Script(result) = result else {
+) -> Result<AutomationResult, DevToolsError> {
+    let AutomationResult::Script(result) = result else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedLocateNodesResult",
@@ -755,12 +755,10 @@ pub(super) fn locate_nodes_result_from_script_result(
                     "LocateNodesUnexpectedSerializedArray",
                 ));
             };
-            Ok(DevToolsCommandResult::LocateNodes(
-                DevToolsLocateNodesResult {
-                    node_ids: nodes.iter().filter_map(|node| node.node_id).collect(),
-                    nodes,
-                },
-            ))
+            Ok(AutomationResult::LocateNodes(DevToolsLocateNodesResult {
+                node_ids: nodes.iter().filter_map(|node| node.node_id).collect(),
+                nodes,
+            }))
         }
         DevToolsScriptResult::Exception(exception) => {
             Err(locate_nodes_error_from_exception(exception, locator))

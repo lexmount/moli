@@ -1,10 +1,10 @@
 use super::*;
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsAddNetworkInterceptCommand, DevToolsAuthChallengeAction,
-    DevToolsAuthCredentials, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
+    DevToolsAddNetworkInterceptCommand, DevToolsAuthChallengeAction, DevToolsAuthCredentials,
     DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
     DevToolsNetworkInterceptId, DevToolsNetworkInterceptPattern, DevToolsNetworkInterceptPhase,
-    DevToolsProtocol, DevToolsRequestId, DevToolsSessionId, DevToolsTargetId,
+    DevToolsRequestId, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -251,10 +251,10 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
 
     let outcome = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::ContinueInterceptedResponse(
+        .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
             DevToolsContinueInterceptedResponseCommand {
-                context: crate::devtools_runtime::DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: crate::automation::AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: None,
                     target_id: Some("TID-1".into()),
                     browser_context_id: Some("BID-1".into()),
@@ -273,7 +273,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     let (result, scheduler_events, events) = outcome.into_parts_with_protocol_events();
     assert_eq!(
         result.expect("continueResponse credentials should succeed"),
-        crate::devtools_runtime::DevToolsCommandResult::Empty
+        crate::automation::AutomationResult::Empty
     );
     let event_parts = events
         .clone()
@@ -891,10 +891,10 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
         add_intercept_renderer_output_predecessor,
     ) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
+        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -912,8 +912,8 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     assert!(add_intercept_renderer_output_predecessor.is_none());
     assert_eq!(
         result.expect("BiDi navigation auth intercept should succeed"),
-        DevToolsCommandResult::AddNetworkIntercept(
-            crate::devtools_runtime::DevToolsAddNetworkInterceptResult {
+        AutomationResult::AddNetworkIntercept(
+            crate::automation::DevToolsAddNetworkInterceptResult {
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-auth")
             }
         )
@@ -1030,10 +1030,10 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     ) = match terminal_command {
         NavigationMixedAuthTerminalCommand::ContinueWithAuth => ctx
             .conn
-            .execute_devtools_command(DevToolsCommand::ContinueWithAuth(
+            .execute_automation_command(AutomationCommand::ContinueWithAuth(
                 DevToolsContinueWithAuthCommand {
-                    context: DevToolsCommandContext {
-                        protocol: DevToolsProtocol::WebDriverBidi,
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
                         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                         target_id: Some(DevToolsTargetId::from("TID-1")),
                         browser_context_id: None,
@@ -1048,10 +1048,10 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
             .into_complete_parts(),
         NavigationMixedAuthTerminalCommand::ContinueResponseAuthCredentials => ctx
             .conn
-            .execute_devtools_command(DevToolsCommand::ContinueInterceptedResponse(
+            .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
                 DevToolsContinueInterceptedResponseCommand {
-                    context: DevToolsCommandContext {
-                        protocol: DevToolsProtocol::WebDriverBidi,
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
                         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                         target_id: Some(DevToolsTargetId::from("TID-1")),
                         browser_context_id: None,
@@ -1070,10 +1070,10 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
             .into_complete_parts(),
         NavigationMixedAuthTerminalCommand::ContinueWithAuthCancel => ctx
             .conn
-            .execute_devtools_command(DevToolsCommand::ContinueWithAuth(
+            .execute_automation_command(AutomationCommand::ContinueWithAuth(
                 DevToolsContinueWithAuthCommand {
-                    context: DevToolsCommandContext {
-                        protocol: DevToolsProtocol::WebDriverBidi,
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
                         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                         target_id: Some(DevToolsTargetId::from("TID-1")),
                         browser_context_id: None,
@@ -1090,7 +1090,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     assert!(continue_renderer_output_predecessor.is_none());
     assert_eq!(
         continue_result.expect("BiDi navigation auth terminal action should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     ctx.route_direct_command_output_for_test(continue_protocol_events, continue_scheduler_events)
         .await;

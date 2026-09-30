@@ -1,13 +1,13 @@
-//! Protocol-neutral DevTools owner and dispatch layer for Moli.
+//! Protocol-neutral automation owner and dispatch layer for Moli.
 //!
 //! This crate is being split away from the Chrome DevTools Protocol wire shape.
 //! It still contains transitional CDP-named owner types, but protocol-specific
 //! parsing and Chrome protocol metadata belong in
 //! `moli-protocol-cdp`.
 
+pub mod automation;
 mod cdp_projection;
 pub mod conn;
-pub mod devtools_runtime;
 pub mod domains;
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -15,23 +15,22 @@ pub mod test_support;
 pub mod testing;
 pub mod version;
 
-pub use devtools_runtime::*;
+pub use automation::*;
 
 pub use conn::{
-    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererCommandAccess, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
-    CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
+    AutomationCommandDispatchOutcome, BackgroundCommandResponsePayload, BackgroundProtocolEvent,
+    CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition, CdpRendererCommandAccess,
+    CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome,
+    CdpSchedulerEvent, CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,
     CompletedCdpCommandDispatch, CompletedDeferredMainDocumentLoadCompletion,
     CompletedRuntimeProtocolMessageDispatch, DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID,
     DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
-    DeferredMainDocumentLoadPredecessorCandidate, DevToolsCommandDispatchOutcome,
-    DevToolsDocumentLifecycleWaitKey, DevToolsDocumentLifecycleWaitState,
-    DevToolsDocumentNavigationState, DevToolsPageResidenceIdentity, ParsedCdpCommand,
-    PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingRuntimeProtocolMessageDispatch,
+    DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentLifecycleWaitKey,
+    DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState,
+    DevToolsPageResidenceIdentity, ParsedCdpCommand, PendingCdpCommandDispatch,
+    PendingDeferredMainDocumentLoadCompletion, PendingRuntimeProtocolMessageDispatch,
 };
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,

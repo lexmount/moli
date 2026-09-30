@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::automation::DevToolsTargetInfo;
 use crate::conn::{BackgroundProtocolEvent, PreparedTargetAttach};
-use crate::devtools_runtime::DevToolsTargetInfo;
 
 use super::*;
 

@@ -1,9 +1,9 @@
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
-use crate::devtools_runtime::{
-    DevToolsAddNetworkDataCollectorCommand, DevToolsBrowserContextId, DevToolsCommand,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsAddNetworkDataCollectorCommand,
+    DevToolsBrowserContextId, DevToolsError, DevToolsErrorKind,
     DevToolsRemoveNetworkDataCollectorCommand, DevToolsSetCacheBehaviorCommand, DevToolsTargetId,
 };
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 
 use super::storage::{
     CdpCookieParam, DeleteCookiesParams, associated_cookies_to_json, cookie_query_report_to_json,
@@ -300,20 +300,20 @@ pub(crate) fn start_network_domain_command_dispatch(
 
 pub(crate) fn execute_devtools_network_command(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     match command {
-        DevToolsCommand::AddNetworkDataCollector(command) => {
+        AutomationCommand::AddNetworkDataCollector(command) => {
             add_network_data_collector_result(conn, command)
         }
-        DevToolsCommand::RemoveNetworkDataCollector(command) => {
+        AutomationCommand::RemoveNetworkDataCollector(command) => {
             remove_network_data_collector_result(conn, command)
         }
-        DevToolsCommand::DisownNetworkData(command) => {
+        AutomationCommand::DisownNetworkData(command) => {
             response_body::disown_network_data_result(conn, command)
         }
-        DevToolsCommand::GetNetworkData(command) => get_network_data_result(conn, command),
-        DevToolsCommand::SetCacheBehavior(command) => set_cache_behavior_result(conn, command),
+        AutomationCommand::GetNetworkData(command) => get_network_data_result(conn, command),
+        AutomationCommand::SetCacheBehavior(command) => set_cache_behavior_result(conn, command),
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
             "UnsupportedDevToolsNetworkCommand",
@@ -324,7 +324,7 @@ pub(crate) fn execute_devtools_network_command(
 fn add_network_data_collector_result(
     conn: &mut CdpConnection,
     mut command: DevToolsAddNetworkDataCollectorCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     command.target_ids = validate_network_data_collector_target_ids(conn, &command.target_ids)?;
     command.browser_context_ids =
         resolve_network_data_collector_browser_context_ids(conn, &command.browser_context_ids)?;
@@ -334,10 +334,10 @@ fn add_network_data_collector_result(
 fn remove_network_data_collector_result(
     conn: &mut CdpConnection,
     command: DevToolsRemoveNetworkDataCollectorCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     conn.network_data_collectors
         .remove_collector(&command.collector_id)?;
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 fn validate_network_data_collector_target_ids(
@@ -419,7 +419,7 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
 fn set_cache_behavior_result(
     conn: &mut CdpConnection,
     command: DevToolsSetCacheBehaviorCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let target_ids = if command.target_ids.is_empty() {
         conn.set_global_cache_disabled(command.cache_disabled);
         top_level_target_ids(conn)
@@ -434,7 +434,7 @@ fn set_cache_behavior_result(
             ));
         }
     }
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 fn top_level_target_ids(conn: &CdpConnection) -> Vec<String> {

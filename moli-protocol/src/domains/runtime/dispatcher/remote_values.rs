@@ -164,7 +164,7 @@ pub(super) fn devtools_script_result_from_response(
     response: Value,
     result_ownership: DevToolsResultOwnership,
     target_realm: Option<DevToolsRealmId>,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     if let Some(error) = response.get("error") {
         return Err(devtools_error_from_cdp_error_value(error));
     }
@@ -177,12 +177,12 @@ pub(super) fn devtools_script_result_from_response(
         if exception.realm.is_none() {
             exception.realm = target_realm;
         }
-        return Ok(DevToolsCommandResult::Script(Box::new(
+        return Ok(AutomationResult::Script(Box::new(
             DevToolsScriptResult::Exception(exception),
         )));
     }
     let remote = result.get("result").unwrap_or(&Value::Null);
-    Ok(DevToolsCommandResult::Script(Box::new(
+    Ok(AutomationResult::Script(Box::new(
         DevToolsScriptResult::Value(devtools_remote_value_from_cdp(
             remote,
             matches!(result_ownership, DevToolsResultOwnership::Root),
@@ -193,23 +193,23 @@ pub(super) fn devtools_script_result_from_response(
 
 pub(super) fn devtools_empty_result_from_response(
     response: Value,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     if let Some(error) = response.get("error") {
         return Err(devtools_error_from_cdp_error_value(error));
     }
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 pub(super) fn validate_protocol_neutral_runtime_handle_realms(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
-    let DevToolsCommand::CallFunction(command) = command else {
+    let AutomationCommand::CallFunction(command) = command else {
         return Ok(());
     };
-    if command.context.protocol != DevToolsProtocol::WebDriverBidi {
+    if command.context.protocol != FrontendProtocol::WebDriverBidi {
         return Ok(());
     }
 
@@ -246,10 +246,10 @@ pub(super) fn validate_protocol_neutral_runtime_handle_realms(
 pub(super) fn register_devtools_script_result_remote_object_realm(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    result: &DevToolsCommandResult,
+    result: &AutomationResult,
     realm_id: Option<&DevToolsRealmId>,
 ) {
-    let (DevToolsCommandResult::Script(result), Some(realm_id)) = (result, realm_id) else {
+    let (AutomationResult::Script(result), Some(realm_id)) = (result, realm_id) else {
         return;
     };
     let DevToolsScriptResult::Value(value) = result.as_ref() else {
@@ -279,7 +279,7 @@ pub(super) fn register_devtools_script_result_remote_object_realm(
 pub(super) fn register_devtools_script_result_remote_object(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    result: &DevToolsCommandResult,
+    result: &AutomationResult,
 ) {
     let Some(value) = devtools_script_result_remote_value(result) else {
         return;
@@ -294,7 +294,7 @@ pub(super) fn register_devtools_script_result_remote_object(
 }
 
 pub(super) fn materialize_devtools_script_window_remote_value(
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
     target: &DevToolsRuntimeTarget,
 ) {
     let Some(target_window_context_id) = target.window_context_id.clone() else {
@@ -366,7 +366,7 @@ pub(super) fn deep_serialized_string_value(value: &Value) -> Option<String> {
 }
 
 pub(super) fn devtools_window_remote_candidate(
-    result: &DevToolsCommandResult,
+    result: &AutomationResult,
 ) -> Option<DevToolsWindowRemoteCandidate> {
     let value = devtools_script_result_remote_value(result)?;
     Some(DevToolsWindowRemoteCandidate {
@@ -377,7 +377,7 @@ pub(super) fn devtools_window_remote_candidate(
 pub(super) async fn devtools_probe_remote_value_async(
     conn: &mut CdpConnection,
     target: DevToolsRuntimeTarget,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
     let result_ownership = devtools_runtime_result_ownership(&command);
     let internal_command_id = conn.next_internal_runtime_command_id();
@@ -399,7 +399,7 @@ pub(super) async fn devtools_probe_remote_value_async(
                 };
                 let result =
                     devtools_script_result_from_response(response, result_ownership, None)?;
-                let DevToolsCommandResult::Script(result) = result else {
+                let AutomationResult::Script(result) = result else {
                     return Ok(None);
                 };
                 let DevToolsScriptResult::Value(value) = *result else {
@@ -417,7 +417,7 @@ pub(super) async fn devtools_probe_remote_value_async(
 
 pub(super) async fn materialize_devtools_script_deep_serialized_root_value_async(
     conn: &mut CdpConnection,
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
 ) {
@@ -441,9 +441,9 @@ pub(super) async fn materialize_devtools_script_deep_serialized_root_value_async
         return;
     };
 
-    let command = DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+    let command = AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: target.window_context_id.clone(),
             browser_context_id: None,
@@ -485,9 +485,9 @@ pub(super) async fn materialize_devtools_script_deep_serialized_root_value_async
 }
 
 pub(super) fn devtools_script_result_remote_value(
-    result: &DevToolsCommandResult,
+    result: &AutomationResult,
 ) -> Option<&DevToolsRemoteValue> {
-    let DevToolsCommandResult::Script(result) = result else {
+    let AutomationResult::Script(result) = result else {
         return None;
     };
     match result.as_ref() {
@@ -497,9 +497,9 @@ pub(super) fn devtools_script_result_remote_value(
 }
 
 pub(super) fn devtools_script_result_remote_value_mut(
-    result: &mut DevToolsCommandResult,
+    result: &mut AutomationResult,
 ) -> Option<&mut DevToolsRemoteValue> {
-    let DevToolsCommandResult::Script(result) = result else {
+    let AutomationResult::Script(result) = result else {
         return None;
     };
     match result.as_mut() {
@@ -547,7 +547,7 @@ pub(super) fn bidi_script_message_serialization_options_from_value(
 pub(super) async fn devtools_probe_value_async(
     conn: &mut CdpConnection,
     target: DevToolsRuntimeTarget,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> Result<Option<Value>, DevToolsError> {
     let Some(value) = devtools_probe_remote_value_async(conn, target, command).await? else {
         return Ok(None);

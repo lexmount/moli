@@ -1,4 +1,4 @@
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
     DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId, DevToolsNavigationId,
     DevToolsNetworkInterceptId, DevToolsNetworkResourceType, DevToolsRealmId, DevToolsRemoteValue,
@@ -154,7 +154,7 @@ fn assert_bidi_adapter_invalid(method: &str, params: Value) -> String {
     .expect("BiDi command");
     let context = super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let error = super::devtools_command_from_bidi_command(&command, &context)
+    let error = super::automation_command_from_bidi_command(&command, &context)
         .expect_err("command should fail validation");
 
     assert_eq!(error.code, super::BidiErrorCode::InvalidArgument);

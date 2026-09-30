@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{DevToolsError, DevToolsErrorKind};
+use crate::automation::{DevToolsError, DevToolsErrorKind};
 
 use crate::conn::{CdpConnection, Cmd, DevToolsLogViolationThreshold};
 use crate::domains::actions::LogAction;
@@ -171,8 +171,8 @@ fn append_log_replay_snapshot(
 
 #[cfg(test)]
 mod tests {
+    use crate::automation::AutomationEvent;
     use crate::conn::BrowserContext;
-    use crate::devtools_runtime::AutomationEvent;
     use crate::domains::observable_output::{
         ObservableOutputProjectionStep, ObservablePreparedOutputSlot,
         live_log_prepared_outputs_for_renderer_network_fact,

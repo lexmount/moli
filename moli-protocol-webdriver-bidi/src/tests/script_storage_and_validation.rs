@@ -918,7 +918,7 @@ fn rejects_chromium_wpt_invalid_browsing_context_params() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
     assert!(
-        super::super::devtools_command_from_bidi_command(&valid_shape_user_context, &context)
+        super::super::automation_command_from_bidi_command(&valid_shape_user_context, &context)
             .is_ok(),
         "user context existence is checked by the execution layer that owns browser contexts"
     );
@@ -2029,7 +2029,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_wait, &context)
+        super::super::automation_command_from_bidi_command(&invalid_wait, &context)
             .expect_err("invalid wait should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2046,7 +2046,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_wait_type, &context)
+        super::super::automation_command_from_bidi_command(&invalid_wait_type, &context)
             .expect_err("non-string wait should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2061,7 +2061,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_get_tree_root_type, &context)
+        super::super::automation_command_from_bidi_command(&invalid_get_tree_root_type, &context)
             .expect_err("non-string getTree root should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2077,7 +2077,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(
+        super::super::automation_command_from_bidi_command(
             &invalid_reload_ignore_cache_type,
             &context
         )
@@ -2099,7 +2099,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_await_promise_type, &context)
+        super::super::automation_command_from_bidi_command(&invalid_await_promise_type, &context)
             .expect_err("non-boolean awaitPromise should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2118,9 +2118,12 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_result_ownership_type, &context)
-            .expect_err("non-string resultOwnership should fail")
-            .code,
+        super::super::automation_command_from_bidi_command(
+            &invalid_result_ownership_type,
+            &context
+        )
+        .expect_err("non-string resultOwnership should fail")
+        .code,
         super::super::BidiErrorCode::InvalidArgument
     );
 
@@ -2137,7 +2140,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(
+        super::super::automation_command_from_bidi_command(
             &invalid_script_target_sandbox_type,
             &context
         )
@@ -2159,7 +2162,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(
+        super::super::automation_command_from_bidi_command(
             &invalid_call_function_arguments_type,
             &context
         )
@@ -2178,7 +2181,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_preload_sandbox_type, &context)
+        super::super::automation_command_from_bidi_command(&invalid_preload_sandbox_type, &context)
             .expect_err("non-string preload sandbox should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2197,9 +2200,9 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     let shared =
-        super::super::devtools_command_from_bidi_command(&context_and_realm_target, &context)
+        super::super::automation_command_from_bidi_command(&context_and_realm_target, &context)
             .expect("context target should ignore realm");
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
@@ -2207,7 +2210,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.realm_id.is_none());
@@ -2221,7 +2224,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_realm_type, &context)
+        super::super::automation_command_from_bidi_command(&invalid_realm_type, &context)
             .expect_err("invalid realm type should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2238,7 +2241,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&conflicting_preload_targets, &context)
+        super::super::automation_command_from_bidi_command(&conflicting_preload_targets, &context)
             .expect_err("conflicting preload targets should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2254,7 +2257,7 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&empty_preload_contexts, &context)
+        super::super::automation_command_from_bidi_command(&empty_preload_contexts, &context)
             .expect_err("empty preload contexts should fail")
             .code,
         super::super::BidiErrorCode::InvalidArgument
@@ -2270,9 +2273,12 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_preload_arguments_type, &context)
-            .expect_err("non-array preload arguments should fail")
-            .code,
+        super::super::automation_command_from_bidi_command(
+            &invalid_preload_arguments_type,
+            &context
+        )
+        .expect_err("non-array preload arguments should fail")
+        .code,
         super::super::BidiErrorCode::InvalidArgument
     );
 
@@ -2286,9 +2292,12 @@ fn rejects_invalid_bidi_command_adapter_params() {
     }))
     .expect("BiDi command");
     assert_eq!(
-        super::super::devtools_command_from_bidi_command(&invalid_preload_argument_entry, &context)
-            .expect_err("non-object preload argument entries should fail")
-            .code,
+        super::super::automation_command_from_bidi_command(
+            &invalid_preload_argument_entry,
+            &context
+        )
+        .expect_err("non-object preload argument entries should fail")
+        .code,
         super::super::BidiErrorCode::InvalidArgument
     );
 }
@@ -2305,8 +2314,8 @@ fn network_continue_request_preserves_header_bytes() {
     }))
     .unwrap();
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
-    let moli_protocol::devtools_runtime::DevToolsCommand::ContinueInterceptedRequest(command) =
-        super::super::devtools_command_from_bidi_command(&command, &context).unwrap()
+    let moli_protocol::automation::AutomationCommand::ContinueInterceptedRequest(command) =
+        super::super::automation_command_from_bidi_command(&command, &context).unwrap()
     else {
         panic!("expected request continuation");
     };

@@ -1,34 +1,35 @@
 use crate::DevToolsRuntimeCommandTaskStep;
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsActivateTargetCommand, DevToolsAddNetworkInterceptCommand,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
+    DevToolsActivateTargetCommand, DevToolsAddNetworkInterceptCommand,
     DevToolsAddPreloadScriptCommand, DevToolsAuthChallengeAction, DevToolsBrowserContextId,
     DevToolsCallFunctionCommand, DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
-    DevToolsCloseTargetCommand, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsContinueInterceptedRequestCommand, DevToolsContinueInterceptedResponseCommand,
-    DevToolsContinueWithAuthCommand, DevToolsCookieParam, DevToolsCreateBrowserContextCommand,
-    DevToolsCreateTargetCommand, DevToolsDeleteCookiesCommand, DevToolsDescribeNodeCommand,
-    DevToolsDevicePixelRatioSetting, DevToolsDispatchKeyEventCommand,
-    DevToolsDispatchMouseEventCommand, DevToolsDomGeometryCommand, DevToolsDomGeometryOperation,
-    DevToolsDomNodeReference, DevToolsErrorKind, DevToolsEvaluateScriptCommand,
-    DevToolsFailInterceptedRequestCommand, DevToolsFulfillInterceptedRequestCommand,
-    DevToolsGetAttributesCommand, DevToolsGetBrowserContextsCommand, DevToolsGetCookiesCommand,
-    DevToolsGetFrameTreeCommand, DevToolsGetLayoutMetricsCommand,
-    DevToolsGetNavigationHistoryCommand, DevToolsGetOuterHtmlCommand, DevToolsGetPropertyCommand,
-    DevToolsGetRealmsCommand, DevToolsGetTargetsCommand, DevToolsGetTextCommand,
-    DevToolsHistoryTraversalDestination, DevToolsKeyEventType, DevToolsLocateNodesCommand,
-    DevToolsLocateNodesLocator, DevToolsLocateNodesTextMatch, DevToolsMouseEventType,
-    DevToolsNavigateCommand, DevToolsNavigationWait, DevToolsNetworkInterceptId,
-    DevToolsNetworkInterceptPattern, DevToolsNetworkInterceptPhase, DevToolsPointerType,
-    DevToolsPreloadScriptSource, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsProtocol, DevToolsQuerySelectorCommand, DevToolsReleaseObjectsCommand,
-    DevToolsReloadCommand, DevToolsRemoteHandleId, DevToolsRemoteValue,
-    DevToolsRemoveBrowserContextCommand, DevToolsRemoveNetworkInterceptCommand,
-    DevToolsRemovePreloadScriptCommand, DevToolsRequestId, DevToolsResolveNodeCommand,
-    DevToolsResultOwnership, DevToolsScreenshotElementClip, DevToolsScriptResult,
-    DevToolsScrollIntoViewIfNeededCommand, DevToolsSerializationOptions, DevToolsSessionId,
-    DevToolsSetCookiesCommand, DevToolsSetFileInputFilesCommand, DevToolsSetViewportCommand,
-    DevToolsSetWindowStateCommand, DevToolsTargetId, DevToolsTraverseHistoryCommand,
-    DevToolsTraverseHistoryResult, DevToolsViewportSetting, DevToolsWindowState,
+    DevToolsCloseTargetCommand, DevToolsContinueInterceptedRequestCommand,
+    DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
+    DevToolsCookieParam, DevToolsCreateBrowserContextCommand, DevToolsCreateTargetCommand,
+    DevToolsDeleteCookiesCommand, DevToolsDescribeNodeCommand, DevToolsDevicePixelRatioSetting,
+    DevToolsDispatchKeyEventCommand, DevToolsDispatchMouseEventCommand, DevToolsDomGeometryCommand,
+    DevToolsDomGeometryOperation, DevToolsDomNodeReference, DevToolsErrorKind,
+    DevToolsEvaluateScriptCommand, DevToolsFailInterceptedRequestCommand,
+    DevToolsFulfillInterceptedRequestCommand, DevToolsGetAttributesCommand,
+    DevToolsGetBrowserContextsCommand, DevToolsGetCookiesCommand, DevToolsGetFrameTreeCommand,
+    DevToolsGetLayoutMetricsCommand, DevToolsGetNavigationHistoryCommand,
+    DevToolsGetOuterHtmlCommand, DevToolsGetPropertyCommand, DevToolsGetRealmsCommand,
+    DevToolsGetTargetsCommand, DevToolsGetTextCommand, DevToolsHistoryTraversalDestination,
+    DevToolsKeyEventType, DevToolsLocateNodesCommand, DevToolsLocateNodesLocator,
+    DevToolsLocateNodesTextMatch, DevToolsMouseEventType, DevToolsNavigateCommand,
+    DevToolsNavigationWait, DevToolsNetworkInterceptId, DevToolsNetworkInterceptPattern,
+    DevToolsNetworkInterceptPhase, DevToolsPointerType, DevToolsPreloadScriptSource,
+    DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode, DevToolsQuerySelectorCommand,
+    DevToolsReleaseObjectsCommand, DevToolsReloadCommand, DevToolsRemoteHandleId,
+    DevToolsRemoteValue, DevToolsRemoveBrowserContextCommand,
+    DevToolsRemoveNetworkInterceptCommand, DevToolsRemovePreloadScriptCommand, DevToolsRequestId,
+    DevToolsResolveNodeCommand, DevToolsResultOwnership, DevToolsScreenshotElementClip,
+    DevToolsScriptResult, DevToolsScrollIntoViewIfNeededCommand, DevToolsSerializationOptions,
+    DevToolsSessionId, DevToolsSetCookiesCommand, DevToolsSetFileInputFilesCommand,
+    DevToolsSetViewportCommand, DevToolsSetWindowStateCommand, DevToolsTargetId,
+    DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, DevToolsViewportSetting,
+    DevToolsWindowState, FrontendProtocol,
 };
 use serde_json::json;
 
@@ -41,8 +42,8 @@ fn complete_messages(step: CdpCommandTaskStep) -> Vec<Value> {
     }
 }
 
-fn expect_script_value_result(result: DevToolsCommandResult, message: &str) -> DevToolsRemoteValue {
-    let DevToolsCommandResult::Script(result) = result else {
+fn expect_script_value_result(result: AutomationResult, message: &str) -> DevToolsRemoteValue {
+    let AutomationResult::Script(result) = result else {
         panic!("{message}");
     };
     let DevToolsScriptResult::Value(value) = *result else {
@@ -58,32 +59,32 @@ fn is_command_response_sidecar_event(event: &BackgroundProtocolEvent) -> bool {
     })
 }
 
-fn bidi_fetch_command_context() -> DevToolsCommandContext {
-    DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+fn bidi_fetch_command_context() -> AutomationContext {
+    AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     }
 }
 
-async fn execute_direct_devtools_command_through_renderer_fence_for_test(
+async fn execute_direct_automation_command_through_renderer_fence_for_test(
     ctx: &mut crate::testing::TestContext,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, crate::devtools_runtime::DevToolsError> {
-    ctx.execute_devtools_command_through_renderer_fence_for_test(command)
+    command: AutomationCommand,
+) -> Result<AutomationResult, crate::automation::DevToolsError> {
+    ctx.execute_automation_command_through_renderer_fence_for_test(command)
         .await
 }
 
 async fn evaluate_string_through_renderer_fence_for_test(
     ctx: &mut crate::testing::TestContext,
-    context: DevToolsCommandContext,
+    context: AutomationContext,
     expression: &str,
     label: &str,
 ) -> String {
-    let result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let result = execute_direct_automation_command_through_renderer_fence_for_test(
         ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+        AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
             context,
             realm_id: None,
             world_name: None,
@@ -111,13 +112,13 @@ async fn evaluate_string_through_renderer_fence_for_test(
 
 async fn create_target_in_browser_context_through_renderer_fence_for_test(
     ctx: &mut crate::testing::TestContext,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
     browser_context_id: &str,
     label: &str,
 ) -> DevToolsTargetId {
-    let create_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let create_result = execute_direct_automation_command_through_renderer_fence_for_test(
         ctx,
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context: context.clone(),
             url: "about:blank".to_owned(),
             browser_context_id: Some(DevToolsBrowserContextId::from(browser_context_id)),
@@ -125,7 +126,7 @@ async fn create_target_in_browser_context_through_renderer_fence_for_test(
         }),
     )
     .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.unwrap_or_else(|error| panic!("create {label} should succeed: {error:?}"))
     else {
         panic!("expected create target result for {label}");
@@ -137,35 +138,35 @@ async fn materialize_bidi_target_node_for_test(
     ctx: &mut crate::testing::TestContext,
     html: &str,
     selector: &str,
-) -> (DevToolsCommandContext, DevToolsRemoteHandleId, u32) {
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+) -> (AutomationContext, DevToolsRemoteHandleId, u32) {
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let create_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
+            }),
+        )
         .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id),
         ..context
     };
 
     let navigate_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::Navigate(
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
             DevToolsNavigateCommand {
                 context: target_context.clone(),
                 url: format!("data:text/html,{html}"),
@@ -177,8 +178,8 @@ async fn materialize_bidi_target_node_for_test(
     navigate_result.expect("navigate should succeed");
 
     let evaluate_result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(DevToolsCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context: target_context.clone(),
                 realm_id: None,
                 world_name: None,
@@ -190,10 +191,10 @@ async fn materialize_bidi_target_node_for_test(
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
+            }),
+        )
         .await;
-    let DevToolsCommandResult::Script(evaluate_result) =
+    let AutomationResult::Script(evaluate_result) =
         evaluate_result.expect("node evaluate should succeed")
     else {
         panic!("expected script result");
@@ -213,7 +214,7 @@ async fn materialize_bidi_target_node_for_test(
 async fn materialize_bidi_target_input_node_for_test(
     ctx: &mut crate::testing::TestContext,
     html: &str,
-) -> (DevToolsCommandContext, DevToolsRemoteHandleId, u32) {
+) -> (AutomationContext, DevToolsRemoteHandleId, u32) {
     materialize_bidi_target_node_for_test(ctx, html, "#target").await
 }
 
@@ -247,12 +248,12 @@ async fn ensure_initial_document_for_target_id_for_test(
 
 async fn evaluate_string_for_test(
     conn: &mut CdpConnection,
-    context: DevToolsCommandContext,
+    context: AutomationContext,
     expression: &str,
     label: &str,
 ) -> String {
     let (evaluate_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context,
                 realm_id: None,
@@ -301,7 +302,7 @@ fn connection_with_background_pending_fetch_action(request_id: &str) -> CdpConne
 }
 
 async fn assert_bidi_fetch_action_consumes_background_request(
-    command: DevToolsCommand,
+    command: AutomationCommand,
     request_id: &str,
 ) {
     let mut conn = connection_with_background_pending_fetch_action(request_id);
@@ -311,7 +312,7 @@ async fn assert_bidi_fetch_action_consumes_background_request(
     ));
 
     let (result, events, protocol_events, renderer_output_predecessor) = conn
-        .execute_devtools_command(command)
+        .execute_automation_command(command)
         .await
         .into_complete_parts();
 
@@ -320,7 +321,7 @@ async fn assert_bidi_fetch_action_consumes_background_request(
     assert!(renderer_output_predecessor.is_none());
     assert_eq!(
         result.expect("BiDi request action should resolve background owner"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert!(
         conn.pending_fetch_request_session_route(request_id)
@@ -395,10 +396,10 @@ async fn attach_page_session_for_test(conn: &mut CdpConnection, target_id: &str)
 
 async fn evaluate_document_surface_payload(
     conn: &mut CdpConnection,
-    context: DevToolsCommandContext,
+    context: AutomationContext,
 ) -> serde_json::Value {
     let (result, _) = conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context,
                 realm_id: None,

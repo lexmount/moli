@@ -344,24 +344,24 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
         })
         .expect("target session state should exist");
 
-    let context = crate::devtools_runtime::DevToolsCommandContext {
-        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverClassic,
-        session_id: Some(crate::devtools_runtime::DevToolsSessionId::from("SID-1")),
-        target_id: Some(crate::devtools_runtime::DevToolsTargetId::from("TID-1")),
+    let context = crate::automation::AutomationContext {
+        protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+        session_id: Some(crate::automation::DevToolsSessionId::from("SID-1")),
+        target_id: Some(crate::automation::DevToolsTargetId::from("TID-1")),
         browser_context_id: None,
     };
     let (result, _, _) = ctx
         .conn
-        .execute_devtools_command_with_protocol_events(
-            crate::devtools_runtime::DevToolsCommand::GetJavaScriptDialog(
-                crate::devtools_runtime::DevToolsGetJavaScriptDialogCommand {
+        .execute_automation_command_with_protocol_events(
+            crate::automation::AutomationCommand::GetJavaScriptDialog(
+                crate::automation::DevToolsGetJavaScriptDialogCommand {
                     context: context.clone(),
                 },
             ),
         )
         .await
         .into_parts_with_protocol_events();
-    let crate::devtools_runtime::DevToolsCommandResult::JavaScriptDialog(result) =
+    let crate::automation::AutomationResult::JavaScriptDialog(result) =
         result.expect("get dialog text should resolve")
     else {
         panic!("get dialog text should return dialog result");
@@ -371,9 +371,9 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
 
     let (result, _, events) = ctx
         .conn
-        .execute_devtools_command_with_protocol_events(
-            crate::devtools_runtime::DevToolsCommand::HandleJavaScriptDialog(
-                crate::devtools_runtime::DevToolsHandleJavaScriptDialogCommand {
+        .execute_automation_command_with_protocol_events(
+            crate::automation::AutomationCommand::HandleJavaScriptDialog(
+                crate::automation::DevToolsHandleJavaScriptDialogCommand {
                     context,
                     accept: true,
                     prompt_text: String::new(),
@@ -384,7 +384,7 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
         .into_parts_with_protocol_events();
     assert!(matches!(
         result.expect("handle dialog should resolve"),
-        crate::devtools_runtime::DevToolsCommandResult::Empty
+        crate::automation::AutomationResult::Empty
     ));
     let closed_event = events
         .into_iter()
@@ -401,9 +401,7 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     assert_eq!(closed_message["params"]["frameId"], json!("TID-1"));
     assert!(matches!(
         closed_sidecar,
-        Some(crate::devtools_runtime::AutomationEvent::UserPromptClosed(
-            _
-        ))
+        Some(crate::automation::AutomationEvent::UserPromptClosed(_))
     ));
 }
 
@@ -423,17 +421,17 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
         })
         .expect("target session state should exist");
 
-    let context = crate::devtools_runtime::DevToolsCommandContext {
-        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverClassic,
-        session_id: Some(crate::devtools_runtime::DevToolsSessionId::from("SID-1")),
-        target_id: Some(crate::devtools_runtime::DevToolsTargetId::from("TID-1")),
+    let context = crate::automation::AutomationContext {
+        protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+        session_id: Some(crate::automation::DevToolsSessionId::from("SID-1")),
+        target_id: Some(crate::automation::DevToolsTargetId::from("TID-1")),
         browser_context_id: None,
     };
     let (result, _, _) = ctx
         .conn
-        .execute_devtools_command_with_protocol_events(
-            crate::devtools_runtime::DevToolsCommand::SetJavaScriptDialogPromptText(
-                crate::devtools_runtime::DevToolsSetJavaScriptDialogPromptTextCommand {
+        .execute_automation_command_with_protocol_events(
+            crate::automation::AutomationCommand::SetJavaScriptDialogPromptText(
+                crate::automation::DevToolsSetJavaScriptDialogPromptTextCommand {
                     context: context.clone(),
                     prompt_text: "cheese".to_owned(),
                 },
@@ -443,14 +441,14 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
         .into_parts_with_protocol_events();
     assert!(matches!(
         result.expect("set prompt text should resolve"),
-        crate::devtools_runtime::DevToolsCommandResult::Empty
+        crate::automation::AutomationResult::Empty
     ));
 
     let (result, _, events) = ctx
         .conn
-        .execute_devtools_command_with_protocol_events(
-            crate::devtools_runtime::DevToolsCommand::HandleJavaScriptDialog(
-                crate::devtools_runtime::DevToolsHandleJavaScriptDialogCommand {
+        .execute_automation_command_with_protocol_events(
+            crate::automation::AutomationCommand::HandleJavaScriptDialog(
+                crate::automation::DevToolsHandleJavaScriptDialogCommand {
                     context,
                     accept: true,
                     prompt_text: String::new(),
@@ -461,7 +459,7 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
         .into_parts_with_protocol_events();
     assert!(matches!(
         result.expect("accept prompt should resolve"),
-        crate::devtools_runtime::DevToolsCommandResult::Empty
+        crate::automation::AutomationResult::Empty
     ));
     let messages = events
         .into_iter()

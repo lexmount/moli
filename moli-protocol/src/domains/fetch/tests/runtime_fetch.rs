@@ -1,11 +1,10 @@
 use super::*;
-use crate::devtools_runtime::{
-    DevToolsAddNetworkInterceptCommand, DevToolsCommand, DevToolsCommandContext,
-    DevToolsCommandResult, DevToolsContinueInterceptedRequestCommand,
-    DevToolsContinueInterceptedResponseCommand, DevToolsEvaluateScriptCommand,
-    DevToolsNetworkInterceptId, DevToolsNetworkInterceptPattern, DevToolsNetworkInterceptPhase,
-    DevToolsNetworkResourceType, DevToolsProtocol, DevToolsRequestId, DevToolsResultOwnership,
-    DevToolsSessionId, DevToolsTargetId,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,
+    DevToolsContinueInterceptedRequestCommand, DevToolsContinueInterceptedResponseCommand,
+    DevToolsEvaluateScriptCommand, DevToolsNetworkInterceptId, DevToolsNetworkInterceptPattern,
+    DevToolsNetworkInterceptPhase, DevToolsNetworkResourceType, DevToolsRequestId,
+    DevToolsResultOwnership, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
 };
 use crate::testing::{
     drain_scheduler_events_like_scheduler,

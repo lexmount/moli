@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
+use crate::automation::{DevToolsError, DevToolsErrorKind, DevToolsTargetKind};
 use crate::conn::{CdpConnection, CommandDispatchContext, PreparedTargetHostClosure};
-use crate::devtools_runtime::{DevToolsError, DevToolsErrorKind, DevToolsTargetKind};
 
 use super::{events, worker_target};
 

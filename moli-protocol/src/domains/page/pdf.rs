@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, io::Write as _};
 
-use crate::devtools_runtime::DevToolsPrintToPdfCommand;
+use crate::automation::DevToolsPrintToPdfCommand;
 
 const POINTS_PER_INCH: f64 = 72.0;
 const DEFAULT_MARGIN_INCHES: f64 = 1.0 / 2.54;
@@ -360,14 +360,12 @@ fn pdf_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::devtools_runtime::{
-        DevToolsCommandContext, DevToolsPrintToPdfTransferMode, DevToolsProtocol,
-    };
+    use crate::automation::{AutomationContext, DevToolsPrintToPdfTransferMode, FrontendProtocol};
 
     fn command() -> DevToolsPrintToPdfCommand {
         DevToolsPrintToPdfCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::Cdp,
+            context: AutomationContext {
+                protocol: FrontendProtocol::Cdp,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,

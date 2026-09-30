@@ -1,5 +1,5 @@
 use super::graph::TabTarget;
-use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
+use crate::automation::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
 
 pub(crate) fn tab_target_info_from_page_target_info(
     target: &TabTarget,
@@ -37,7 +37,7 @@ pub(crate) fn project_page_tab_target_infos_for_destruction(
 
 #[cfg(test)]
 mod tests {
-    use crate::devtools_runtime::{
+    use crate::automation::{
         DevToolsBrowserContextId, DevToolsFrameId, DevToolsTargetId, DevToolsTargetInfo,
         DevToolsTargetKind,
     };

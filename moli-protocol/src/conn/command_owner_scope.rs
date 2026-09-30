@@ -102,14 +102,14 @@ impl CommandOwnerScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, PageTargetHost};
-    use crate::devtools_runtime::{
-        DevToolsCommandContext, DevToolsProtocol, DevToolsSessionId, DevToolsTargetId,
+    use crate::automation::{
+        AutomationContext, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
     };
+    use crate::conn::{BrowserContext, PageTargetHost};
 
-    fn page_context(session_id: &str, target_id: &str) -> DevToolsCommandContext {
-        DevToolsCommandContext {
-            protocol: DevToolsProtocol::Cdp,
+    fn page_context(session_id: &str, target_id: &str) -> AutomationContext {
+        AutomationContext {
+            protocol: FrontendProtocol::Cdp,
             session_id: Some(DevToolsSessionId::from(session_id)),
             target_id: Some(DevToolsTargetId::from(target_id)),
             browser_context_id: None,

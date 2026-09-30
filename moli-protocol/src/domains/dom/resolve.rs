@@ -5,23 +5,22 @@ use serde_json::{Value, json};
 
 use super::node_references::{NodeReferenceParams, devtools_node_reference_from_ids};
 use super::*;
-use crate::conn::BackgroundProtocolEvent;
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandResult, DevToolsDescribeNodeCommand,
-    DevToolsDescribeNodeResult, DevToolsDomAttribute, DevToolsDomBoxModel,
-    DevToolsDomGeometryCommand, DevToolsDomGeometryOperation, DevToolsDomGeometryResult,
-    DevToolsDomNodeReference, DevToolsDomObjectReferenceCommand,
-    DevToolsDomObjectReferenceOperation, DevToolsDomQuad, DevToolsError, DevToolsErrorKind,
-    DevToolsFrameId, DevToolsGetAttributesCommand, DevToolsGetAttributesResult,
-    DevToolsGetDocumentCommand, DevToolsGetFrameOwnerCommand, DevToolsGetFrameOwnerResult,
-    DevToolsGetNodeForLocationCommand, DevToolsGetNodeForLocationResult,
-    DevToolsGetOuterHtmlCommand, DevToolsGetOuterHtmlResult, DevToolsGetPropertyCommand,
-    DevToolsGetPropertyResult, DevToolsGetTextCommand, DevToolsGetTextResult,
-    DevToolsPushNodesByBackendIdsCommand, DevToolsPushNodesByBackendIdsResult,
-    DevToolsQuerySelectorCommand, DevToolsQuerySelectorResult, DevToolsRemoteHandleId,
-    DevToolsRemoveNodeCommand, DevToolsRequestChildNodesCommand, DevToolsResolveNodeCommand,
-    DevToolsResolveNodeResult, DevToolsScrollIntoViewIfNeededCommand,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsDescribeNodeCommand, DevToolsDescribeNodeResult,
+    DevToolsDomAttribute, DevToolsDomBoxModel, DevToolsDomGeometryCommand,
+    DevToolsDomGeometryOperation, DevToolsDomGeometryResult, DevToolsDomNodeReference,
+    DevToolsDomObjectReferenceCommand, DevToolsDomObjectReferenceOperation, DevToolsDomQuad,
+    DevToolsError, DevToolsErrorKind, DevToolsFrameId, DevToolsGetAttributesCommand,
+    DevToolsGetAttributesResult, DevToolsGetDocumentCommand, DevToolsGetFrameOwnerCommand,
+    DevToolsGetFrameOwnerResult, DevToolsGetNodeForLocationCommand,
+    DevToolsGetNodeForLocationResult, DevToolsGetOuterHtmlCommand, DevToolsGetOuterHtmlResult,
+    DevToolsGetPropertyCommand, DevToolsGetPropertyResult, DevToolsGetTextCommand,
+    DevToolsGetTextResult, DevToolsPushNodesByBackendIdsCommand,
+    DevToolsPushNodesByBackendIdsResult, DevToolsQuerySelectorCommand, DevToolsQuerySelectorResult,
+    DevToolsRemoteHandleId, DevToolsRemoveNodeCommand, DevToolsRequestChildNodesCommand,
+    DevToolsResolveNodeCommand, DevToolsResolveNodeResult, DevToolsScrollIntoViewIfNeededCommand,
 };
+use crate::conn::BackgroundProtocolEvent;
 use crate::domains::actions::DomAction;
 use crate::domains::command_output::CommandOutputPlan;
 use chromiumoxide_cdp::cdp::browser_protocol::dom::{
@@ -164,11 +163,11 @@ pub(crate) enum DomCommandTaskStep {
 
 pub(super) enum DevToolsDomCommandTaskStep {
     Pending(Box<PendingDomCommandDispatch>),
-    Complete(Box<Result<DevToolsCommandResult, DevToolsError>>),
+    Complete(Box<Result<AutomationResult, DevToolsError>>),
 }
 
 pub(super) fn devtools_dom_command_task_complete(
-    result: Result<DevToolsCommandResult, DevToolsError>,
+    result: Result<AutomationResult, DevToolsError>,
 ) -> DevToolsDomCommandTaskStep {
     DevToolsDomCommandTaskStep::Complete(Box::new(result))
 }

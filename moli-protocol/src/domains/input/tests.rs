@@ -323,7 +323,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         &mut CommandDispatchContext::default(),
     )
     .await;
-    assert!(matches!(completed.result, Ok(DevToolsCommandResult::Empty)));
+    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
     assert!(completed.protocol_events.is_empty());
     assert!(
         ctx.conn
@@ -378,7 +378,7 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         &mut CommandDispatchContext::default(),
     )
     .await;
-    assert!(matches!(completed.result, Ok(DevToolsCommandResult::Empty)));
+    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
     assert!(completed.protocol_events.is_empty());
 }
 

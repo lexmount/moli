@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
-use moli_protocol::devtools_runtime::DevToolsCommandResult;
+use moli_protocol::automation::AutomationResult;
 use moli_protocol_webdriver_classic::{
     ClassicDevToolsCommandContext, ClassicError, ClassicErrorCode, add_cookie_command,
     classic_cookie_by_name, classic_cookies_from_devtools, classic_error_from_devtools_error,
@@ -36,7 +36,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_get_cookies(
         .execute(get_cookies_command(&context, current_url))
         .await
     {
-        Ok(DevToolsCommandResult::GetCookies(result)) => {
+        Ok(AutomationResult::GetCookies(result)) => {
             classic_success_into_response(json!(classic_cookies_from_devtools(result)))
         }
         Ok(_) => classic_error_into_response(ClassicError::new(
@@ -66,12 +66,10 @@ pub(in crate::protocol_server) async fn webdriver_classic_get_named_cookie(
         .execute(get_cookies_command(&context, current_url))
         .await
     {
-        Ok(DevToolsCommandResult::GetCookies(result)) => {
-            match classic_cookie_by_name(result, &name) {
-                Ok(cookie) => classic_success_into_response(cookie),
-                Err(error) => classic_error_into_response(error),
-            }
-        }
+        Ok(AutomationResult::GetCookies(result)) => match classic_cookie_by_name(result, &name) {
+            Ok(cookie) => classic_success_into_response(cookie),
+            Err(error) => classic_error_into_response(error),
+        },
         Ok(_) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "get cookie returned an unexpected result",
@@ -104,10 +102,10 @@ pub(in crate::protocol_server) async fn webdriver_classic_add_cookie(
         Err(error) => return classic_error_into_response(error),
     };
     match binding.runtime.execute(command).await {
-        Ok(DevToolsCommandResult::SetCookies(result)) if result.success => {
+        Ok(AutomationResult::SetCookies(result)) if result.success => {
             classic_success_into_response(Value::Null)
         }
-        Ok(DevToolsCommandResult::SetCookies(_)) => classic_error_into_response(ClassicError::new(
+        Ok(AutomationResult::SetCookies(_)) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::InvalidCookieDomain,
             "cookie could not be set for the current document",
         )),
@@ -138,7 +136,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_delete_all_cookies(
         .execute(delete_all_cookies_command(&context, current_url))
         .await
     {
-        Ok(DevToolsCommandResult::Empty | DevToolsCommandResult::DeleteCookies(_)) => {
+        Ok(AutomationResult::Empty | AutomationResult::DeleteCookies(_)) => {
             classic_success_into_response(Value::Null)
         }
         Ok(_) => classic_error_into_response(ClassicError::new(
@@ -168,7 +166,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_delete_cookie(
         .execute(delete_cookie_command(&context, name, current_url))
         .await
     {
-        Ok(DevToolsCommandResult::Empty | DevToolsCommandResult::DeleteCookies(_)) => {
+        Ok(AutomationResult::Empty | AutomationResult::DeleteCookies(_)) => {
             classic_success_into_response(Value::Null)
         }
         Ok(_) => classic_error_into_response(ClassicError::new(

@@ -1,6 +1,6 @@
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsError,
-    DevToolsErrorKind, DevToolsTargetId,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsError, DevToolsErrorKind,
+    DevToolsTargetId,
 };
 
 use super::*;
@@ -13,14 +13,14 @@ use super::*;
 /// error, so neither the events nor the exact renderer cursor may be discarded
 /// while a domain-specific adapter translates the result.
 #[must_use = "DevTools execution output carries protocol events and an exact renderer cursor"]
-pub(crate) struct DevToolsCommandExecutionOutput {
-    result: Result<DevToolsCommandResult, DevToolsError>,
+pub(crate) struct AutomationExecutionOutput {
+    result: Result<AutomationResult, DevToolsError>,
     protocol_events: Vec<BackgroundProtocolEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
 }
 
-impl DevToolsCommandExecutionOutput {
-    pub(crate) fn new(result: Result<DevToolsCommandResult, DevToolsError>) -> Self {
+impl AutomationExecutionOutput {
+    pub(crate) fn new(result: Result<AutomationResult, DevToolsError>) -> Self {
         Self {
             result,
             protocol_events: Vec::new(),
@@ -29,7 +29,7 @@ impl DevToolsCommandExecutionOutput {
     }
 
     pub(crate) fn from_parts(
-        result: Result<DevToolsCommandResult, DevToolsError>,
+        result: Result<AutomationResult, DevToolsError>,
         protocol_events: Vec<BackgroundProtocolEvent>,
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> Self {
@@ -43,7 +43,7 @@ impl DevToolsCommandExecutionOutput {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        Result<DevToolsCommandResult, DevToolsError>,
+        Result<AutomationResult, DevToolsError>,
         Vec<BackgroundProtocolEvent>,
         Option<moli_core::RendererOutputFence>,
     ) {
@@ -55,16 +55,16 @@ impl DevToolsCommandExecutionOutput {
     }
 }
 
-pub struct DevToolsCommandDispatchOutcome {
-    result: Result<DevToolsCommandResult, DevToolsError>,
+pub struct AutomationCommandDispatchOutcome {
+    result: Result<AutomationResult, DevToolsError>,
     scheduler_events: Vec<CdpSchedulerEvent>,
     protocol_events: Vec<BackgroundProtocolEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
 }
 
-impl DevToolsCommandDispatchOutcome {
+impl AutomationCommandDispatchOutcome {
     pub(crate) fn new_with_protocol_events(
-        result: Result<DevToolsCommandResult, DevToolsError>,
+        result: Result<AutomationResult, DevToolsError>,
         scheduler_events: Vec<CdpSchedulerEvent>,
         protocol_events: Vec<BackgroundProtocolEvent>,
     ) -> Self {
@@ -98,7 +98,7 @@ impl DevToolsCommandDispatchOutcome {
     pub fn into_parts(
         self,
     ) -> (
-        Result<DevToolsCommandResult, DevToolsError>,
+        Result<AutomationResult, DevToolsError>,
         Vec<CdpSchedulerEvent>,
     ) {
         assert!(
@@ -118,7 +118,7 @@ impl DevToolsCommandDispatchOutcome {
     pub fn into_parts_with_protocol_events(
         self,
     ) -> (
-        Result<DevToolsCommandResult, DevToolsError>,
+        Result<AutomationResult, DevToolsError>,
         Vec<CdpSchedulerEvent>,
         Vec<BackgroundProtocolEvent>,
     ) {
@@ -134,7 +134,7 @@ impl DevToolsCommandDispatchOutcome {
     pub fn into_complete_parts(
         self,
     ) -> (
-        Result<DevToolsCommandResult, DevToolsError>,
+        Result<AutomationResult, DevToolsError>,
         Vec<CdpSchedulerEvent>,
         Vec<BackgroundProtocolEvent>,
         Option<moli_core::RendererOutputFence>,
@@ -149,30 +149,32 @@ impl DevToolsCommandDispatchOutcome {
 }
 
 impl CdpConnection {
-    pub async fn execute_devtools_command(
+    pub async fn execute_automation_command(
         &mut self,
-        command: DevToolsCommand,
-    ) -> DevToolsCommandDispatchOutcome {
-        Box::pin(self.execute_devtools_command_with_protocol_events(command)).await
+        command: AutomationCommand,
+    ) -> AutomationCommandDispatchOutcome {
+        Box::pin(self.execute_automation_command_with_protocol_events(command)).await
     }
 
-    pub async fn execute_devtools_command_with_protocol_events(
+    pub async fn execute_automation_command_with_protocol_events(
         &mut self,
-        command: DevToolsCommand,
-    ) -> DevToolsCommandDispatchOutcome {
-        self.execute_devtools_command_with_protocol_events_with_background_command_id(command, None)
-            .await
+        command: AutomationCommand,
+    ) -> AutomationCommandDispatchOutcome {
+        self.execute_automation_command_with_protocol_events_with_background_command_id(
+            command, None,
+        )
+        .await
     }
 
-    pub async fn execute_devtools_command_with_protocol_events_with_background_command_id(
+    pub async fn execute_automation_command_with_protocol_events_with_background_command_id(
         &mut self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         background_command_id: Option<u64>,
-    ) -> DevToolsCommandDispatchOutcome {
+    ) -> AutomationCommandDispatchOutcome {
         let command_context = command.context().clone();
         let mut renderer_output_predecessor = None;
         let (result, protocol_events) = match command {
-            DevToolsCommand::CreateTarget(command) => {
+            AutomationCommand::CreateTarget(command) => {
                 let (result, protocol_events, predecessor) =
                     crate::domains::target::execute_devtools_create_target_command_async_with_protocol_events(
                         self,
@@ -182,30 +184,30 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (DevToolsCommand::GetTargets(_)
-            | DevToolsCommand::GetServiceWorkerLogs(_)
-            | DevToolsCommand::GetClientWindows(_)
-            | DevToolsCommand::CreateBrowserContext(_)
-            | DevToolsCommand::GetBrowserContexts(_)
-            | DevToolsCommand::GetTargetInfo(_)) => {
+            command @ (AutomationCommand::GetTargets(_)
+            | AutomationCommand::GetServiceWorkerLogs(_)
+            | AutomationCommand::GetClientWindows(_)
+            | AutomationCommand::CreateBrowserContext(_)
+            | AutomationCommand::GetBrowserContexts(_)
+            | AutomationCommand::GetTargetInfo(_)) => {
                 crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
                     self, command,
                 )
             }
-            command @ DevToolsCommand::SetDownloadBehavior(_) => (
+            command @ AutomationCommand::SetDownloadBehavior(_) => (
                 crate::domains::browser::execute_devtools_browser_command(self, command),
                 Vec::new(),
             ),
-            command @ DevToolsCommand::SetPermission(_) => (
+            command @ AutomationCommand::SetPermission(_) => (
                 Box::pin(crate::domains::browser::execute_devtools_browser_command_async(
                     self, command,
                 ))
                 .await,
                 Vec::new(),
             ),
-            command @ (DevToolsCommand::CloseTarget(_)
-            | DevToolsCommand::ActivateTarget(_)
-            | DevToolsCommand::RemoveBrowserContext(_)) => {
+            command @ (AutomationCommand::CloseTarget(_)
+            | AutomationCommand::ActivateTarget(_)
+            | AutomationCommand::RemoveBrowserContext(_)) => {
                 Box::pin(
                     crate::domains::target::execute_devtools_target_command_async_with_protocol_events(
                         self, command,
@@ -213,20 +215,20 @@ impl CdpConnection {
                 )
                 .await
             }
-            command @ (DevToolsCommand::Navigate(_)
-            | DevToolsCommand::Reload(_)
-            | DevToolsCommand::CaptureScreenshot(_)
-            | DevToolsCommand::PrintToPdf(_)
-            | DevToolsCommand::GetJavaScriptDialog(_)
-            | DevToolsCommand::SetJavaScriptDialogPromptText(_)
-            | DevToolsCommand::HandleJavaScriptDialog(_)
-            | DevToolsCommand::GetFrameTree(_)
-            | DevToolsCommand::GetFrameTrees(_)
-            | DevToolsCommand::GetLayoutMetrics(_)
-            | DevToolsCommand::GetNavigationHistory(_)
-            | DevToolsCommand::TraverseHistory(_)
-            | DevToolsCommand::AddPreloadScript(_)
-            | DevToolsCommand::RemovePreloadScript(_)) => {
+            command @ (AutomationCommand::Navigate(_)
+            | AutomationCommand::Reload(_)
+            | AutomationCommand::CaptureScreenshot(_)
+            | AutomationCommand::PrintToPdf(_)
+            | AutomationCommand::GetJavaScriptDialog(_)
+            | AutomationCommand::SetJavaScriptDialogPromptText(_)
+            | AutomationCommand::HandleJavaScriptDialog(_)
+            | AutomationCommand::GetFrameTree(_)
+            | AutomationCommand::GetFrameTrees(_)
+            | AutomationCommand::GetLayoutMetrics(_)
+            | AutomationCommand::GetNavigationHistory(_)
+            | AutomationCommand::TraverseHistory(_)
+            | AutomationCommand::AddPreloadScript(_)
+            | AutomationCommand::RemovePreloadScript(_)) => {
                 let (result, protocol_events, predecessor) = Box::pin(
                     crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
                         self,
@@ -238,27 +240,27 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (DevToolsCommand::SetViewport(_)
-            | DevToolsCommand::SetWindowState(_)
-            | DevToolsCommand::SetClientWindowState(_)
-            | DevToolsCommand::SetUserAgentOverride(_)
-            | DevToolsCommand::SetLocaleOverride(_)
-            | DevToolsCommand::SetTimezoneOverride(_)
-            | DevToolsCommand::SetGeolocationOverride(_)
-            | DevToolsCommand::SetNetworkConditions(_)
-            | DevToolsCommand::SetExtraHeaders(_)) => (
+            command @ (AutomationCommand::SetViewport(_)
+            | AutomationCommand::SetWindowState(_)
+            | AutomationCommand::SetClientWindowState(_)
+            | AutomationCommand::SetUserAgentOverride(_)
+            | AutomationCommand::SetLocaleOverride(_)
+            | AutomationCommand::SetTimezoneOverride(_)
+            | AutomationCommand::SetGeolocationOverride(_)
+            | AutomationCommand::SetNetworkConditions(_)
+            | AutomationCommand::SetExtraHeaders(_)) => (
                 Box::pin(crate::domains::emulation::execute_devtools_emulation_command_async(
                     self, command,
                 ))
                 .await,
                 Vec::new(),
             ),
-            command @ (DevToolsCommand::GetRealms(_)
-            | DevToolsCommand::EvaluateScript(_)
-            | DevToolsCommand::CallFunction(_)
-            | DevToolsCommand::TerminateExecution(_)
-            | DevToolsCommand::LocateNodes(_)
-            | DevToolsCommand::ReleaseObjects(_)) => {
+            command @ (AutomationCommand::GetRealms(_)
+            | AutomationCommand::EvaluateScript(_)
+            | AutomationCommand::CallFunction(_)
+            | AutomationCommand::TerminateExecution(_)
+            | AutomationCommand::LocateNodes(_)
+            | AutomationCommand::ReleaseObjects(_)) => {
                 let output = Box::pin(
                     crate::domains::runtime::execute_devtools_runtime_command_async_with_protocol_events(
                         self, command,
@@ -270,22 +272,22 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (DevToolsCommand::GetCookies(_)
-            | DevToolsCommand::DeleteCookies(_)
-            | DevToolsCommand::SetCookies(_)) => (
+            command @ (AutomationCommand::GetCookies(_)
+            | AutomationCommand::DeleteCookies(_)
+            | AutomationCommand::SetCookies(_)) => (
                 Box::pin(crate::domains::storage::execute_devtools_storage_command_async(
                     self, command,
                 ))
                 .await,
                 Vec::new(),
             ),
-            command @ (DevToolsCommand::AddNetworkIntercept(_)
-            | DevToolsCommand::RemoveNetworkIntercept(_)
-            | DevToolsCommand::ContinueInterceptedRequest(_)
-            | DevToolsCommand::ContinueInterceptedResponse(_)
-            | DevToolsCommand::ContinueWithAuth(_)
-            | DevToolsCommand::FailInterceptedRequest(_)
-            | DevToolsCommand::FulfillInterceptedRequest(_)) => {
+            command @ (AutomationCommand::AddNetworkIntercept(_)
+            | AutomationCommand::RemoveNetworkIntercept(_)
+            | AutomationCommand::ContinueInterceptedRequest(_)
+            | AutomationCommand::ContinueInterceptedResponse(_)
+            | AutomationCommand::ContinueWithAuth(_)
+            | AutomationCommand::FailInterceptedRequest(_)
+            | AutomationCommand::FulfillInterceptedRequest(_)) => {
                 let output = Box::pin(
                     crate::domains::fetch::execute_devtools_fetch_command_async_with_protocol_events(
                         self, command,
@@ -297,20 +299,20 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (DevToolsCommand::AddNetworkDataCollector(_)
-            | DevToolsCommand::RemoveNetworkDataCollector(_)
-            | DevToolsCommand::DisownNetworkData(_)
-            | DevToolsCommand::GetNetworkData(_)
-            | DevToolsCommand::SetCacheBehavior(_)) => (
+            command @ (AutomationCommand::AddNetworkDataCollector(_)
+            | AutomationCommand::RemoveNetworkDataCollector(_)
+            | AutomationCommand::DisownNetworkData(_)
+            | AutomationCommand::GetNetworkData(_)
+            | AutomationCommand::SetCacheBehavior(_)) => (
                 crate::domains::network::execute_devtools_network_command(self, command),
                 Vec::new(),
             ),
-            command @ (DevToolsCommand::ElementClick(_)
-            | DevToolsCommand::DispatchMouseEvent(_)
-            | DevToolsCommand::DispatchKeyEvent(_)
-            | DevToolsCommand::DispatchTouchEvent(_)
-            | DevToolsCommand::DispatchDragEvent(_)
-            | DevToolsCommand::SynthesizeTapGesture(_)) => {
+            command @ (AutomationCommand::ElementClick(_)
+            | AutomationCommand::DispatchMouseEvent(_)
+            | AutomationCommand::DispatchKeyEvent(_)
+            | AutomationCommand::DispatchTouchEvent(_)
+            | AutomationCommand::DispatchDragEvent(_)
+            | AutomationCommand::SynthesizeTapGesture(_)) => {
                 Box::pin(
                     crate::domains::input::execute_devtools_input_command_async_with_protocol_events(
                         self, command,
@@ -318,19 +320,19 @@ impl CdpConnection {
                 )
                 .await
             }
-            command @ (DevToolsCommand::QuerySelector(_)
-            | DevToolsCommand::GetAttributes(_)
-            | DevToolsCommand::GetText(_)
-            | DevToolsCommand::GetProperty(_)
-            | DevToolsCommand::GetOuterHtml(_)
-            | DevToolsCommand::DescribeNode(_)
-            | DevToolsCommand::GetFrameOwner(_)
-            | DevToolsCommand::GetNodeForLocation(_)
-            | DevToolsCommand::ResolveNode(_)
-            | DevToolsCommand::ScrollIntoViewIfNeeded(_)
-            | DevToolsCommand::DomObjectReference(_)
-            | DevToolsCommand::SetFileInputFiles(_)
-            | DevToolsCommand::DomGeometry(_)) => (
+            command @ (AutomationCommand::QuerySelector(_)
+            | AutomationCommand::GetAttributes(_)
+            | AutomationCommand::GetText(_)
+            | AutomationCommand::GetProperty(_)
+            | AutomationCommand::GetOuterHtml(_)
+            | AutomationCommand::DescribeNode(_)
+            | AutomationCommand::GetFrameOwner(_)
+            | AutomationCommand::GetNodeForLocation(_)
+            | AutomationCommand::ResolveNode(_)
+            | AutomationCommand::ScrollIntoViewIfNeeded(_)
+            | AutomationCommand::DomObjectReference(_)
+            | AutomationCommand::SetFileInputFiles(_)
+            | AutomationCommand::DomGeometry(_)) => (
                 Box::pin(crate::domains::dom::execute_devtools_dom_command_async(
                     self, command,
                 ))
@@ -345,7 +347,7 @@ impl CdpConnection {
                 Vec::new(),
             ),
         };
-        self.finish_devtools_command_dispatch(
+        self.finish_automation_command_dispatch(
             command_context,
             result,
             protocol_events,
@@ -354,13 +356,13 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn finish_devtools_command_dispatch(
+    pub(crate) async fn finish_automation_command_dispatch(
         &mut self,
-        command_context: DevToolsCommandContext,
-        result: Result<DevToolsCommandResult, DevToolsError>,
+        command_context: AutomationContext,
+        result: Result<AutomationResult, DevToolsError>,
         mut protocol_events: Vec<BackgroundProtocolEvent>,
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    ) -> DevToolsCommandDispatchOutcome {
+    ) -> AutomationCommandDispatchOutcome {
         let mut dispatch_context = CommandDispatchContext::default();
         Box::pin(self.project_protocol_local_outputs_for_direct_command(
             &command_context,
@@ -370,7 +372,7 @@ impl CdpConnection {
         .await;
         protocol_events.extend(dispatch_context.take_post_response_events());
         let scheduler_events = self.take_scheduler_events();
-        DevToolsCommandDispatchOutcome::new_with_protocol_events(
+        AutomationCommandDispatchOutcome::new_with_protocol_events(
             result,
             scheduler_events,
             protocol_events,
@@ -484,7 +486,7 @@ impl CdpConnection {
 
     async fn project_protocol_local_outputs_for_direct_command(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
         dispatch_context: &mut CommandDispatchContext,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) {

@@ -1,13 +1,13 @@
 use serde::Deserialize;
 
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsActivateTargetCommand, DevToolsCloseTargetCommand,
+    DevToolsCreateTargetCommand, DevToolsError, DevToolsErrorKind, DevToolsTargetFilterEntry,
+    DevToolsTargetInfo, DevToolsTargetKind,
+};
 use crate::conn::{
     BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, CommandOwnerScope,
     TargetAttachSessionCommit, TargetHandlerAccessMode,
-};
-use crate::devtools_runtime::{
-    DevToolsActivateTargetCommand, DevToolsCloseTargetCommand, DevToolsCommand,
-    DevToolsCommandResult, DevToolsCreateTargetCommand, DevToolsError, DevToolsErrorKind,
-    DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
 };
 use crate::domains::actions::TargetAction;
 use crate::domains::command_output::CommandOutputPlan;
@@ -444,58 +444,58 @@ fn start_devtools_target_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> TargetCommandTaskStep {
     match command {
-        DevToolsCommand::CreateTarget(command) => creation::start_devtools_create_target_command(
+        AutomationCommand::CreateTarget(command) => creation::start_devtools_create_target_command(
             conn,
             command_id,
             command_session_id,
             command,
         ),
-        DevToolsCommand::CloseTarget(command) => {
+        AutomationCommand::CloseTarget(command) => {
             closing::start_devtools_close_target_command(command_id, command_session_id, command)
         }
-        DevToolsCommand::ActivateTarget(command) => {
+        AutomationCommand::ActivateTarget(command) => {
             pending_activate_target_command(command_id, command_session_id, command)
         }
-        DevToolsCommand::GetTargets(command) => TargetCommandTaskStep::Complete(
+        AutomationCommand::GetTargets(command) => TargetCommandTaskStep::Complete(
             browser_context::start_devtools_get_targets_command(conn, command),
         ),
-        DevToolsCommand::GetServiceWorkerLogs(command) => TargetCommandTaskStep::Complete(
+        AutomationCommand::GetServiceWorkerLogs(command) => TargetCommandTaskStep::Complete(
             match browser_context::execute_devtools_get_service_worker_logs_command(conn, &command)
             {
                 Ok(result) => CommandOutputPlan::from_devtools_result(
-                    DevToolsCommandResult::ServiceWorkerLogs(result),
+                    AutomationResult::ServiceWorkerLogs(result),
                 ),
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             },
         ),
-        DevToolsCommand::GetClientWindows(command) => TargetCommandTaskStep::Complete(
+        AutomationCommand::GetClientWindows(command) => TargetCommandTaskStep::Complete(
             match browser_context::execute_devtools_get_client_windows_command(conn, &command) {
-                Ok(result) => CommandOutputPlan::from_devtools_result(
-                    DevToolsCommandResult::ClientWindows(result),
-                ),
+                Ok(result) => {
+                    CommandOutputPlan::from_devtools_result(AutomationResult::ClientWindows(result))
+                }
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             },
         ),
-        DevToolsCommand::CreateBrowserContext(command) => {
+        AutomationCommand::CreateBrowserContext(command) => {
             let plan = match browser_context::execute_devtools_create_browser_context_command(
                 conn, command,
             ) {
                 Ok(result) => CommandOutputPlan::from_devtools_result(
-                    DevToolsCommandResult::CreateBrowserContext(result),
+                    AutomationResult::CreateBrowserContext(result),
                 ),
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             };
             TargetCommandTaskStep::Complete(plan)
         }
-        DevToolsCommand::GetBrowserContexts(command) => TargetCommandTaskStep::Complete(
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::GetBrowserContexts(
+        AutomationCommand::GetBrowserContexts(command) => TargetCommandTaskStep::Complete(
+            CommandOutputPlan::from_devtools_result(AutomationResult::GetBrowserContexts(
                 browser_context::devtools_get_browser_contexts_result(conn, &command),
             )),
         ),
-        DevToolsCommand::GetTargetInfo(command) => TargetCommandTaskStep::Complete(
+        AutomationCommand::GetTargetInfo(command) => TargetCommandTaskStep::Complete(
             info::start_devtools_get_target_info_command(conn, command),
         ),
         _ => target_command_error(-32000, "UnsupportedDevToolsCommand"),
@@ -504,46 +504,46 @@ fn start_devtools_target_command(
 
 pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     match command {
-        DevToolsCommand::CreateTarget(command) => {
+        AutomationCommand::CreateTarget(command) => {
             let result = creation::execute_devtools_create_target_command(conn, command)
-                .map(|execution| DevToolsCommandResult::CreateTarget(execution.result));
+                .map(|execution| AutomationResult::CreateTarget(execution.result));
             (result, Vec::new())
         }
-        DevToolsCommand::GetTargets(command) => (
+        AutomationCommand::GetTargets(command) => (
             browser_context::execute_devtools_get_targets_command(conn, &command)
-                .map(DevToolsCommandResult::GetTargets),
+                .map(AutomationResult::GetTargets),
             Vec::new(),
         ),
-        DevToolsCommand::GetServiceWorkerLogs(command) => (
+        AutomationCommand::GetServiceWorkerLogs(command) => (
             browser_context::execute_devtools_get_service_worker_logs_command(conn, &command)
-                .map(DevToolsCommandResult::ServiceWorkerLogs),
+                .map(AutomationResult::ServiceWorkerLogs),
             Vec::new(),
         ),
-        DevToolsCommand::GetClientWindows(command) => (
+        AutomationCommand::GetClientWindows(command) => (
             browser_context::execute_devtools_get_client_windows_command(conn, &command)
-                .map(DevToolsCommandResult::ClientWindows),
+                .map(AutomationResult::ClientWindows),
             Vec::new(),
         ),
-        DevToolsCommand::CreateBrowserContext(command) => (
+        AutomationCommand::CreateBrowserContext(command) => (
             browser_context::execute_devtools_create_browser_context_command(conn, command)
-                .map(DevToolsCommandResult::CreateBrowserContext),
+                .map(AutomationResult::CreateBrowserContext),
             Vec::new(),
         ),
-        DevToolsCommand::GetBrowserContexts(command) => (
-            Ok(DevToolsCommandResult::GetBrowserContexts(
+        AutomationCommand::GetBrowserContexts(command) => (
+            Ok(AutomationResult::GetBrowserContexts(
                 browser_context::devtools_get_browser_contexts_result(conn, &command),
             )),
             Vec::new(),
         ),
-        DevToolsCommand::GetTargetInfo(command) => (
+        AutomationCommand::GetTargetInfo(command) => (
             info::execute_devtools_get_target_info_command(conn, command)
-                .map(DevToolsCommandResult::GetTargetInfo),
+                .map(AutomationResult::GetTargetInfo),
             Vec::new(),
         ),
         _ => (
@@ -560,7 +560,7 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
     conn: &mut CdpConnection,
     command: DevToolsCreateTargetCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
     Option<moli_core::RendererOutputFence>,
 ) {
@@ -588,7 +588,7 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         return (Err(error), Vec::new(), renderer_output_predecessor);
     }
     (
-        Ok(DevToolsCommandResult::CreateTarget(result)),
+        Ok(AutomationResult::CreateTarget(result)),
         protocol_events,
         renderer_output_predecessor,
     )
@@ -596,13 +596,13 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
 
 pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     match command {
-        DevToolsCommand::CloseTarget(command) => {
+        AutomationCommand::CloseTarget(command) => {
             let mut command_context = crate::conn::CommandDispatchContext::default();
             let mut side_effects = events::TargetProtocolSideEffects::default();
             let result = closing::execute_devtools_close_target_command_async(
@@ -612,34 +612,34 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
                 &mut command_context,
             )
             .await
-            .map(DevToolsCommandResult::CloseTarget);
+            .map(AutomationResult::CloseTarget);
             let mut protocol_events = side_effects.into_background_events();
             protocol_events.append(&mut command_context.take_protocol_events());
             (result, protocol_events)
         }
-        DevToolsCommand::ActivateTarget(command) => {
+        AutomationCommand::ActivateTarget(command) => {
             match activation::execute_devtools_activate_target_command_async(conn, command).await {
-                Ok(events) => (Ok(DevToolsCommandResult::Empty), events),
+                Ok(events) => (Ok(AutomationResult::Empty), events),
                 Err(error) => (Err(error), Vec::new()),
             }
         }
-        DevToolsCommand::RemoveBrowserContext(_) => {
-            let DevToolsCommand::RemoveBrowserContext(command) = command else {
+        AutomationCommand::RemoveBrowserContext(_) => {
+            let AutomationCommand::RemoveBrowserContext(command) = command else {
                 unreachable!("matched remove browser context command");
             };
             browser_context::execute_devtools_remove_browser_context_command_async(conn, command)
                 .await
         }
-        DevToolsCommand::CreateTarget(command) => {
+        AutomationCommand::CreateTarget(command) => {
             let (result, events, _) =
                 execute_devtools_create_target_command_async_with_protocol_events(conn, command)
                     .await;
             (result, events)
         }
-        DevToolsCommand::GetTargets(_)
-        | DevToolsCommand::GetClientWindows(_)
-        | DevToolsCommand::CreateBrowserContext(_)
-        | DevToolsCommand::GetBrowserContexts(_) => {
+        AutomationCommand::GetTargets(_)
+        | AutomationCommand::GetClientWindows(_)
+        | AutomationCommand::CreateBrowserContext(_)
+        | AutomationCommand::GetBrowserContexts(_) => {
             execute_immediate_devtools_target_command_with_protocol_events(conn, command)
         }
         _ => (
@@ -1008,20 +1008,20 @@ fn select_browser_context_for_target(
 
 #[cfg(test)]
 mod devtools_runtime_entry_tests {
-    use crate::conn::RendererCommandDescriptor;
-    use crate::devtools_runtime::{
-        AutomationEvent, DevToolsActivateTargetCommand, DevToolsCloseTargetCommand,
-        DevToolsCommand, DevToolsCommandContext, DevToolsCreateTargetCommand,
-        DevToolsGetClientWindowsCommand, DevToolsGetTargetInfoCommand, DevToolsGetTargetsCommand,
-        DevToolsProtocol, DevToolsTargetId, DevToolsTargetKind,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, AutomationEvent, DevToolsActivateTargetCommand,
+        DevToolsCloseTargetCommand, DevToolsCreateTargetCommand, DevToolsGetClientWindowsCommand,
+        DevToolsGetTargetInfoCommand, DevToolsGetTargetsCommand, DevToolsTargetId,
+        DevToolsTargetKind, FrontendProtocol,
     };
+    use crate::conn::RendererCommandDescriptor;
     use serde_json::{Value, json};
 
     use super::*;
 
-    fn cdp_context() -> DevToolsCommandContext {
-        DevToolsCommandContext {
-            protocol: DevToolsProtocol::Cdp,
+    fn cdp_context() -> AutomationContext {
+        AutomationContext {
+            protocol: FrontendProtocol::Cdp,
             session_id: None,
             target_id: None,
             browser_context_id: None,
@@ -1072,7 +1072,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(41),
             None,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: cdp_context(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
@@ -1230,14 +1230,14 @@ mod devtools_runtime_entry_tests {
 
         let (result, protocol_events) = execute_devtools_target_command_async_with_protocol_events(
             &mut conn,
-            DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
+            AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
                 context: cdp_context(),
                 target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
             }),
         )
         .await;
 
-        let DevToolsCommandResult::CloseTarget(close_result) =
+        let AutomationResult::CloseTarget(close_result) =
             result.expect("close target should succeed")
         else {
             panic!("expected close target result");
@@ -1284,7 +1284,7 @@ mod devtools_runtime_entry_tests {
         let (result, protocol_events) =
             execute_immediate_devtools_target_command_with_protocol_events(
                 &mut conn,
-                DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                     context: cdp_context(),
                     url: "about:blank".to_owned(),
                     browser_context_id: None,
@@ -1292,7 +1292,7 @@ mod devtools_runtime_entry_tests {
                 }),
             );
 
-        let DevToolsCommandResult::CreateTarget(result) =
+        let AutomationResult::CreateTarget(result) =
             result.expect("create target staging should succeed")
         else {
             panic!("expected create target result");
@@ -1319,7 +1319,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(42),
             Some("SID-1"),
-            DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
+            AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
                 context: cdp_context(),
                 target_id: DevToolsTargetId::from("TARGET-1"),
             }),
@@ -1345,7 +1345,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(43),
             Some("SID-2"),
-            DevToolsCommand::ActivateTarget(DevToolsActivateTargetCommand {
+            AutomationCommand::ActivateTarget(DevToolsActivateTargetCommand {
                 context: cdp_context(),
                 target_id: DevToolsTargetId::from("TARGET-2"),
             }),
@@ -1371,7 +1371,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(40),
             None,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: cdp_context(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
@@ -1383,7 +1383,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(44),
             None,
-            DevToolsCommand::GetTargets(DevToolsGetTargetsCommand {
+            AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
                 context: cdp_context(),
                 root: None,
                 max_depth: None,
@@ -1409,7 +1409,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(46),
             None,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: cdp_context(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
@@ -1421,7 +1421,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(47),
             None,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: cdp_context(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
@@ -1434,7 +1434,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(45),
             None,
-            DevToolsCommand::GetClientWindows(DevToolsGetClientWindowsCommand {
+            AutomationCommand::GetClientWindows(DevToolsGetClientWindowsCommand {
                 context: cdp_context(),
             }),
         );
@@ -1466,7 +1466,7 @@ mod devtools_runtime_entry_tests {
             &mut conn,
             Some(45),
             None,
-            DevToolsCommand::GetTargetInfo(DevToolsGetTargetInfoCommand {
+            AutomationCommand::GetTargetInfo(DevToolsGetTargetInfoCommand {
                 context: cdp_context(),
                 target_id: None,
             }),

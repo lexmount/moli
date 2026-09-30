@@ -8,8 +8,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use url::Url;
 
+use crate::automation::FrontendProtocol;
 use crate::conn::{CommandOwnerScope, ResponseCommitReady};
-use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
 };
@@ -252,19 +252,19 @@ pub(crate) enum NavigationResultProjection {
 }
 
 impl NavigationResultProjection {
-    pub(crate) fn new(protocol: DevToolsProtocol, payload: Value) -> Self {
+    pub(crate) fn new(protocol: FrontendProtocol, payload: Value) -> Self {
         match protocol {
-            DevToolsProtocol::Cdp => Self::Cdp(payload),
-            DevToolsProtocol::WebDriverClassic => Self::WebDriverClassic(payload),
-            DevToolsProtocol::WebDriverBidi => Self::WebDriverBidi(payload),
+            FrontendProtocol::Cdp => Self::Cdp(payload),
+            FrontendProtocol::WebDriverClassic => Self::WebDriverClassic(payload),
+            FrontendProtocol::WebDriverBidi => Self::WebDriverBidi(payload),
         }
     }
 
-    pub(crate) fn protocol(&self) -> DevToolsProtocol {
+    pub(crate) fn protocol(&self) -> FrontendProtocol {
         match self {
-            Self::Cdp(_) => DevToolsProtocol::Cdp,
-            Self::WebDriverClassic(_) => DevToolsProtocol::WebDriverClassic,
-            Self::WebDriverBidi(_) => DevToolsProtocol::WebDriverBidi,
+            Self::Cdp(_) => FrontendProtocol::Cdp,
+            Self::WebDriverClassic(_) => FrontendProtocol::WebDriverClassic,
+            Self::WebDriverBidi(_) => FrontendProtocol::WebDriverBidi,
         }
     }
 

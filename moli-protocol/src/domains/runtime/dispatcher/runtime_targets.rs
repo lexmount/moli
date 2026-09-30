@@ -31,42 +31,42 @@ pub(super) async fn devtools_runtime_realm_for_target_async(
 }
 
 pub(super) fn devtools_runtime_result_ownership(
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> DevToolsResultOwnership {
     match command {
-        DevToolsCommand::EvaluateScript(command) => command.result_ownership,
-        DevToolsCommand::CallFunction(command) => command.result_ownership,
+        AutomationCommand::EvaluateScript(command) => command.result_ownership,
+        AutomationCommand::CallFunction(command) => command.result_ownership,
         _ => DevToolsResultOwnership::None,
     }
 }
 
 pub(super) fn devtools_runtime_command_result_kind(
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> DevToolsRuntimeCommandResultKind {
     match command {
-        DevToolsCommand::TerminateExecution(_) => DevToolsRuntimeCommandResultKind::Empty,
+        AutomationCommand::TerminateExecution(_) => DevToolsRuntimeCommandResultKind::Empty,
         _ => DevToolsRuntimeCommandResultKind::Script,
     }
 }
 
 pub(super) fn devtools_runtime_serialization_options(
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Option<DevToolsSerializationOptions> {
     match command {
-        DevToolsCommand::EvaluateScript(command) => command.serialization_options.clone(),
-        DevToolsCommand::CallFunction(command) => command.serialization_options.clone(),
+        AutomationCommand::EvaluateScript(command) => command.serialization_options.clone(),
+        AutomationCommand::CallFunction(command) => command.serialization_options.clone(),
         _ => None,
     }
 }
 
 #[cfg(test)]
-pub(super) fn devtools_command_has_bidi_script_channel_arguments(
-    command: &DevToolsCommand,
+pub(super) fn automation_command_has_bidi_script_channel_arguments(
+    command: &AutomationCommand,
 ) -> bool {
-    let DevToolsCommand::CallFunction(command) = command else {
+    let AutomationCommand::CallFunction(command) = command else {
         return false;
     };
-    matches!(command.context.protocol, DevToolsProtocol::WebDriverBidi)
+    matches!(command.context.protocol, FrontendProtocol::WebDriverBidi)
         && command
             .this_parameter
             .iter()
@@ -103,9 +103,9 @@ pub(super) fn bidi_local_value_contains_channel(value: &Value) -> bool {
 
 pub(super) async fn devtools_runtime_target_async(
     conn: &mut CdpConnection,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
-    if let DevToolsCommand::TerminateExecution(command) = command {
+    if let AutomationCommand::TerminateExecution(command) = command {
         let target_id =
             command.context.target_id.as_ref().ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
@@ -113,18 +113,18 @@ pub(super) async fn devtools_runtime_target_async(
         return devtools_runtime_control_target(conn, target_id);
     }
     let (target_id, realm_id, world_name) = match command {
-        DevToolsCommand::EvaluateScript(command) => (
+        AutomationCommand::EvaluateScript(command) => (
             command.context.target_id.as_ref(),
             command.realm_id.as_ref(),
             command.world_name.as_deref(),
         ),
-        DevToolsCommand::CallFunction(command) => (
+        AutomationCommand::CallFunction(command) => (
             command.context.target_id.as_ref(),
             command.realm_id.as_ref(),
             command.world_name.as_deref(),
         ),
-        DevToolsCommand::LocateNodes(command) => (command.context.target_id.as_ref(), None, None),
-        DevToolsCommand::ReleaseObjects(command) => (
+        AutomationCommand::LocateNodes(command) => (command.context.target_id.as_ref(), None, None),
+        AutomationCommand::ReleaseObjects(command) => (
             command.context.target_id.as_ref(),
             command.realm_id.as_ref(),
             command.world_name.as_deref(),

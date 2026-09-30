@@ -3,15 +3,15 @@ use super::*;
 pub(super) async fn execute_devtools_release_objects_command_async(
     conn: &mut CdpConnection,
     command: DevToolsReleaseObjectsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let target =
-        devtools_runtime_target_async(conn, &DevToolsCommand::ReleaseObjects(command.clone()))
+        devtools_runtime_target_async(conn, &AutomationCommand::ReleaseObjects(command.clone()))
             .await?;
     let target_realm = devtools_realm_id_for_runtime_target_async(conn, &target).await;
     let owner = CommandOwnerScope::for_route(target.route);
     release_devtools_objects_for_owner_async(conn, &owner, &command.handles, target_realm.as_ref())
         .await?;
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 pub(super) async fn release_devtools_objects_for_owner_async(
@@ -111,7 +111,7 @@ pub(super) async fn dispatch_runtime_inspector_command_response_for_owner_async(
 pub(super) async fn execute_devtools_get_realms_command_async(
     conn: &mut CdpConnection,
     command: DevToolsGetRealmsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let requested_target_id = command
         .context
         .target_id
@@ -150,9 +150,7 @@ pub(super) async fn execute_devtools_get_realms_command_async(
         realms.retain(|realm| devtools_realm_type(realm.context_type.as_deref()) == realm_type);
     }
     dedup_devtools_realms(&mut realms);
-    Ok(DevToolsCommandResult::Realms(DevToolsGetRealmsResult {
-        realms,
-    }))
+    Ok(AutomationResult::Realms(DevToolsGetRealmsResult { realms }))
 }
 
 pub(super) fn dedup_devtools_realms(realms: &mut Vec<RuntimeExecutionContextEvent>) {
@@ -189,7 +187,7 @@ pub(super) fn dedup_devtools_realms(realms: &mut Vec<RuntimeExecutionContextEven
 
 pub(super) fn devtools_get_realms_routes(
     conn: &CdpConnection,
-    target_id: Option<&crate::devtools_runtime::DevToolsTargetId>,
+    target_id: Option<&crate::automation::DevToolsTargetId>,
 ) -> Result<Vec<CdpSessionRoute>, DevToolsError> {
     if let Some(target_id) = target_id {
         if let Some(route) = conn
@@ -211,11 +209,11 @@ pub(super) fn devtools_get_realms_routes(
     {
         if !matches!(
             target_info.kind,
-            crate::devtools_runtime::DevToolsTargetKind::Page
-                | crate::devtools_runtime::DevToolsTargetKind::Frame
-                | crate::devtools_runtime::DevToolsTargetKind::SharedWorker
-                | crate::devtools_runtime::DevToolsTargetKind::Worker
-                | crate::devtools_runtime::DevToolsTargetKind::ServiceWorker
+            crate::automation::DevToolsTargetKind::Page
+                | crate::automation::DevToolsTargetKind::Frame
+                | crate::automation::DevToolsTargetKind::SharedWorker
+                | crate::automation::DevToolsTargetKind::Worker
+                | crate::automation::DevToolsTargetKind::ServiceWorker
         ) {
             continue;
         }
@@ -435,7 +433,7 @@ pub(super) fn devtools_script_exception_from_cdp(
             .and_then(Value::as_u64),
         stack_trace: exception_details
             .get("stackTrace")
-            .and_then(crate::devtools_runtime::DevToolsStackTrace::from_cdp_value),
+            .and_then(crate::automation::DevToolsStackTrace::from_cdp_value),
     }
 }
 

@@ -3,12 +3,12 @@ use super::*;
 pub(super) async fn start_protocol_neutral_runtime_command(
     conn: &mut CdpConnection,
     target: DevToolsRuntimeTarget,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     internal_command_id: u64,
 ) -> RuntimeCommandTaskStep {
     let owner = CommandOwnerScope::for_route(target.route.clone());
     match command {
-        DevToolsCommand::EvaluateScript(command) => {
+        AutomationCommand::EvaluateScript(command) => {
             let params = devtools_evaluate_script_params(&command, target.execution_context_id);
             let json =
                 runtime_inspector_command_json(internal_command_id, "Runtime.evaluate", &params);
@@ -23,7 +23,7 @@ pub(super) async fn start_protocol_neutral_runtime_command(
             };
             let cmd = Cmd::from_parsed(&parsed)
                 .expect("synthesized Runtime command must contain a domain separator");
-            let command = DevToolsCommand::EvaluateScript(command);
+            let command = AutomationCommand::EvaluateScript(command);
             match prepare_pending_devtools_runtime_inspector_json_for_owner(
                 conn, &cmd, &owner, &command,
             ) {
@@ -41,8 +41,8 @@ pub(super) async fn start_protocol_neutral_runtime_command(
                 }
             }
         }
-        DevToolsCommand::CallFunction(mut command) => {
-            if matches!(command.context.protocol, DevToolsProtocol::WebDriverBidi)
+        AutomationCommand::CallFunction(mut command) => {
+            if matches!(command.context.protocol, FrontendProtocol::WebDriverBidi)
                 && let Err(message) = Box::pin(materialize_bidi_channel_argument_proxies_async(
                     conn,
                     &target,
@@ -80,7 +80,7 @@ pub(super) async fn start_protocol_neutral_runtime_command(
                     };
                     let cmd = Cmd::from_parsed(&parsed)
                         .expect("synthesized Runtime command must contain a domain separator");
-                    let command = DevToolsCommand::CallFunction(command);
+                    let command = AutomationCommand::CallFunction(command);
                     match prepare_pending_devtools_runtime_inspector_json_for_owner(
                         conn, &cmd, &owner, &command,
                     ) {
@@ -104,7 +104,7 @@ pub(super) async fn start_protocol_neutral_runtime_command(
                 )),
             }
         }
-        DevToolsCommand::TerminateExecution(_) => {
+        AutomationCommand::TerminateExecution(_) => {
             let json = runtime_inspector_command_json(
                 internal_command_id,
                 "Runtime.terminateExecution",
@@ -495,7 +495,7 @@ pub(super) fn devtools_call_function_cdp_arguments(
 pub(super) fn devtools_call_function_deserializes_bidi_local_values(
     command: &DevToolsCallFunctionCommand,
 ) -> bool {
-    matches!(command.context.protocol, DevToolsProtocol::WebDriverBidi)
+    matches!(command.context.protocol, FrontendProtocol::WebDriverBidi)
         && command
             .this_parameter
             .iter()

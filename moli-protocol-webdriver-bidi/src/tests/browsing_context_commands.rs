@@ -13,10 +13,10 @@ fn maps_browsing_context_get_tree_null_root_to_shared_get_frame_trees_command() 
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetFrameTrees(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::GetFrameTrees(command) = shared else {
         panic!("expected GetFrameTrees command");
     };
     assert_eq!(command.max_depth, Some(2));
@@ -28,15 +28,15 @@ fn maps_browsing_context_navigate_wait_to_shared_navigation_wait() {
     for (wait, expected) in [
         (
             "none",
-            moli_protocol::devtools_runtime::DevToolsNavigationWait::None,
+            moli_protocol::automation::DevToolsNavigationWait::None,
         ),
         (
             "interactive",
-            moli_protocol::devtools_runtime::DevToolsNavigationWait::DomContentLoaded,
+            moli_protocol::automation::DevToolsNavigationWait::DomContentLoaded,
         ),
         (
             "complete",
-            moli_protocol::devtools_runtime::DevToolsNavigationWait::Load,
+            moli_protocol::automation::DevToolsNavigationWait::Load,
         ),
     ] {
         let command = super::super::parse_bidi_command(json!({
@@ -51,10 +51,10 @@ fn maps_browsing_context_navigate_wait_to_shared_navigation_wait() {
         .expect("BiDi command");
         let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-        let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+        let shared = super::super::automation_command_from_bidi_command(&command, &context)
             .expect("shared command");
 
-        let moli_protocol::devtools_runtime::DevToolsCommand::Navigate(command) = shared else {
+        let moli_protocol::automation::AutomationCommand::Navigate(command) = shared else {
             panic!("expected Navigate command");
         };
         assert_eq!(command.url, "https://example.test/");
@@ -64,7 +64,7 @@ fn maps_browsing_context_navigate_wait_to_shared_navigation_wait() {
                 .context
                 .target_id
                 .as_ref()
-                .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+                .map(moli_protocol::automation::DevToolsTargetId::as_str),
             Some("TARGET-1")
         );
     }
@@ -84,10 +84,10 @@ fn maps_browsing_context_reload_to_shared_reload_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::Reload(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::Reload(command) = shared else {
         panic!("expected Reload command");
     };
     assert_eq!(
@@ -95,13 +95,13 @@ fn maps_browsing_context_reload_to_shared_reload_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.ignore_cache);
     assert_eq!(
         command.wait,
-        moli_protocol::devtools_runtime::DevToolsNavigationWait::Load
+        moli_protocol::automation::DevToolsNavigationWait::Load
     );
 }
 
@@ -118,10 +118,10 @@ fn maps_browsing_context_traverse_history_to_shared_delta_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::TraverseHistory(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::TraverseHistory(command) = shared else {
         panic!("expected TraverseHistory command");
     };
     assert_eq!(
@@ -129,16 +129,16 @@ fn maps_browsing_context_traverse_history_to_shared_delta_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(
         command.destination,
-        moli_protocol::devtools_runtime::DevToolsHistoryTraversalDestination::Delta(-2)
+        moli_protocol::automation::DevToolsHistoryTraversalDestination::Delta(-2)
     );
     assert_eq!(
         command.wait,
-        moli_protocol::devtools_runtime::DevToolsNavigationWait::Load
+        moli_protocol::automation::DevToolsNavigationWait::Load
     );
 }
 
@@ -159,37 +159,35 @@ fn maps_script_evaluate_context_target_to_shared_evaluate_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(command.expression, "globalThis.answer");
     assert!(command.await_promise);
     assert_eq!(
         command.result_ownership,
-        moli_protocol::devtools_runtime::DevToolsResultOwnership::Root
+        moli_protocol::automation::DevToolsResultOwnership::Root
     );
     assert_eq!(
         command
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.realm_id.is_none());
     assert!(command.world_name.is_none());
     assert_eq!(
         command.serialization_options,
-        Some(
-            moli_protocol::devtools_runtime::DevToolsSerializationOptions {
-                max_object_depth: Some(2),
-                max_dom_depth: Some(1),
-                include_shadow_tree: None,
-            }
-        )
+        Some(moli_protocol::automation::DevToolsSerializationOptions {
+            max_object_depth: Some(2),
+            max_dom_depth: Some(1),
+            include_shadow_tree: None,
+        })
     );
 }
 
@@ -209,9 +207,9 @@ fn maps_script_user_activation_to_user_gesture_without_rewriting_source() {
     }))
     .expect("BiDi evaluate command");
 
-    let shared = super::super::devtools_command_from_bidi_command(&evaluate, &context)
+    let shared = super::super::automation_command_from_bidi_command(&evaluate, &context)
         .expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(command.expression, "navigator.userActivation.isActive");
@@ -230,9 +228,9 @@ fn maps_script_user_activation_to_user_gesture_without_rewriting_source() {
     }))
     .expect("BiDi callFunction command");
 
-    let shared = super::super::devtools_command_from_bidi_command(&call_function, &context)
+    let shared = super::super::automation_command_from_bidi_command(&call_function, &context)
         .expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::CallFunction(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::CallFunction(command) = shared else {
         panic!("expected CallFunction command");
     };
     assert_eq!(
@@ -258,15 +256,15 @@ fn maps_script_evaluate_await_promise_default_ownership_preserves_metadata() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
         command.result_ownership,
-        moli_protocol::devtools_runtime::DevToolsResultOwnership::None
+        moli_protocol::automation::DevToolsResultOwnership::None
     );
     assert!(
         command.preserve_remote_metadata,
@@ -290,10 +288,10 @@ fn maps_script_context_sandbox_to_shared_runtime_world() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
@@ -301,7 +299,7 @@ fn maps_script_context_sandbox_to_shared_runtime_world() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.realm_id.is_none());
@@ -327,21 +325,19 @@ fn maps_script_serialization_options_to_shared_runtime_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
         command.serialization_options,
-        Some(
-            moli_protocol::devtools_runtime::DevToolsSerializationOptions {
-                max_object_depth: Some(1),
-                max_dom_depth: None,
-                include_shadow_tree: Some("open".to_owned()),
-            }
-        )
+        Some(moli_protocol::automation::DevToolsSerializationOptions {
+            max_object_depth: Some(1),
+            max_dom_depth: None,
+            include_shadow_tree: Some("open".to_owned()),
+        })
     );
     assert!(
         command.preserve_remote_metadata,
@@ -365,21 +361,19 @@ fn maps_empty_script_serialization_options_to_unbounded_deep_runtime_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
         command.serialization_options,
-        Some(
-            moli_protocol::devtools_runtime::DevToolsSerializationOptions {
-                max_object_depth: None,
-                max_dom_depth: None,
-                include_shadow_tree: None,
-            }
-        )
+        Some(moli_protocol::automation::DevToolsSerializationOptions {
+            max_object_depth: None,
+            max_dom_depth: None,
+            include_shadow_tree: None,
+        })
     );
 }
 
@@ -398,24 +392,24 @@ fn maps_script_evaluate_realm_target_to_shared_evaluate_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::EvaluateScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::EvaluateScript(command) = shared else {
         panic!("expected EvaluateScript command");
     };
     assert_eq!(
         command
             .realm_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsRealmId::as_str),
+            .map(moli_protocol::automation::DevToolsRealmId::as_str),
         Some("REALM-1")
     );
     assert!(command.context.target_id.is_none());
     assert!(command.world_name.is_none());
     assert_eq!(
         command.result_ownership,
-        moli_protocol::devtools_runtime::DevToolsResultOwnership::None
+        moli_protocol::automation::DevToolsResultOwnership::None
     );
 }
 
@@ -441,10 +435,10 @@ fn maps_script_call_function_to_shared_call_function_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::CallFunction(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::CallFunction(command) = shared else {
         panic!("expected CallFunction command");
     };
     assert_eq!(command.function_declaration, "(value) => value");
@@ -459,19 +453,17 @@ fn maps_script_call_function_to_shared_call_function_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.world_name.is_none());
     assert_eq!(
         command.serialization_options,
-        Some(
-            moli_protocol::devtools_runtime::DevToolsSerializationOptions {
-                max_object_depth: Some(2),
-                max_dom_depth: Some(1),
-                include_shadow_tree: None,
-            }
-        )
+        Some(moli_protocol::automation::DevToolsSerializationOptions {
+            max_object_depth: Some(2),
+            max_dom_depth: Some(1),
+            include_shadow_tree: None,
+        })
     );
     assert!(
         command.preserve_remote_metadata,
@@ -502,10 +494,10 @@ fn maps_browsing_context_locate_nodes_to_shared_runtime_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::LocateNodes(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::LocateNodes(command) = shared else {
         panic!("expected LocateNodes command");
     };
     assert_eq!(
@@ -513,7 +505,7 @@ fn maps_browsing_context_locate_nodes_to_shared_runtime_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(command.max_node_count, Some(3));
@@ -526,10 +518,10 @@ fn maps_browsing_context_locate_nodes_to_shared_runtime_command() {
     );
     assert!(matches!(
         command.locator,
-        moli_protocol::devtools_runtime::DevToolsLocateNodesLocator::InnerText {
+        moli_protocol::automation::DevToolsLocateNodesLocator::InnerText {
             ref value,
             ignore_case: true,
-            match_type: moli_protocol::devtools_runtime::DevToolsLocateNodesTextMatch::Partial,
+            match_type: moli_protocol::automation::DevToolsLocateNodesTextMatch::Partial,
             max_depth: 2,
         } if value == "Foo"
     ));
@@ -553,10 +545,10 @@ fn maps_browsing_context_locate_nodes_context_locator_to_shared_runtime_command(
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::LocateNodes(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::LocateNodes(command) = shared else {
         panic!("expected LocateNodes command");
     };
     assert_eq!(
@@ -564,12 +556,12 @@ fn maps_browsing_context_locate_nodes_context_locator_to_shared_runtime_command(
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("PARENT-1")
     );
     assert!(matches!(
         command.locator,
-        moli_protocol::devtools_runtime::DevToolsLocateNodesLocator::Context(ref context)
+        moli_protocol::automation::DevToolsLocateNodesLocator::Context(ref context)
             if context.as_str() == "CHILD-1"
     ));
 }
@@ -596,7 +588,7 @@ fn rejects_browsing_context_locate_nodes_context_locator_start_nodes() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let error = super::super::devtools_command_from_bidi_command(&command, &context)
+    let error = super::super::automation_command_from_bidi_command(&command, &context)
         .expect_err("context locator startNodes should fail validation");
 
     assert_eq!(error.code, super::super::BidiErrorCode::InvalidArgument);
@@ -615,10 +607,10 @@ fn maps_script_get_realms_to_shared_get_realms_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetRealms(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::GetRealms(command) = shared else {
         panic!("expected GetRealms command");
     };
     assert_eq!(
@@ -626,7 +618,7 @@ fn maps_script_get_realms_to_shared_get_realms_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(command.realm_type.as_deref(), Some("window"));
@@ -645,10 +637,10 @@ fn maps_script_get_realms_to_service_worker_target_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetRealms(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::GetRealms(command) = shared else {
         panic!("expected GetRealms command");
     };
     assert_eq!(
@@ -656,7 +648,7 @@ fn maps_script_get_realms_to_service_worker_target_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TID-service-worker")
     );
     assert_eq!(command.realm_type.as_deref(), Some("service-worker"));
@@ -677,24 +669,24 @@ fn maps_script_disown_to_shared_release_objects_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::ReleaseObjects(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::ReleaseObjects(command) = shared else {
         panic!("expected ReleaseObjects command");
     };
     assert_eq!(
         command
             .realm_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsRealmId::as_str),
+            .map(moli_protocol::automation::DevToolsRealmId::as_str),
         Some("REALM-1")
     );
     assert_eq!(
         command
             .handles
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsRemoteHandleId::as_str)
+            .map(moli_protocol::automation::DevToolsRemoteHandleId::as_str)
             .collect::<Vec<_>>(),
         vec!["HANDLE-1", "HANDLE-2"]
     );
@@ -730,15 +722,15 @@ fn maps_storage_cookie_commands_to_shared_storage_commands() {
     }))
     .expect("BiDi storage.setCookie command");
     let shared =
-        super::super::devtools_command_from_bidi_command(&set, &context).expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetCookies(set) = shared else {
+        super::super::automation_command_from_bidi_command(&set, &context).expect("shared command");
+    let moli_protocol::automation::AutomationCommand::SetCookies(set) = shared else {
         panic!("expected SetCookies command");
     };
     assert_eq!(
         set.context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(set.cookies.len(), 1);
@@ -773,8 +765,8 @@ fn maps_storage_cookie_commands_to_shared_storage_commands() {
     }))
     .expect("BiDi storage.getCookies command");
     let shared =
-        super::super::devtools_command_from_bidi_command(&get, &context).expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetCookies(get) = shared else {
+        super::super::automation_command_from_bidi_command(&get, &context).expect("shared command");
+    let moli_protocol::automation::AutomationCommand::GetCookies(get) = shared else {
         panic!("expected GetCookies command");
     };
     let filter = get.filter.expect("cookie filter");
@@ -800,9 +792,9 @@ fn maps_storage_cookie_commands_to_shared_storage_commands() {
         }
     }))
     .expect("BiDi storage.deleteCookies command");
-    let shared = super::super::devtools_command_from_bidi_command(&delete, &context)
+    let shared = super::super::automation_command_from_bidi_command(&delete, &context)
         .expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::DeleteCookies(delete) = shared else {
+    let moli_protocol::automation::AutomationCommand::DeleteCookies(delete) = shared else {
         panic!("expected DeleteCookies command");
     };
     assert_eq!(delete.name.as_deref(), Some("sid"));
@@ -839,21 +831,21 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
     }))
     .expect("BiDi storage.setCookie command");
     let shared =
-        super::super::devtools_command_from_bidi_command(&set, &context).expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetCookies(set) = shared else {
+        super::super::automation_command_from_bidi_command(&set, &context).expect("shared command");
+    let moli_protocol::automation::AutomationCommand::SetCookies(set) = shared else {
         panic!("expected SetCookies command");
     };
     assert_eq!(
         set.browser_context_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str),
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-2")
     );
     assert_eq!(
         set.context
             .browser_context_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str),
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-2")
     );
     assert_eq!(set.cookies[0].value, "abc");
@@ -870,10 +862,9 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
         }
     }))
     .expect("BiDi storage.getCookies command");
-    let shared = super::super::devtools_command_from_bidi_command(&default_partition, &context)
+    let shared = super::super::automation_command_from_bidi_command(&default_partition, &context)
         .expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetCookies(default_partition) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::GetCookies(default_partition) = shared else {
         panic!("expected GetCookies command");
     };
     assert_eq!(default_partition.browser_context_id, None);
@@ -891,15 +882,15 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
     }))
     .expect("BiDi storage.getCookies command");
     let shared =
-        super::super::devtools_command_from_bidi_command(&get, &context).expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::GetCookies(get) = shared else {
+        super::super::automation_command_from_bidi_command(&get, &context).expect("shared command");
+    let moli_protocol::automation::AutomationCommand::GetCookies(get) = shared else {
         panic!("expected GetCookies command");
     };
     assert_eq!(
         get.context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-2")
     );
 
@@ -921,16 +912,16 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
         }
     }))
     .expect("BiDi storage.deleteCookies command");
-    let shared = super::super::devtools_command_from_bidi_command(&delete, &context)
+    let shared = super::super::automation_command_from_bidi_command(&delete, &context)
         .expect("shared command");
-    let moli_protocol::devtools_runtime::DevToolsCommand::DeleteCookies(delete) = shared else {
+    let moli_protocol::automation::AutomationCommand::DeleteCookies(delete) = shared else {
         panic!("expected DeleteCookies command");
     };
     assert_eq!(
         delete
             .browser_context_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str),
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-3")
     );
     let filter = delete.filter.expect("delete filter");
@@ -953,7 +944,7 @@ fn rejects_script_disown_non_string_handles() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let error = super::super::devtools_command_from_bidi_command(&command, &context)
+    let error = super::super::automation_command_from_bidi_command(&command, &context)
         .expect_err("non-string handles should be rejected");
 
     assert_eq!(error.code, super::super::BidiErrorCode::InvalidArgument);
@@ -964,19 +955,15 @@ fn rejects_script_disown_non_string_handles() {
 fn serializes_get_realms_result_to_bidi_realm_list() {
     let response = super::super::bidi_response_from_devtools_result(
         9,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Realms(
-            moli_protocol::devtools_runtime::DevToolsGetRealmsResult {
+        moli_protocol::automation::AutomationResult::Realms(
+            moli_protocol::automation::DevToolsGetRealmsResult {
                 realms: vec![RuntimeExecutionContextEvent {
-                    target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                    target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                         "TARGET-1",
                     )),
                     context_id: Some(3),
-                    realm_id: Some(moli_protocol::devtools_runtime::DevToolsRealmId::from(
-                        "REALM-1",
-                    )),
-                    frame_id: Some(moli_protocol::devtools_runtime::DevToolsFrameId::from(
-                        "TARGET-1",
-                    )),
+                    realm_id: Some(moli_protocol::automation::DevToolsRealmId::from("REALM-1")),
+                    frame_id: Some(moli_protocol::automation::DevToolsFrameId::from("TARGET-1")),
                     origin: Some("https://example.test".to_owned()),
                     name: Some(String::new()),
                     is_default: Some(true),
@@ -1008,14 +995,14 @@ fn serializes_get_realms_result_to_bidi_realm_list() {
 fn serializes_get_realms_result_to_service_worker_bidi_realm() {
     let response = super::super::bidi_response_from_devtools_result(
         92,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Realms(
-            moli_protocol::devtools_runtime::DevToolsGetRealmsResult {
+        moli_protocol::automation::AutomationResult::Realms(
+            moli_protocol::automation::DevToolsGetRealmsResult {
                 realms: vec![RuntimeExecutionContextEvent {
-                    target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                    target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                         "TID-service-worker",
                     )),
                     context_id: Some(20_000_007),
-                    realm_id: Some(moli_protocol::devtools_runtime::DevToolsRealmId::from(
+                    realm_id: Some(moli_protocol::automation::DevToolsRealmId::from(
                         "service-worker-TID-service-worker",
                     )),
                     frame_id: None,
@@ -1049,18 +1036,18 @@ fn serializes_get_realms_result_to_service_worker_bidi_realm() {
 fn serializes_get_realms_default_window_realm_before_sandbox_realm() {
     let response = super::super::bidi_response_from_devtools_result(
         91,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::Realms(
-            moli_protocol::devtools_runtime::DevToolsGetRealmsResult {
+        moli_protocol::automation::AutomationResult::Realms(
+            moli_protocol::automation::DevToolsGetRealmsResult {
                 realms: vec![
                     RuntimeExecutionContextEvent {
-                        target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                        target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                             "TARGET-1",
                         )),
                         context_id: Some(5),
-                        realm_id: Some(moli_protocol::devtools_runtime::DevToolsRealmId::from(
+                        realm_id: Some(moli_protocol::automation::DevToolsRealmId::from(
                             "REALM-SANDBOX",
                         )),
-                        frame_id: Some(moli_protocol::devtools_runtime::DevToolsFrameId::from(
+                        frame_id: Some(moli_protocol::automation::DevToolsFrameId::from(
                             "child-browsing-context-1",
                         )),
                         origin: Some("https://not-web-platform.test:8443".to_owned()),
@@ -1070,14 +1057,14 @@ fn serializes_get_realms_default_window_realm_before_sandbox_realm() {
                         grant_universal_access: None,
                     },
                     RuntimeExecutionContextEvent {
-                        target_id: Some(moli_protocol::devtools_runtime::DevToolsTargetId::from(
+                        target_id: Some(moli_protocol::automation::DevToolsTargetId::from(
                             "TARGET-1",
                         )),
                         context_id: Some(4),
-                        realm_id: Some(moli_protocol::devtools_runtime::DevToolsRealmId::from(
+                        realm_id: Some(moli_protocol::automation::DevToolsRealmId::from(
                             "REALM-DEFAULT",
                         )),
-                        frame_id: Some(moli_protocol::devtools_runtime::DevToolsFrameId::from(
+                        frame_id: Some(moli_protocol::automation::DevToolsFrameId::from(
                             "child-browsing-context-1",
                         )),
                         origin: Some("https://not-web-platform.test:8443".to_owned()),
@@ -1139,13 +1126,13 @@ fn maps_script_add_preload_script_to_shared_preload_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::AddPreloadScript(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::AddPreloadScript(command) = shared else {
         panic!("expected AddPreloadScript command");
     };
-    let moli_protocol::devtools_runtime::DevToolsPreloadScriptSource::FunctionDeclaration {
+    let moli_protocol::automation::DevToolsPreloadScriptSource::FunctionDeclaration {
         function_declaration,
         arguments,
     } = command.source
@@ -1163,14 +1150,14 @@ fn maps_script_add_preload_script_to_shared_preload_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(
         command.target_ids.as_ref().map(|target_ids| {
             target_ids
                 .iter()
-                .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+                .map(moli_protocol::automation::DevToolsTargetId::as_str)
                 .collect::<Vec<_>>()
         }),
         Some(vec!["TARGET-1"])
@@ -1191,10 +1178,10 @@ fn maps_browsing_context_handle_user_prompt_to_shared_page_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::HandleJavaScriptDialog(command) = shared
+    let moli_protocol::automation::AutomationCommand::HandleJavaScriptDialog(command) = shared
     else {
         panic!("expected HandleJavaScriptDialog command");
     };
@@ -1203,7 +1190,7 @@ fn maps_browsing_context_handle_user_prompt_to_shared_page_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert!(command.accept);
@@ -1233,11 +1220,10 @@ fn maps_browsing_context_capture_screenshot_to_shared_page_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::CaptureScreenshot(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::CaptureScreenshot(command) = shared else {
         panic!("expected CaptureScreenshot command");
     };
     assert_eq!(command.quality, Some(60));
@@ -1248,10 +1234,10 @@ fn maps_browsing_context_capture_screenshot_to_shared_page_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
-    let moli_protocol::devtools_runtime::DevToolsCaptureScreenshotClip::Box(clip) =
+    let moli_protocol::automation::DevToolsCaptureScreenshotClip::Box(clip) =
         command.clip.expect("box clip should map")
     else {
         panic!("expected box clip");
@@ -1281,14 +1267,13 @@ fn maps_browsing_context_capture_screenshot_element_clip_to_shared_page_command(
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::CaptureScreenshot(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::CaptureScreenshot(command) = shared else {
         panic!("expected CaptureScreenshot command");
     };
-    let moli_protocol::devtools_runtime::DevToolsCaptureScreenshotClip::Element(clip) =
+    let moli_protocol::automation::DevToolsCaptureScreenshotClip::Element(clip) =
         command.clip.expect("element clip should map")
     else {
         panic!("expected element clip");
@@ -1323,10 +1308,10 @@ fn maps_browsing_context_print_to_shared_page_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::PrintToPdf(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::PrintToPdf(command) = shared else {
         panic!("expected PrintToPdf command");
     };
     assert_eq!(
@@ -1334,7 +1319,7 @@ fn maps_browsing_context_print_to_shared_page_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(command.landscape, Some(true));
@@ -1344,7 +1329,7 @@ fn maps_browsing_context_print_to_shared_page_command() {
     assert_eq!(command.shrink_to_fit, Some(false));
     assert_eq!(
         command.transfer_mode,
-        Some(moli_protocol::devtools_runtime::DevToolsPrintToPdfTransferMode::ReturnAsBase64)
+        Some(moli_protocol::automation::DevToolsPrintToPdfTransferMode::ReturnAsBase64)
     );
     assert!((command.margin_top.unwrap() - (1.0 / 2.54)).abs() < 1e-12);
     assert!((command.margin_bottom.unwrap() - (2.0 / 2.54)).abs() < 1e-12);
@@ -1358,9 +1343,9 @@ fn maps_browsing_context_print_to_shared_page_command() {
 fn serializes_network_data_result_to_bidi_bytes_payload() {
     let response = super::super::bidi_response_from_devtools_result(
         10,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::NetworkData(
-            moli_protocol::devtools_runtime::DevToolsNetworkDataResult {
-                bytes_type: moli_protocol::devtools_runtime::DevToolsNetworkDataBytesType::String,
+        moli_protocol::automation::AutomationResult::NetworkData(
+            moli_protocol::automation::DevToolsNetworkDataResult {
+                bytes_type: moli_protocol::automation::DevToolsNetworkDataBytesType::String,
                 value: "body text".to_owned(),
             },
         ),
@@ -1382,9 +1367,9 @@ fn serializes_network_data_result_to_bidi_bytes_payload() {
 
     let response = super::super::bidi_response_from_devtools_result(
         11,
-        moli_protocol::devtools_runtime::DevToolsCommandResult::NetworkData(
-            moli_protocol::devtools_runtime::DevToolsNetworkDataResult {
-                bytes_type: moli_protocol::devtools_runtime::DevToolsNetworkDataBytesType::Base64,
+        moli_protocol::automation::AutomationResult::NetworkData(
+            moli_protocol::automation::DevToolsNetworkDataResult {
+                bytes_type: moli_protocol::automation::DevToolsNetworkDataBytesType::Base64,
                 value: "AP8=".to_owned(),
             },
         ),
@@ -1416,10 +1401,10 @@ fn maps_browsing_context_set_viewport_to_shared_emulation_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetViewport(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::SetViewport(command) = shared else {
         panic!("expected SetViewport command");
     };
     assert_eq!(
@@ -1427,19 +1412,19 @@ fn maps_browsing_context_set_viewport_to_shared_emulation_command() {
             .context
             .target_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str),
+            .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
     );
     assert_eq!(
         command.viewport,
-        moli_protocol::devtools_runtime::DevToolsViewportSetting::Dimensions {
+        moli_protocol::automation::DevToolsViewportSetting::Dimensions {
             width: 800,
             height: 600,
         }
     );
     assert_eq!(
         command.device_pixel_ratio,
-        moli_protocol::devtools_runtime::DevToolsDevicePixelRatioSetting::Scale(2.0)
+        moli_protocol::automation::DevToolsDevicePixelRatioSetting::Scale(2.0)
     );
 }
 
@@ -1459,10 +1444,10 @@ fn maps_browsing_context_set_viewport_user_contexts_without_id_format_guessing()
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetViewport(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::SetViewport(command) = shared else {
         panic!("expected SetViewport command");
     };
     assert_eq!(command.context.target_id, None);
@@ -1470,7 +1455,7 @@ fn maps_browsing_context_set_viewport_user_contexts_without_id_format_guessing()
         command
             .browser_context_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str)
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str)
             .collect::<Vec<_>>(),
         vec!["custom-user-context"]
     );
@@ -1490,19 +1475,19 @@ fn maps_browsing_context_set_viewport_nulls_to_default_settings() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetViewport(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::SetViewport(command) = shared else {
         panic!("expected SetViewport command");
     };
     assert_eq!(
         command.viewport,
-        moli_protocol::devtools_runtime::DevToolsViewportSetting::Default
+        moli_protocol::automation::DevToolsViewportSetting::Default
     );
     assert_eq!(
         command.device_pixel_ratio,
-        moli_protocol::devtools_runtime::DevToolsDevicePixelRatioSetting::Default
+        moli_protocol::automation::DevToolsDevicePixelRatioSetting::Default
     );
 }
 
@@ -1518,11 +1503,10 @@ fn maps_emulation_set_user_agent_override_global_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetUserAgentOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetUserAgentOverride(command) = shared else {
         panic!("expected SetUserAgentOverride command");
     };
     assert!(command.target_ids.is_empty());
@@ -1533,7 +1517,7 @@ fn maps_emulation_set_user_agent_override_global_to_shared_command() {
             .context
             .session_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsSessionId::as_str),
+            .map(moli_protocol::automation::DevToolsSessionId::as_str),
         Some("bidi-session-1")
     );
 }
@@ -1551,18 +1535,17 @@ fn maps_emulation_set_user_agent_override_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetUserAgentOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetUserAgentOverride(command) = shared else {
         panic!("expected SetUserAgentOverride command");
     };
     assert_eq!(
         command
             .target_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+            .map(moli_protocol::automation::DevToolsTargetId::as_str)
             .collect::<Vec<_>>(),
         vec!["TARGET-1", "TARGET-2"]
     );
@@ -1583,11 +1566,10 @@ fn maps_emulation_set_user_agent_override_user_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetUserAgentOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetUserAgentOverride(command) = shared else {
         panic!("expected SetUserAgentOverride command");
     };
     assert!(command.target_ids.is_empty());
@@ -1595,7 +1577,7 @@ fn maps_emulation_set_user_agent_override_user_contexts_to_shared_command() {
         command
             .browser_context_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str)
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str)
             .collect::<Vec<_>>(),
         vec!["default", "custom-user-context"]
     );
@@ -1615,18 +1597,17 @@ fn maps_emulation_set_locale_override_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetLocaleOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetLocaleOverride(command) = shared else {
         panic!("expected SetLocaleOverride command");
     };
     assert_eq!(
         command
             .target_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+            .map(moli_protocol::automation::DevToolsTargetId::as_str)
             .collect::<Vec<_>>(),
         vec!["TARGET-1", "TARGET-2"]
     );
@@ -1647,11 +1628,10 @@ fn maps_emulation_set_locale_override_user_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetLocaleOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetLocaleOverride(command) = shared else {
         panic!("expected SetLocaleOverride command");
     };
     assert!(command.target_ids.is_empty());
@@ -1659,7 +1639,7 @@ fn maps_emulation_set_locale_override_user_contexts_to_shared_command() {
         command
             .browser_context_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str)
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str)
             .collect::<Vec<_>>(),
         vec!["default", "custom-user-context"]
     );
@@ -1679,18 +1659,17 @@ fn maps_emulation_set_timezone_override_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetTimezoneOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetTimezoneOverride(command) = shared else {
         panic!("expected SetTimezoneOverride command");
     };
     assert_eq!(
         command
             .target_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+            .map(moli_protocol::automation::DevToolsTargetId::as_str)
             .collect::<Vec<_>>(),
         vec!["TARGET-1"]
     );
@@ -1711,11 +1690,10 @@ fn maps_emulation_set_timezone_override_user_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetTimezoneOverride(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetTimezoneOverride(command) = shared else {
         panic!("expected SetTimezoneOverride command");
     };
     assert!(command.target_ids.is_empty());
@@ -1723,7 +1701,7 @@ fn maps_emulation_set_timezone_override_user_contexts_to_shared_command() {
         command
             .browser_context_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str)
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str)
             .collect::<Vec<_>>(),
         vec!["custom-user-context"]
     );
@@ -1744,18 +1722,17 @@ fn maps_emulation_set_network_conditions_global_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetNetworkConditions(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetNetworkConditions(command) = shared else {
         panic!("expected SetNetworkConditions command");
     };
     assert!(command.target_ids.is_empty());
     assert!(command.browser_context_ids.is_empty());
     assert_eq!(
         command.network_conditions,
-        Some(moli_protocol::devtools_runtime::DevToolsNetworkConditions::offline())
+        Some(moli_protocol::automation::DevToolsNetworkConditions::offline())
     );
 }
 
@@ -1774,25 +1751,24 @@ fn maps_emulation_set_network_conditions_contexts_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetNetworkConditions(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetNetworkConditions(command) = shared else {
         panic!("expected SetNetworkConditions command");
     };
     assert_eq!(
         command
             .target_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+            .map(moli_protocol::automation::DevToolsTargetId::as_str)
             .collect::<Vec<_>>(),
         vec!["TARGET-1", "TARGET-2"]
     );
     assert!(command.browser_context_ids.is_empty());
     assert_eq!(
         command.network_conditions,
-        Some(moli_protocol::devtools_runtime::DevToolsNetworkConditions::offline())
+        Some(moli_protocol::automation::DevToolsNetworkConditions::offline())
     );
 }
 
@@ -1809,11 +1785,10 @@ fn maps_emulation_set_network_conditions_user_contexts_reset_to_shared_command()
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetNetworkConditions(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::SetNetworkConditions(command) = shared else {
         panic!("expected SetNetworkConditions command");
     };
     assert!(command.target_ids.is_empty());
@@ -1821,7 +1796,7 @@ fn maps_emulation_set_network_conditions_user_contexts_reset_to_shared_command()
         command
             .browser_context_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str)
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str)
             .collect::<Vec<_>>(),
         vec!["default", "custom-user-context"]
     );
@@ -1844,10 +1819,10 @@ fn maps_permissions_set_permission_to_shared_browser_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetPermission(command) = shared else {
+    let moli_protocol::automation::AutomationCommand::SetPermission(command) = shared else {
         panic!("expected SetPermission command");
     };
     assert_eq!(command.permission, json!({ "name": "storage-access" }));
@@ -1861,7 +1836,7 @@ fn maps_permissions_set_permission_to_shared_browser_command() {
         command
             .browser_context_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsBrowserContextId::as_str),
+            .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-default")
     );
 }
@@ -1886,10 +1861,10 @@ fn maps_emulation_set_geolocation_override_coordinates_to_shared_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::SetGeolocationOverride(command) = shared
+    let moli_protocol::automation::AutomationCommand::SetGeolocationOverride(command) = shared
     else {
         panic!("expected SetGeolocationOverride command");
     };
@@ -1897,13 +1872,13 @@ fn maps_emulation_set_geolocation_override_coordinates_to_shared_command() {
         command
             .target_ids
             .iter()
-            .map(moli_protocol::devtools_runtime::DevToolsTargetId::as_str)
+            .map(moli_protocol::automation::DevToolsTargetId::as_str)
             .collect::<Vec<_>>(),
         vec!["TARGET-1"]
     );
     assert!(command.browser_context_ids.is_empty());
     let override_state = command.override_state.expect("coordinates override");
-    let moli_protocol::devtools_runtime::DevToolsGeolocationOverrideState::Position(override_state) =
+    let moli_protocol::automation::DevToolsGeolocationOverrideState::Position(override_state) =
         override_state
     else {
         panic!("expected coordinates override");
@@ -1932,9 +1907,7 @@ fn maps_emulation_set_geolocation_override_reset_and_error_to_distinct_shared_st
                 "contexts": ["TARGET-1"],
                 "error": { "type": "positionUnavailable" }
             }),
-            Some(
-                moli_protocol::devtools_runtime::DevToolsGeolocationOverrideState::PositionUnavailable,
-            ),
+            Some(moli_protocol::automation::DevToolsGeolocationOverrideState::PositionUnavailable),
         ),
     ] {
         let command = super::super::parse_bidi_command(json!({
@@ -1945,11 +1918,10 @@ fn maps_emulation_set_geolocation_override_reset_and_error_to_distinct_shared_st
         .expect("BiDi command");
         let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-        let shared =
-            super::super::devtools_command_from_bidi_command(&command, &context).expect("shared command");
+        let shared = super::super::automation_command_from_bidi_command(&command, &context)
+            .expect("shared command");
 
-        let moli_protocol::devtools_runtime::DevToolsCommand::SetGeolocationOverride(command) =
-            shared
+        let moli_protocol::automation::AutomationCommand::SetGeolocationOverride(command) = shared
         else {
             panic!("expected SetGeolocationOverride command");
         };
@@ -1984,9 +1956,9 @@ fn timezone_adapter_defers_name_validation_to_native_environment_controller() {
         }))
         .expect("BiDi command");
         let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
-        let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+        let shared = super::super::automation_command_from_bidi_command(&command, &context)
             .expect("shared command");
-        let moli_protocol::devtools_runtime::DevToolsCommand::SetTimezoneOverride(command) = shared
+        let moli_protocol::automation::AutomationCommand::SetTimezoneOverride(command) = shared
         else {
             panic!("expected SetTimezoneOverride command");
         };
@@ -2006,11 +1978,10 @@ fn maps_script_remove_preload_script_to_shared_preload_command() {
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
 
-    let shared = super::super::devtools_command_from_bidi_command(&command, &context)
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
         .expect("shared command");
 
-    let moli_protocol::devtools_runtime::DevToolsCommand::RemovePreloadScript(command) = shared
-    else {
+    let moli_protocol::automation::AutomationCommand::RemovePreloadScript(command) = shared else {
         panic!("expected RemovePreloadScript command");
     };
     assert_eq!(command.script_id.as_str(), "SCRIPT-1");
@@ -2019,7 +1990,7 @@ fn maps_script_remove_preload_script_to_shared_preload_command() {
             .context
             .session_id
             .as_ref()
-            .map(moli_protocol::devtools_runtime::DevToolsSessionId::as_str),
+            .map(moli_protocol::automation::DevToolsSessionId::as_str),
         Some("bidi-session-1")
     );
 }
@@ -2062,7 +2033,7 @@ fn rejects_chromium_wpt_invalid_emulation_set_user_agent_override_params() {
     }))
     .expect("BiDi command");
     let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
-    let error = super::super::devtools_command_from_bidi_command(&command, &context)
+    let error = super::super::automation_command_from_bidi_command(&command, &context)
         .expect_err("empty userAgent should fail validation");
     assert_eq!(
         error.code,

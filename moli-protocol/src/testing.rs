@@ -13,7 +13,7 @@ use super::conn::{
     LoadedNavigationRendererAttachmentCommit, ParsedCdpCommand, PendingCdpCommandDispatch,
     RuntimeInspectorResponseReady,
 };
-use crate::devtools_runtime::{DevToolsCommand, DevToolsCommandResult, DevToolsError};
+use crate::automation::{AutomationCommand, AutomationResult, DevToolsError};
 use crate::domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
     RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
@@ -681,7 +681,7 @@ impl TestContext {
     /// Routes the output of one direct protocol-neutral command through the
     /// stateful test scheduler.
     ///
-    /// Direct `DevToolsCommand` fixtures bypass parsed CDP dispatch but can
+    /// Direct `AutomationCommand` fixtures bypass parsed CDP dispatch but can
     /// still publish protocol work whose exact owner action is not ready yet.
     /// Keeping that work resident here mirrors the production scheduler;
     /// callers must use the scheduler wait helpers for later renderer input.
@@ -983,13 +983,13 @@ impl TestContext {
 
     /// Completes one protocol-neutral command across the same concrete
     /// renderer-output boundary as the production actor.
-    pub(crate) async fn execute_devtools_command_through_renderer_fence_for_test(
+    pub(crate) async fn execute_automation_command_through_renderer_fence_for_test(
         &mut self,
-        command: DevToolsCommand,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
         let (result, scheduler_events, protocol_events, renderer_output_predecessor) = self
             .conn
-            .execute_devtools_command(command)
+            .execute_automation_command(command)
             .await
             .into_complete_parts();
         if let Some(predecessor) = renderer_output_predecessor {

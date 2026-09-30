@@ -1,5 +1,5 @@
 use super::*;
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsDevicePixelRatioSetting, DevToolsSetViewportCommand, DevToolsViewportSetting,
 };
 
@@ -569,7 +569,7 @@ async fn clearing_target_metrics_restores_browser_context_viewport_defaults() {
     let mut ctx = setup().await;
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::SetViewport(DevToolsSetViewportCommand {
+        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
             context: bidi_command_context(),
             browser_context_ids: vec!["BID-1".into()],
             viewport: DevToolsViewportSetting::Dimensions {
@@ -584,7 +584,7 @@ async fn clearing_target_metrics_restores_browser_context_viewport_defaults() {
         .into_parts();
     assert_eq!(
         result.expect("context viewport default"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     assert_eq!(
         evaluate(&mut ctx, "[innerWidth, innerHeight, devicePixelRatio]").await,

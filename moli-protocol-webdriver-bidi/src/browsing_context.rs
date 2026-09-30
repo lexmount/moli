@@ -1,4 +1,4 @@
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     DevToolsBrowserContextId, DevToolsGetFrameTreeResult, DevToolsTargetId, DevToolsTargetInfo,
     DevToolsTargetKind, TargetLifecycleEvent,
 };

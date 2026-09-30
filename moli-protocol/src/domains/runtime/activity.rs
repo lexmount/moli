@@ -587,8 +587,8 @@ mod tests {
     use serde_json::Value;
     use serde_json::json;
 
+    use crate::automation::AutomationEvent;
     use crate::conn::{BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope};
-    use crate::devtools_runtime::AutomationEvent;
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::testing::TestContext;
 

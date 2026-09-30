@@ -1,10 +1,8 @@
 use serde::Deserialize;
 
+use crate::automation::{DevToolsBrowserContextId, DevToolsCreateTargetResult, DevToolsTargetId};
 use crate::conn::{
     CdpSessionRoute, PreparedTargetAttach, TargetActivationTransition, TargetAttachSessionCommit,
-};
-use crate::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCreateTargetResult, DevToolsTargetId,
 };
 
 use super::*;
@@ -177,7 +175,7 @@ pub(super) fn build_cdp_create_target_command(
         return Err("Can't focus a target in the background. Use background=false instead.");
     }
     Ok(DevToolsCreateTargetCommand {
-        context: cmd.devtools_command_context(None::<&str>, params.browser_context_id.as_deref()),
+        context: cmd.automation_context(None::<&str>, params.browser_context_id.as_deref()),
         // CDP defines the empty string as about:blank. Normalize before target
         // creation so URL metadata and the initial history entry agree.
         url: if params.url.is_empty() {
@@ -226,7 +224,7 @@ fn start_devtools_create_target_command_with_result_host(
                 }
             };
             plan.extend(CommandOutputPlan::from_devtools_result(
-                DevToolsCommandResult::CreateTarget(DevToolsCreateTargetResult {
+                AutomationResult::CreateTarget(DevToolsCreateTargetResult {
                     target_id: response_target_id,
                 }),
             ));

@@ -2569,7 +2569,7 @@ async fn websocket_bidi_session_unsubscribe_browsing_context_module_stops_naviga
     protocol_server.abort();
 }
 #[tokio::test]
-async fn websocket_bidi_bound_devtools_command_executes_target_commands() {
+async fn websocket_bidi_bound_automation_command_executes_target_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
         .await

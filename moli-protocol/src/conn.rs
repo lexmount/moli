@@ -14,8 +14,8 @@ use moli_fetch::FetchConfig;
 use parking_lot::Mutex;
 use serde_json::json;
 
-use crate::devtools_runtime::{
-    DevToolsCommandContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
+use crate::automation::{
+    AutomationContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
 };
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 
@@ -33,6 +33,7 @@ pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
 mod activity_source;
+mod automation_command;
 mod bidi_channel_work;
 mod body_spool;
 mod browser_context;
@@ -43,7 +44,6 @@ mod cookie_owner;
 mod cookie_policy_surface;
 #[cfg(test)]
 mod cookie_store_boundary;
-mod devtools_command;
 mod dispatch;
 mod downloads;
 mod fetch_support;
@@ -68,6 +68,8 @@ mod target;
 mod top_level_navigation_work;
 
 pub use crate::domains::network::IoStreamState;
+pub use automation_command::AutomationCommandDispatchOutcome;
+pub(crate) use automation_command::AutomationExecutionOutput;
 #[cfg(test)]
 pub(crate) use bidi_channel_work::BidiChannelOwnerActionKind;
 pub(crate) use bidi_channel_work::{
@@ -94,8 +96,6 @@ pub(crate) use cookie_manager_surface::{
 pub(crate) use cookie_owner::{
     BrowserContextCookieGetFreshnessStatus, BrowserContextCookieSetReadinessStatus,
 };
-pub use devtools_command::DevToolsCommandDispatchOutcome;
-pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
 pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
 pub(crate) use downloads::SharedDownloadRegistry;
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
@@ -1655,19 +1655,19 @@ impl CdpConnection {
 
     pub fn has_inflight_background_navigation_for_devtools_context(
         &self,
-        context: &crate::devtools_runtime::DevToolsCommandContext,
+        context: &crate::automation::AutomationContext,
     ) -> bool {
         context
             .target_id
             .as_ref()
-            .map(crate::devtools_runtime::DevToolsTargetId::as_str)
+            .map(crate::automation::DevToolsTargetId::as_str)
             .map(str::to_owned)
             .or_else(|| {
                 self.target_id_for_session_owner(
                     context
                         .session_id
                         .as_ref()
-                        .map(crate::devtools_runtime::DevToolsSessionId::as_str),
+                        .map(crate::automation::DevToolsSessionId::as_str),
                 )
             })
             .is_some_and(|target_id| self.has_inflight_background_navigation_for_target(&target_id))
@@ -1730,7 +1730,7 @@ impl CdpConnection {
     /// browser context.
     pub fn devtools_context_document_navigation_state(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
     ) -> DevToolsDocumentNavigationState {
         let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
             return DevToolsDocumentNavigationState::Unavailable;
@@ -2234,10 +2234,7 @@ impl CdpConnection {
         true
     }
 
-    pub fn devtools_context_routes_to_top_level_target(
-        &self,
-        context: &DevToolsCommandContext,
-    ) -> bool {
+    pub fn devtools_context_routes_to_top_level_target(&self, context: &AutomationContext) -> bool {
         context.target_id.as_ref().is_some_and(|target_id| {
             self.target_session_route_for_target_id(target_id.as_str())
                 .is_some()
@@ -2246,7 +2243,7 @@ impl CdpConnection {
 
     pub(crate) fn command_owner_scope_for_devtools_context(
         &self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
     ) -> Option<CommandOwnerScope> {
         if let Some(target_id) = context.target_id.as_ref() {
             let route = self
@@ -2276,7 +2273,7 @@ impl CdpConnection {
     /// within that Page and changes when the Page itself is replaced.
     pub fn page_residence_identity_for_devtools_context(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
     ) -> Option<DevToolsPageResidenceIdentity> {
         let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
         self.target_page_residence_identity_for_owner(&owner_scope)
@@ -2284,7 +2281,7 @@ impl CdpConnection {
 
     pub fn capture_devtools_document_lifecycle_wait_key(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
         expected_loader_id: &str,
         milestone: moli_core::page::RendererDocumentLifecycleMilestone,
     ) -> Option<DevToolsDocumentLifecycleWaitKey> {
@@ -2307,7 +2304,7 @@ impl CdpConnection {
 
     pub fn devtools_document_lifecycle_wait_state(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
         key: &DevToolsDocumentLifecycleWaitKey,
     ) -> DevToolsDocumentLifecycleWaitState {
         let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
@@ -2322,7 +2319,7 @@ impl CdpConnection {
 
     pub fn release_devtools_document_lifecycle_wait_key(
         &mut self,
-        context: &DevToolsCommandContext,
+        context: &AutomationContext,
         key: &DevToolsDocumentLifecycleWaitKey,
     ) -> bool {
         let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {

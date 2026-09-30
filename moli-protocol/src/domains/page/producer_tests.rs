@@ -14,10 +14,10 @@ use moli_core::page::{
 };
 use serde_json::{Value, json};
 
+use crate::automation::{AutomationEvent, NavigationFrameEventKind};
 use crate::conn::{
     BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter, CommandOwnerScope,
 };
-use crate::devtools_runtime::{AutomationEvent, NavigationFrameEventKind};
 use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
 use crate::domains::input::{InputPreparedOutputSlot, InputPreparedOutputs};
 use crate::testing::TestContext;

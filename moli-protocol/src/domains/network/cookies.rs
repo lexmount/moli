@@ -3,8 +3,8 @@ use serde_json::Value;
 use url::Url;
 
 use super::*;
-use crate::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommand, DevToolsDeleteCookiesCommand,
+use crate::automation::{
+    AutomationCommand, DevToolsBrowserContextId, DevToolsDeleteCookiesCommand,
     DevToolsGetCookiesCommand, DevToolsSetCookiesCommand,
 };
 use crate::domains::storage::{
@@ -19,7 +19,7 @@ pub(super) fn start_get_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::GetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::GetCookies(command))
 }
 
 pub(super) fn start_get_all_cookies_command(
@@ -30,7 +30,7 @@ pub(super) fn start_get_all_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::GetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::GetCookies(command))
 }
 
 fn build_cdp_network_get_cookies_command(
@@ -48,7 +48,7 @@ fn build_cdp_network_get_cookies_command(
         .map(|(_, target_id)| ((), target_id))
         .unwrap_or(((), None));
     Ok(DevToolsGetCookiesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), Option::<&str>::None),
+        context: cmd.automation_context(target_id.as_deref(), Option::<&str>::None),
         browser_context_id: None,
         urls,
         filter: None,
@@ -81,7 +81,7 @@ pub(super) fn start_delete_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::DeleteCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::DeleteCookies(command))
 }
 
 pub(super) fn start_clear_browser_cookies_command(
@@ -93,7 +93,7 @@ pub(super) fn start_clear_browser_cookies_command(
         .map(|(_, target_id)| ((), target_id))
         .unwrap_or(((), None));
     let command = DevToolsDeleteCookiesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), Option::<&str>::None),
+        context: cmd.automation_context(target_id.as_deref(), Option::<&str>::None),
         browser_context_id: None,
         name: None,
         url: None,
@@ -102,7 +102,7 @@ pub(super) fn start_clear_browser_cookies_command(
         partition_key: None,
         filter: None,
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::DeleteCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::DeleteCookies(command))
 }
 
 fn build_cdp_network_delete_cookies_command(
@@ -123,7 +123,7 @@ fn build_cdp_network_delete_cookies_command(
         .browser_context_id
         .map(DevToolsBrowserContextId::from);
     Ok(DevToolsDeleteCookiesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.clone()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.clone()),
         browser_context_id,
         name: params.name,
         url: params.url,
@@ -148,7 +148,7 @@ pub(super) fn start_set_cookie_command(
         }
     };
     let command = build_devtools_set_cookies_command(conn, cmd, None, vec![cookie]);
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::SetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::SetCookies(command))
 }
 
 #[derive(Deserialize)]
@@ -171,7 +171,7 @@ pub(super) fn start_set_cookies_command(
         }
     };
     let command = build_devtools_set_cookies_command(conn, cmd, None, params.cookies);
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::SetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::SetCookies(command))
 }
 
 fn build_devtools_set_cookies_command(
@@ -186,7 +186,7 @@ fn build_devtools_set_cookies_command(
         .unwrap_or(((), None));
     let browser_context_id = browser_context_id.map(DevToolsBrowserContextId::from);
     DevToolsSetCookiesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.clone()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.clone()),
         browser_context_id,
         cookies: cookies.into_iter().map(Into::into).collect(),
     }
@@ -194,7 +194,7 @@ fn build_devtools_set_cookies_command(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::DevToolsProtocol;
+    use crate::automation::FrontendProtocol;
     use serde_json::{Value, json};
 
     use crate::conn::{CdpConnection, Cmd};
@@ -229,7 +229,7 @@ mod protocol_neutral_tests {
             panic!("valid Network.getCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-network")
@@ -320,7 +320,7 @@ mod protocol_neutral_tests {
             panic!("valid Network.deleteCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-network")

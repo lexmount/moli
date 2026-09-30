@@ -1,6 +1,6 @@
 use super::*;
-use crate::devtools_runtime::{
-    DevToolsElementClickCommand, DevToolsElementClickOperation, DevToolsProtocol,
+use crate::automation::{
+    DevToolsElementClickCommand, DevToolsElementClickOperation, FrontendProtocol,
 };
 use moli_core::page::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
@@ -9,17 +9,19 @@ use moli_core::page::{
 async fn command(
     ctx: &mut TestContext,
     operation: DevToolsElementClickOperation,
-) -> DevToolsCommandResult {
+) -> AutomationResult {
     ctx.conn
-        .execute_devtools_command(DevToolsCommand::ElementClick(DevToolsElementClickCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverClassic,
-                session_id: None,
-                target_id: None,
-                browser_context_id: None,
+        .execute_automation_command(AutomationCommand::ElementClick(
+            DevToolsElementClickCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
+                    session_id: None,
+                    target_id: None,
+                    browser_context_id: None,
+                },
+                operation,
             },
-            operation,
-        }))
+        ))
         .await
         .into_parts()
         .0
@@ -36,9 +38,9 @@ async fn prepare(ctx: &mut TestContext) -> RendererPreparedPointerClick {
     )
     .await
     {
-        DevToolsCommandResult::ElementClickPreparation(Ok(
-            RendererElementClickTarget::Pointer(click),
-        )) => click,
+        AutomationResult::ElementClickPreparation(Ok(RendererElementClickTarget::Pointer(
+            click,
+        ))) => click,
         result => panic!("expected prepared pointer click: {result:?}"),
     }
 }
@@ -67,7 +69,7 @@ async fn native_element_click_rejects_stale_preparation_before_observable_input(
         let click = prepare(&mut ctx).await;
         assert!(evaluate_bool(&mut ctx, &format!("(()=>{{const target=document.getElementById('target');{mutation};return true}})()")).await);
         let result = command(&mut ctx, DevToolsElementClickOperation::Dispatch(click)).await;
-        let DevToolsCommandResult::ElementClickDispatch(result) = result else {
+        let AutomationResult::ElementClickDispatch(result) = result else {
             panic!("unexpected dispatch result: {result:?}")
         };
         assert_eq!(
@@ -100,7 +102,7 @@ async fn native_element_click_stops_after_document_replacement_in_pointer_handle
         let click = prepare(&mut ctx).await;
         assert!(matches!(
             command(&mut ctx, DevToolsElementClickOperation::Dispatch(click)).await,
-            DevToolsCommandResult::ElementClickDispatch(Ok(()))
+            AutomationResult::ElementClickDispatch(Ok(()))
         ));
         assert_eq!(
             evaluate_string(&mut ctx, "JSON.stringify(successorEvents)").await,

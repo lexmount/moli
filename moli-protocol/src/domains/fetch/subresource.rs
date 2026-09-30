@@ -2,15 +2,15 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::helpers::pending_subresource_response_stage_request_paused_event;
+use crate::automation::{
+    AutomationEvent, DevToolsFrameId, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
+    DevToolsRequestId, DevToolsTargetId, NetworkRequestEvent,
+};
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, DEFAULT_LOADER_ID,
     FetchRequestStage, PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
     PendingSubresourceFetchResponseRequest, build_event, monotonic_timestamp_seconds,
-};
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsFrameId, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
-    DevToolsRequestId, DevToolsTargetId, NetworkRequestEvent,
 };
 use crate::domains::network;
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
@@ -591,11 +591,11 @@ mod tests {
     use serde_json::json;
     use url::Url;
 
+    use crate::automation::{AutomationEvent, DevToolsNetworkResourceType};
     use crate::conn::{
         BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope, PageTargetHost,
         PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     };
-    use crate::devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType};
     use crate::domains::network::{
         TargetSubresourceFetchPauseNetworkOutput, TargetSubresourceFetchPauseOutput,
     };

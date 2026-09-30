@@ -1,5 +1,5 @@
+use crate::automation::DevToolsTargetInfo;
 use crate::conn::{BackgroundProtocolEvent, CdpSessionRoute};
-use crate::devtools_runtime::DevToolsTargetInfo;
 use moli_page_types::DevToolsSessionKey;
 
 use super::{CommittedAttachSession, DetachedTargetSession, TargetHostDelta};
@@ -600,8 +600,8 @@ mod tests {
         TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan,
         TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
     };
+    use crate::automation::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
     use crate::conn::CdpSessionRoute;
-    use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
     use moli_page_types::DevToolsSessionKey;
 
     #[test]

@@ -6,7 +6,7 @@ use moli_core::{
 };
 use serde::Deserialize;
 
-use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::automation::DevToolsDomNodeReference;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

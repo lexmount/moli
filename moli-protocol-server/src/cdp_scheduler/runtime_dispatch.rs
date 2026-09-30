@@ -3,11 +3,11 @@ use std::{future, time::Duration};
 use moli_protocol::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
     PendingDevToolsRuntimeCommandDispatch,
+    automation::{AutomationCommand, DevToolsError, DevToolsErrorKind},
     conn::{
         BackgroundProtocolEvent, RuntimeInspectorAsyncCompletionReceiver,
         RuntimeInspectorResponseReady,
     },
-    devtools_runtime::{DevToolsCommand, DevToolsError, DevToolsErrorKind},
 };
 use tokio::{
     sync::mpsc,
@@ -16,8 +16,8 @@ use tokio::{
 };
 
 use super::{
-    CdpScheduler, CdpSchedulerEventReceivers, CdpSchedulerInterleavedInput,
-    DevToolsCommandExecution, ProtocolOutputSequence, RendererOutputTransportFailure,
+    AutomationExecution, CdpScheduler, CdpSchedulerEventReceivers, CdpSchedulerInterleavedInput,
+    ProtocolOutputSequence, RendererOutputTransportFailure,
 };
 
 pub(crate) struct PendingDevToolsRuntimeDeferredReplyExecution {
@@ -27,24 +27,24 @@ pub(crate) struct PendingDevToolsRuntimeDeferredReplyExecution {
 }
 
 pub(crate) enum DevToolsRuntimeCommandProgress {
-    Complete(Box<DevToolsCommandExecution>),
+    Complete(Box<AutomationExecution>),
     PendingDeferredReply {
         pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
         protocol_output: ProtocolOutputSequence,
     },
 }
 
-pub(super) fn devtools_command_uses_interleaved_runtime_dispatch(
-    command: &DevToolsCommand,
+pub(super) fn automation_command_uses_interleaved_runtime_dispatch(
+    command: &AutomationCommand,
 ) -> bool {
     matches!(
         command,
-        DevToolsCommand::GetRealms(_)
-            | DevToolsCommand::EvaluateScript(_)
-            | DevToolsCommand::CallFunction(_)
-            | DevToolsCommand::TerminateExecution(_)
-            | DevToolsCommand::LocateNodes(_)
-            | DevToolsCommand::ReleaseObjects(_)
+        AutomationCommand::GetRealms(_)
+            | AutomationCommand::EvaluateScript(_)
+            | AutomationCommand::CallFunction(_)
+            | AutomationCommand::TerminateExecution(_)
+            | AutomationCommand::LocateNodes(_)
+            | AutomationCommand::ReleaseObjects(_)
     )
 }
 
@@ -62,8 +62,8 @@ impl CdpScheduler {
     pub(super) async fn execute_devtools_runtime_command_with_interleaved_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
-    ) -> DevToolsCommandExecution {
+        command: AutomationCommand,
+    ) -> AutomationExecution {
         self.execute_devtools_runtime_command_with_interleaved_progress_until(
             receivers, command, None,
         )
@@ -73,9 +73,9 @@ impl CdpScheduler {
     pub(crate) async fn execute_devtools_runtime_command_with_interleaved_progress_timeout(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Duration,
-    ) -> DevToolsCommandExecution {
+    ) -> AutomationExecution {
         self.execute_devtools_runtime_command_with_interleaved_progress_until(
             receivers,
             command,
@@ -87,9 +87,9 @@ impl CdpScheduler {
     async fn execute_devtools_runtime_command_with_interleaved_progress_until(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         deadline: Option<TokioInstant>,
-    ) -> DevToolsCommandExecution {
+    ) -> AutomationExecution {
         let mut protocol_output = ProtocolOutputSequence::empty();
         let mut step = self
             .conn
@@ -112,7 +112,7 @@ impl CdpScheduler {
                             Err(failure) => {
                                 let (output, error) = failure.into_parts();
                                 protocol_output.append(output);
-                                return DevToolsCommandExecution {
+                                return AutomationExecution {
                                     result: Err(error),
                                     protocol_output,
                                 };
@@ -123,7 +123,7 @@ impl CdpScheduler {
                         protocol_events,
                     ));
                     self.apply_scheduler_events(scheduler_events);
-                    return DevToolsCommandExecution {
+                    return AutomationExecution {
                         result,
                         protocol_output,
                     };
@@ -142,7 +142,7 @@ impl CdpScheduler {
                     {
                         Ok(Some(completed)) => completed,
                         Ok(None) => {
-                            return DevToolsCommandExecution {
+                            return AutomationExecution {
                                 result: Err(DevToolsError::new(
                                     DevToolsErrorKind::Internal,
                                     "SchedulerInputClosed",
@@ -151,7 +151,7 @@ impl CdpScheduler {
                             };
                         }
                         Err(error) => {
-                            return DevToolsCommandExecution {
+                            return AutomationExecution {
                                 result: Err(error),
                                 protocol_output,
                             };
@@ -170,7 +170,7 @@ impl CdpScheduler {
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-        command: DevToolsCommand,
+        command: AutomationCommand,
     ) -> DevToolsRuntimeCommandProgress {
         let protocol_output = ProtocolOutputSequence::empty();
         let step = self
@@ -258,7 +258,7 @@ impl CdpScheduler {
                                 let (output, error) = failure.into_parts();
                                 protocol_output.append(output);
                                 return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                    DevToolsCommandExecution {
+                                    AutomationExecution {
                                         result: Err(error),
                                         protocol_output,
                                     },
@@ -271,7 +271,7 @@ impl CdpScheduler {
                     ));
                     self.apply_scheduler_events(scheduler_events);
                     return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                        DevToolsCommandExecution {
+                        AutomationExecution {
                             result,
                             protocol_output,
                         },
@@ -333,7 +333,7 @@ impl CdpScheduler {
                         Ok(Some(completed)) => completed,
                         Ok(None) => {
                             return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                DevToolsCommandExecution {
+                                AutomationExecution {
                                     result: Err(DevToolsError::new(
                                         DevToolsErrorKind::Internal,
                                         "SchedulerInputClosed",
@@ -344,7 +344,7 @@ impl CdpScheduler {
                         }
                         Err(error) => {
                             return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                DevToolsCommandExecution {
+                                AutomationExecution {
                                     result: Err(error),
                                     protocol_output,
                                 },
@@ -630,7 +630,7 @@ fn complete_devtools_runtime_deferred_reply_with_loose_response_error(
     protocol_output: ProtocolOutputSequence,
 ) -> DevToolsRuntimeCommandProgress {
     drop(pending);
-    DevToolsRuntimeCommandProgress::Complete(Box::new(DevToolsCommandExecution {
+    DevToolsRuntimeCommandProgress::Complete(Box::new(AutomationExecution {
         result: Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "RuntimeDeferredReplyLooseProtocolResponse",
@@ -693,7 +693,7 @@ fn runtime_command_timeout_error() -> DevToolsError {
 mod tests {
     use moli_protocol::{
         BackgroundProtocolEvent,
-        devtools_runtime::{AutomationEvent, DevToolsFrameId, PageFileChooserOpenedEvent},
+        automation::{AutomationEvent, DevToolsFrameId, PageFileChooserOpenedEvent},
     };
     use serde_json::json;
 

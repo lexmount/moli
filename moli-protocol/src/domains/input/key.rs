@@ -1,5 +1,5 @@
 use super::*;
-use crate::devtools_runtime::DevToolsKeyEventType;
+use crate::automation::DevToolsKeyEventType;
 use chromiumoxide_cdp::cdp::browser_protocol::input::{
     DispatchKeyEventParams as KeyEventParams, DispatchKeyEventType as KeyEventType,
     InsertTextParams,

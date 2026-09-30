@@ -1,12 +1,12 @@
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsBrowserContextId, DevToolsCookieParam,
+    DevToolsDeleteCookiesCommand, DevToolsDeleteCookiesResult, DevToolsError, DevToolsErrorKind,
+    DevToolsGetCookiesCommand, DevToolsGetCookiesResult, DevToolsSetCookiesCommand,
+    DevToolsSetCookiesResult, DevToolsTargetId, FrontendProtocol,
+};
 use crate::conn::{
     BrowserContext, BrowserContextCookieManagerSurfaceSnapshot, CdpConnection, Cmd,
     CommandOwnerScope, SiteDataClearOptions,
-};
-use crate::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandResult, DevToolsCookieParam,
-    DevToolsDeleteCookiesCommand, DevToolsDeleteCookiesResult, DevToolsError, DevToolsErrorKind,
-    DevToolsGetCookiesCommand, DevToolsGetCookiesResult, DevToolsProtocol,
-    DevToolsSetCookiesCommand, DevToolsSetCookiesResult, DevToolsTargetId,
 };
 use crate::domains::actions::StorageAction;
 use crate::domains::command_output::CommandOutputPlan;
@@ -130,18 +130,18 @@ pub(crate) fn try_start_storage_command_dispatch(
 pub(crate) fn start_devtools_storage_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> StorageCommandTaskStep {
     match command {
-        DevToolsCommand::GetCookies(command) => StorageCommandTaskStep::Complete(
+        AutomationCommand::GetCookies(command) => StorageCommandTaskStep::Complete(
             devtools_get_cookies_output_plan(complete_devtools_get_cookies_result(conn, command)),
         ),
-        DevToolsCommand::DeleteCookies(command) => {
+        AutomationCommand::DeleteCookies(command) => {
             StorageCommandTaskStep::Complete(devtools_delete_cookies_output_plan(
                 complete_devtools_delete_cookies_result(conn, command),
             ))
         }
-        DevToolsCommand::SetCookies(command) => {
+        AutomationCommand::SetCookies(command) => {
             start_devtools_set_cookies_command(conn, command_id, command)
         }
         _ => StorageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -153,21 +153,22 @@ pub(crate) fn start_devtools_storage_command(
 
 pub(crate) async fn execute_devtools_storage_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+    command: AutomationCommand,
+) -> Result<AutomationResult, DevToolsError> {
     match command {
-        DevToolsCommand::GetCookies(command) => complete_devtools_get_cookies_result(conn, command)
-            .map(DevToolsCommandResult::GetCookies),
-        DevToolsCommand::DeleteCookies(command) => {
-            complete_devtools_delete_cookies_result(conn, command)
-                .map(DevToolsCommandResult::DeleteCookies)
+        AutomationCommand::GetCookies(command) => {
+            complete_devtools_get_cookies_result(conn, command).map(AutomationResult::GetCookies)
         }
-        DevToolsCommand::SetCookies(command) => {
+        AutomationCommand::DeleteCookies(command) => {
+            complete_devtools_delete_cookies_result(conn, command)
+                .map(AutomationResult::DeleteCookies)
+        }
+        AutomationCommand::SetCookies(command) => {
             let mut step = start_devtools_set_cookies_result(conn, None, command);
             loop {
                 match step {
                     DevToolsSetCookiesTaskStep::Complete(result) => {
-                        return result.map(DevToolsCommandResult::SetCookies);
+                        return result.map(AutomationResult::SetCookies);
                     }
                     DevToolsSetCookiesTaskStep::Pending(pending) => {
                         step = DevToolsSetCookiesTaskStep::Complete(
@@ -192,7 +193,7 @@ fn start_storage_get_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::GetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::GetCookies(command))
 }
 
 fn start_storage_clear_cookies_command(
@@ -203,7 +204,7 @@ fn start_storage_clear_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::DeleteCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::DeleteCookies(command))
 }
 
 pub(crate) fn build_cdp_storage_clear_cookies_command(
@@ -214,7 +215,7 @@ pub(crate) fn build_cdp_storage_clear_cookies_command(
         .map(DevToolsBrowserContextId::from);
     Ok(DevToolsDeleteCookiesCommand {
         context: cmd
-            .devtools_command_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
+            .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
         browser_context_id,
         name: None,
         url: None,
@@ -233,7 +234,7 @@ pub(crate) fn build_cdp_storage_get_cookies_command(
         .map(DevToolsBrowserContextId::from);
     Ok(DevToolsGetCookiesCommand {
         context: cmd
-            .devtools_command_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
+            .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
         browser_context_id,
         urls: None,
         filter: None,
@@ -248,7 +249,7 @@ pub(crate) fn start_storage_delete_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::DeleteCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::DeleteCookies(command))
 }
 
 pub(crate) fn build_cdp_storage_delete_cookies_command(
@@ -273,7 +274,7 @@ pub(crate) fn build_cdp_storage_delete_cookies_command(
         .map(DevToolsBrowserContextId::from);
     Ok(DevToolsDeleteCookiesCommand {
         context: cmd
-            .devtools_command_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
+            .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
         browser_context_id,
         name: params.name,
         url: params.url,
@@ -549,7 +550,7 @@ fn start_storage_set_cookies_command(
         Ok(command) => command,
         Err(plan) => return StorageCommandTaskStep::Complete(plan),
     };
-    start_devtools_storage_command(conn, cmd.id, DevToolsCommand::SetCookies(command))
+    start_devtools_storage_command(conn, cmd.id, AutomationCommand::SetCookies(command))
 }
 
 pub(crate) fn build_cdp_storage_set_cookies_command(
@@ -566,7 +567,7 @@ pub(crate) fn build_cdp_storage_set_cookies_command(
         .map(DevToolsBrowserContextId::from);
     Ok(DevToolsSetCookiesCommand {
         context: cmd
-            .devtools_command_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
+            .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
         browser_context_id,
         cookies: params.cookies.into_iter().map(Into::into).collect(),
     })
@@ -632,7 +633,7 @@ fn start_devtools_set_cookies_result(
     command_id: Option<u64>,
     command: DevToolsSetCookiesCommand,
 ) -> DevToolsSetCookiesTaskStep {
-    let session_id = (command.context.protocol == DevToolsProtocol::Cdp)
+    let session_id = (command.context.protocol == FrontendProtocol::Cdp)
         .then(|| command.context.session_id.as_ref().map(|id| id.as_str()))
         .flatten();
     let browser_context_id = command
@@ -981,7 +982,7 @@ pub(crate) fn complete_devtools_get_cookies_result(
         .browser_context_id
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
-    let session_id = (command.context.protocol == DevToolsProtocol::Cdp)
+    let session_id = (command.context.protocol == FrontendProtocol::Cdp)
         .then(|| command.context.session_id.as_ref().map(|id| id.as_str()))
         .flatten();
     let target_id = command.context.target_id.as_ref().map(|id| id.as_str());
@@ -1076,7 +1077,7 @@ pub(crate) fn complete_devtools_delete_cookies_result(
         .browser_context_id
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
-    let session_id = (command.context.protocol == DevToolsProtocol::Cdp)
+    let session_id = (command.context.protocol == FrontendProtocol::Cdp)
         .then(|| command.context.session_id.as_ref().map(|id| id.as_str()))
         .flatten();
     let target_id = command.context.target_id.as_ref().map(|id| id.as_str());
@@ -1119,7 +1120,7 @@ pub(crate) fn complete_devtools_delete_cookies_result(
 
 fn filter_cookies_by_devtools_filter(
     cookies: Vec<Value>,
-    filter: Option<&crate::devtools_runtime::DevToolsCookieFilter>,
+    filter: Option<&crate::automation::DevToolsCookieFilter>,
 ) -> Vec<Value> {
     let Some(filter) = filter else {
         return cookies;
@@ -1132,7 +1133,7 @@ fn filter_cookies_by_devtools_filter(
 
 fn cookie_matches_devtools_filter(
     cookie: &Value,
-    filter: &crate::devtools_runtime::DevToolsCookieFilter,
+    filter: &crate::automation::DevToolsCookieFilter,
 ) -> bool {
     if let Some(name) = filter.name.as_deref()
         && cookie.get("name").and_then(Value::as_str) != Some(name)
@@ -1208,7 +1209,7 @@ fn delete_cookies_for_browser_context_by_filter(
     name: Option<String>,
     domain: Option<String>,
     path: Option<String>,
-    filter: Option<&crate::devtools_runtime::DevToolsCookieFilter>,
+    filter: Option<&crate::automation::DevToolsCookieFilter>,
 ) -> Result<(), (i32, &'static str)> {
     let cookies = get_cookies_for_browser_context(conn, Ok(browser_context_id.clone()))?;
     let cookies = filter_cookies_by_devtools_filter(cookies, filter);
@@ -1371,9 +1372,7 @@ fn devtools_get_cookies_output_plan(
     result: Result<DevToolsGetCookiesResult, DevToolsError>,
 ) -> CommandOutputPlan {
     match result {
-        Ok(result) => {
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::GetCookies(result))
-        }
+        Ok(result) => CommandOutputPlan::from_devtools_result(AutomationResult::GetCookies(result)),
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
 }
@@ -1383,7 +1382,7 @@ fn devtools_delete_cookies_output_plan(
 ) -> CommandOutputPlan {
     match result {
         Ok(result) => {
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::DeleteCookies(result))
+            CommandOutputPlan::from_devtools_result(AutomationResult::DeleteCookies(result))
         }
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
@@ -1393,9 +1392,7 @@ fn devtools_set_cookies_output_plan(
     result: Result<DevToolsSetCookiesResult, DevToolsError>,
 ) -> CommandOutputPlan {
     match result {
-        Ok(result) => {
-            CommandOutputPlan::from_devtools_result(DevToolsCommandResult::SetCookies(result))
-        }
+        Ok(result) => CommandOutputPlan::from_devtools_result(AutomationResult::SetCookies(result)),
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
 }
@@ -1459,7 +1456,7 @@ fn delete_cookies_for_browser_context_with_normalized_partition_key(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::{DevToolsCommand, DevToolsProtocol};
+    use crate::automation::{AutomationCommand, FrontendProtocol};
     use serde_json::{Value, json};
 
     use crate::conn::{CdpConnection, Cmd};
@@ -1486,7 +1483,7 @@ mod protocol_neutral_tests {
             panic!("valid Storage.getCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-storage")
@@ -1522,8 +1519,11 @@ mod protocol_neutral_tests {
             panic!("default Storage.getCookies command should build");
         };
 
-        let step =
-            start_devtools_storage_command(&mut conn, cmd.id, DevToolsCommand::GetCookies(command));
+        let step = start_devtools_storage_command(
+            &mut conn,
+            cmd.id,
+            AutomationCommand::GetCookies(command),
+        );
 
         let StorageCommandTaskStep::Complete(plan) = step else {
             panic!("getCookies should complete through the shared storage entry");
@@ -1561,7 +1561,7 @@ mod protocol_neutral_tests {
             panic!("valid Storage.deleteCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-storage")
@@ -1602,7 +1602,7 @@ mod protocol_neutral_tests {
         let step = start_devtools_storage_command(
             &mut conn,
             cmd.id,
-            DevToolsCommand::DeleteCookies(command),
+            AutomationCommand::DeleteCookies(command),
         );
 
         let StorageCommandTaskStep::Complete(plan) = step else {
@@ -1631,7 +1631,7 @@ mod protocol_neutral_tests {
             panic!("valid Storage.clearCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-storage")
@@ -1665,7 +1665,7 @@ mod protocol_neutral_tests {
         let step = start_devtools_storage_command(
             &mut conn,
             cmd.id,
-            DevToolsCommand::DeleteCookies(command),
+            AutomationCommand::DeleteCookies(command),
         );
 
         let StorageCommandTaskStep::Complete(plan) = step else {
@@ -1703,7 +1703,7 @@ mod protocol_neutral_tests {
             panic!("valid Storage.setCookies command");
         };
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.browser_context_id.as_ref().map(|id| id.as_str()),
             Some("BID-cookies")
@@ -1739,8 +1739,11 @@ mod protocol_neutral_tests {
             panic!("valid Storage.setCookies command");
         };
 
-        let step =
-            start_devtools_storage_command(&mut conn, cmd.id, DevToolsCommand::SetCookies(command));
+        let step = start_devtools_storage_command(
+            &mut conn,
+            cmd.id,
+            AutomationCommand::SetCookies(command),
+        );
 
         let StorageCommandTaskStep::Complete(plan) = step else {
             panic!("missing browser context should fail synchronously");

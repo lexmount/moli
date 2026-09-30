@@ -15,14 +15,14 @@ use moli_protocol::{
     DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadPredecessorCandidate,
     ProtocolSchedulerWork,
-    conn::RuntimeInspectorResponseReady,
-    devtools_runtime::{
-        AutomationEvent, BrowserDownloadWillBeginEvent, DevToolsCommand, DevToolsCommandContext,
-        DevToolsCommandResult, DevToolsCreateTargetCommand, DevToolsFrameId, DevToolsLoaderId,
-        DevToolsNavigationWait, DevToolsNetworkResourceType, DevToolsProtocol, DevToolsRequestId,
-        DevToolsSessionId, DevToolsTargetId, NavigationFrameEvent, NavigationFrameEventKind,
-        NetworkRequestEvent,
+    automation::{
+        AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
+        BrowserDownloadWillBeginEvent, DevToolsCreateTargetCommand, DevToolsFrameId,
+        DevToolsLoaderId, DevToolsNavigationWait, DevToolsNetworkResourceType, DevToolsRequestId,
+        DevToolsSessionId, DevToolsTargetId, FrontendProtocol, NavigationFrameEvent,
+        NavigationFrameEventKind, NetworkRequestEvent,
     },
+    conn::RuntimeInspectorResponseReady,
     test_support::{
         arm_background_navigation_request, arm_background_navigation_request_for_target,
         deferred_main_document_load_observation_id, deferred_main_document_load_output_interest,
@@ -1031,7 +1031,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
     assert!(output.is_empty());
     assert_eq!(
         error.kind,
-        moli_protocol::devtools_runtime::DevToolsErrorKind::Internal
+        moli_protocol::automation::DevToolsErrorKind::Internal
     );
     assert!(error.message.contains("closed"));
 }
@@ -1389,14 +1389,14 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
 async fn target_a_navigation_does_not_defer_target_b_network_events() {
     let mut conn = CdpConnection::new();
     conn.install_default_browser_target();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-test")),
         target_id: None,
         browser_context_id: None,
     };
-    let create_target = |context: DevToolsCommandContext| {
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+    let create_target = |context: AutomationContext| {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context,
             url: "about:blank".to_owned(),
             browser_context_id: None,
@@ -1404,18 +1404,20 @@ async fn target_a_navigation_does_not_defer_target_b_network_events() {
         })
     };
     let first_create = conn
-        .execute_devtools_command(create_target(context.clone()))
+        .execute_automation_command(create_target(context.clone()))
         .await;
     let (first_result, _) = first_create.into_parts();
-    let DevToolsCommandResult::CreateTarget(first_result) =
+    let AutomationResult::CreateTarget(first_result) =
         first_result.expect("first target should be created")
     else {
         panic!("expected create-target result")
     };
     let first_target_id = first_result.target_id.into_string();
-    let second_create = conn.execute_devtools_command(create_target(context)).await;
+    let second_create = conn
+        .execute_automation_command(create_target(context))
+        .await;
     let (second_result, _) = second_create.into_parts();
-    let DevToolsCommandResult::CreateTarget(second_result) =
+    let AutomationResult::CreateTarget(second_result) =
         second_result.expect("second target should be created")
     else {
         panic!("expected create-target result")

@@ -1733,7 +1733,7 @@ impl Page {
     /// Admit a frontend terminal, distinct from an internal renderer query.
     /// The returned guard must live with the adapter continuation until the
     /// producer has settled; dropping it earlier cancels the publication.
-    pub fn start_native_frontend_command(
+    pub fn start_cdp_call(
         &self,
         command_id: u64,
         frontend_session_id: Option<&str>,
@@ -1745,7 +1745,7 @@ impl Page {
         let attachment = self.renderer_agent_attachment_id.ok_or_else(|| {
             anyhow::anyhow!("native frontend command requires a renderer attachment")
         })?;
-        let (command, guard) = crate::RendererNativeCommand::new(
+        let (command, guard) = crate::RendererCdpCall::new(
             moli_page_types::FrontendCommandId::new(command_id),
             moli_page_types::DevToolsSessionKey::from_wire_session_id(frontend_session_id),
             attachment,

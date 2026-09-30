@@ -1,7 +1,7 @@
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 
-use crate::devtools_runtime::AutomationEvent;
+use crate::automation::AutomationEvent;
 use serde_json::Value;
 
 use crate::conn::{BackgroundEventSender, BackgroundProtocolEvent, build_event};

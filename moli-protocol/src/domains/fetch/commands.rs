@@ -1,13 +1,13 @@
+use crate::automation::{
+    AutomationCommand, DevToolsAuthChallengeAction, DevToolsContinueInterceptedRequestCommand,
+    DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
+    DevToolsFailInterceptedRequestCommand, DevToolsFulfillInterceptedRequestCommand,
+    DevToolsRequestFailure, DevToolsRequestId, FrontendProtocol,
+};
 use crate::conn::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationClaimError, CapturedBody,
     CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
     PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
-};
-use crate::devtools_runtime::{
-    DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
-    DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
-    DevToolsFailInterceptedRequestCommand, DevToolsFulfillInterceptedRequestCommand,
-    DevToolsProtocol, DevToolsRequestFailure, DevToolsRequestId,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::{activity, network, page};
@@ -55,7 +55,7 @@ pub(super) fn start_devtools_fetch_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> FetchCommandTaskStep {
     let owner = CommandOwnerScope::capture(conn, command_session_id);
     start_devtools_fetch_command_for_owner(conn, command_id, &owner, command)
@@ -65,24 +65,24 @@ pub(super) fn start_devtools_fetch_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> FetchCommandTaskStep {
     match command {
-        DevToolsCommand::ContinueInterceptedRequest(command) => {
+        AutomationCommand::ContinueInterceptedRequest(command) => {
             start_devtools_continue_intercepted_request_command(conn, command_id, owner, &command)
         }
-        DevToolsCommand::ContinueInterceptedResponse(command) => {
+        AutomationCommand::ContinueInterceptedResponse(command) => {
             start_devtools_continue_intercepted_response_command(conn, command_id, owner, &command)
         }
-        DevToolsCommand::ContinueWithAuth(command) => {
+        AutomationCommand::ContinueWithAuth(command) => {
             super::auth::start_devtools_continue_with_auth_command(
                 conn, command_id, owner, &command,
             )
         }
-        DevToolsCommand::FailInterceptedRequest(command) => {
+        AutomationCommand::FailInterceptedRequest(command) => {
             start_devtools_fail_intercepted_request_command(conn, command_id, owner, command)
         }
-        DevToolsCommand::FulfillInterceptedRequest(command) => {
+        AutomationCommand::FulfillInterceptedRequest(command) => {
             start_devtools_fulfill_intercepted_request_command(conn, command_id, owner, command)
         }
         _ => FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -153,7 +153,7 @@ pub(super) fn start_continue_request_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ContinueInterceptedRequest(command),
+        AutomationCommand::ContinueInterceptedRequest(command),
     )
 }
 
@@ -189,7 +189,7 @@ fn build_cdp_continue_intercepted_request_command(
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     Ok(DevToolsContinueInterceptedRequestCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(params.request_id.as_ref().to_owned()),
         url: params.url,
         method: params.method,
@@ -242,13 +242,13 @@ fn start_devtools_continue_intercepted_request_command(
                 .headers
                 .clone()
                 .map(|headers| match command.context.protocol {
-                    DevToolsProtocol::Cdp => moli_fetch::RequestHeaderOverride::current_request(
+                    FrontendProtocol::Cdp => moli_fetch::RequestHeaderOverride::current_request(
                         headers,
                         pending
                             .request_stage_pause_state()
                             .and_then(|chain| chain.header_override.as_ref()),
                     ),
-                    DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => {
+                    FrontendProtocol::WebDriverClassic | FrontendProtocol::WebDriverBidi => {
                         moli_fetch::RequestHeaderOverride::RedirectChain(headers)
                     }
                 });
@@ -381,7 +381,7 @@ fn start_devtools_continue_intercepted_request_command(
             pending.navigation.set_request_body_text(body);
         }
         if let Some(headers) = command.headers.clone() {
-            if command.context.protocol == DevToolsProtocol::Cdp {
+            if command.context.protocol == FrontendProtocol::Cdp {
                 pending
                     .navigation
                     .redirect_headers
@@ -415,7 +415,7 @@ fn start_devtools_continue_intercepted_request_command(
         conn,
         owner,
         &request_id,
-        command.context.protocol == DevToolsProtocol::Cdp,
+        command.context.protocol == FrontendProtocol::Cdp,
     )
     .map_or_else(FetchCommandTaskStep::Complete, |()| {
         FetchCommandTaskStep::Complete(CommandOutputPlan::success())
@@ -496,7 +496,7 @@ pub(super) fn start_fail_request_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::FailInterceptedRequest(command),
+        AutomationCommand::FailInterceptedRequest(command),
     )
 }
 
@@ -509,7 +509,7 @@ fn build_cdp_fail_intercepted_request_command(
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     DevToolsFailInterceptedRequestCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(request_id),
         failure,
     }
@@ -522,7 +522,7 @@ fn start_devtools_fail_intercepted_request_command(
     command: DevToolsFailInterceptedRequestCommand,
 ) -> FetchCommandTaskStep {
     let command_session_id = owner.session_id();
-    let validate_request_id = command.context.protocol == DevToolsProtocol::Cdp;
+    let validate_request_id = command.context.protocol == FrontendProtocol::Cdp;
     let request_id = command.request_id.into_string();
     let failure = command.failure;
     let error_text = failure.to_string();
@@ -884,7 +884,7 @@ pub(super) fn start_fulfill_request_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::FulfillInterceptedRequest(command),
+        AutomationCommand::FulfillInterceptedRequest(command),
     )
 }
 
@@ -900,7 +900,7 @@ fn build_cdp_fulfill_intercepted_request_command(
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     DevToolsFulfillInterceptedRequestCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(request_id),
         response_code,
         response_headers,
@@ -916,7 +916,7 @@ fn start_devtools_fulfill_intercepted_request_command(
     command: DevToolsFulfillInterceptedRequestCommand,
 ) -> FetchCommandTaskStep {
     let command_session_id = owner.session_id();
-    let validate_request_id = command.context.protocol == DevToolsProtocol::Cdp;
+    let validate_request_id = command.context.protocol == FrontendProtocol::Cdp;
     let request_id = command.request_id.into_string();
     let response_code = command.response_code;
     let response_headers = command.response_headers;
@@ -1493,7 +1493,7 @@ pub(super) fn start_continue_response_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ContinueInterceptedResponse(command),
+        AutomationCommand::ContinueInterceptedResponse(command),
     )
 }
 
@@ -1508,7 +1508,7 @@ fn build_cdp_continue_intercepted_response_command(
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     DevToolsContinueInterceptedResponseCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(request_id),
         response_code,
         response_headers,
@@ -1723,7 +1723,7 @@ fn start_devtools_continue_intercepted_response_command(
         conn,
         owner,
         &request_id,
-        command.context.protocol == DevToolsProtocol::Cdp,
+        command.context.protocol == FrontendProtocol::Cdp,
     )
     .map_or_else(FetchCommandTaskStep::Complete, |()| {
         FetchCommandTaskStep::Complete(CommandOutputPlan::success())
@@ -1909,7 +1909,7 @@ fn continue_streaming_document_response_in_background(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::DevToolsRequestFailure;
+    use crate::automation::DevToolsRequestFailure;
 
     #[test]
     fn cdp_abort_reason_is_preserved_as_a_typed_cause() {
@@ -1926,7 +1926,7 @@ mod protocol_neutral_tests {
         );
     }
 
-    use crate::devtools_runtime::{AutomationEvent, DevToolsCommand, DevToolsProtocol};
+    use crate::automation::{AutomationCommand, AutomationEvent, FrontendProtocol};
     use moli_core::page::SubresourceResourceType;
     use serde_json::{Value, json};
     use url::Url;
@@ -1973,7 +1973,7 @@ mod protocol_neutral_tests {
         let parsed_url =
             parsed_continue_request_url(&command).expect("continueRequest URL should parse");
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-0")
@@ -2016,7 +2016,7 @@ mod protocol_neutral_tests {
             Some("No Content".to_owned()),
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-1")
@@ -2054,7 +2054,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::ContinueInterceptedRequest(command),
+            AutomationCommand::ContinueInterceptedRequest(command),
         );
 
         let super::super::FetchCommandTaskStep::Complete(plan) = step else {
@@ -2145,7 +2145,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::ContinueInterceptedRequest(command),
+            AutomationCommand::ContinueInterceptedRequest(command),
         );
 
         let super::super::FetchCommandTaskStep::Complete(plan) = step else {
@@ -2160,7 +2160,7 @@ mod protocol_neutral_tests {
         assert_eq!(paused_sidecar.request_id.as_str(), "FETCH-aux");
         assert_eq!(
             paused_sidecar.blocked_intercepts,
-            Vec::<crate::devtools_runtime::DevToolsNetworkInterceptId>::new()
+            Vec::<crate::automation::DevToolsNetworkInterceptId>::new()
         );
         assert_eq!(
             paused_sidecar.network_id.as_ref().map(|id| id.as_str()),
@@ -2297,7 +2297,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::ContinueInterceptedResponse(command),
+            AutomationCommand::ContinueInterceptedResponse(command),
         );
 
         let super::super::FetchCommandTaskStep::Complete(plan) = step else {
@@ -2426,7 +2426,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::ContinueInterceptedRequest(command),
+            AutomationCommand::ContinueInterceptedRequest(command),
         );
 
         let super::super::FetchCommandTaskStep::Complete(plan) = step else {
@@ -2490,7 +2490,7 @@ mod protocol_neutral_tests {
             DevToolsRequestFailure::Failed("net::ERR_BLOCKED_BY_CLIENT".to_owned()),
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-2")
@@ -2526,7 +2526,7 @@ mod protocol_neutral_tests {
             Some("No Content".to_owned()),
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-3")

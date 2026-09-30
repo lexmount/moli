@@ -1,8 +1,8 @@
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
+use crate::automation::DevToolsNetworkDataType;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
-use crate::devtools_runtime::DevToolsNetworkDataType;
 use crate::domains::network::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,

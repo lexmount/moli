@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsFetchRequestId, DevToolsFrameId, DevToolsLoaderId,
     DevToolsNetworkInterceptId, DevToolsNetworkResourceType, DevToolsRequestId, DevToolsTargetId,
     NetworkRedirectResponseEvent, NetworkRequestEvent,
@@ -1293,7 +1293,7 @@ mod tests {
     use serde_json::{Value, json};
     use url::Url;
 
-    use crate::devtools_runtime::{
+    use crate::automation::{
         AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkInterceptId,
         DevToolsNetworkResourceType, DevToolsRequestId, DevToolsTargetId, NetworkRequestEvent,
     };

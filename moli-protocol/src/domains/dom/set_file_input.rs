@@ -13,11 +13,11 @@ use super::resolve::{
     PendingDomCommandKind, PendingDomCommandStartError, devtools_dom_command_task_complete,
     dom_object_reference_id_for_owner, start_document_node_snapshot_for_reference,
 };
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsDomNodeReference, DevToolsError, DevToolsErrorKind, DevToolsRemoteHandleId,
     DevToolsSetFileInputFilesCommand, is_webdriver_bidi_node_shared_id,
 };
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use moli_core::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererDomBidiNodeBindingResolution,
     SelectedFile,
@@ -48,7 +48,7 @@ pub(super) fn build_cdp_set_file_input_files_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(Some(DevToolsSetFileInputFilesCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         object_id: DevToolsRemoteHandleId::from(object_id),
         files,
         append: false,

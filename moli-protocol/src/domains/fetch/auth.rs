@@ -1,10 +1,10 @@
+use crate::automation::{
+    AutomationCommand, DevToolsAuthChallengeAction, DevToolsContinueWithAuthCommand,
+    DevToolsRequestId, FrontendProtocol,
+};
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, PendingFetchAuthNavigation,
     PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-};
-use crate::devtools_runtime::{
-    DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueWithAuthCommand,
-    DevToolsProtocol, DevToolsRequestId,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::{activity, network};
@@ -71,7 +71,7 @@ pub(super) fn start_continue_with_auth_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::ContinueWithAuth(command),
+        AutomationCommand::ContinueWithAuth(command),
     )
 }
 
@@ -83,7 +83,7 @@ fn build_cdp_continue_with_auth_command(
     let (browser_context_id, target_id) =
         super::commands::devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     DevToolsContinueWithAuthCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(params.request_id.as_ref().to_owned()),
         action: devtools_auth_action_from_cdp(params.auth_challenge_response.response),
         username: params.auth_challenge_response.username,
@@ -119,7 +119,7 @@ pub(super) fn start_devtools_continue_with_auth_command(
         conn,
         owner,
         command.request_id.as_str(),
-        command.context.protocol == DevToolsProtocol::Cdp,
+        command.context.protocol == FrontendProtocol::Cdp,
     ))
 }
 

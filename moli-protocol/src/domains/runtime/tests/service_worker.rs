@@ -1,11 +1,11 @@
 use super::*;
 
-use crate::conn::ServiceWorkerTargetState;
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsErrorKind,
-    DevToolsGetRealmsCommand, DevToolsGetServiceWorkerLogsCommand, DevToolsProtocol,
-    DevToolsSessionId, DevToolsTargetId, RuntimeExecutionContextEvent,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsErrorKind,
+    DevToolsGetRealmsCommand, DevToolsGetServiceWorkerLogsCommand, DevToolsSessionId,
+    DevToolsTargetId, FrontendProtocol, RuntimeExecutionContextEvent,
 };
+use crate::conn::ServiceWorkerTargetState;
 use moli_core::page::{
     RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
     RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerVersionStatus,
@@ -348,9 +348,9 @@ async fn get_realms_on_service_worker_target_waits_for_renderer_context() {
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: Some(DevToolsTargetId::from("TID-service-worker")),
                 browser_context_id: None,
@@ -359,7 +359,7 @@ async fn get_realms_on_service_worker_target_waits_for_renderer_context() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -378,9 +378,9 @@ async fn get_realms_on_service_worker_target_returns_real_renderer_realm() {
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: Some(DevToolsTargetId::from("TID-service-worker")),
                 browser_context_id: None,
@@ -389,7 +389,7 @@ async fn get_realms_on_service_worker_target_returns_real_renderer_realm() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -416,9 +416,9 @@ async fn get_realms_global_enumeration_waits_for_service_worker_renderer_context
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: None,
                 browser_context_id: None,
@@ -427,7 +427,7 @@ async fn get_realms_global_enumeration_waits_for_service_worker_renderer_context
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -448,9 +448,9 @@ async fn get_realms_global_enumeration_includes_service_worker_real_renderer_rea
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: None,
                 browser_context_id: None,
@@ -459,7 +459,7 @@ async fn get_realms_global_enumeration_includes_service_worker_real_renderer_rea
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -484,10 +484,10 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetServiceWorkerLogs(
+        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
             DevToolsGetServiceWorkerLogsCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverClassic,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("classic-session-1")),
                     target_id: None,
                     browser_context_id: None,
@@ -497,7 +497,7 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
         ))
         .await
         .into_parts();
-    let DevToolsCommandResult::ServiceWorkerLogs(result) =
+    let AutomationResult::ServiceWorkerLogs(result) =
         result.expect("getServiceWorkerLogs should succeed")
     else {
         panic!("expected ServiceWorkerLogs result");
@@ -526,10 +526,10 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
 
     let (second_result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetServiceWorkerLogs(
+        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
             DevToolsGetServiceWorkerLogsCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverClassic,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("classic-session-1")),
                     target_id: None,
                     browser_context_id: None,
@@ -539,7 +539,7 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
         ))
         .await
         .into_parts();
-    let DevToolsCommandResult::ServiceWorkerLogs(second_result) =
+    let AutomationResult::ServiceWorkerLogs(second_result) =
         second_result.expect("second getServiceWorkerLogs should succeed")
     else {
         panic!("expected second ServiceWorkerLogs result");
@@ -548,10 +548,10 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
 
     let missing = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetServiceWorkerLogs(
+        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
             DevToolsGetServiceWorkerLogsCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverClassic,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("classic-session-1")),
                     target_id: None,
                     browser_context_id: None,

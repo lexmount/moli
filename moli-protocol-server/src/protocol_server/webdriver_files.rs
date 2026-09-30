@@ -8,7 +8,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flate2::read::DeflateDecoder;
 use moli_core::page::SelectedFile;
-use moli_protocol::devtools_runtime::{DevToolsError, DevToolsErrorKind};
+use moli_protocol::automation::{DevToolsError, DevToolsErrorKind};
 
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const MAX_UPLOAD_ZIP_ARCHIVE_BYTES: usize = MAX_UPLOAD_BYTES + 1024 * 1024;

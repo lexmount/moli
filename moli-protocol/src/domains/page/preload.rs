@@ -1,10 +1,10 @@
 pub(super) mod native;
 
-use crate::devtools_runtime::{
-    DevToolsAddPreloadScriptCommand, DevToolsAddPreloadScriptResult, DevToolsCommand,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsPreloadScriptId,
-    DevToolsPreloadScriptSource, DevToolsProtocol, DevToolsRemovePreloadScriptCommand,
-    DevToolsTargetId, DevToolsTargetKind,
+use crate::automation::{
+    AutomationCommand, AutomationResult, DevToolsAddPreloadScriptCommand,
+    DevToolsAddPreloadScriptResult, DevToolsError, DevToolsErrorKind, DevToolsPreloadScriptId,
+    DevToolsPreloadScriptSource, DevToolsRemovePreloadScriptCommand, DevToolsTargetId,
+    DevToolsTargetKind, FrontendProtocol,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     AddScriptToEvaluateOnNewDocumentParams, RemoveScriptToEvaluateOnNewDocumentParams,
@@ -212,7 +212,7 @@ pub(super) fn add_preload_script_result_plan(identifier: String) -> CommandOutpu
 }
 
 pub(super) fn add_preload_script_result(identifier: String) -> serde_json::Value {
-    CommandOutputPlan::devtools_result_payload(DevToolsCommandResult::AddPreloadScript(
+    CommandOutputPlan::devtools_result_payload(AutomationResult::AddPreloadScript(
         DevToolsAddPreloadScriptResult {
             script_id: DevToolsPreloadScriptId::from(identifier),
         },
@@ -235,7 +235,7 @@ fn build_cdp_add_preload_script_command(
     params: AddScriptToEvaluateOnNewDocumentParams,
 ) -> DevToolsAddPreloadScriptCommand {
     DevToolsAddPreloadScriptCommand {
-        context: cmd.devtools_command_context(target_id, browser_context_id),
+        context: cmd.automation_context(target_id, browser_context_id),
         source: DevToolsPreloadScriptSource::RawScript(params.source),
         world_name: params.world_name,
         target_ids: target_id.map(|target_id| vec![target_id.into()]),
@@ -254,7 +254,7 @@ fn build_cdp_remove_preload_script_command(
     params: RemoveScriptToEvaluateOnNewDocumentParams,
 ) -> DevToolsRemovePreloadScriptCommand {
     DevToolsRemovePreloadScriptCommand {
-        context: cmd.devtools_command_context(target_id, browser_context_id),
+        context: cmd.automation_context(target_id, browser_context_id),
         script_id: DevToolsPreloadScriptId::from(params.identifier.as_ref()),
     }
 }
@@ -303,13 +303,13 @@ fn start_devtools_preload_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> PageCommandTaskStep {
     match command {
-        DevToolsCommand::AddPreloadScript(command) => {
+        AutomationCommand::AddPreloadScript(command) => {
             start_devtools_add_preload_script_command(conn, command_id, command_session_id, command)
         }
-        DevToolsCommand::RemovePreloadScript(command) => {
+        AutomationCommand::RemovePreloadScript(command) => {
             start_devtools_remove_preload_script_command(
                 conn,
                 command_id,
@@ -326,14 +326,14 @@ fn start_devtools_preload_command(
 
 pub(crate) async fn execute_devtools_preload_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
     Option<moli_core::RendererOutputFence>,
 ) {
     match command {
-        DevToolsCommand::AddPreloadScript(command) => {
+        AutomationCommand::AddPreloadScript(command) => {
             if !command.browser_context_ids.is_empty() {
                 return (
                     execute_devtools_browser_context_add_preload_script_command(conn, command)
@@ -344,12 +344,12 @@ pub(crate) async fn execute_devtools_preload_command_async(
             }
             execute_devtools_single_route_preload_command_async(
                 conn,
-                DevToolsCommand::AddPreloadScript(command),
+                AutomationCommand::AddPreloadScript(command),
             )
             .await
         }
-        DevToolsCommand::RemovePreloadScript(command)
-            if command.context.protocol == DevToolsProtocol::WebDriverBidi
+        AutomationCommand::RemovePreloadScript(command)
+            if command.context.protocol == FrontendProtocol::WebDriverBidi
                 && command.context.target_id.is_none()
                 && split_bidi_preload_script_id(&command.script_id).is_none() =>
         {
@@ -366,9 +366,9 @@ pub(crate) async fn execute_devtools_preload_command_async(
 
 async fn execute_devtools_single_route_preload_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
     Option<moli_core::RendererOutputFence>,
 ) {
@@ -384,7 +384,7 @@ async fn execute_devtools_single_route_preload_command_async(
     let mut events = Vec::new();
     let mut command_context = CommandDispatchContext::default();
     let result = match command {
-        DevToolsCommand::AddPreloadScript(command) => {
+        AutomationCommand::AddPreloadScript(command) => {
             execute_devtools_single_route_add_preload_script_command(
                 conn,
                 &owner,
@@ -395,11 +395,11 @@ async fn execute_devtools_single_route_preload_command_async(
             )
             .await
         }
-        DevToolsCommand::RemovePreloadScript(command) => {
+        AutomationCommand::RemovePreloadScript(command) => {
             match execute_devtools_single_route_remove_preload_script_command(conn, &owner, command)
                 .await
             {
-                Ok(()) => Ok(DevToolsCommandResult::Empty),
+                Ok(()) => Ok(AutomationResult::Empty),
                 Err(error) => Err(error),
             }
         }
@@ -421,7 +421,7 @@ async fn execute_devtools_single_route_preload_command_async(
 async fn execute_devtools_browser_context_add_preload_script_command(
     conn: &mut CdpConnection,
     command: DevToolsAddPreloadScriptCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let script = document_start_script_from_add_preload_command(&command)?;
     let browser_context_ids =
         resolve_bidi_preload_browser_context_ids(conn, &command.browser_context_ids)?;
@@ -466,7 +466,7 @@ async fn execute_devtools_browser_context_add_preload_script_command(
             .await
             .map_err(|message| devtools_preload_owner_error(&message))?;
     }
-    Ok(DevToolsCommandResult::AddPreloadScript(
+    Ok(AutomationResult::AddPreloadScript(
         DevToolsAddPreloadScriptResult {
             script_id: DevToolsPreloadScriptId::from(identifier),
         },
@@ -480,7 +480,7 @@ async fn execute_devtools_single_route_add_preload_script_command(
     result_kind: DevToolsPreloadResultKind,
     events: &mut Vec<BackgroundProtocolEvent>,
     command_context: &mut CommandDispatchContext,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let identifier = if is_bidi_default_preload_command(&command) {
         execute_devtools_default_add_preload_script_command(conn, owner, command).await?
     } else {
@@ -591,7 +591,7 @@ async fn execute_devtools_single_route_remove_preload_script_command(
         return Err(preload_missing_owner_error(conn));
     };
     if !removed
-        && protocol == DevToolsProtocol::WebDriverBidi
+        && protocol == FrontendProtocol::WebDriverBidi
         && let Some((browser_context_id, _)) = owner_identity.as_ref()
         && let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id)
         && let Some(default_registry_key) =
@@ -600,7 +600,7 @@ async fn execute_devtools_single_route_remove_preload_script_command(
         removed = true;
         registry_key = Some(default_registry_key);
     }
-    if !removed && protocol == DevToolsProtocol::WebDriverBidi {
+    if !removed && protocol == FrontendProtocol::WebDriverBidi {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchScript,
             "NoSuchScript",
@@ -645,7 +645,7 @@ async fn remove_document_start_script_direct_async(
 async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
     conn: &mut CdpConnection,
     command: DevToolsRemovePreloadScriptCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let script_id = command.script_id.as_str().to_owned();
     let browser_context_ids = conn
         .browser_contexts()
@@ -685,12 +685,12 @@ async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
             .await
             .map_err(|message| devtools_preload_owner_error(&message))?;
     }
-    Ok(DevToolsCommandResult::Empty)
+    Ok(AutomationResult::Empty)
 }
 
 fn resolve_bidi_preload_browser_context_ids(
     conn: &mut CdpConnection,
-    browser_context_ids: &[crate::devtools_runtime::DevToolsBrowserContextId],
+    browser_context_ids: &[crate::automation::DevToolsBrowserContextId],
 ) -> Result<Vec<String>, DevToolsError> {
     let mut resolved = Vec::new();
     for browser_context_id in browser_context_ids {
@@ -755,23 +755,23 @@ fn devtools_preload_internal_error(message: impl Into<String>) -> DevToolsError 
 #[derive(Clone)]
 enum DevToolsPreloadResultKind {
     Add {
-        protocol: DevToolsProtocol,
+        protocol: FrontendProtocol,
         target_id: Option<DevToolsTargetId>,
     },
     Remove,
 }
 
 impl DevToolsPreloadResultKind {
-    fn from_command(command: &DevToolsCommand) -> Result<Self, DevToolsError> {
+    fn from_command(command: &AutomationCommand) -> Result<Self, DevToolsError> {
         match command {
-            DevToolsCommand::AddPreloadScript(command) => {
+            AutomationCommand::AddPreloadScript(command) => {
                 let target_id = add_preload_command_target_id(command)?.cloned();
                 Ok(Self::Add {
                     protocol: command.context.protocol,
                     target_id,
                 })
             }
-            DevToolsCommand::RemovePreloadScript(_) => Ok(Self::Remove),
+            AutomationCommand::RemovePreloadScript(_) => Ok(Self::Remove),
             _ => Err(DevToolsError::new(
                 DevToolsErrorKind::Unsupported,
                 "UnsupportedDevToolsCommand",
@@ -779,7 +779,7 @@ impl DevToolsPreloadResultKind {
         }
     }
 
-    fn add_result(self, identifier: String) -> Result<DevToolsCommandResult, DevToolsError> {
+    fn add_result(self, identifier: String) -> Result<AutomationResult, DevToolsError> {
         let Self::Add {
             protocol,
             target_id,
@@ -790,14 +790,14 @@ impl DevToolsPreloadResultKind {
                 "UnexpectedPreloadResultKind",
             ));
         };
-        let script_id = if protocol == DevToolsProtocol::WebDriverBidi
+        let script_id = if protocol == FrontendProtocol::WebDriverBidi
             && let Some(target_id) = target_id
         {
             format!("{}:{identifier}", target_id.as_str())
         } else {
             identifier
         };
-        Ok(DevToolsCommandResult::AddPreloadScript(
+        Ok(AutomationResult::AddPreloadScript(
             DevToolsAddPreloadScriptResult {
                 script_id: DevToolsPreloadScriptId::from(script_id),
             },
@@ -807,10 +807,10 @@ impl DevToolsPreloadResultKind {
 
 fn devtools_preload_command_target_route(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
-) -> Result<(CdpSessionRoute, DevToolsCommand), DevToolsError> {
+    command: AutomationCommand,
+) -> Result<(CdpSessionRoute, AutomationCommand), DevToolsError> {
     match command {
-        DevToolsCommand::AddPreloadScript(command) => {
+        AutomationCommand::AddPreloadScript(command) => {
             let route = if let Some(target_id) = add_preload_command_target_id(&command)? {
                 if conn
                     .target_session_route_for_child_frame_id(target_id.as_str())
@@ -828,11 +828,11 @@ fn devtools_preload_command_target_route(
             } else {
                 default_add_preload_command_route(conn)?
             };
-            Ok((route, DevToolsCommand::AddPreloadScript(command)))
+            Ok((route, AutomationCommand::AddPreloadScript(command)))
         }
-        DevToolsCommand::RemovePreloadScript(command) => {
+        AutomationCommand::RemovePreloadScript(command) => {
             let (route, command) = remove_preload_command_target_route(conn, command)?;
-            Ok((route, DevToolsCommand::RemovePreloadScript(command)))
+            Ok((route, AutomationCommand::RemovePreloadScript(command)))
         }
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
@@ -865,7 +865,7 @@ fn add_preload_command_target_id(
 }
 
 fn is_bidi_default_preload_command(command: &DevToolsAddPreloadScriptCommand) -> bool {
-    command.context.protocol == DevToolsProtocol::WebDriverBidi
+    command.context.protocol == FrontendProtocol::WebDriverBidi
         && command.target_ids.is_none()
         && command.context.target_id.is_none()
         && command.browser_context_ids.is_empty()
@@ -898,7 +898,7 @@ fn remove_preload_command_target_route(
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
         return Ok((route, command));
     }
-    if command.context.protocol == DevToolsProtocol::WebDriverBidi
+    if command.context.protocol == FrontendProtocol::WebDriverBidi
         && let Some((target_id, local_script_id)) = split_bidi_preload_script_id(&command.script_id)
     {
         let route = conn
@@ -909,7 +909,7 @@ fn remove_preload_command_target_route(
         return Ok((route, command));
     }
     let script_id = command.script_id.as_str().to_owned();
-    if command.context.protocol == DevToolsProtocol::WebDriverBidi
+    if command.context.protocol == FrontendProtocol::WebDriverBidi
         && let Some(route) = find_default_preload_script_route(conn, &script_id)
     {
         return Ok((route, command));
@@ -1067,7 +1067,7 @@ fn remove_preload_script_registration(
     let script_id = command.script_id.into_string();
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
-    let script_owner_session = (protocol == DevToolsProtocol::Cdp).then(|| {
+    let script_owner_session = (protocol == FrontendProtocol::Cdp).then(|| {
         DevToolsSessionKey::from_wire_session_id(renderer_inspector_session_id.as_deref())
     });
     let owner_identity = conn.target_owner_identity_for_session(command_session_id);
@@ -1104,8 +1104,8 @@ fn remove_preload_script_registration(
     }
     if !removed {
         let message = match protocol {
-            DevToolsProtocol::Cdp => "Script not found",
-            DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => "NoSuchScript",
+            FrontendProtocol::Cdp => "Script not found",
+            FrontendProtocol::WebDriverClassic | FrontendProtocol::WebDriverBidi => "NoSuchScript",
         };
         return Err(CommandOutputPlan::error(-32000, message));
     }
@@ -1158,7 +1158,7 @@ pub(super) fn try_start_add_script_to_evaluate_on_new_document_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::AddPreloadScript(command),
+        AutomationCommand::AddPreloadScript(command),
     ))
 }
 
@@ -1189,7 +1189,7 @@ pub(super) fn try_start_remove_script_to_evaluate_on_new_document_command(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::RemovePreloadScript(command),
+        AutomationCommand::RemovePreloadScript(command),
     ))
 }
 
@@ -1718,7 +1718,7 @@ async fn add_script_to_evaluate_on_new_document_direct_async(
     let script = document_start_script_from_add_preload_command(&command)?;
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let script_owner_session = (command.context.protocol == DevToolsProtocol::Cdp).then(|| {
+    let script_owner_session = (command.context.protocol == FrontendProtocol::Cdp).then(|| {
         DevToolsSessionKey::from_wire_session_id(renderer_inspector_session_id.as_deref())
     });
     let target_id = conn
@@ -1802,9 +1802,9 @@ async fn add_script_to_evaluate_on_new_document_direct_async(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::{
-        DevToolsAddPreloadScriptCommand, DevToolsCommand, DevToolsCommandContext,
-        DevToolsPreloadScriptSource, DevToolsProtocol,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, DevToolsAddPreloadScriptCommand,
+        DevToolsPreloadScriptSource, FrontendProtocol,
     };
     use serde_json::json;
 
@@ -1839,7 +1839,7 @@ mod protocol_neutral_tests {
         let command =
             build_cdp_add_preload_script_command(&cmd, Some("TID-preload"), Some("BID-1"), params);
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-preload")
@@ -1859,7 +1859,7 @@ mod protocol_neutral_tests {
         assert_eq!(
             command.target_ids.as_ref().map(|ids| {
                 ids.iter()
-                    .map(crate::devtools_runtime::DevToolsTargetId::as_str)
+                    .map(crate::automation::DevToolsTargetId::as_str)
                     .collect::<Vec<_>>()
             }),
             Some(vec!["TID-preload"])
@@ -1868,7 +1868,7 @@ mod protocol_neutral_tests {
             command
                 .browser_context_ids
                 .iter()
-                .map(crate::devtools_runtime::DevToolsBrowserContextId::as_str)
+                .map(crate::automation::DevToolsBrowserContextId::as_str)
                 .collect::<Vec<_>>(),
             vec!["BID-1"]
         );
@@ -1903,7 +1903,7 @@ mod protocol_neutral_tests {
             params,
         );
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(command.script_id.as_str(), "SCRIPT-1");
         assert_eq!(
             command.context.target_id.as_ref().map(|id| id.as_str()),
@@ -2061,8 +2061,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_add_preload_script_marks_channel_arguments() {
         let command = DevToolsAddPreloadScriptCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -2127,7 +2127,7 @@ mod protocol_neutral_tests {
             &mut conn,
             cmd.id,
             cmd.session_id,
-            DevToolsCommand::AddPreloadScript(command),
+            AutomationCommand::AddPreloadScript(command),
         );
 
         let PageCommandTaskStep::Complete(plan) = step else {

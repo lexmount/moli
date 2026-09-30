@@ -1,10 +1,10 @@
 use moli_core::page::{SubresourceBodyFinishedResult, SubresourceResponseBody};
 
+use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, FetchRequestStage,
     monotonic_timestamp_seconds,
 };
-use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::{NetworkBacklogPreferredRequestId, NetworkPreparedOutputs};
 
 use super::events::{
@@ -838,7 +838,7 @@ fn record_subresource_response_body_source(
     session_ids: &[Option<String>],
 ) {
     let captured_body = crate::conn::CapturedBody::from_subresource_response_body(response_body);
-    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
+    let data_type = crate::automation::DevToolsNetworkDataType::Response;
     let collector_ids =
         conn.network_data_collector_ids_for_owner_body(owner, data_type, captured_body.len());
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
@@ -871,7 +871,7 @@ fn record_subresource_request_body(
     let Some(request_body) = request_body else {
         return;
     };
-    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
+    let data_type = crate::automation::DevToolsNetworkDataType::Request;
     let collector_ids =
         conn.network_data_collector_ids_for_owner_body(owner, data_type, request_body.len());
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
@@ -902,11 +902,11 @@ fn record_subresource_pending_response_body(
 ) {
     let collector_ids = conn.network_data_collector_ids_for_owner_body(
         owner,
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
     );
     let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
@@ -928,11 +928,11 @@ fn record_subresource_failed_response_body(
 ) {
     let collector_ids = conn.network_data_collector_ids_for_owner_body(
         owner,
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        crate::automation::DevToolsNetworkDataType::Response,
     );
     let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
@@ -1044,8 +1044,8 @@ mod tests {
     use url::Url;
 
     use crate::{
+        automation::{AutomationEvent, DevToolsNetworkResourceType},
         conn::{CdpConnection, CommandOwnerScope},
-        devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType},
         domains::network::{
             NetworkPreparedOutputs, PendingSubresourceNetworkActivity,
             PendingSubresourceNetworkActivitySession, TargetNetworkBacklogRequestIdResolver,

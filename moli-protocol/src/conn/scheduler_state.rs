@@ -230,7 +230,7 @@ impl CdpRendererOwnerTurnOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::devtools_runtime::AutomationEvent;
+    use crate::automation::AutomationEvent;
 
     #[test]
     fn turn_outcome_raw_protocol_messages_regain_typed_sidecars() {

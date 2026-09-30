@@ -1,4 +1,4 @@
-use moli_protocol::devtools_runtime::DevToolsBrowserContextId;
+use moli_protocol::automation::DevToolsBrowserContextId;
 
 pub(crate) const DEFAULT_BIDI_USER_CONTEXT: &str = "default";
 pub(crate) const DEFAULT_MOLI_BROWSER_CONTEXT_ID: &str = "BID-default";

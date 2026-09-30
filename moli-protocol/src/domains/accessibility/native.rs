@@ -1,5 +1,5 @@
 use super::*;
-use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::automation::DevToolsDomNodeReference;
 use crate::domains::native::{self, NativeCommandStep, NodeLookupExecution};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,

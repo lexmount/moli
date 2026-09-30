@@ -1,5 +1,6 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
+use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
@@ -11,7 +12,6 @@ use crate::conn::{
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
 };
-use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::TargetIoStreamRead;
 
 pub(crate) type SessionOwnerPendingFetchState = (

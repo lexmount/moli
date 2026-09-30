@@ -1199,10 +1199,10 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
     ctx.sent.clear();
 
     let result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1217,8 +1217,8 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
         .await;
     assert_eq!(
         result.expect("BiDi add intercept should succeed"),
-        DevToolsCommandResult::AddNetworkIntercept(
-            crate::devtools_runtime::DevToolsAddNetworkInterceptResult {
+        AutomationResult::AddNetworkIntercept(
+            crate::automation::DevToolsAddNetworkInterceptResult {
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-hit")
             }
         )
@@ -1227,10 +1227,10 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
 
     let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1347,10 +1347,10 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
     ctx.expect_result(41_010, json!({}), Some("SID-1"));
 
     let result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1442,10 +1442,10 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
         continue_renderer_output_predecessor,
     ) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::ContinueInterceptedRequest(
+        .execute_automation_command(AutomationCommand::ContinueInterceptedRequest(
             DevToolsContinueInterceptedRequestCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1466,7 +1466,7 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
     }
     assert_eq!(
         continue_result.expect("BiDi continue request should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     let mut continue_output = Vec::new();
     drain_scheduler_events_like_scheduler(
@@ -1540,10 +1540,10 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
     ctx.expect_result(41_110, json!({}), Some("SID-1"));
 
     let result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1711,10 +1711,10 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         continue_renderer_output_predecessor,
     ) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::ContinueInterceptedResponse(
+        .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
             DevToolsContinueInterceptedResponseCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1734,7 +1734,7 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
     }
     assert_eq!(
         continue_result.expect("BiDi continue response should succeed"),
-        DevToolsCommandResult::Empty
+        AutomationResult::Empty
     );
     let mut continue_output = Vec::new();
     drain_scheduler_events_like_scheduler(
@@ -1800,10 +1800,10 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
     ctx.sent.clear();
 
     let result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,
@@ -1818,8 +1818,8 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
         .await;
     assert_eq!(
         result.expect("BiDi add response-stage intercept should succeed"),
-        DevToolsCommandResult::AddNetworkIntercept(
-            crate::devtools_runtime::DevToolsAddNetworkInterceptResult {
+        AutomationResult::AddNetworkIntercept(
+            crate::automation::DevToolsAddNetworkInterceptResult {
                 intercept_id: DevToolsNetworkInterceptId::from("intercept-hit")
             }
         )
@@ -1828,10 +1828,10 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
 
     let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::EvaluateScript(
+        .execute_automation_command(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,

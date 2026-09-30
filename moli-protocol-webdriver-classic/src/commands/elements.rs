@@ -1,5 +1,5 @@
-use moli_protocol::devtools_runtime::{
-    DevToolsCallFunctionCommand, DevToolsCommand, DevToolsDescribeNodeCommand,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsCallFunctionCommand, DevToolsDescribeNodeCommand,
     DevToolsDomGeometryCommand, DevToolsDomGeometryOperation, DevToolsDomNodeReference,
     DevToolsEvaluateScriptCommand, DevToolsGetAttributesCommand, DevToolsGetAttributesResult,
     DevToolsGetPropertyCommand, DevToolsGetPropertyResult, DevToolsGetTextCommand,
@@ -21,7 +21,7 @@ pub fn find_element_command(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
     multiple: bool,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     find_element_command_with_root(context, params, multiple, None)
 }
 
@@ -30,7 +30,7 @@ pub fn find_element_command_with_root(
     params: &Value,
     multiple: bool,
     root: Option<DevToolsDomNodeReference>,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let using = required_string(params, "using")?;
     let value = required_string(params, "value")?;
     if using == "xpath"
@@ -49,7 +49,7 @@ pub fn find_element_command_with_root(
                 },
             ));
         }
-        return Ok(DevToolsCommand::LocateNodes(DevToolsLocateNodesCommand {
+        return Ok(AutomationCommand::LocateNodes(DevToolsLocateNodesCommand {
             context: context.command_context(),
             locator: match using {
                 "xpath" => DevToolsLocateNodesLocator::XPath(value.to_owned()),
@@ -76,7 +76,7 @@ pub fn find_element_command_with_root(
             "value must be a non-empty selector",
         ));
     }
-    Ok(DevToolsCommand::QuerySelector(
+    Ok(AutomationCommand::QuerySelector(
         DevToolsQuerySelectorCommand {
             context: context.command_context(),
             root,
@@ -233,7 +233,7 @@ pub fn classic_elements_from_locate_nodes_result(result: DevToolsLocateNodesResu
 pub fn get_element_attributes_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_element_id(element_id)?;
     Ok(get_element_attributes_reference_command(context, reference))
 }
@@ -241,8 +241,8 @@ pub fn get_element_attributes_command(
 pub fn get_element_attributes_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
-) -> DevToolsCommand {
-    DevToolsCommand::GetAttributes(DevToolsGetAttributesCommand {
+) -> AutomationCommand {
+    AutomationCommand::GetAttributes(DevToolsGetAttributesCommand {
         context: context.command_context(),
         reference,
     })
@@ -251,7 +251,7 @@ pub fn get_element_attributes_reference_command(
 pub fn get_element_text_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_element_id(element_id)?;
     Ok(get_element_text_reference_command(context, reference))
 }
@@ -259,8 +259,8 @@ pub fn get_element_text_command(
 pub fn get_element_text_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
-) -> DevToolsCommand {
-    DevToolsCommand::GetText(DevToolsGetTextCommand {
+) -> AutomationCommand {
+    AutomationCommand::GetText(DevToolsGetTextCommand {
         context: context.command_context(),
         reference,
     })
@@ -270,7 +270,7 @@ pub fn get_element_property_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     name: impl Into<String>,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_element_id(element_id)?;
     Ok(get_element_property_reference_command(
         context, reference, name,
@@ -281,8 +281,8 @@ pub fn get_element_property_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
     name: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::GetProperty(DevToolsGetPropertyCommand {
+) -> AutomationCommand {
+    AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
         context: context.command_context(),
         reference,
         name: name.into(),
@@ -293,8 +293,8 @@ pub fn get_element_css_value_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
     property_name: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -323,8 +323,8 @@ pub fn get_element_css_value_command(
 pub fn get_element_displayed_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -346,8 +346,8 @@ pub fn get_element_displayed_command(
 pub fn get_element_rendered_text_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -369,8 +369,8 @@ pub fn get_element_rendered_text_command(
 pub fn get_element_enabled_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -392,8 +392,8 @@ pub fn get_element_enabled_command(
 pub fn get_element_computed_label_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -415,8 +415,8 @@ pub fn get_element_computed_label_command(
 pub fn get_element_computed_role_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -438,8 +438,8 @@ pub fn get_element_computed_role_command(
 pub fn get_element_shadow_root_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -469,7 +469,7 @@ pub fn describe_node_command(
     node_id: u32,
     depth: i32,
     pierce: bool,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     describe_node_reference_command(
         context,
         DevToolsDomNodeReference::FrontendNodeId(node_id),
@@ -483,8 +483,8 @@ pub fn describe_node_reference_command(
     reference: DevToolsDomNodeReference,
     depth: i32,
     pierce: bool,
-) -> DevToolsCommand {
-    DevToolsCommand::DescribeNode(DevToolsDescribeNodeCommand {
+) -> AutomationCommand {
+    AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
         context: context.command_context(),
         reference: Some(reference),
         depth,
@@ -495,8 +495,8 @@ pub fn describe_node_reference_command(
 pub fn verify_element_attached_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -524,8 +524,8 @@ pub fn verify_element_attached_command(
 pub fn shadow_root_attached_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -555,14 +555,14 @@ pub fn shadow_root_attached_command(
 pub fn get_element_tag_name_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     get_element_property_command(context, element_id, "localName")
 }
 
 pub fn get_element_rect_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_element_id(element_id)?;
     Ok(get_element_rect_reference_command(context, reference))
 }
@@ -570,16 +570,16 @@ pub fn get_element_rect_command(
 pub fn get_element_rect_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
-) -> DevToolsCommand {
-    DevToolsCommand::DomGeometry(DevToolsDomGeometryCommand {
+) -> AutomationCommand {
+    AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
         context: context.command_context(),
         reference,
         operation: DevToolsDomGeometryOperation::GetBoxModel,
     })
 }
 
-pub fn active_element_command(context: &ClassicDevToolsCommandContext) -> DevToolsCommand {
-    DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+pub fn active_element_command(context: &ClassicDevToolsCommandContext) -> AutomationCommand {
+    AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -599,7 +599,7 @@ pub fn resolve_element_command(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     object_group: impl Into<String>,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_element_id(element_id)?;
     Ok(resolve_element_reference_command(
         context,
@@ -612,7 +612,7 @@ pub fn resolve_element_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
     object_group: impl Into<String>,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     resolve_element_reference_command_with_execution_context(context, reference, None, object_group)
 }
 
@@ -621,8 +621,8 @@ pub fn resolve_element_reference_command_with_execution_context(
     reference: DevToolsDomNodeReference,
     execution_context_id: Option<i64>,
     object_group: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::ResolveNode(DevToolsResolveNodeCommand {
+) -> AutomationCommand {
+    AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
         context: context.command_context(),
         reference,
         execution_context_id,
@@ -634,7 +634,7 @@ pub fn resolve_shadow_root_command(
     context: &ClassicDevToolsCommandContext,
     shadow_root_id: &str,
     object_group: impl Into<String>,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let reference = dom_node_reference_from_classic_shadow_root_id(shadow_root_id)?;
     Ok(resolve_shadow_root_reference_command(
         context,
@@ -647,7 +647,7 @@ pub fn resolve_shadow_root_reference_command(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
     object_group: impl Into<String>,
-) -> DevToolsCommand {
+) -> AutomationCommand {
     resolve_shadow_root_reference_command_with_execution_context(
         context,
         reference,
@@ -661,8 +661,8 @@ pub fn resolve_shadow_root_reference_command_with_execution_context(
     reference: DevToolsDomNodeReference,
     execution_context_id: Option<i64>,
     object_group: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::ResolveNode(DevToolsResolveNodeCommand {
+) -> AutomationCommand {
+    AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
         context: context.command_context(),
         reference,
         execution_context_id,
@@ -673,8 +673,8 @@ pub fn resolve_shadow_root_reference_command_with_execution_context(
 pub fn frame_id_for_element_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -696,8 +696,8 @@ pub fn frame_id_for_element_command(
 pub fn release_remote_object_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::ReleaseObjects(DevToolsReleaseObjectsCommand {
+) -> AutomationCommand {
+    AutomationCommand::ReleaseObjects(DevToolsReleaseObjectsCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -717,8 +717,8 @@ const CLASSIC_FRAME_ID_FOR_ELEMENT_FUNCTION: &str = r#"function() {
 pub fn clear_element_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -740,8 +740,8 @@ pub fn clear_element_command(
 pub fn element_click_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(element_click_call_function(context, object_id))
+) -> AutomationCommand {
+    AutomationCommand::CallFunction(element_click_call_function(context, object_id))
 }
 
 fn element_click_call_function(
@@ -805,14 +805,14 @@ fn element_click_call_function(
 pub fn element_geometry_prepare_commands(
     context: &ClassicDevToolsCommandContext,
     reference: DevToolsDomNodeReference,
-) -> Vec<DevToolsCommand> {
+) -> Vec<AutomationCommand> {
     vec![
-        DevToolsCommand::ScrollIntoViewIfNeeded(DevToolsScrollIntoViewIfNeededCommand {
+        AutomationCommand::ScrollIntoViewIfNeeded(DevToolsScrollIntoViewIfNeededCommand {
             context: context.command_context(),
             reference: Some(reference.clone()),
             rect: None,
         }),
-        DevToolsCommand::DomGeometry(DevToolsDomGeometryCommand {
+        AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
             context: context.command_context(),
             reference,
             operation: DevToolsDomGeometryOperation::GetBoxModel,
@@ -901,7 +901,7 @@ pub fn classic_property_value(result: DevToolsGetPropertyResult) -> Value {
 }
 
 pub fn classic_rect_from_geometry(
-    geometry: &moli_protocol::devtools_runtime::DevToolsDomGeometryResult,
+    geometry: &moli_protocol::automation::DevToolsDomGeometryResult,
 ) -> Result<Value, ClassicError> {
     let Some(quad) = geometry_border_quad(geometry) else {
         return Err(ClassicError::new(

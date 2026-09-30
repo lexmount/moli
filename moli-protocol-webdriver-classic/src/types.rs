@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
 
-use moli_protocol::devtools_runtime::{
-    DevToolsCommandContext, DevToolsNavigationWait, DevToolsProtocol, DevToolsSessionId,
-    DevToolsTargetId,
+use moli_protocol::automation::{
+    AutomationContext, DevToolsNavigationWait, DevToolsSessionId, DevToolsTargetId,
+    FrontendProtocol,
 };
 
 use crate::actions::ClassicActionState;
@@ -242,7 +242,7 @@ impl ClassicPromptHandler {
 pub struct ClassicDevToolsCommandContext {
     pub session_id: String,
     pub target_id: Option<String>,
-    protocol: DevToolsProtocol,
+    protocol: FrontendProtocol,
 }
 
 impl ClassicDevToolsCommandContext {
@@ -250,7 +250,7 @@ impl ClassicDevToolsCommandContext {
         Self {
             session_id: session_id.into(),
             target_id: None,
-            protocol: DevToolsProtocol::WebDriverClassic,
+            protocol: FrontendProtocol::WebDriverClassic,
         }
     }
 
@@ -258,12 +258,12 @@ impl ClassicDevToolsCommandContext {
         Self {
             session_id: session_id.into(),
             target_id: Some(target_id.into()),
-            protocol: DevToolsProtocol::WebDriverClassic,
+            protocol: FrontendProtocol::WebDriverClassic,
         }
     }
 
     pub fn with_protocol_and_target_id(
-        protocol: DevToolsProtocol,
+        protocol: FrontendProtocol,
         session_id: impl Into<String>,
         target_id: impl Into<String>,
     ) -> Self {
@@ -274,8 +274,8 @@ impl ClassicDevToolsCommandContext {
         }
     }
 
-    pub(crate) fn command_context(&self) -> DevToolsCommandContext {
-        DevToolsCommandContext {
+    pub(crate) fn command_context(&self) -> AutomationContext {
+        AutomationContext {
             protocol: self.protocol,
             session_id: Some(DevToolsSessionId::from(self.session_id.as_str())),
             target_id: self.target_id.as_deref().map(DevToolsTargetId::from),

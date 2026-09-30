@@ -1,7 +1,7 @@
 //! WebDriver BiDi protocol adapter surface.
 //!
 //! This crate is intentionally thin. It serializes protocol-neutral
-//! `moli-protocol::devtools_runtime` events into WebDriver BiDi wire shapes and keeps
+//! `moli-protocol::automation` events into WebDriver BiDi wire shapes and keeps
 //! only the connection-local subscription and protocol bridge state needed until
 //! the shared typed EventHub owns live fan-out.
 

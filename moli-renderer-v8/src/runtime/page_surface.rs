@@ -4644,7 +4644,7 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
-    Native(Box<RendererNativeCommand>),
+    Native(Box<RendererCdpCall>),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,

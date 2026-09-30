@@ -1,4 +1,4 @@
-use crate::devtools_runtime::DevToolsNetworkResourceType;
+use crate::automation::DevToolsNetworkResourceType;
 use moli_cookie_jar::new_shared_browser_cookie_store;
 use moli_core::page::{SessionHistoryUpdateKind, SubresourceResourceType};
 

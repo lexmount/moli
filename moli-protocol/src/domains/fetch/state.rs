@@ -1,9 +1,9 @@
+use crate::automation::{DevToolsSessionId, FrontendProtocol};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, PendingFetchAuthNavigation, PendingFetchNavigation,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest,
 };
-use crate::devtools_runtime::{DevToolsProtocol, DevToolsSessionId};
 use crate::domains::command_output::CommandOutputPlan;
 
 use super::patterns::validate_request_id;
@@ -74,10 +74,10 @@ impl PreparedSubresourceCorrelation {
 
 pub(crate) fn action_session_id_for_devtools_context<'a>(
     command_session_id: Option<&'a str>,
-    protocol: DevToolsProtocol,
+    protocol: FrontendProtocol,
     context_session_id: Option<&'a DevToolsSessionId>,
 ) -> Option<&'a str> {
-    if protocol == DevToolsProtocol::Cdp {
+    if protocol == FrontendProtocol::Cdp {
         command_session_id
     } else {
         context_session_id.map(|session_id| session_id.as_str())

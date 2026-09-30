@@ -1061,10 +1061,10 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
     ctx.expect_result(35_958, json!({}), Some("SID-1"));
 
     let result = ctx
-        .execute_devtools_command_through_renderer_fence_for_test(
-            DevToolsCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("BIDI-SID")),
                     target_id: Some(DevToolsTargetId::from("TID-1")),
                     browser_context_id: None,

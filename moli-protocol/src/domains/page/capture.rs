@@ -96,7 +96,7 @@ pub(super) fn build_cdp_capture_screenshot_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsCaptureScreenshotCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         format: params.format,
         quality,
         clip: params.clip.map(|clip| {
@@ -136,7 +136,7 @@ pub(super) fn try_start_page_capture_screenshot_command(
         Ok(command) => command,
         Err(plan) => return PageCommandTaskStep::Complete(plan),
     };
-    start_devtools_page_command(conn, cmd.id, DevToolsCommand::CaptureScreenshot(command))
+    start_devtools_page_command(conn, cmd.id, AutomationCommand::CaptureScreenshot(command))
 }
 
 #[derive(Default, Deserialize)]
@@ -277,7 +277,7 @@ pub(super) fn build_cdp_print_to_pdf_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsPrintToPdfCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         landscape: params.landscape,
         print_background: params.print_background,
         scale: params.scale,
@@ -355,10 +355,10 @@ pub(super) fn print_to_pdf_page_size_error(
 pub(super) async fn execute_devtools_get_layout_metrics_command(
     conn: &mut CdpConnection,
     command: DevToolsGetLayoutMetricsCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let owner = page_command_owner(conn, &command.context)?;
     let result = execute_devtools_get_layout_metrics_for_current_owner(conn, &owner).await;
-    result.map(DevToolsCommandResult::LayoutMetrics)
+    result.map(AutomationResult::LayoutMetrics)
 }
 
 pub(super) async fn execute_devtools_get_layout_metrics_for_current_owner(
@@ -461,7 +461,7 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
     conn: &mut CdpConnection,
     command: DevToolsCaptureScreenshotCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Option<moli_core::RendererOutputFence>,
 ) {
     let mut predecessor = None;
@@ -499,7 +499,7 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
             .map_err(|error| capture_error(error.to_string()))?;
         match reply {
             RendererCaptureScreenshotReply::Captured(image) => Ok(
-                DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
+                AutomationResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
                     mime_type: image.mime_type,
                     width: image.width,
                     height: image.height,
@@ -521,14 +521,14 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
 pub(super) fn execute_devtools_print_to_pdf_command(
     conn: &mut CdpConnection,
     command: DevToolsPrintToPdfCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     validate_page_capture_target_context(conn, &command.context)?;
     Err(devtools_print_to_pdf_error(&command))
 }
 
 pub(super) fn validate_page_capture_target_context(
     conn: &CdpConnection,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
 ) -> Result<(), DevToolsError> {
     if let Some(target_id) = context.target_id.as_ref() {
         page_capture_route_for_context_id(conn, target_id.as_str())?;
@@ -551,7 +551,7 @@ pub(super) fn start_devtools_capture_screenshot_command(
     if let Err(error) = validate_page_capture_target_context(conn, &command.context) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
     }
-    if command.context.protocol != DevToolsProtocol::Cdp {
+    if command.context.protocol != FrontendProtocol::Cdp {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
             devtools_capture_screenshot_error(&command),
         ));
@@ -599,7 +599,7 @@ pub(super) fn start_devtools_print_to_pdf_command(
     if let Err(error) = validate_page_capture_target_context(conn, &command.context) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
     }
-    if command.context.protocol != DevToolsProtocol::Cdp {
+    if command.context.protocol != FrontendProtocol::Cdp {
         return PageCommandTaskStep::Complete(complete_devtools_print_to_pdf_command(
             conn, command,
         ));
@@ -662,13 +662,13 @@ pub(super) fn start_devtools_print_to_pdf_command(
 pub(super) fn build_cdp_get_layout_metrics_command(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
-) -> crate::devtools_runtime::DevToolsGetLayoutMetricsCommand {
+) -> crate::automation::DevToolsGetLayoutMetricsCommand {
     let (browser_context_id, target_id) = conn
         .target_owner_identity_for_session(cmd.session_id)
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
-    crate::devtools_runtime::DevToolsGetLayoutMetricsCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+    crate::automation::DevToolsGetLayoutMetricsCommand {
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
     }
 }
 
@@ -677,13 +677,13 @@ pub(super) fn try_start_page_get_layout_metrics_command(
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
     let command = build_cdp_get_layout_metrics_command(conn, cmd);
-    start_devtools_page_command(conn, cmd.id, DevToolsCommand::GetLayoutMetrics(command))
+    start_devtools_page_command(conn, cmd.id, AutomationCommand::GetLayoutMetrics(command))
 }
 
 pub(super) fn start_devtools_get_layout_metrics_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command: crate::devtools_runtime::DevToolsGetLayoutMetricsCommand,
+    command: crate::automation::DevToolsGetLayoutMetricsCommand,
 ) -> PageCommandTaskStep {
     let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, command_session_id);
@@ -717,5 +717,5 @@ pub(super) fn try_start_page_print_to_pdf_command(
         Ok(command) => command,
         Err(plan) => return PageCommandTaskStep::Complete(plan),
     };
-    start_devtools_page_command(conn, cmd.id, DevToolsCommand::PrintToPdf(command))
+    start_devtools_page_command(conn, cmd.id, AutomationCommand::PrintToPdf(command))
 }

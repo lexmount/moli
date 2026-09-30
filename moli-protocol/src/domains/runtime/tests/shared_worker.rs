@@ -1,8 +1,8 @@
 use super::*;
 
-use crate::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsGetRealmsCommand,
-    DevToolsProtocol, DevToolsSessionId, DevToolsTargetId, RuntimeExecutionContextEvent,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsGetRealmsCommand,
+    DevToolsSessionId, DevToolsTargetId, FrontendProtocol, RuntimeExecutionContextEvent,
 };
 
 async fn wait_until_runtime_expression_true(
@@ -165,9 +165,9 @@ async fn get_realms_on_shared_worker_target_waits_for_renderer_context() {
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: Some(DevToolsTargetId::from("TID-shared-worker")),
                 browser_context_id: None,
@@ -176,7 +176,7 @@ async fn get_realms_on_shared_worker_target_waits_for_renderer_context() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -195,9 +195,9 @@ async fn get_realms_on_shared_worker_target_returns_real_renderer_realm() {
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: Some(DevToolsTargetId::from("TID-shared-worker")),
                 browser_context_id: None,
@@ -206,7 +206,7 @@ async fn get_realms_on_shared_worker_target_returns_real_renderer_realm() {
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -234,9 +234,9 @@ async fn get_realms_global_enumeration_waits_for_shared_worker_renderer_context(
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: None,
                 browser_context_id: None,
@@ -245,7 +245,7 @@ async fn get_realms_global_enumeration_waits_for_shared_worker_renderer_context(
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 
@@ -266,9 +266,9 @@ async fn get_realms_global_enumeration_includes_shared_worker_real_renderer_real
 
     let (result, _) = ctx
         .conn
-        .execute_devtools_command(DevToolsCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: Some(DevToolsSessionId::from("bidi-session-1")),
                 target_id: None,
                 browser_context_id: None,
@@ -277,7 +277,7 @@ async fn get_realms_global_enumeration_includes_shared_worker_real_renderer_real
         }))
         .await
         .into_parts();
-    let DevToolsCommandResult::Realms(result) = result.expect("getRealms should succeed") else {
+    let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
 

@@ -1,4 +1,4 @@
-use moli_protocol::devtools_runtime::{
+use moli_protocol::automation::{
     DevToolsBrowserContextId, DevToolsCookieFilter, DevToolsCookieParam,
     DevToolsDeleteCookiesCommand, DevToolsGetCookiesCommand, DevToolsSetCookiesCommand,
     DevToolsTargetId,

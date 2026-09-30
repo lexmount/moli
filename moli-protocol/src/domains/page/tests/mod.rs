@@ -1,13 +1,13 @@
 use super::{LOADER_ID, build_mhtml_snapshot, child_frame_security_identity};
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
+    DevToolsGetFrameTreeCommand, DevToolsGetFrameTreesCommand, DevToolsTargetId, FrontendProtocol,
+    NavigationFrameEventKind,
+};
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics,
     FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL, PageTargetHost,
     PendingCdpCommandDispatch, ServiceWorkerTargetState, URL_BASE,
-};
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsGetFrameTreeCommand, DevToolsGetFrameTreesCommand, DevToolsProtocol, DevToolsTargetId,
-    NavigationFrameEventKind,
 };
 use crate::testing::{
     TestContext, wait_until_frame_stopped_loading, wait_until_message, wait_until_messages,

@@ -232,12 +232,10 @@ fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
 fn bidi_channel_listener_for_test(channel: &str) -> PendingBidiChannelListener {
     PendingBidiChannelListener::new(
         Some(DevToolsTargetId::from("TID-active")),
-        Some(crate::devtools_runtime::DevToolsRealmId::from(
-            "realm-active",
-        )),
-        crate::devtools_runtime::DevToolsRemoteHandleId::from(format!("channel-proxy-{channel}")),
+        Some(crate::automation::DevToolsRealmId::from("realm-active")),
+        crate::automation::DevToolsRemoteHandleId::from(format!("channel-proxy-{channel}")),
         format!("webdriver-bidi-channel-{channel}"),
-        crate::devtools_runtime::DevToolsBidiChannelProperties {
+        crate::automation::DevToolsBidiChannelProperties {
             channel: channel.to_owned(),
             ownership: DevToolsResultOwnership::None,
             serialization_options: None,
@@ -1910,12 +1908,10 @@ fn stale_bidi_listener_reply_does_not_emit_or_restart_on_replacement_page() {
 fn bidi_listener_result_handles_stay_in_user_object_group() {
     let listener = PendingBidiChannelListener::new(
         Some(DevToolsTargetId::from("TID-active")),
-        Some(crate::devtools_runtime::DevToolsRealmId::from(
-            "realm-active",
-        )),
-        crate::devtools_runtime::DevToolsRemoteHandleId::from("channel-proxy"),
+        Some(crate::automation::DevToolsRealmId::from("realm-active")),
+        crate::automation::DevToolsRemoteHandleId::from("channel-proxy"),
         "webdriver-bidi-channel-infra".to_owned(),
-        crate::devtools_runtime::DevToolsBidiChannelProperties {
+        crate::automation::DevToolsBidiChannelProperties {
             channel: "preload".to_owned(),
             ownership: DevToolsResultOwnership::Root,
             serialization_options: None,
@@ -1940,15 +1936,13 @@ fn bidi_listener_result_handles_stay_in_user_object_group() {
 fn bidi_listener_uses_deep_serialization_additional_parameters() {
     let listener = PendingBidiChannelListener::new(
         Some(DevToolsTargetId::from("TID-active")),
-        Some(crate::devtools_runtime::DevToolsRealmId::from(
-            "realm-active",
-        )),
-        crate::devtools_runtime::DevToolsRemoteHandleId::from("channel-proxy"),
+        Some(crate::automation::DevToolsRealmId::from("realm-active")),
+        crate::automation::DevToolsRemoteHandleId::from("channel-proxy"),
         "webdriver-bidi-channel-infra".to_owned(),
-        crate::devtools_runtime::DevToolsBidiChannelProperties {
+        crate::automation::DevToolsBidiChannelProperties {
             channel: "preload".to_owned(),
             ownership: DevToolsResultOwnership::None,
-            serialization_options: Some(crate::devtools_runtime::DevToolsSerializationOptions {
+            serialization_options: Some(crate::automation::DevToolsSerializationOptions {
                 max_object_depth: Some(1),
                 max_dom_depth: Some(2),
                 include_shadow_tree: Some("open".to_owned()),

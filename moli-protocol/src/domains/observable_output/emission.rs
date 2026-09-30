@@ -8,8 +8,8 @@ use super::output_queue::{
     ObservableSessionAuditsPreparedRange,
 };
 use super::runtime_emission::mark_runtime_observable_emission_cursor_for_session_owner;
+use crate::automation::DevToolsTargetId;
 use crate::conn::{BackgroundProtocolEvent, CdpConnection, monotonic_timestamp_seconds};
-use crate::devtools_runtime::DevToolsTargetId;
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSlot,
 };

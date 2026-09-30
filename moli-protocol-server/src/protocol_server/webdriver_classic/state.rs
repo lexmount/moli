@@ -11,11 +11,11 @@ use moli_cookie_jar::StoredCookie;
 use moli_core::{page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig};
 use moli_protocol::{
     CdpInitialStoragePartition, DevToolsPageResidenceIdentity,
-    devtools_runtime::{
-        DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsDomNodeReference,
+    automation::{
+        AutomationCommand, AutomationContext, AutomationResult, DevToolsDomNodeReference,
         DevToolsError, DevToolsErrorKind, DevToolsFrameId, DevToolsGetFrameOwnerCommand,
-        DevToolsGetFrameOwnerResult, DevToolsGetFrameTreeCommand, DevToolsProtocol,
-        DevToolsSessionId, DevToolsTargetId, DevToolsTerminateExecutionCommand,
+        DevToolsGetFrameOwnerResult, DevToolsGetFrameTreeCommand, DevToolsSessionId,
+        DevToolsTargetId, DevToolsTerminateExecutionCommand, FrontendProtocol,
     },
 };
 use moli_protocol_webdriver_classic::{
@@ -30,8 +30,8 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cdp_scheduler::{
-    CdpScheduler, CdpSchedulerEventReceivers, DevToolsCommandExecution,
-    DevToolsPageCommandExecution, ProtocolAdapterScheduler,
+    AutomationExecution, AutomationPageExecution, CdpScheduler, CdpSchedulerEventReceivers,
+    ProtocolAdapterScheduler,
 };
 
 use super::super::webdriver_bidi::{
@@ -392,7 +392,7 @@ impl ClassicSessionManager {
         &mut self,
         session_id: &str,
         context: &ClassicDevToolsCommandContext,
-    ) -> Result<Vec<DevToolsCommand>, ClassicError> {
+    ) -> Result<Vec<AutomationCommand>, ClassicError> {
         let Some(action_state) = self.registry.action_state_mut(session_id) else {
             return Err(ClassicError::new(
                 ClassicErrorCode::InvalidSessionId,
@@ -495,33 +495,33 @@ impl ClassicSessionRuntimeHandle {
 
     pub(super) async fn execute(
         &self,
-        command: DevToolsCommand,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_inner(command, None).await
     }
 
     pub(super) async fn execute_inner(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_with_options(command, timeout, None, false)
             .await
     }
 
     pub(super) async fn execute_with_pending_navigation_wait(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_with_options(command, timeout, pending_navigation_timeout, false)
             .await
     }
 
     pub(super) async fn wait_for_document_lifecycle(
         &self,
-        context: DevToolsCommandContext,
+        context: AutomationContext,
         milestone: RendererDocumentLifecycleMilestone,
         timeout: Option<Duration>,
     ) -> Result<(), DevToolsError> {
@@ -549,11 +549,11 @@ impl ClassicSessionRuntimeHandle {
 
     async fn execute_with_options(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
         terminate_execution_on_timeout: bool,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_request(
             command,
             timeout,
@@ -567,8 +567,8 @@ impl ClassicSessionRuntimeHandle {
 
     pub(super) async fn execute_with_page_residence(
         &self,
-        command: DevToolsCommand,
-    ) -> Result<(DevToolsCommandResult, DevToolsPageResidenceIdentity), DevToolsError> {
+        command: AutomationCommand,
+    ) -> Result<(AutomationResult, DevToolsPageResidenceIdentity), DevToolsError> {
         let execution = self.execute_request(command, None, None, false, None).await;
         let result = execution.result?;
         let page_residence = execution.page_residence.ok_or_else(|| {
@@ -582,9 +582,9 @@ impl ClassicSessionRuntimeHandle {
 
     pub(super) async fn execute_script_with_page_residence(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
-    ) -> Result<(DevToolsCommandResult, DevToolsPageResidenceIdentity), DevToolsError> {
+    ) -> Result<(AutomationResult, DevToolsPageResidenceIdentity), DevToolsError> {
         let execution = self
             .execute_request(command, timeout, None, true, None)
             .await;
@@ -600,9 +600,9 @@ impl ClassicSessionRuntimeHandle {
 
     pub(super) async fn execute_on_page(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         expected_page: DevToolsPageResidenceIdentity,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_request(command, None, None, false, Some(expected_page))
             .await
             .result
@@ -610,10 +610,10 @@ impl ClassicSessionRuntimeHandle {
 
     pub(super) async fn execute_script_on_page(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
         expected_page: DevToolsPageResidenceIdentity,
-    ) -> Result<DevToolsCommandResult, DevToolsError> {
+    ) -> Result<AutomationResult, DevToolsError> {
         self.execute_request(command, timeout, None, true, Some(expected_page))
             .await
             .result
@@ -621,7 +621,7 @@ impl ClassicSessionRuntimeHandle {
 
     async fn execute_request(
         &self,
-        command: DevToolsCommand,
+        command: AutomationCommand,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
         terminate_execution_on_timeout: bool,
@@ -831,7 +831,7 @@ impl ClassicSessionRuntimeHandle {
 }
 
 struct ClassicSessionRuntimeCommandExecution {
-    result: Result<DevToolsCommandResult, DevToolsError>,
+    result: Result<AutomationResult, DevToolsError>,
     page_residence: Option<DevToolsPageResidenceIdentity>,
 }
 
@@ -846,7 +846,7 @@ impl ClassicSessionRuntimeCommandExecution {
 
 enum ClassicSessionRuntimeRequest {
     Execute {
-        command: Box<DevToolsCommand>,
+        command: Box<AutomationCommand>,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
         terminate_execution_on_timeout: bool,
@@ -854,7 +854,7 @@ enum ClassicSessionRuntimeRequest {
         response_tx: oneshot::Sender<ClassicSessionRuntimeCommandExecution>,
     },
     WaitForDocumentLifecycle {
-        context: DevToolsCommandContext,
+        context: AutomationContext,
         milestone: RendererDocumentLifecycleMilestone,
         timeout: Option<Duration>,
         response_tx: oneshot::Sender<Result<(), DevToolsError>>,
@@ -956,7 +956,7 @@ async fn handle_classic_session_runtime_request(
                 return ClassicSessionRuntimeRequestOutcome::Continue;
             }
             let termination_context = command.context().clone();
-            let mut execution = execute_classic_devtools_command_with_pending_navigation_retry(
+            let mut execution = execute_classic_automation_command_with_pending_navigation_retry(
                 scheduler,
                 receivers,
                 *command,
@@ -974,10 +974,10 @@ async fn handle_classic_session_runtime_request(
                 // Finish the IO-side termination before the HTTP handler
                 // releases argument handles or admits the next Classic
                 // command on this session.
-                let termination = execute_classic_devtools_command_once(
+                let termination = execute_classic_automation_command_once(
                     scheduler,
                     receivers,
-                    DevToolsCommand::TerminateExecution(DevToolsTerminateExecutionCommand {
+                    AutomationCommand::TerminateExecution(DevToolsTerminateExecutionCommand {
                         context: termination_context,
                     }),
                     Some(CLASSIC_SCRIPT_TERMINATION_TIMEOUT),
@@ -1181,15 +1181,15 @@ async fn handle_classic_session_runtime_request(
     }
 }
 
-async fn execute_classic_devtools_command_with_pending_navigation_retry(
+async fn execute_classic_automation_command_with_pending_navigation_retry(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     timeout: Option<Duration>,
     pending_navigation_timeout: Option<Duration>,
     expected_page: Option<&DevToolsPageResidenceIdentity>,
 ) -> ClassicDevToolsCommandExecution {
-    let mut execution = execute_classic_devtools_command_once(
+    let mut execution = execute_classic_automation_command_once(
         scheduler,
         receivers,
         command.clone(),
@@ -1260,7 +1260,7 @@ async fn execute_classic_devtools_command_with_pending_navigation_retry(
             }
             None => None,
         };
-        let retry = execute_classic_devtools_command_once(
+        let retry = execute_classic_automation_command_once(
             scheduler,
             receivers,
             command.clone(),
@@ -1277,18 +1277,18 @@ async fn execute_classic_devtools_command_with_pending_navigation_retry(
     }
 }
 
-async fn execute_classic_devtools_command_once(
+async fn execute_classic_automation_command_once(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     timeout: Option<Duration>,
     expected_page: Option<&DevToolsPageResidenceIdentity>,
 ) -> ClassicDevToolsCommandExecution {
-    let DevToolsPageCommandExecution {
+    let AutomationPageExecution {
         execution,
         page_residence,
     } = scheduler
-        .execute_devtools_command_with_external_load_wait_and_page_residence(
+        .execute_automation_command_with_external_load_wait_and_page_residence(
             receivers,
             command,
             timeout,
@@ -1302,12 +1302,12 @@ async fn execute_classic_devtools_command_once(
 }
 
 struct ClassicDevToolsCommandExecution {
-    execution: DevToolsCommandExecution,
+    execution: AutomationExecution,
     page_residence: Option<DevToolsPageResidenceIdentity>,
 }
 
 fn classic_runtime_result_is_navigation_changing_document(
-    result: &Result<DevToolsCommandResult, DevToolsError>,
+    result: &Result<AutomationResult, DevToolsError>,
 ) -> bool {
     matches!(
         result,
@@ -1636,24 +1636,24 @@ async fn classic_frame_owner_reference_on_page(
     frame_id: &str,
     expected_page: &DevToolsPageResidenceIdentity,
 ) -> Result<DevToolsGetFrameOwnerResult, DevToolsError> {
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from(session_id)),
         target_id: Some(DevToolsTargetId::from(target_id)),
         browser_context_id: None,
     };
     ensure_classic_command_page_is_current(scheduler, &context, expected_page)?;
     match scheduler
-        .execute_devtools_command_with_external_load_wait(
+        .execute_automation_command_with_external_load_wait(
             receivers,
-            DevToolsCommand::GetFrameOwner(DevToolsGetFrameOwnerCommand {
+            AutomationCommand::GetFrameOwner(DevToolsGetFrameOwnerCommand {
                 context,
                 frame_id: DevToolsFrameId::new(frame_id),
             }),
         )
         .await
     {
-        Ok(DevToolsCommandResult::GetFrameOwner(owner)) => Ok(owner),
+        Ok(AutomationResult::GetFrameOwner(owner)) => Ok(owner),
         Ok(_) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedFrameOwnerResult",
@@ -1710,23 +1710,23 @@ async fn classic_frame_tree(
     session_id: &str,
     target_id: &str,
 ) -> Result<serde_json::Value, DevToolsError> {
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from(session_id)),
         target_id: Some(DevToolsTargetId::from(target_id)),
         browser_context_id: None,
     };
     match scheduler
-        .execute_devtools_command_with_external_load_wait(
+        .execute_automation_command_with_external_load_wait(
             receivers,
-            DevToolsCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
+            AutomationCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
                 context,
                 max_depth: None,
             }),
         )
         .await
     {
-        Ok(DevToolsCommandResult::GetFrameTree(result)) => Ok(result.frame_tree),
+        Ok(AutomationResult::GetFrameTree(result)) => Ok(result.frame_tree),
         Ok(_) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedFrameTreeResult",
@@ -1742,24 +1742,24 @@ async fn classic_frame_tree_on_page(
     target_id: &str,
     expected_page: &DevToolsPageResidenceIdentity,
 ) -> Result<serde_json::Value, DevToolsError> {
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from(session_id)),
         target_id: Some(DevToolsTargetId::from(target_id)),
         browser_context_id: None,
     };
     ensure_classic_command_page_is_current(scheduler, &context, expected_page)?;
     match scheduler
-        .execute_devtools_command_with_external_load_wait(
+        .execute_automation_command_with_external_load_wait(
             receivers,
-            DevToolsCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
+            AutomationCommand::GetFrameTree(DevToolsGetFrameTreeCommand {
                 context,
                 max_depth: None,
             }),
         )
         .await
     {
-        Ok(DevToolsCommandResult::GetFrameTree(result)) => Ok(result.frame_tree),
+        Ok(AutomationResult::GetFrameTree(result)) => Ok(result.frame_tree),
         Ok(_) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedFrameTreeResult",
@@ -1770,7 +1770,7 @@ async fn classic_frame_tree_on_page(
 
 fn ensure_classic_command_page_is_current(
     scheduler: &mut CdpScheduler,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
     expected_page: &DevToolsPageResidenceIdentity,
 ) -> Result<(), DevToolsError> {
     if scheduler.page_residence_identity_for_devtools_context(context)

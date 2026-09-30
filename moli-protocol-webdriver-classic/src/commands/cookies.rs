@@ -1,6 +1,6 @@
-use moli_protocol::devtools_runtime::{
-    DevToolsCommand, DevToolsCookieParam, DevToolsDeleteCookiesCommand, DevToolsGetCookiesCommand,
-    DevToolsGetCookiesResult, DevToolsSetCookiesCommand,
+use moli_protocol::automation::{
+    AutomationCommand, DevToolsCookieParam, DevToolsDeleteCookiesCommand,
+    DevToolsGetCookiesCommand, DevToolsGetCookiesResult, DevToolsSetCookiesCommand,
 };
 use serde_json::{Value, json};
 
@@ -13,8 +13,8 @@ use super::parsing::{
 pub fn get_cookies_command(
     context: &ClassicDevToolsCommandContext,
     current_url: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::GetCookies(DevToolsGetCookiesCommand {
+) -> AutomationCommand {
+    AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
         context: context.command_context(),
         browser_context_id: None,
         urls: Some(vec![current_url.into()]),
@@ -26,7 +26,7 @@ pub fn add_cookie_command(
     context: &ClassicDevToolsCommandContext,
     params: &Value,
     current_url: impl Into<String>,
-) -> Result<DevToolsCommand, ClassicError> {
+) -> Result<AutomationCommand, ClassicError> {
     let cookie = params
         .get("cookie")
         .and_then(Value::as_object)
@@ -47,7 +47,7 @@ pub fn add_cookie_command(
             "sameSite must be None, Lax, or Strict",
         ));
     }
-    Ok(DevToolsCommand::SetCookies(DevToolsSetCookiesCommand {
+    Ok(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
         context: context.command_context(),
         browser_context_id: None,
         cookies: vec![DevToolsCookieParam {
@@ -72,8 +72,8 @@ pub fn add_cookie_command(
 pub fn delete_all_cookies_command(
     context: &ClassicDevToolsCommandContext,
     current_url: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
+) -> AutomationCommand {
+    AutomationCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
         context: context.command_context(),
         browser_context_id: None,
         name: None,
@@ -89,8 +89,8 @@ pub fn delete_cookie_command(
     context: &ClassicDevToolsCommandContext,
     name: impl Into<String>,
     current_url: impl Into<String>,
-) -> DevToolsCommand {
-    DevToolsCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
+) -> AutomationCommand {
+    AutomationCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
         context: context.command_context(),
         browser_context_id: None,
         name: Some(name.into()),

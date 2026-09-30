@@ -1,13 +1,13 @@
+use crate::automation::{
+    AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkInterceptId,
+    DevToolsNetworkResourceType, DevToolsRequestId, DevToolsTargetId, NetworkAuthChallengeEvent,
+    NetworkRequestEvent,
+};
 use crate::conn::{BackgroundProtocolEvent, CdpConnection, build_event};
 use crate::conn::{
     FetchAuthChallenge, NavigationDispatchState, PendingFetchAuthNavigation,
     PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchResponseRequest,
-};
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkInterceptId,
-    DevToolsNetworkResourceType, DevToolsRequestId, DevToolsTargetId, NetworkAuthChallengeEvent,
-    NetworkRequestEvent,
 };
 use crate::domains::network;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};

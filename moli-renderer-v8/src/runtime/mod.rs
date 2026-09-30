@@ -411,7 +411,7 @@ pub(in crate::runtime) use self::phase_one::{
 };
 pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
 pub use self::protocol_output::{
-    RendererDocumentTitleChanged, RendererNativeCommand, RendererNativeCommandReadyResponse,
+    RendererCdpCall, RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
     RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,

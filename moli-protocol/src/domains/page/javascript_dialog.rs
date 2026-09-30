@@ -38,7 +38,7 @@ pub(super) fn handle_javascript_dialog_command(
     match start_devtools_page_command(
         conn,
         cmd.id,
-        DevToolsCommand::HandleJavaScriptDialog(command),
+        AutomationCommand::HandleJavaScriptDialog(command),
     ) {
         PageCommandTaskStep::Complete(plan) => plan,
         PageCommandTaskStep::Pending(_) => {
@@ -60,7 +60,7 @@ pub(super) fn build_cdp_handle_javascript_dialog_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     Ok(DevToolsHandleJavaScriptDialogCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         accept: params.accept,
         prompt_text: params.prompt_text.unwrap_or_default(),
     })
@@ -111,7 +111,7 @@ pub(super) fn finish_devtools_set_javascript_dialog_prompt_text_command(
     conn: &mut CdpConnection,
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
     owner: &CommandOwnerScope,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
     let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
         let dialog_state = &mut state.page_session_state.javascript_dialog_state;
@@ -136,7 +136,7 @@ pub(super) fn finish_devtools_set_javascript_dialog_prompt_text_command(
                 "No dialog is showing",
             ));
         }
-        Ok(DevToolsCommandResult::Empty)
+        Ok(AutomationResult::Empty)
     }) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchAlert,
@@ -209,16 +209,16 @@ pub(in crate::domains) async fn emit_javascript_dialog_activity_background_event
 pub(super) fn execute_devtools_get_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsGetJavaScriptDialogCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let owner = page_command_owner(conn, &command.context)?;
     let result = finish_devtools_get_javascript_dialog_command(conn, &owner);
-    result.map(DevToolsCommandResult::JavaScriptDialog)
+    result.map(AutomationResult::JavaScriptDialog)
 }
 
 pub(super) fn execute_devtools_set_javascript_dialog_prompt_text_command(
     conn: &mut CdpConnection,
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let owner = page_command_owner(conn, &command.context)?;
     finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, &owner)
 }
@@ -227,7 +227,7 @@ pub(super) fn execute_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
 ) {
     let owner = match page_command_owner(conn, &command.context) {
@@ -236,7 +236,7 @@ pub(super) fn execute_devtools_handle_javascript_dialog_command(
     };
     let result = finish_devtools_handle_javascript_dialog_command(conn, command, &owner);
     match result {
-        Ok(event) => (Ok(DevToolsCommandResult::Empty), vec![event]),
+        Ok(event) => (Ok(AutomationResult::Empty), vec![event]),
         Err(error) => (Err(error), Vec::new()),
     }
 }
@@ -244,13 +244,13 @@ pub(super) fn execute_devtools_handle_javascript_dialog_command(
 #[cfg(test)]
 use moli_core::page::RendererPendingJavaScriptDialog;
 
+use crate::automation::PageJavaScriptDialogOpeningEvent;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, TargetPageProtocolAttachmentIdentity,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
 };
 #[cfg(test)]
 use crate::conn::{TargetJavaScriptDialogScopeObserver, TargetPageResidenceIdentity};
-use crate::devtools_runtime::PageJavaScriptDialogOpeningEvent;
 
 pub(super) type PreparedJavaScriptDialog = TargetPreparedJavaScriptDialog;
 

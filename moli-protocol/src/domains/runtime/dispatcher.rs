@@ -2,15 +2,15 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
-use crate::devtools_runtime::{
-    DevToolsBidiChannelProperties, DevToolsCallFunctionCommand, DevToolsCommand,
-    DevToolsCommandContext, DevToolsCommandResult, DevToolsDomNodeReference, DevToolsError,
-    DevToolsErrorKind, DevToolsEvaluateScriptCommand, DevToolsGetFrameOwnerCommand,
-    DevToolsGetRealmsCommand, DevToolsGetRealmsResult, DevToolsLocateNodesCommand,
-    DevToolsLocateNodesLocator, DevToolsLocateNodesResult, DevToolsLocateNodesTextMatch,
-    DevToolsProtocol, DevToolsRealmId, DevToolsReleaseObjectsCommand, DevToolsRemoteHandleId,
-    DevToolsRemoteValue, DevToolsResolveNodeCommand, DevToolsResultOwnership,
-    DevToolsScriptException, DevToolsScriptResult, DevToolsSerializationOptions, DevToolsTargetId,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsBidiChannelProperties,
+    DevToolsCallFunctionCommand, DevToolsDomNodeReference, DevToolsError, DevToolsErrorKind,
+    DevToolsEvaluateScriptCommand, DevToolsGetFrameOwnerCommand, DevToolsGetRealmsCommand,
+    DevToolsGetRealmsResult, DevToolsLocateNodesCommand, DevToolsLocateNodesLocator,
+    DevToolsLocateNodesResult, DevToolsLocateNodesTextMatch, DevToolsRealmId,
+    DevToolsReleaseObjectsCommand, DevToolsRemoteHandleId, DevToolsRemoteValue,
+    DevToolsResolveNodeCommand, DevToolsResultOwnership, DevToolsScriptException,
+    DevToolsScriptResult, DevToolsSerializationOptions, DevToolsTargetId, FrontendProtocol,
     RuntimeExecutionContextEvent, is_webdriver_bidi_node_shared_id,
     webdriver_bidi_node_shared_id_for_backend_node_id,
 };
@@ -22,19 +22,19 @@ use moli_core::page::{
 use moli_page_types::RendererInspectorResponseDelivery;
 
 use crate::conn::{
-    BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
-    BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection,
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute,
-    ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
+    AutomationCommandDispatchOutcome, AutomationExecutionOutput, BackgroundCommandResponsePayload,
+    BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent, BidiChannelListenerResidence,
+    BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess,
+    CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait,
+    Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
     CompletedServiceWorkerRuntimeProtocolMessageDispatch,
-    CompletedSharedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
-    DevToolsCommandExecutionOutput, DuplicatePendingRendererCommand, InspectorCommandDispatch,
-    ParsedCdpCommand, PendingBidiChannelListener, PendingMoliDiagnosticsDispatch,
-    PendingRuntimeBindingPageCommandDispatch, PendingRuntimeChildDefaultContextLookupDispatch,
-    PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
-    PendingServiceWorkerRuntimeProtocolMessageDispatch,
+    CompletedSharedWorkerRuntimeProtocolMessageDispatch, DuplicatePendingRendererCommand,
+    InspectorCommandDispatch, ParsedCdpCommand, PendingBidiChannelListener,
+    PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
+    PendingRuntimeChildDefaultContextLookupDispatch, PendingRuntimeEnableEventsDispatch,
+    PendingRuntimeProtocolMessageDispatch, PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
     RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeEnableReplayEvent,
     RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady,
@@ -146,7 +146,7 @@ struct DevToolsRuntimeTarget {
 
 struct DevToolsRuntimeCommandDispatchState {
     internal_command_id: u64,
-    command_context: DevToolsCommandContext,
+    command_context: AutomationContext,
     result_kind: DevToolsRuntimeCommandResultKind,
     result_ownership: DevToolsResultOwnership,
     serialization_options: Option<DevToolsSerializationOptions>,
@@ -175,7 +175,7 @@ pub struct CompletedDevToolsRuntimeCommandDispatch {
 
 pub enum DevToolsRuntimeCommandTaskStep {
     Pending(Box<PendingDevToolsRuntimeCommandDispatch>),
-    Complete(Box<DevToolsCommandDispatchOutcome>),
+    Complete(Box<AutomationCommandDispatchOutcome>),
 }
 
 impl PendingDevToolsRuntimeCommandDispatch {
@@ -1208,19 +1208,19 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
 
 pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    mut command: DevToolsCommand,
-) -> DevToolsCommandExecutionOutput {
-    if let DevToolsCommand::GetRealms(command) = command {
-        return DevToolsCommandExecutionOutput::new(
+    mut command: AutomationCommand,
+) -> AutomationExecutionOutput {
+    if let AutomationCommand::GetRealms(command) = command {
+        return AutomationExecutionOutput::new(
             execute_devtools_get_realms_command_async(conn, command).await,
         );
     }
-    if let DevToolsCommand::ReleaseObjects(command) = command {
-        return DevToolsCommandExecutionOutput::new(
+    if let AutomationCommand::ReleaseObjects(command) = command {
+        return AutomationExecutionOutput::new(
             execute_devtools_release_objects_command_async(conn, command).await,
         );
     }
-    if let DevToolsCommand::LocateNodes(command) = command {
+    if let AutomationCommand::LocateNodes(command) = command {
         return execute_devtools_locate_nodes_command_async(conn, command).await;
     }
     let result_kind = devtools_runtime_command_result_kind(&command);
@@ -1228,7 +1228,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     let serialization_options = devtools_runtime_serialization_options(&command);
     let target = match devtools_runtime_target_async(conn, &command).await {
         Ok(target) => target,
-        Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
+        Err(error) => return AutomationExecutionOutput::new(Err(error)),
     };
     // Control commands must reach their Inspector route without first asking
     // the Page owner for realm inventory. That owner can be the JavaScript
@@ -1240,10 +1240,10 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
         DevToolsRuntimeCommandResultKind::Empty => None,
     };
     let target_owner = CommandOwnerScope::for_route(target.route.clone());
-    if let DevToolsCommand::CallFunction(call_function) = &mut command
+    if let AutomationCommand::CallFunction(call_function) = &mut command
         && matches!(
             call_function.context.protocol,
-            DevToolsProtocol::WebDriverBidi
+            FrontendProtocol::WebDriverBidi
         )
         && let Err(error) = remap_bidi_node_shared_references_for_target_async(
             conn,
@@ -1253,7 +1253,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
         )
         .await
     {
-        return DevToolsCommandExecutionOutput::new(Err(error));
+        return AutomationExecutionOutput::new(Err(error));
     }
     let validation_result = validate_protocol_neutral_runtime_handle_realms(
         conn,
@@ -1262,7 +1262,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
         target_realm.as_ref(),
     );
     if let Err(error) = validation_result {
-        return DevToolsCommandExecutionOutput::new(Err(error));
+        return AutomationExecutionOutput::new(Err(error));
     }
     let internal_command_id = conn.next_internal_runtime_command_id();
     let mut step =
@@ -1278,7 +1278,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                         None,
                     );
                 let Some(response) = response else {
-                    return DevToolsCommandExecutionOutput::from_parts(
+                    return AutomationExecutionOutput::from_parts(
                         Err(DevToolsError::new(
                             DevToolsErrorKind::Internal,
                             "MissingDevToolsCommandResult",
@@ -1288,7 +1288,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                     );
                 };
                 if result_kind == DevToolsRuntimeCommandResultKind::Empty {
-                    return DevToolsCommandExecutionOutput::from_parts(
+                    return AutomationExecutionOutput::from_parts(
                         devtools_empty_result_from_response(response),
                         protocol_events,
                         renderer_output_predecessor,
@@ -1301,7 +1301,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                 ) {
                     Ok(result) => result,
                     Err(error) => {
-                        return DevToolsCommandExecutionOutput::from_parts(
+                        return AutomationExecutionOutput::from_parts(
                             Err(error),
                             protocol_events,
                             renderer_output_predecessor,
@@ -1347,7 +1347,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                     &result,
                     target_realm.as_ref(),
                 );
-                return DevToolsCommandExecutionOutput::from_parts(
+                return AutomationExecutionOutput::from_parts(
                     Ok(result),
                     protocol_events,
                     renderer_output_predecessor,
@@ -1361,7 +1361,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                         .await
                     {
                         pending.forget_scheduler_deferred_inspector_reply(conn);
-                        return DevToolsCommandExecutionOutput::from_parts(
+                        return AutomationExecutionOutput::from_parts(
                             Err(DevToolsError::new(DevToolsErrorKind::Internal, message)),
                             Vec::new(),
                             None,
@@ -1380,22 +1380,22 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
 impl CdpConnection {
     pub async fn start_devtools_runtime_command_dispatch(
         &mut self,
-        mut command: DevToolsCommand,
+        mut command: AutomationCommand,
     ) -> DevToolsRuntimeCommandTaskStep {
         let command_context = command.context().clone();
-        if let DevToolsCommand::GetRealms(command) = command {
+        if let AutomationCommand::GetRealms(command) = command {
             let result = execute_devtools_get_realms_command_async(self, command).await;
             return self
                 .complete_devtools_runtime_direct_result(command_context, result, Vec::new(), None)
                 .await;
         }
-        if let DevToolsCommand::ReleaseObjects(command) = command {
+        if let AutomationCommand::ReleaseObjects(command) = command {
             let result = execute_devtools_release_objects_command_async(self, command).await;
             return self
                 .complete_devtools_runtime_direct_result(command_context, result, Vec::new(), None)
                 .await;
         }
-        if let DevToolsCommand::LocateNodes(command) = command {
+        if let AutomationCommand::LocateNodes(command) = command {
             let output = execute_devtools_locate_nodes_command_async(self, command).await;
             let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
             return self
@@ -1434,10 +1434,10 @@ impl CdpConnection {
             DevToolsRuntimeCommandResultKind::Empty => None,
         };
         let target_owner = CommandOwnerScope::for_route(target.route.clone());
-        if let DevToolsCommand::CallFunction(call_function) = &mut command
+        if let AutomationCommand::CallFunction(call_function) = &mut command
             && matches!(
                 call_function.context.protocol,
-                DevToolsProtocol::WebDriverBidi
+                FrontendProtocol::WebDriverBidi
             )
             && let Err(error) = remap_bidi_node_shared_references_for_target_async(
                 self,
@@ -1631,13 +1631,13 @@ impl CdpConnection {
 
     async fn complete_devtools_runtime_direct_result(
         &mut self,
-        command_context: DevToolsCommandContext,
-        result: Result<DevToolsCommandResult, DevToolsError>,
+        command_context: AutomationContext,
+        result: Result<AutomationResult, DevToolsError>,
         protocol_events: Vec<BackgroundProtocolEvent>,
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> DevToolsRuntimeCommandTaskStep {
         DevToolsRuntimeCommandTaskStep::Complete(Box::new(
-            self.finish_devtools_command_dispatch(
+            self.finish_automation_command_dispatch(
                 command_context,
                 result,
                 protocol_events,
@@ -2131,9 +2131,9 @@ pub(crate) async fn execute_runtime_listener_command_for_owner(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
-    use crate::devtools_runtime::{
-        DevToolsCallFunctionCommand, DevToolsCommand, DevToolsCommandContext, DevToolsProtocol,
-        DevToolsResultOwnership, RuntimeExecutionContextEvent,
+    use crate::automation::{
+        AutomationCommand, AutomationContext, DevToolsCallFunctionCommand, DevToolsResultOwnership,
+        FrontendProtocol, RuntimeExecutionContextEvent,
     };
     use moli_core::RendererOwnerLocalHostId;
     use moli_core::page::{MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererSharedWorkerConsoleMessage};
@@ -2154,18 +2154,17 @@ mod protocol_neutral_tests {
     };
     use super::{
         DevToolsRuntimeTarget, RuntimeCommandTaskStep,
-        apply_shared_worker_runtime_completion_projection, build_cdp_call_function_command,
+        apply_shared_worker_runtime_completion_projection,
+        automation_command_has_bidi_script_channel_arguments, build_cdp_call_function_command,
         build_cdp_evaluate_script_command, cdp_call_argument_from_devtools_argument,
         devtools_call_function_cdp_arguments, devtools_call_function_declaration,
-        devtools_call_function_deserializes_bidi_local_values,
-        devtools_command_has_bidi_script_channel_arguments, locate_nodes_error_from_exception,
+        devtools_call_function_deserializes_bidi_local_values, locate_nodes_error_from_exception,
         materialize_devtools_script_window_remote_value, start_console_inspector_command_dispatch,
         start_devtools_runtime_command,
     };
-    use crate::devtools_runtime::{
-        DevToolsCommandResult, DevToolsErrorKind, DevToolsLocateNodesLocator,
-        DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsScriptException, DevToolsScriptResult,
-        DevToolsTargetId,
+    use crate::automation::{
+        AutomationResult, DevToolsErrorKind, DevToolsLocateNodesLocator, DevToolsRemoteHandleId,
+        DevToolsRemoteValue, DevToolsScriptException, DevToolsScriptResult, DevToolsTargetId,
     };
 
     fn worker_context_created_event(context_id: i64) -> RuntimeExecutionContextEvent {
@@ -2331,7 +2330,7 @@ mod protocol_neutral_tests {
 
         let command = build_cdp_evaluate_script_command(&cmd, Some("TID-1"), Some("BID-1"), true);
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-1")
@@ -2376,11 +2375,11 @@ mod protocol_neutral_tests {
             ]
         }));
         let mut shape_only_result =
-            DevToolsCommandResult::Script(Box::new(DevToolsScriptResult::Value(shape_only)));
+            AutomationResult::Script(Box::new(DevToolsScriptResult::Value(shape_only)));
 
         materialize_devtools_script_window_remote_value(&mut shape_only_result, &target);
 
-        let DevToolsCommandResult::Script(result) = shape_only_result else {
+        let AutomationResult::Script(result) = shape_only_result else {
             panic!("expected script result");
         };
         let DevToolsScriptResult::Value(value) = *result else {
@@ -2401,11 +2400,11 @@ mod protocol_neutral_tests {
             ]
         }));
         let mut marked_result =
-            DevToolsCommandResult::Script(Box::new(DevToolsScriptResult::Value(marked_window)));
+            AutomationResult::Script(Box::new(DevToolsScriptResult::Value(marked_window)));
 
         materialize_devtools_script_window_remote_value(&mut marked_result, &target);
 
-        let DevToolsCommandResult::Script(result) = marked_result else {
+        let AutomationResult::Script(result) = marked_result else {
             panic!("expected script result");
         };
         let DevToolsScriptResult::Value(value) = *result else {
@@ -2579,7 +2578,7 @@ mod protocol_neutral_tests {
 
         let command = build_cdp_call_function_command(&cmd, Some("TID-call"), Some("BID-call"));
 
-        assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+        assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-call")
@@ -2681,8 +2680,8 @@ mod protocol_neutral_tests {
             ]
         });
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -2759,8 +2758,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_call_function_deserializes_nested_unserializable_numbers_and_bigints() {
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -2835,8 +2834,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_call_function_deserializes_channel_arguments() {
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -2869,8 +2868,8 @@ mod protocol_neutral_tests {
         assert!(devtools_call_function_deserializes_bidi_local_values(
             &command
         ));
-        assert!(devtools_command_has_bidi_script_channel_arguments(
-            &DevToolsCommand::CallFunction(command.clone())
+        assert!(automation_command_has_bidi_script_channel_arguments(
+            &AutomationCommand::CallFunction(command.clone())
         ));
         let declaration = devtools_call_function_declaration(&command, true, 1);
         assert!(!declaration.contains("__moliBidiScriptMessageQueue"));
@@ -2901,8 +2900,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_call_function_deserializes_nested_remote_references() {
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -2990,8 +2989,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_call_function_treats_remote_collection_preview_nodes_as_inert() {
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -3037,8 +3036,8 @@ mod protocol_neutral_tests {
     #[test]
     fn bidi_call_function_passes_remote_node_reference_as_remote_handle() {
         let command = DevToolsCallFunctionCommand {
-            context: DevToolsCommandContext {
-                protocol: DevToolsProtocol::WebDriverBidi,
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
                 session_id: None,
                 target_id: None,
                 browser_context_id: None,
@@ -3100,7 +3099,7 @@ mod protocol_neutral_tests {
         let step = start_devtools_runtime_command(
             &mut conn,
             &cmd,
-            DevToolsCommand::EvaluateScript(command),
+            AutomationCommand::EvaluateScript(command),
             cmd.json.to_owned(),
             false,
             RendererInspectorResponseDelivery::AdapterReply,
@@ -3144,7 +3143,7 @@ mod protocol_neutral_tests {
         let step = start_devtools_runtime_command(
             &mut conn,
             &cmd,
-            DevToolsCommand::EvaluateScript(command),
+            AutomationCommand::EvaluateScript(command),
             cmd.json.to_owned(),
             true,
             RendererInspectorResponseDelivery::AdapterReply,

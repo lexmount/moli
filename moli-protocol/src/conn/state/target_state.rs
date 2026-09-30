@@ -6,7 +6,7 @@ use moli_page_types::{DevToolsSessionKey, FrontendCommandId};
 use serde_json::{Value, json};
 
 use crate::{
-    devtools_runtime::{
+    automation::{
         DevToolsBidiChannelProperties, DevToolsRealmId, DevToolsRemoteHandleId, DevToolsTargetId,
     },
     domains::{

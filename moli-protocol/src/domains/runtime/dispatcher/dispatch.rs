@@ -920,7 +920,7 @@ pub(super) fn start_cdp_devtools_script_runtime_command(
     let await_promise = runtime_command_awaits_promise(cmd, action);
     let command = match command_kind {
         RuntimeDevToolsScriptCommand::Evaluate => {
-            DevToolsCommand::EvaluateScript(build_cdp_evaluate_script_command(
+            AutomationCommand::EvaluateScript(build_cdp_evaluate_script_command(
                 cmd,
                 target_id.as_deref(),
                 browser_context_id.as_deref(),
@@ -928,7 +928,7 @@ pub(super) fn start_cdp_devtools_script_runtime_command(
             ))
         }
         RuntimeDevToolsScriptCommand::CallFunctionOn => {
-            DevToolsCommand::CallFunction(build_cdp_call_function_command(
+            AutomationCommand::CallFunction(build_cdp_call_function_command(
                 cmd,
                 target_id.as_deref(),
                 browser_context_id.as_deref(),
@@ -955,7 +955,7 @@ pub(super) fn start_cdp_devtools_script_runtime_command(
 pub(super) fn prepare_pending_devtools_runtime_inspector_json(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<String, String> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     prepare_pending_devtools_runtime_inspector_json_for_owner(conn, cmd, &owner, command)
@@ -965,11 +965,11 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json_for_owner(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
-    command: &DevToolsCommand,
+    command: &AutomationCommand,
 ) -> Result<String, String> {
     match command {
-        DevToolsCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
-        DevToolsCommand::CallFunction(command) => {
+        AutomationCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
+        AutomationCommand::CallFunction(command) => {
             prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, command)
         }
         _ => Err("UnsupportedDevToolsCommand".to_owned()),
@@ -979,7 +979,7 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json_for_owner(
 pub(super) fn start_devtools_runtime_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     inspector_json: String,
     wait_for_deferred_reply: bool,
     response_delivery: RendererInspectorResponseDelivery,
@@ -999,17 +999,17 @@ pub(super) fn start_devtools_runtime_command(
 pub(super) fn start_devtools_runtime_command_for_owner(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     inspector_json: String,
     wait_for_deferred_reply: bool,
     response_delivery: RendererInspectorResponseDelivery,
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
     let (action, action_label, await_promise) = match &command {
-        DevToolsCommand::EvaluateScript(command) => {
+        AutomationCommand::EvaluateScript(command) => {
             (RuntimeAction::Evaluate, "evaluate", command.await_promise)
         }
-        DevToolsCommand::CallFunction(command) => (
+        AutomationCommand::CallFunction(command) => (
             RuntimeAction::CallFunctionOn,
             "callFunctionOn",
             command.await_promise,

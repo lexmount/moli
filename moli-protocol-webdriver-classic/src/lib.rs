@@ -11,8 +11,8 @@ mod responses;
 mod types;
 
 fn geometry_border_quad(
-    geometry: &moli_protocol::devtools_runtime::DevToolsDomGeometryResult,
-) -> Option<&moli_protocol::devtools_runtime::DevToolsDomQuad> {
+    geometry: &moli_protocol::automation::DevToolsDomGeometryResult,
+) -> Option<&moli_protocol::automation::DevToolsDomQuad> {
     geometry
         .box_model
         .as_ref()

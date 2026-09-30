@@ -1,4 +1,4 @@
-use crate::devtools_runtime::DevToolsRemoteValue;
+use crate::automation::DevToolsRemoteValue;
 use moli_protocol_cdp::remote_object_from_json_value;
 use serde_json::{Value, json};
 

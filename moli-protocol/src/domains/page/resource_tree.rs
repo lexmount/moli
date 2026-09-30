@@ -168,20 +168,20 @@ pub(crate) fn child_frame_security_identity(
 pub(super) async fn execute_devtools_get_frame_trees_command_async(
     conn: &mut CdpConnection,
     command: DevToolsGetFrameTreesCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let mut frame_trees = Vec::new();
     for target_info in devtools_browsing_context_target_infos(conn) {
         let Some(target_id) = target_info.target_id.clone() else {
             continue;
         };
         let frame_tree_command = DevToolsGetFrameTreeCommand {
-            context: DevToolsCommandContext {
+            context: AutomationContext {
                 target_id: Some(target_id),
                 ..command.context.clone()
             },
             max_depth: command.max_depth,
         };
-        let DevToolsCommandResult::GetFrameTree(frame_tree_result) =
+        let AutomationResult::GetFrameTree(frame_tree_result) =
             execute_devtools_get_frame_tree_command_async(conn, frame_tree_command).await?
         else {
             return Err(DevToolsError::new(
@@ -191,7 +191,7 @@ pub(super) async fn execute_devtools_get_frame_trees_command_async(
         };
         frame_trees.push(frame_tree_result);
     }
-    Ok(DevToolsCommandResult::GetFrameTrees(
+    Ok(AutomationResult::GetFrameTrees(
         DevToolsGetFrameTreesResult { frame_trees },
     ))
 }
@@ -215,7 +215,7 @@ pub(super) fn devtools_browsing_context_target_infos(
 pub(super) async fn execute_devtools_get_frame_tree_command_async(
     conn: &mut CdpConnection,
     command: DevToolsGetFrameTreeCommand,
-) -> Result<DevToolsCommandResult, DevToolsError> {
+) -> Result<AutomationResult, DevToolsError> {
     let target_info = command
         .context
         .target_id
@@ -229,14 +229,14 @@ pub(super) async fn execute_devtools_get_frame_tree_command_async(
             target_info.expect("service worker target info was checked"),
             command.max_depth,
         )
-        .map(DevToolsCommandResult::GetFrameTree);
+        .map(AutomationResult::GetFrameTree);
     }
     let owner = page_command_owner(conn, &command.context)?;
     let max_depth = command.max_depth;
     devtools_frame_tree_for_current_owner_async(conn, command, &owner)
         .await
         .map(|frame_tree| {
-            DevToolsCommandResult::GetFrameTree(DevToolsGetFrameTreeResult {
+            AutomationResult::GetFrameTree(DevToolsGetFrameTreeResult {
                 frame_tree,
                 target_info,
                 max_depth,
@@ -440,7 +440,7 @@ pub(super) fn build_cdp_get_frame_tree_command(
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
     DevToolsGetFrameTreeCommand {
-        context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
+        context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
         max_depth: None,
     }
 }

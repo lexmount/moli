@@ -9,7 +9,7 @@ use super::{
     CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, DocumentNavigationToken,
     NavigationDispatchState, NavigationLoadOutcome,
 };
-use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
 use moli_cookie_jar::StoredCookieQueryReport;
 use moli_core::page::{
@@ -161,7 +161,7 @@ mod tests {
         FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
         fetch_subresource_interception_config_for_patterns, matching_fetch_pattern,
     };
-    use crate::devtools_runtime::DevToolsNetworkResourceType;
+    use crate::automation::DevToolsNetworkResourceType;
     use moli_core::page::SubresourceResourceType;
     use url::Url;
 

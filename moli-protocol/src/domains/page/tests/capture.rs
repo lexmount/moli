@@ -20,7 +20,7 @@ async fn native_snapshot_reads_live_url_and_html_before_adapter_settlement() {
     )
     .await;
     let (pending, guard) = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap()
-        .start_native_frontend_command(1200, None, RendererNativeOperation::new(
+        .start_cdp_call(1200, None, RendererNativeOperation::new(
             RendererPageCommand::EvaluateExpression {
                 expression: "history.replaceState(null, '', '#current'); document.body.innerHTML = '<p>snapshot current</p>'".to_owned(),
                 await_promise: false,

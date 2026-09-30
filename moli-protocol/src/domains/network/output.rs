@@ -5,8 +5,8 @@ use moli_core::page::{
 use serde_json::Value;
 use url::Url;
 
+use crate::automation::DevToolsNetworkInterceptId;
 use crate::conn::PendingSubresourceFetchRequest;
-use crate::devtools_runtime::DevToolsNetworkInterceptId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetSubresourceFetchPauseOutput {

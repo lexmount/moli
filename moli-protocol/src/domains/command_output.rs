@@ -1,13 +1,13 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::{Value, json};
 
-use crate::devtools_runtime::{
-    AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
-    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsFetchRequestId,
-    DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkDataBytesType, DevToolsNetworkInterceptId,
-    DevToolsNetworkResourceType, DevToolsRealmId, DevToolsRemoteValue, DevToolsRequestId,
-    DevToolsScriptException, DevToolsScriptResult, DevToolsStackTrace, DevToolsTargetId,
-    DevToolsTargetInfo, NavigationFrameEvent, NavigationFrameEventKind, NetworkAuthChallengeEvent,
+use crate::automation::{
+    AutomationEvent, AutomationResult, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
+    DevToolsError, DevToolsErrorKind, DevToolsFetchRequestId, DevToolsFrameId, DevToolsLoaderId,
+    DevToolsNetworkDataBytesType, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
+    DevToolsRealmId, DevToolsRemoteValue, DevToolsRequestId, DevToolsScriptException,
+    DevToolsScriptResult, DevToolsStackTrace, DevToolsTargetId, DevToolsTargetInfo,
+    NavigationFrameEvent, NavigationFrameEventKind, NetworkAuthChallengeEvent,
     NetworkRedirectResponseEvent, NetworkRequestEvent, PageFileChooserOpenedEvent,
     PageJavaScriptDialogOpeningEvent, PageLifecycleEvent, RuntimeConsoleEvent,
     RuntimeExecutionContextEvent, SameDocumentNavigationEvent, ScriptExceptionEvent,
@@ -79,7 +79,7 @@ enum CommandOwnerEvent {
 
 impl CommandOutputPlan {
     pub(crate) fn success() -> Self {
-        Self::from_devtools_result(DevToolsCommandResult::Empty)
+        Self::from_devtools_result(AutomationResult::Empty)
     }
 
     pub(crate) fn error(code: i32, message: impl Into<String>) -> Self {
@@ -100,11 +100,11 @@ impl CommandOutputPlan {
         plan
     }
 
-    pub(crate) fn from_devtools_result(result: DevToolsCommandResult) -> Self {
+    pub(crate) fn from_devtools_result(result: AutomationResult) -> Self {
         Self::result(Self::devtools_result_payload(result))
     }
 
-    pub(crate) fn devtools_result_payload(result: DevToolsCommandResult) -> Value {
+    pub(crate) fn devtools_result_payload(result: AutomationResult) -> Value {
         cdp_result_payload_from_devtools_result(result)
     }
 
@@ -1605,14 +1605,14 @@ fn blocked_intercepts_from_cdp_params(params: &Value) -> Vec<DevToolsNetworkInte
         .collect()
 }
 
-fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Value {
+fn cdp_result_payload_from_devtools_result(result: AutomationResult) -> Value {
     match result {
-        DevToolsCommandResult::ElementClickPreparation(_)
-        | DevToolsCommandResult::ElementClickDispatch(_) => {
+        AutomationResult::ElementClickPreparation(_)
+        | AutomationResult::ElementClickDispatch(_) => {
             unreachable!("element click is an internal automation operation with no CDP method")
         }
-        DevToolsCommandResult::Empty | DevToolsCommandResult::TraverseHistory(_) => json!({}),
-        DevToolsCommandResult::Navigate(result) => {
+        AutomationResult::Empty | AutomationResult::TraverseHistory(_) => json!({}),
+        AutomationResult::Navigate(result) => {
             let mut payload = json!({});
             if let Some(frame_id) = result.frame_id {
                 payload["frameId"] = json!(frame_id.into_string());
@@ -1628,7 +1628,7 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
             }
             payload
         }
-        DevToolsCommandResult::GetNavigationHistory(result) => json!({
+        AutomationResult::GetNavigationHistory(result) => json!({
             "currentIndex": result.current_index,
             "entries": result
                 .entries
@@ -1644,77 +1644,75 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
                 })
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::GetFrameTree(result) => json!({
+        AutomationResult::GetFrameTree(result) => json!({
             "frameTree": result.frame_tree,
         }),
-        DevToolsCommandResult::GetFrameTrees(result) => json!({
+        AutomationResult::GetFrameTrees(result) => json!({
             "frameTrees": result
                 .frame_trees
                 .into_iter()
                 .map(|result| result.frame_tree)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::CreateTarget(result) => json!({
+        AutomationResult::CreateTarget(result) => json!({
             "targetId": result.target_id.into_string(),
         }),
-        DevToolsCommandResult::CloseTarget(result) => json!({
+        AutomationResult::CloseTarget(result) => json!({
             "success": result.success,
         }),
-        DevToolsCommandResult::GetTargets(result) => json!({
+        AutomationResult::GetTargets(result) => json!({
             "targetInfos": result
                 .targets
                 .into_iter()
                 .map(cdp_target_info)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ServiceWorkerLogs(result) => json!({
+        AutomationResult::ServiceWorkerLogs(result) => json!({
             "entries": result
                 .entries
                 .into_iter()
                 .map(service_worker_log_entry_json)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ClientWindows(result) => json!({
+        AutomationResult::ClientWindows(result) => json!({
             "clientWindows": result
                 .client_windows
                 .into_iter()
                 .map(client_window_info_json)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::ClientWindow(result) => {
-            client_window_info_json(result.client_window)
-        }
-        DevToolsCommandResult::CreateBrowserContext(result) => json!({
+        AutomationResult::ClientWindow(result) => client_window_info_json(result.client_window),
+        AutomationResult::CreateBrowserContext(result) => json!({
             "browserContextId": result.browser_context_id.into_string(),
         }),
-        DevToolsCommandResult::GetBrowserContexts(result) => json!({
+        AutomationResult::GetBrowserContexts(result) => json!({
             "browserContextIds": result
                 .browser_context_ids
                 .into_iter()
                 .map(|id| id.into_string())
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::GetTargetInfo(result) => json!({
+        AutomationResult::GetTargetInfo(result) => json!({
             "targetInfo": cdp_target_info(result.target_info),
         }),
-        DevToolsCommandResult::GetCookies(result) => json!({
+        AutomationResult::GetCookies(result) => json!({
             "cookies": result.cookies,
         }),
-        DevToolsCommandResult::DeleteCookies(_) => json!({}),
-        DevToolsCommandResult::SetCookies(result) => json!({
+        AutomationResult::DeleteCookies(_) => json!({}),
+        AutomationResult::SetCookies(result) => json!({
             "success": result.success,
             "cookieReports": result.cookie_reports,
         }),
-        DevToolsCommandResult::AddPreloadScript(result) => json!({
+        AutomationResult::AddPreloadScript(result) => json!({
             "identifier": result.script_id.into_string(),
         }),
-        DevToolsCommandResult::AddNetworkIntercept(result) => json!({
+        AutomationResult::AddNetworkIntercept(result) => json!({
             "intercept": result.intercept_id.into_string(),
         }),
-        DevToolsCommandResult::AddNetworkDataCollector(result) => json!({
+        AutomationResult::AddNetworkDataCollector(result) => json!({
             "collector": result.collector_id.into_string(),
         }),
-        DevToolsCommandResult::NetworkData(result) => json!({
+        AutomationResult::NetworkData(result) => json!({
             "bytes": {
                 "type": match result.bytes_type {
                     DevToolsNetworkDataBytesType::String => "string",
@@ -1723,14 +1721,14 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
                 "value": result.value,
             },
         }),
-        DevToolsCommandResult::Realms(result) => json!({
+        AutomationResult::Realms(result) => json!({
             "realms": result
                 .realms
                 .into_iter()
                 .map(cdp_realm_info)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::Script(result) => match *result {
+        AutomationResult::Script(result) => match *result {
             DevToolsScriptResult::Value(value) => json!({
                 "result": crate::cdp_projection::remote_object_from_devtools(value),
             }),
@@ -1761,53 +1759,51 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
                 })
             }
         },
-        DevToolsCommandResult::LocateNodes(result) => json!({
+        AutomationResult::LocateNodes(result) => json!({
             "nodes": result
                 .nodes
                 .into_iter()
                 .map(crate::cdp_projection::remote_object_from_devtools)
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::DescribeNode(result) => json!({
+        AutomationResult::DescribeNode(result) => json!({
             "node": result.node,
         }),
-        DevToolsCommandResult::GetFrameOwner(result) => json!({
+        AutomationResult::GetFrameOwner(result) => json!({
             "nodeId": result.node_id,
             "backendNodeId": result.backend_node_id,
         }),
-        DevToolsCommandResult::QuerySelector(result) => {
+        AutomationResult::QuerySelector(result) => {
             if result.multiple {
                 json!({ "nodeIds": result.node_ids })
             } else {
                 json!({ "nodeId": result.node_ids.first().copied().unwrap_or(0) })
             }
         }
-        DevToolsCommandResult::ResolveNode(result) => json!({
+        AutomationResult::ResolveNode(result) => json!({
             "object": result.object,
         }),
-        DevToolsCommandResult::GetAttributes(result) => json!({
+        AutomationResult::GetAttributes(result) => json!({
             "attributes": result
                 .attributes
                 .into_iter()
                 .flat_map(|attribute| [attribute.name, attribute.value])
                 .collect::<Vec<_>>(),
         }),
-        DevToolsCommandResult::GetText(result) => json!({
+        AutomationResult::GetText(result) => json!({
             "text": result.text,
         }),
-        DevToolsCommandResult::GetProperty(result) => json!({
+        AutomationResult::GetProperty(result) => json!({
             "value": result.value,
         }),
-        DevToolsCommandResult::PushNodesByBackendIds(result) => json!({
+        AutomationResult::PushNodesByBackendIds(result) => json!({
             "nodeIds": result.node_ids,
         }),
-        DevToolsCommandResult::GetOuterHtml(result) => {
-            Value::Object(serde_json::Map::from_iter([(
-                "outerHTML".to_owned(),
-                Value::String(result.outer_html),
-            )]))
-        }
-        DevToolsCommandResult::GetNodeForLocation(result) => {
+        AutomationResult::GetOuterHtml(result) => Value::Object(serde_json::Map::from_iter([(
+            "outerHTML".to_owned(),
+            Value::String(result.outer_html),
+        )])),
+        AutomationResult::GetNodeForLocation(result) => {
             let mut value = json!({
                 "backendNodeId": result.backend_node_id,
                 "frameId": result.frame_id.as_str(),
@@ -1817,7 +1813,7 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
             }
             value
         }
-        DevToolsCommandResult::DomGeometry(result) => {
+        AutomationResult::DomGeometry(result) => {
             if let Some(model) = result.box_model {
                 return json!({
                     "model": {
@@ -1852,7 +1848,7 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
                 json!({ "quads": quads })
             }
         }
-        DevToolsCommandResult::LayoutMetrics(result) => {
+        AutomationResult::LayoutMetrics(result) => {
             let viewport = json!({
                 "pageX": result.page_x,
                 "pageY": result.page_y,
@@ -1884,12 +1880,12 @@ fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Val
                 "cssContentSize": content,
             })
         }
-        DevToolsCommandResult::JavaScriptDialog(result) => json!({
+        AutomationResult::JavaScriptDialog(result) => json!({
             "type": result.dialog_type,
             "message": result.message,
             "defaultPrompt": result.default_prompt,
         }),
-        DevToolsCommandResult::CaptureScreenshot(result) => json!({
+        AutomationResult::CaptureScreenshot(result) => json!({
             "data": BASE64_STANDARD.encode(result.bytes.as_ref()),
         }),
     }
@@ -1955,7 +1951,7 @@ fn service_worker_log_entry_json(entry: RuntimeConsoleEvent) -> Value {
     payload
 }
 
-fn client_window_info_json(window: crate::devtools_runtime::DevToolsClientWindowInfo) -> Value {
+fn client_window_info_json(window: crate::automation::DevToolsClientWindowInfo) -> Value {
     json!({
         "clientWindow": window.client_window.into_string(),
         "active": window.active,
@@ -2183,8 +2179,8 @@ impl CommandOwnerEvent {
 
 #[cfg(test)]
 mod tests {
-    use crate::devtools_runtime::{
-        AutomationEvent, DevToolsCaptureScreenshotResult, DevToolsCommandResult, DevToolsErrorKind,
+    use crate::automation::{
+        AutomationEvent, AutomationResult, DevToolsCaptureScreenshotResult, DevToolsErrorKind,
         NavigationFrameEventKind,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -2252,7 +2248,7 @@ mod tests {
     fn command_output_plan_base64_encodes_owned_screenshot_bytes() {
         let bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(DevToolsCommandResult::CaptureScreenshot(
+        CommandOutputPlan::from_devtools_result(AutomationResult::CaptureScreenshot(
             DevToolsCaptureScreenshotResult {
                 mime_type: "image/png".to_owned(),
                 width: 800,
@@ -2276,20 +2272,16 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_navigate_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::Navigate(
-                crate::devtools_runtime::DevToolsNavigateResult {
-                    navigation_id: Some(crate::devtools_runtime::DevToolsNavigationId::from(
-                        "NAV-1",
-                    )),
-                    frame_id: Some(crate::devtools_runtime::DevToolsFrameId::from("FRAME-1")),
-                    loader_id: Some(crate::devtools_runtime::DevToolsLoaderId::from("LOADER-1")),
-                    url: "https://example.test/".to_owned(),
-                    error_text: None,
-                    is_download: None,
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::Navigate(
+            crate::automation::DevToolsNavigateResult {
+                navigation_id: Some(crate::automation::DevToolsNavigationId::from("NAV-1")),
+                frame_id: Some(crate::automation::DevToolsFrameId::from("FRAME-1")),
+                loader_id: Some(crate::automation::DevToolsLoaderId::from("LOADER-1")),
+                url: "https://example.test/".to_owned(),
+                error_text: None,
+                is_download: None,
+            },
+        ))
         .emit_into(&mut out, Some(12), Some("SID-1"));
 
         assert_eq!(
@@ -2308,18 +2300,16 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_aborted_cdp_navigate_as_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::Navigate(
-                crate::devtools_runtime::DevToolsNavigateResult {
-                    navigation_id: None,
-                    frame_id: Some(crate::devtools_runtime::DevToolsFrameId::from("FRAME-1")),
-                    loader_id: None,
-                    url: "https://superseded.example.test/".to_owned(),
-                    error_text: Some("net::ERR_ABORTED".to_owned()),
-                    is_download: Some(false),
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::Navigate(
+            crate::automation::DevToolsNavigateResult {
+                navigation_id: None,
+                frame_id: Some(crate::automation::DevToolsFrameId::from("FRAME-1")),
+                loader_id: None,
+                url: "https://superseded.example.test/".to_owned(),
+                error_text: Some("net::ERR_ABORTED".to_owned()),
+                is_download: Some(false),
+            },
+        ))
         .emit_into(&mut out, Some(13), Some("SID-1"));
 
         assert_eq!(
@@ -2339,30 +2329,26 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_script_value_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-                crate::devtools_runtime::DevToolsScriptResult::Value(
-                    crate::devtools_runtime::DevToolsRemoteValue {
-                        value: json!("Moli"),
-                        handle: Some(crate::devtools_runtime::DevToolsRemoteHandleId::from(
-                            "OBJ-1",
-                        )),
-                        shared_id: None,
-                        node_id: None,
-                        backend_node_id: None,
-                        window_context: None,
-                        realm: None,
-                        remote_type: None,
-                        remote_subtype: None,
-                        unserializable_value: None,
-                        description: None,
-                        class_name: None,
-                        deep_serialized_value: None,
-                        node_value: None,
-                    },
-                ),
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::Script(
+            Box::new(crate::automation::DevToolsScriptResult::Value(
+                crate::automation::DevToolsRemoteValue {
+                    value: json!("Moli"),
+                    handle: Some(crate::automation::DevToolsRemoteHandleId::from("OBJ-1")),
+                    shared_id: None,
+                    node_id: None,
+                    backend_node_id: None,
+                    window_context: None,
+                    realm: None,
+                    remote_type: None,
+                    remote_subtype: None,
+                    unserializable_value: None,
+                    description: None,
+                    class_name: None,
+                    deep_serialized_value: None,
+                    node_value: None,
+                },
             )),
-        )
+        ))
         .emit_into(&mut out, Some(13), None);
 
         assert_eq!(
@@ -2383,13 +2369,11 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_outer_html_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::GetOuterHtml(
-                crate::devtools_runtime::DevToolsGetOuterHtmlResult {
-                    outer_html: "<html><body>source</body></html>".to_owned(),
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::GetOuterHtml(
+            crate::automation::DevToolsGetOuterHtmlResult {
+                outer_html: "<html><body>source</body></html>".to_owned(),
+            },
+        ))
         .emit_into(&mut out, Some(14), None);
 
         assert_eq!(
@@ -2410,11 +2394,9 @@ mod tests {
         let outer_html_pointer = outer_html.as_ptr();
         let mut out = Vec::new();
 
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::GetOuterHtml(
-                crate::devtools_runtime::DevToolsGetOuterHtmlResult { outer_html },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::GetOuterHtml(
+            crate::automation::DevToolsGetOuterHtmlResult { outer_html },
+        ))
         .emit_into(&mut out, Some(14), None);
 
         assert_eq!(
@@ -2431,8 +2413,8 @@ mod tests {
     fn command_output_plan_serializes_devtools_query_selector_result() {
         let mut out = Vec::new();
         CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::QuerySelector(
-                crate::devtools_runtime::DevToolsQuerySelectorResult {
+            crate::automation::AutomationResult::QuerySelector(
+                crate::automation::DevToolsQuerySelectorResult {
                     node_ids: vec![7, 9],
                     multiple: true,
                 },
@@ -2452,8 +2434,8 @@ mod tests {
 
         let mut out = Vec::new();
         CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::QuerySelector(
-                crate::devtools_runtime::DevToolsQuerySelectorResult {
+            crate::automation::AutomationResult::QuerySelector(
+                crate::automation::DevToolsQuerySelectorResult {
                     node_ids: Vec::new(),
                     multiple: false,
                 },
@@ -2476,14 +2458,14 @@ mod tests {
     fn command_output_plan_serializes_devtools_get_attributes_result() {
         let mut out = Vec::new();
         CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::GetAttributes(
-                crate::devtools_runtime::DevToolsGetAttributesResult {
+            crate::automation::AutomationResult::GetAttributes(
+                crate::automation::DevToolsGetAttributesResult {
                     attributes: vec![
-                        crate::devtools_runtime::DevToolsDomAttribute {
+                        crate::automation::DevToolsDomAttribute {
                             name: "id".to_owned(),
                             value: "target".to_owned(),
                         },
-                        crate::devtools_runtime::DevToolsDomAttribute {
+                        crate::automation::DevToolsDomAttribute {
                             name: "data-kind".to_owned(),
                             value: "primary".to_owned(),
                         },
@@ -2507,13 +2489,11 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_get_text_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::GetText(
-                crate::devtools_runtime::DevToolsGetTextResult {
-                    text: "element text".to_owned(),
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::GetText(
+            crate::automation::DevToolsGetTextResult {
+                text: "element text".to_owned(),
+            },
+        ))
         .emit_into(&mut out, Some(18), None);
 
         assert_eq!(
@@ -2530,13 +2510,11 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_get_property_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::GetProperty(
-                crate::devtools_runtime::DevToolsGetPropertyResult {
-                    value: json!("property value"),
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::GetProperty(
+            crate::automation::DevToolsGetPropertyResult {
+                value: json!("property value"),
+            },
+        ))
         .emit_into(&mut out, Some(19), None);
 
         assert_eq!(
@@ -2553,13 +2531,11 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_create_target_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::CreateTarget(
-                crate::devtools_runtime::DevToolsCreateTargetResult {
-                    target_id: crate::devtools_runtime::DevToolsTargetId::from("TARGET-1"),
-                },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::CreateTarget(
+            crate::automation::DevToolsCreateTargetResult {
+                target_id: crate::automation::DevToolsTargetId::from("TARGET-1"),
+            },
+        ))
         .emit_into(&mut out, Some(16), None);
 
         assert_eq!(
@@ -2574,11 +2550,9 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_close_target_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::CloseTarget(
-                crate::devtools_runtime::DevToolsCloseTargetResult { success: true },
-            ),
-        )
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::CloseTarget(
+            crate::automation::DevToolsCloseTargetResult { success: true },
+        ))
         .emit_into(&mut out, Some(17), None);
 
         assert_eq!(
@@ -2594,9 +2568,9 @@ mod tests {
     fn command_output_plan_serializes_devtools_add_preload_script_result() {
         let mut out = Vec::new();
         CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::AddPreloadScript(
-                crate::devtools_runtime::DevToolsAddPreloadScriptResult {
-                    script_id: crate::devtools_runtime::DevToolsPreloadScriptId::from("SCRIPT-1"),
+            crate::automation::AutomationResult::AddPreloadScript(
+                crate::automation::DevToolsAddPreloadScriptResult {
+                    script_id: crate::automation::DevToolsPreloadScriptId::from("SCRIPT-1"),
                 },
             ),
         )
@@ -2614,26 +2588,22 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_script_exception_result() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-                crate::devtools_runtime::DevToolsScriptResult::Exception(
-                    crate::devtools_runtime::DevToolsScriptException {
-                        exception_id: Some(42),
-                        script_id: None,
-                        text: "boom".to_owned(),
-                        value: Some(
-                            crate::devtools_runtime::DevToolsRemoteValue::from_json_value(json!(
-                                "boom"
-                            )),
-                        ),
-                        realm: None,
-                        line_number: None,
-                        column_number: None,
-                        stack_trace: None,
-                    },
-                ),
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::Script(
+            Box::new(crate::automation::DevToolsScriptResult::Exception(
+                crate::automation::DevToolsScriptException {
+                    exception_id: Some(42),
+                    script_id: None,
+                    text: "boom".to_owned(),
+                    value: Some(crate::automation::DevToolsRemoteValue::from_json_value(
+                        json!("boom"),
+                    )),
+                    realm: None,
+                    line_number: None,
+                    column_number: None,
+                    stack_trace: None,
+                },
             )),
-        )
+        ))
         .emit_into(&mut out, Some(14), None);
 
         assert_eq!(out[0]["id"], json!(14));
@@ -2652,26 +2622,22 @@ mod tests {
     #[test]
     fn command_output_plan_omits_missing_devtools_script_exception_id() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_result(
-            crate::devtools_runtime::DevToolsCommandResult::Script(Box::new(
-                crate::devtools_runtime::DevToolsScriptResult::Exception(
-                    crate::devtools_runtime::DevToolsScriptException {
-                        exception_id: None,
-                        script_id: None,
-                        text: "boom".to_owned(),
-                        value: Some(
-                            crate::devtools_runtime::DevToolsRemoteValue::from_json_value(json!(
-                                "boom"
-                            )),
-                        ),
-                        realm: None,
-                        line_number: None,
-                        column_number: None,
-                        stack_trace: None,
-                    },
-                ),
+        CommandOutputPlan::from_devtools_result(crate::automation::AutomationResult::Script(
+            Box::new(crate::automation::DevToolsScriptResult::Exception(
+                crate::automation::DevToolsScriptException {
+                    exception_id: None,
+                    script_id: None,
+                    text: "boom".to_owned(),
+                    value: Some(crate::automation::DevToolsRemoteValue::from_json_value(
+                        json!("boom"),
+                    )),
+                    realm: None,
+                    line_number: None,
+                    column_number: None,
+                    stack_trace: None,
+                },
             )),
-        )
+        ))
         .emit_into(&mut out, Some(14), None);
 
         assert_eq!(out[0]["id"], json!(14));
@@ -2688,8 +2654,8 @@ mod tests {
     #[test]
     fn command_output_plan_serializes_devtools_error() {
         let mut out = Vec::new();
-        CommandOutputPlan::from_devtools_error(crate::devtools_runtime::DevToolsError::new(
-            crate::devtools_runtime::DevToolsErrorKind::NoSuchSession,
+        CommandOutputPlan::from_devtools_error(crate::automation::DevToolsError::new(
+            crate::automation::DevToolsErrorKind::NoSuchSession,
             "Unknown sessionId",
         ))
         .emit_into(&mut out, Some(15), Some("SID-missing"));

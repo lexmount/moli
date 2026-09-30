@@ -8,7 +8,7 @@ use super::super::{
     SharedWorkerTargetState, TargetIdentityState, TargetInitialEmptyDocumentCreator,
     TargetOwnerState,
 };
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
 use moli_core::network::SharedWebStorageStore;
@@ -728,7 +728,7 @@ impl BrowserContext {
                 opener_frame_id: self
                     .target_opener_frame_ids
                     .get(target_id)
-                    .map(|id| crate::devtools_runtime::DevToolsFrameId::from(id.as_str())),
+                    .map(|id| crate::automation::DevToolsFrameId::from(id.as_str())),
                 can_access_opener: self.target_can_access_opener.contains(target_id),
                 browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
                 moli_popup_id: None,

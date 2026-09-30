@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
 
 pub(crate) fn bidi_remote_value_from_devtools(
-    value: moli_protocol::devtools_runtime::DevToolsRemoteValue,
+    value: moli_protocol::automation::DevToolsRemoteValue,
 ) -> Value {
-    let moli_protocol::devtools_runtime::DevToolsRemoteValue {
+    let moli_protocol::automation::DevToolsRemoteValue {
         value,
         handle,
         shared_id,

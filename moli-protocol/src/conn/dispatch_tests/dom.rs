@@ -3,16 +3,16 @@ use super::*;
 #[tokio::test]
 async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverBidi,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("SID-element-shot")),
         target_id: None,
         browser_context_id: None,
     };
 
-    let create_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let create_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
             context: context.clone(),
             url: "about:blank".to_owned(),
             browser_context_id: None,
@@ -20,19 +20,19 @@ async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
         }),
     )
     .await;
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id.clone()),
         ..context
     };
 
-    let navigate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let navigate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "data:text/html,<div id='target' style='width:120px;height:80px'>shot</div>"
                 .to_owned(),
@@ -43,9 +43,9 @@ async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
     .await;
     navigate_result.expect("navigate should succeed");
 
-    let evaluate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let evaluate_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+        AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
             context: target_context.clone(),
             realm_id: None,
             world_name: None,
@@ -60,7 +60,7 @@ async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
         }),
     )
     .await;
-    let DevToolsCommandResult::Script(evaluate_result) =
+    let AutomationResult::Script(evaluate_result) =
         evaluate_result.expect("element evaluate should succeed")
     else {
         panic!("expected script result");
@@ -72,9 +72,9 @@ async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
         .shared_id
         .expect("element remote value should expose sharedId");
 
-    let screenshot_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+    let screenshot_result = execute_direct_automation_command_through_renderer_fence_for_test(
         &mut ctx,
-        DevToolsCommand::CaptureScreenshot(DevToolsCaptureScreenshotCommand {
+        AutomationCommand::CaptureScreenshot(DevToolsCaptureScreenshotCommand {
             context: target_context,
             format: Some("png".to_owned()),
             quality: None,
@@ -105,10 +105,10 @@ async fn element_screenshot_reports_unsupported_without_initial_document_repair(
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let (screenshot_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CaptureScreenshot(
+        .execute_automation_command(AutomationCommand::CaptureScreenshot(
             DevToolsCaptureScreenshotCommand {
-                context: DevToolsCommandContext {
-                    protocol: DevToolsProtocol::WebDriverBidi,
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("SID-no-page-element-shot")),
                     target_id: Some(DevToolsTargetId::from("TID-no-page-element-shot")),
                     browser_context_id: None,
@@ -143,35 +143,37 @@ async fn element_screenshot_reports_unsupported_without_initial_document_repair(
 }
 
 #[tokio::test]
-async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
+async fn automation_command_low_backend_node_refs_miss_without_backend_binding() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: false,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
     let target_id = create_result.target_id.clone();
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(target_id),
         ..context
     };
     let _ = conn
-        .execute_devtools_command(DevToolsCommand::Navigate(DevToolsNavigateCommand {
+        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: "data:text/html,<!doctype html><html><body></body></html>".to_owned(),
             referrer: None,
@@ -207,7 +209,7 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
         .expect("runtime mutation should complete");
 
     let (attributes_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetAttributes(
+        .execute_automation_command(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: target_context.clone(),
                 reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -220,7 +222,7 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.message, "Could not find node with given id");
 
     let (text_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetText(DevToolsGetTextCommand {
+        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
         }))
@@ -231,7 +233,7 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.message, "Could not find node with given id");
 
     let (property_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetProperty(DevToolsGetPropertyCommand {
+        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
             name: "id".to_owned(),
@@ -243,11 +245,13 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.message, "Could not find node with given id");
 
     let (outer_html_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
-            context: target_context.clone(),
-            reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
-            include_shadow_dom: false,
-        }))
+        .execute_automation_command(AutomationCommand::GetOuterHtml(
+            DevToolsGetOuterHtmlCommand {
+                context: target_context.clone(),
+                reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
+                include_shadow_dom: false,
+            },
+        ))
         .await
         .into_parts();
     let error = outer_html_result.expect_err("low backendNodeId get outerHTML should miss");
@@ -255,12 +259,14 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.message, "Could not find node with given id");
 
     let (describe_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::DescribeNode(DevToolsDescribeNodeCommand {
-            context: target_context.clone(),
-            reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
-            depth: 0,
-            pierce: false,
-        }))
+        .execute_automation_command(AutomationCommand::DescribeNode(
+            DevToolsDescribeNodeCommand {
+                context: target_context.clone(),
+                reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
+                depth: 0,
+                pierce: false,
+            },
+        ))
         .await
         .into_parts();
     let error = describe_result.expect_err("low backendNodeId describe should miss");
@@ -268,7 +274,7 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.message, "Could not find node with given id");
 
     let (rooted_query_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::QuerySelector(
+        .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: target_context,
                 root: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),

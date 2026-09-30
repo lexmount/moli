@@ -136,7 +136,7 @@ impl Drop for RendererNativeCommandResponseGuard {
 /// Native frontend operations use their ordinary backend dispatch. The
 /// synchronous projection freezes the complete response before it enters
 /// the common journal, without involving an adapter waiter.
-pub struct RendererNativeCommand {
+pub struct RendererCdpCall {
     pub(crate) operation: RendererNativeOperation,
     response: RendererNativeCommandResponse,
 }
@@ -148,7 +148,7 @@ struct RendererNativeCommandResponse {
     lease: Lease,
 }
 
-impl RendererNativeCommand {
+impl RendererCdpCall {
     pub fn new(
         command_id: FrontendCommandId,
         session: DevToolsSessionKey,
@@ -332,7 +332,7 @@ enum NativeReadyReply {
     },
 }
 
-impl RendererNativeCommand {
+impl RendererCdpCall {
     pub(crate) fn dispatch(
         self,
         vm: &mut crate::runtime::PageVm,

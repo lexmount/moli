@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::graph::{TabTarget, TargetGraph};
-use crate::devtools_runtime::{
+use crate::automation::{
     DevToolsSessionId, DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo,
     DevToolsTargetKind, TargetAttachmentEvent, TargetDetachmentEvent,
 };
@@ -567,8 +567,8 @@ fn target_detached_event(
 
 #[cfg(test)]
 mod tests {
+    use crate::automation::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
     use crate::conn::{CdpSessionRoute, CdpTargetFilter, TargetControlPlane};
-    use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
 
     fn target_info(target_id: &str, kind: DevToolsTargetKind) -> DevToolsTargetInfo {
         DevToolsTargetInfo {

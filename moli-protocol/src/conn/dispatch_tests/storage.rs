@@ -1,36 +1,38 @@
 use super::*;
 
 #[tokio::test]
-async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context() {
+async fn automation_command_executes_storage_cookie_commands_for_webdriver_context() {
     let mut conn = CdpConnection::new();
-    let context = DevToolsCommandContext {
-        protocol: DevToolsProtocol::WebDriverClassic,
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
     let (create_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context: context.clone(),
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: false,
-        }))
+        .execute_automation_command(AutomationCommand::CreateTarget(
+            DevToolsCreateTargetCommand {
+                context: context.clone(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            },
+        ))
         .await
         .into_parts();
-    let DevToolsCommandResult::CreateTarget(create_result) =
+    let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    let target_context = DevToolsCommandContext {
+    let target_context = AutomationContext {
         target_id: Some(create_result.target_id),
         ..context
     };
     let cookie_url = "https://example.com/path".to_owned();
 
     let (set_result, set_events) = conn
-        .execute_devtools_command(DevToolsCommand::SetCookies(DevToolsSetCookiesCommand {
+        .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
             context: target_context.clone(),
             browser_context_id: None,
             cookies: vec![DevToolsCookieParam {
@@ -56,15 +58,14 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
         set_events.is_empty(),
         "direct storage setCookies must not emit CDP-shaped sidecar messages: {set_events:?}"
     );
-    let DevToolsCommandResult::SetCookies(set_result) =
-        set_result.expect("set cookies should succeed")
+    let AutomationResult::SetCookies(set_result) = set_result.expect("set cookies should succeed")
     else {
         panic!("expected set cookies result");
     };
     assert!(set_result.success);
 
     let (get_result, get_events) = conn
-        .execute_devtools_command(DevToolsCommand::GetCookies(DevToolsGetCookiesCommand {
+        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: target_context.clone(),
             browser_context_id: None,
             urls: Some(vec![cookie_url.clone()]),
@@ -76,8 +77,7 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
         get_events.is_empty(),
         "direct storage getCookies must not emit CDP-shaped sidecar messages: {get_events:?}"
     );
-    let DevToolsCommandResult::GetCookies(get_result) =
-        get_result.expect("get cookies should succeed")
+    let AutomationResult::GetCookies(get_result) = get_result.expect("get cookies should succeed")
     else {
         panic!("expected get cookies result");
     };
@@ -86,7 +86,7 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
     assert_eq!(get_result.cookies[0]["value"], json!("abc"));
 
     let (delete_result, delete_events) = conn
-        .execute_devtools_command(DevToolsCommand::DeleteCookies(
+        .execute_automation_command(AutomationCommand::DeleteCookies(
             DevToolsDeleteCookiesCommand {
                 context: target_context.clone(),
                 browser_context_id: None,
@@ -106,11 +106,11 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
     );
     assert!(matches!(
         delete_result.expect("delete cookie should succeed"),
-        DevToolsCommandResult::DeleteCookies(_)
+        AutomationResult::DeleteCookies(_)
     ));
 
     let (after_delete, after_delete_events) = conn
-        .execute_devtools_command(DevToolsCommand::GetCookies(DevToolsGetCookiesCommand {
+        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: target_context,
             browser_context_id: None,
             urls: Some(vec![cookie_url]),
@@ -122,7 +122,7 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
         after_delete_events.is_empty(),
         "direct storage getCookies after delete must not emit CDP-shaped sidecar messages: {after_delete_events:?}"
     );
-    let DevToolsCommandResult::GetCookies(after_delete) =
+    let AutomationResult::GetCookies(after_delete) =
         after_delete.expect("get cookies after delete should succeed")
     else {
         panic!("expected get cookies result");

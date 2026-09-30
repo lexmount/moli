@@ -1370,11 +1370,11 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
     for event in events {
         let (message, automation_event) = event.into_parts();
         match automation_event {
-            Some(crate::devtools_runtime::AutomationEvent::TargetCreated(event)) => {
+            Some(crate::automation::AutomationEvent::TargetCreated(event)) => {
                 assert_eq!(message["method"], json!("Target.targetCreated"));
                 sidecars.push(("created", event.target_id.as_str().to_owned(), None));
             }
-            Some(crate::devtools_runtime::AutomationEvent::TargetAttached(event)) => {
+            Some(crate::automation::AutomationEvent::TargetAttached(event)) => {
                 assert_eq!(message["method"], json!("Target.attachedToTarget"));
                 assert!(event.waiting_for_debugger);
                 sidecars.push((
@@ -1383,7 +1383,7 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
                     Some(event.session_id.as_str().to_owned()),
                 ));
             }
-            Some(crate::devtools_runtime::AutomationEvent::TargetDetached(event)) => {
+            Some(crate::automation::AutomationEvent::TargetDetached(event)) => {
                 assert_eq!(message["method"], json!("Target.detachedFromTarget"));
                 sidecars.push((
                     "detached",
@@ -1391,7 +1391,7 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
                     Some(event.session_id.as_str().to_owned()),
                 ));
             }
-            Some(crate::devtools_runtime::AutomationEvent::TargetDestroyed(event)) => {
+            Some(crate::automation::AutomationEvent::TargetDestroyed(event)) => {
                 assert_eq!(message["method"], json!("Target.targetDestroyed"));
                 sidecars.push(("destroyed", event.target_id.as_str().to_owned(), None));
             }
@@ -1956,7 +1956,7 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
     assert_eq!(runtime_cleared["sessionId"], attached_session_id);
     assert!(matches!(
         runtime_cleared_sidecar,
-        Some(crate::devtools_runtime::AutomationEvent::RuntimeExecutionContextsCleared(_))
+        Some(crate::automation::AutomationEvent::RuntimeExecutionContextsCleared(_))
     ));
     let inspector_crashed = lifecycle_protocol_message(&outputs, "Inspector.targetCrashed")
         .expect("service worker stop should emit Inspector.targetCrashed");
@@ -2735,8 +2735,7 @@ fn service_worker_exception_messages_emit_runtime_exception_thrown_shape() {
     assert_eq!(details["executionContextId"], json!(90_024));
     assert_eq!(details["lineNumber"], json!(2));
     assert_eq!(details["columnNumber"], json!(8));
-    let Some(crate::devtools_runtime::AutomationEvent::ScriptException(event)) = automation_event
-    else {
+    let Some(crate::automation::AutomationEvent::ScriptException(event)) = automation_event else {
         panic!("expected ScriptException sidecar");
     };
     assert_eq!(event.exception.text, "Uncaught Error: boom");
@@ -2919,38 +2918,38 @@ fn service_worker_fetch_diagnostics_emit_network_event_shape() {
     );
     assert!(matches!(
         sidecars[0].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkBeforeRequestSent(event))
+        Some(crate::automation::AutomationEvent::NetworkBeforeRequestSent(event))
             if event.request_id.as_str() == "TID-service-worker.sw-fetch.101.4"
                 && event.method.as_deref() == Some("POST")
                 && event.resource_type
-                    == Some(crate::devtools_runtime::DevToolsNetworkResourceType::Fetch)
+                    == Some(crate::automation::DevToolsNetworkResourceType::Fetch)
     ));
     assert!(matches!(
         sidecars[1].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkResponseStarted(event))
+        Some(crate::automation::AutomationEvent::NetworkResponseStarted(event))
             if event.status == Some(201)
                 && event.url == "https://example.test/api"
     ));
     assert!(matches!(
         sidecars[3].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkResponseCompleted(event))
+        Some(crate::automation::AutomationEvent::NetworkResponseCompleted(event))
             if event.encoded_data_length == Some(2)
                 && event.resource_type
-                    == Some(crate::devtools_runtime::DevToolsNetworkResourceType::Fetch)
+                    == Some(crate::automation::DevToolsNetworkResourceType::Fetch)
     ));
     assert!(matches!(
         sidecars[5].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkFetchError(event))
+        Some(crate::automation::AutomationEvent::NetworkFetchError(event))
             if event.error_text.as_deref() == Some("ServiceWorkerFallback")
                 && event.resource_type
-                    == Some(crate::devtools_runtime::DevToolsNetworkResourceType::Script)
+                    == Some(crate::automation::DevToolsNetworkResourceType::Script)
     ));
     assert!(matches!(
         sidecars[7].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkFetchError(event))
+        Some(crate::automation::AutomationEvent::NetworkFetchError(event))
             if event.error_text.as_deref() == Some("network down")
                 && event.resource_type
-                    == Some(crate::devtools_runtime::DevToolsNetworkResourceType::Image)
+                    == Some(crate::automation::DevToolsNetworkResourceType::Image)
     ));
 }
 
@@ -2988,7 +2987,7 @@ fn service_worker_fetch_diagnostic_aborted_failure_sets_loading_failed_canceled(
     );
     assert!(matches!(
         sidecars[1].as_ref(),
-        Some(crate::devtools_runtime::AutomationEvent::NetworkFetchError(event))
+        Some(crate::automation::AutomationEvent::NetworkFetchError(event))
             if event.error_text.as_deref() == Some("net::ERR_ABORTED")
     ));
 }
@@ -3385,7 +3384,7 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
     );
     assert!(matches!(
         console_sidecar,
-        Some(crate::devtools_runtime::AutomationEvent::RuntimeConsoleApiCalled(event))
+        Some(crate::automation::AutomationEvent::RuntimeConsoleApiCalled(event))
             if event.console_type == "warning"
                 && event.text == "from shared worker"
                 && event.execution_context_id.is_none()
@@ -3410,7 +3409,7 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
     );
     assert!(matches!(
         runtime_sidecar,
-        Some(crate::devtools_runtime::AutomationEvent::RuntimeConsoleApiCalled(event))
+        Some(crate::automation::AutomationEvent::RuntimeConsoleApiCalled(event))
             if event.console_type == "warning"
                 && event.text == "from shared worker"
                 && event.execution_context_id == Some(90_017)

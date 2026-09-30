@@ -3,9 +3,7 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
-use moli_protocol::devtools_runtime::{
-    DevToolsCommand, DevToolsCommandResult, DevToolsScriptResult,
-};
+use moli_protocol::automation::{AutomationCommand, AutomationResult, DevToolsScriptResult};
 use moli_protocol_webdriver_classic::{
     ClassicDevToolsCommandContext, ClassicError, ClassicErrorCode, ClassicWindowRect,
     ClassicWindowState, classic_error_from_devtools_error, classic_window_rect_for_state,
@@ -125,7 +123,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_get_window_handles(
         .execute(window_handles_command(&context))
         .await
     {
-        Ok(DevToolsCommandResult::GetTargets(result)) => {
+        Ok(AutomationResult::GetTargets(result)) => {
             classic_success_into_response(json!(window_handles_from_targets(result)))
         }
         Ok(_) => classic_error_into_response(ClassicError::new(
@@ -159,7 +157,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_switch_window(
         .and_then(serde_json::Value::as_str)
         .expect("switch_window_command validates handle");
     match binding.runtime.execute(command).await {
-        Ok(DevToolsCommandResult::Empty) => {
+        Ok(AutomationResult::Empty) => {
             if !state
                 .classic_session_registry
                 .lock()
@@ -206,7 +204,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_new_window(
     let context =
         ClassicDevToolsCommandContext::with_target_id(&binding.session_id, &binding.target_id);
     let target_id = match binding.runtime.execute(new_window_command(&context)).await {
-        Ok(DevToolsCommandResult::CreateTarget(result)) => result.target_id.into_string(),
+        Ok(AutomationResult::CreateTarget(result)) => result.target_id.into_string(),
         Ok(_) => {
             return classic_error_into_response(ClassicError::new(
                 ClassicErrorCode::UnknownError,
@@ -236,8 +234,8 @@ pub(in crate::protocol_server) async fn webdriver_classic_close_window(
         Err(error) => return classic_error_into_response(error),
     };
     match binding.runtime.execute(command).await {
-        Ok(DevToolsCommandResult::CloseTarget(result)) if result.success => {}
-        Ok(DevToolsCommandResult::CloseTarget(_)) => {
+        Ok(AutomationResult::CloseTarget(result)) if result.success => {}
+        Ok(AutomationResult::CloseTarget(_)) => {
             return classic_error_into_response(ClassicError::new(
                 ClassicErrorCode::UnknownError,
                 "close window failed",
@@ -261,7 +259,7 @@ pub(in crate::protocol_server) async fn webdriver_classic_close_window(
         .execute(window_handles_command(&context))
         .await
     {
-        Ok(DevToolsCommandResult::GetTargets(result)) => window_handles_from_targets(result),
+        Ok(AutomationResult::GetTargets(result)) => window_handles_from_targets(result),
         Ok(_) => {
             return classic_error_into_response(ClassicError::new(
                 ClassicErrorCode::UnknownError,
@@ -312,7 +310,7 @@ async fn classic_current_window_rect(
         }),
     )?;
     match binding.runtime.execute(command).await {
-        Ok(DevToolsCommandResult::Script(result)) => match *result {
+        Ok(AutomationResult::Script(result)) => match *result {
             DevToolsScriptResult::Value(value) => {
                 let (width, height): (u32, u32) =
                     serde_json::from_value(value.value).map_err(|error| {
@@ -368,11 +366,11 @@ async fn classic_apply_window_rect(
     state: &AppState,
     binding: &super::state::ClassicSessionBinding,
     next: ClassicWindowRect,
-    commands: Vec<DevToolsCommand>,
+    commands: Vec<AutomationCommand>,
 ) -> Result<ClassicWindowRect, ClassicError> {
     for command in commands {
         match binding.runtime.execute(command).await {
-            Ok(DevToolsCommandResult::Empty) => {}
+            Ok(AutomationResult::Empty) => {}
             Ok(_) => {
                 return Err(ClassicError::new(
                     ClassicErrorCode::UnknownError,

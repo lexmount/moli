@@ -1,7 +1,7 @@
-use crate::devtools_runtime::{
-    DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand, DevToolsCommand,
-    DevToolsCommandContext, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsProtocol, DevToolsScreenshotClip, DevToolsTargetId,
+use crate::automation::{
+    AutomationCommand, AutomationContext, DevToolsCaptureScreenshotClip,
+    DevToolsCaptureScreenshotCommand, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
+    DevToolsScreenshotClip, DevToolsTargetId, FrontendProtocol,
 };
 use serde_json::{Value, json};
 
@@ -27,7 +27,7 @@ fn cdp_get_frame_tree_builds_protocol_neutral_command() {
 
     let command = build_cdp_get_frame_tree_command(&conn, &cmd);
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-page")
@@ -50,7 +50,7 @@ fn devtools_page_entry_routes_get_frame_tree_command_to_page_owner() {
     let command = build_cdp_get_frame_tree_command(&conn, &cmd);
 
     let step =
-        start_devtools_page_command(&mut conn, cmd.id, DevToolsCommand::GetFrameTree(command));
+        start_devtools_page_command(&mut conn, cmd.id, AutomationCommand::GetFrameTree(command));
 
     let PageCommandTaskStep::Complete(plan) = step else {
         panic!("missing browser context should complete through the unified page entry");
@@ -76,7 +76,7 @@ fn cdp_get_layout_metrics_builds_protocol_neutral_command() {
 
     let command = build_cdp_get_layout_metrics_command(&conn, &cmd);
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-page")
@@ -101,7 +101,7 @@ fn devtools_page_entry_routes_get_layout_metrics_command_to_page_owner() {
     let step = start_devtools_page_command(
         &mut conn,
         cmd.id,
-        DevToolsCommand::GetLayoutMetrics(command),
+        AutomationCommand::GetLayoutMetrics(command),
     );
 
     let PageCommandTaskStep::Complete(plan) = step else {
@@ -134,7 +134,7 @@ fn cdp_handle_javascript_dialog_builds_protocol_neutral_command() {
         panic!("valid handleJavaScriptDialog command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-page")
@@ -164,7 +164,7 @@ fn devtools_page_entry_routes_handle_javascript_dialog_command_to_page_owner() {
     let step = start_devtools_page_command(
         &mut conn,
         cmd.id,
-        DevToolsCommand::HandleJavaScriptDialog(command),
+        AutomationCommand::HandleJavaScriptDialog(command),
     );
 
     let PageCommandTaskStep::Complete(plan) = step else {
@@ -200,7 +200,7 @@ fn cdp_capture_screenshot_builds_requested_capture_command() {
         panic!("valid captureScreenshot command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-page")
@@ -318,8 +318,8 @@ fn cdp_capture_screenshot_rejects_invalid_quality_and_clip() {
 fn devtools_page_entry_validates_capture_screenshot_target_before_unsupported() {
     let mut conn = CdpConnection::new();
     let command = DevToolsCaptureScreenshotCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: Some(DevToolsTargetId::from("missing-target")),
             browser_context_id: None,
@@ -334,7 +334,7 @@ fn devtools_page_entry_validates_capture_screenshot_target_before_unsupported() 
     let step = start_devtools_page_command(
         &mut conn,
         Some(131),
-        DevToolsCommand::CaptureScreenshot(command),
+        AutomationCommand::CaptureScreenshot(command),
     );
 
     let PageCommandTaskStep::Complete(plan) = step else {
@@ -376,7 +376,7 @@ fn cdp_print_to_pdf_builds_protocol_neutral_command() {
         panic!("valid printToPDF command");
     };
 
-    assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
+    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
     assert_eq!(
         command.context.session_id.as_ref().map(|id| id.as_str()),
         Some("SID-page")
@@ -413,7 +413,8 @@ fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
         panic!("default printToPDF command should build");
     };
 
-    let step = start_devtools_page_command(&mut conn, cmd.id, DevToolsCommand::PrintToPdf(command));
+    let step =
+        start_devtools_page_command(&mut conn, cmd.id, AutomationCommand::PrintToPdf(command));
 
     let PageCommandTaskStep::Complete(plan) = step else {
         panic!("printToPDF command should complete through the unified page entry");
@@ -434,8 +435,8 @@ fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
 fn devtools_page_entry_validates_print_to_pdf_target_before_unsupported() {
     let mut conn = CdpConnection::new();
     let command = DevToolsPrintToPdfCommand {
-        context: DevToolsCommandContext {
-            protocol: DevToolsProtocol::WebDriverBidi,
+        context: AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
             session_id: None,
             target_id: Some(DevToolsTargetId::from("missing-target")),
             browser_context_id: None,
@@ -455,7 +456,7 @@ fn devtools_page_entry_validates_print_to_pdf_target_before_unsupported() {
     };
 
     let step =
-        start_devtools_page_command(&mut conn, Some(132), DevToolsCommand::PrintToPdf(command));
+        start_devtools_page_command(&mut conn, Some(132), AutomationCommand::PrintToPdf(command));
 
     let PageCommandTaskStep::Complete(plan) = step else {
         panic!("print target validation should complete synchronously");

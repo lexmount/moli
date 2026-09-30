@@ -1,3 +1,4 @@
+use crate::automation::DevToolsNetworkInterceptId;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, ClaimedSubresourceContinueRequest, CommandOwnerScope,
     FetchAuthChallenge, FetchRequestStage, PendingSubresourceFetchAuthRequest,
@@ -6,7 +7,6 @@ use crate::conn::{
     PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
     PendingSubresourceFetchResponseStageChain, TargetPageResidenceIdentity,
 };
-use crate::devtools_runtime::DevToolsNetworkInterceptId;
 use crate::domains::fetch;
 use moli_core::page::{
     PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceResponseInfo,

@@ -1,14 +1,13 @@
-use crate::devtools_runtime::{
-    DevToolsAddPreloadScriptCommand, DevToolsCaptureScreenshotClip,
-    DevToolsCaptureScreenshotCommand, DevToolsCaptureScreenshotResult, DevToolsCommand,
-    DevToolsCommandContext, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
-    DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult, DevToolsGetFrameTreesCommand,
-    DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
-    DevToolsGetLayoutMetricsCommand, DevToolsHandleJavaScriptDialogCommand,
-    DevToolsJavaScriptDialogResult, DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand,
-    DevToolsPrintToPdfTransferMode, DevToolsProtocol, DevToolsScreenshotClip,
-    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
-    UserPromptClosedEvent,
+use crate::automation::{
+    AutomationCommand, AutomationContext, AutomationResult, DevToolsAddPreloadScriptCommand,
+    DevToolsCaptureScreenshotClip, DevToolsCaptureScreenshotCommand,
+    DevToolsCaptureScreenshotResult, DevToolsError, DevToolsErrorKind, DevToolsGetFrameTreeCommand,
+    DevToolsGetFrameTreeResult, DevToolsGetFrameTreesCommand, DevToolsGetFrameTreesResult,
+    DevToolsGetJavaScriptDialogCommand, DevToolsGetLayoutMetricsCommand,
+    DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
+    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
+    DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo,
+    DevToolsTargetKind, FrontendProtocol, UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -1614,61 +1613,61 @@ fn page_set_download_behavior_command_output_plan(
 
 pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
     conn: &mut CdpConnection,
-    command: DevToolsCommand,
+    command: AutomationCommand,
     background_command_id: Option<u64>,
 ) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
+    Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
     Option<moli_core::RendererOutputFence>,
 ) {
     match command {
-        DevToolsCommand::GetFrameTree(command) => (
+        AutomationCommand::GetFrameTree(command) => (
             execute_devtools_get_frame_tree_command_async(conn, command).await,
             Vec::new(),
             None,
         ),
-        DevToolsCommand::GetFrameTrees(command) => (
+        AutomationCommand::GetFrameTrees(command) => (
             execute_devtools_get_frame_trees_command_async(conn, command).await,
             Vec::new(),
             None,
         ),
-        DevToolsCommand::GetNavigationHistory(command) => (
+        AutomationCommand::GetNavigationHistory(command) => (
             navigation::execute_devtools_get_navigation_history_command(conn, command),
             Vec::new(),
             None,
         ),
-        DevToolsCommand::GetLayoutMetrics(command) => (
+        AutomationCommand::GetLayoutMetrics(command) => (
             execute_devtools_get_layout_metrics_command(conn, command).await,
             Vec::new(),
             None,
         ),
-        DevToolsCommand::GetJavaScriptDialog(command) => (
+        AutomationCommand::GetJavaScriptDialog(command) => (
             execute_devtools_get_javascript_dialog_command(conn, command),
             Vec::new(),
             None,
         ),
-        DevToolsCommand::SetJavaScriptDialogPromptText(command) => (
+        AutomationCommand::SetJavaScriptDialogPromptText(command) => (
             execute_devtools_set_javascript_dialog_prompt_text_command(conn, command),
             Vec::new(),
             None,
         ),
-        DevToolsCommand::HandleJavaScriptDialog(command) => {
+        AutomationCommand::HandleJavaScriptDialog(command) => {
             let (result, events) = execute_devtools_handle_javascript_dialog_command(conn, command);
             (result, events, None)
         }
-        DevToolsCommand::CaptureScreenshot(command) => {
+        AutomationCommand::CaptureScreenshot(command) => {
             let (result, predecessor) =
                 execute_devtools_capture_screenshot_command(conn, command).await;
             (result, Vec::new(), predecessor)
         }
-        DevToolsCommand::PrintToPdf(command) => (
+        AutomationCommand::PrintToPdf(command) => (
             execute_devtools_print_to_pdf_command(conn, command),
             Vec::new(),
             None,
         ),
-        command @ (DevToolsCommand::Navigate(_)
-        | DevToolsCommand::Reload(_)
-        | DevToolsCommand::TraverseHistory(_)) => {
+        command @ (AutomationCommand::Navigate(_)
+        | AutomationCommand::Reload(_)
+        | AutomationCommand::TraverseHistory(_)) => {
             navigation::execute_devtools_navigation_command_async_with_protocol_events(
                 conn,
                 command,
@@ -1676,8 +1675,8 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
             )
             .await
         }
-        command @ (DevToolsCommand::AddPreloadScript(_)
-        | DevToolsCommand::RemovePreloadScript(_)) => {
+        command @ (AutomationCommand::AddPreloadScript(_)
+        | AutomationCommand::RemovePreloadScript(_)) => {
             preload::execute_devtools_preload_command_async(conn, command).await
         }
         _ => (
@@ -1702,7 +1701,7 @@ fn page_route_for_context_id(
 
 fn page_command_owner(
     conn: &CdpConnection,
-    context: &DevToolsCommandContext,
+    context: &AutomationContext,
 ) -> Result<CommandOwnerScope, DevToolsError> {
     conn.command_owner_scope_for_devtools_context(context)
         .ok_or_else(|| {
@@ -1846,31 +1845,31 @@ fn try_start_page_set_document_content_command(
 fn start_devtools_page_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command: DevToolsCommand,
+    command: AutomationCommand,
 ) -> PageCommandTaskStep {
     match command {
-        DevToolsCommand::GetFrameTree(command) => start_devtools_get_frame_tree_command(
+        AutomationCommand::GetFrameTree(command) => start_devtools_get_frame_tree_command(
             conn,
             command_id,
             command,
             FrameTreeCommandOutputKind::FrameTree,
         ),
-        DevToolsCommand::GetLayoutMetrics(command) => {
+        AutomationCommand::GetLayoutMetrics(command) => {
             start_devtools_get_layout_metrics_command(conn, command_id, command)
         }
-        DevToolsCommand::GetJavaScriptDialog(command) => {
+        AutomationCommand::GetJavaScriptDialog(command) => {
             let owner = page_command_owner(conn, &command.context);
             PageCommandTaskStep::Complete(match owner {
                 Ok(owner) => match finish_devtools_get_javascript_dialog_command(conn, &owner) {
                     Ok(result) => CommandOutputPlan::from_devtools_result(
-                        DevToolsCommandResult::JavaScriptDialog(result),
+                        AutomationResult::JavaScriptDialog(result),
                     ),
                     Err(error) => CommandOutputPlan::from_devtools_error(error),
                 },
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             })
         }
-        DevToolsCommand::SetJavaScriptDialogPromptText(command) => {
+        AutomationCommand::SetJavaScriptDialogPromptText(command) => {
             let owner = page_command_owner(conn, &command.context);
             PageCommandTaskStep::Complete(match owner {
                 Ok(owner) => match finish_devtools_set_javascript_dialog_prompt_text_command(
@@ -1882,13 +1881,13 @@ fn start_devtools_page_command(
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             })
         }
-        DevToolsCommand::HandleJavaScriptDialog(command) => PageCommandTaskStep::Complete(
+        AutomationCommand::HandleJavaScriptDialog(command) => PageCommandTaskStep::Complete(
             complete_devtools_handle_javascript_dialog_command(conn, command),
         ),
-        DevToolsCommand::CaptureScreenshot(command) => {
+        AutomationCommand::CaptureScreenshot(command) => {
             start_devtools_capture_screenshot_command(conn, command_id, command)
         }
-        DevToolsCommand::PrintToPdf(command) => {
+        AutomationCommand::PrintToPdf(command) => {
             start_devtools_print_to_pdf_command(conn, command_id, command)
         }
         _ => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -2234,11 +2233,9 @@ pub(crate) async fn complete_pending_page_command(
                 }
             };
             match page.finish_layout_metrics(completion) {
-                Ok(metrics) => {
-                    CommandOutputPlan::from_devtools_result(DevToolsCommandResult::LayoutMetrics(
-                        layout_metrics_result_from_renderer(metrics),
-                    ))
-                }
+                Ok(metrics) => CommandOutputPlan::from_devtools_result(
+                    AutomationResult::LayoutMetrics(layout_metrics_result_from_renderer(metrics)),
+                ),
                 Err(error) => CommandOutputPlan::error(
                     -32000,
                     format!("Failed to finish layout metrics: {error}"),
@@ -2265,14 +2262,14 @@ pub(crate) async fn complete_pending_page_command(
             };
             match page.finish_capture_screenshot(completion) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => {
-                    CommandOutputPlan::from_devtools_result(
-                        DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
+                    CommandOutputPlan::from_devtools_result(AutomationResult::CaptureScreenshot(
+                        DevToolsCaptureScreenshotResult {
                             mime_type: image.mime_type,
                             width: image.width,
                             height: image.height,
                             bytes: image.bytes,
-                        }),
-                    )
+                        },
+                    ))
                 }
                 Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
                     CommandOutputPlan::error(-32000, CAPTURE_SCREENSHOT_LAYOUT_DISABLED_MESSAGE)

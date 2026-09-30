@@ -1,4 +1,4 @@
-use crate::devtools_runtime::{
+use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsNetworkResourceType,
     DevToolsRequestId, DevToolsTargetId, NetworkRedirectResponseEvent, NetworkRequestEvent,
 };

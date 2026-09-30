@@ -95,7 +95,7 @@ async fn context_wrapped_cancellation_preserves_the_committed_page_and_releases_
 
     for error in [
         anyhow::Error::new(moli_fetch::FetchCancelled),
-        anyhow::Error::new(crate::devtools_runtime::DevToolsRequestFailure::Aborted),
+        anyhow::Error::new(crate::automation::DevToolsRequestFailure::Aborted),
     ] {
         let token = ctx
             .conn

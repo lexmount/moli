@@ -33,9 +33,9 @@ fn prepare(
                 |reply| match reply {
                     Ok(Reply::LayoutMetrics(metrics)) => {
                         Response::success(CommandOutputPlan::devtools_result_payload(
-                            DevToolsCommandResult::LayoutMetrics(
-                                layout_metrics_result_from_renderer(metrics),
-                            ),
+                            AutomationResult::LayoutMetrics(layout_metrics_result_from_renderer(
+                                metrics,
+                            )),
                         ))
                     }
                     Err(error) => Response::error(
@@ -68,7 +68,7 @@ fn prepare(
                     Ok(Reply::CaptureScreenshot(RendererCaptureScreenshotReply::Captured(
                         image,
                     ))) => Response::success(CommandOutputPlan::devtools_result_payload(
-                        DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
+                        AutomationResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
                             mime_type: image.mime_type,
                             width: image.width,
                             height: image.height,

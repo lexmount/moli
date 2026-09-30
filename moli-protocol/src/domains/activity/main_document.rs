@@ -3,6 +3,7 @@ use url::Url;
 
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
+use crate::automation::FrontendProtocol;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
     CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact,
@@ -10,7 +11,6 @@ use crate::conn::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererPageResidenceIdentity,
 };
-use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 use crate::domains::network::{
     self, FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
@@ -355,7 +355,7 @@ impl MainDocumentNavigationActivity {
             return;
         }
         match self.state.result_projection.protocol() {
-            DevToolsProtocol::Cdp => {
+            FrontendProtocol::Cdp => {
                 let mut result_payload = self.state.result_projection.payload().clone();
                 if let Some(payload) = result_payload.as_object_mut() {
                     payload.insert("errorText".to_owned(), json!(error_text));
@@ -363,7 +363,7 @@ impl MainDocumentNavigationActivity {
                 }
                 out.push_result_after_messages(result_payload);
             }
-            DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => {
+            FrontendProtocol::WebDriverClassic | FrontendProtocol::WebDriverBidi => {
                 out.push_error_after_messages(-32000, error_text);
             }
         }
@@ -870,7 +870,7 @@ impl MainDocumentFailedNavigationActivity {
         }
         if navigate_id.is_some() {
             if self.response_mode == FailedNavigationResponseMode::CdpErrorTextResult
-                && self.state.result_projection.protocol() == DevToolsProtocol::Cdp
+                && self.state.result_projection.protocol() == FrontendProtocol::Cdp
             {
                 let mut result_payload = self.state.result_projection.into_payload();
                 if let Some(payload) = result_payload.as_object_mut() {
