@@ -94,14 +94,14 @@
             assert(element[name]===null,'initial null');
             element.addEventListener(type,before); element[name]=first; element.addEventListener(type,after); element[name]=replacement;
             element.dispatchEvent(new realm.Event(type));
-            assert(log.slice().sort().join(',')==='after,before,replacement','replacement invokes current handler exactly once');log.length=0;
+            assert(log.join(',')==='before,replacement,after','replacement keeps registration position');log.length=0;
             element.dispatchEvent(new realm.Event(name.slice(2)));
             assert(log.length===0,'short event name does not invoke SVG handler');
             element[name]=null;element.dispatchEvent(new realm.Event(type));
             assert(log.join(',')==='before,after','null clears handler');log.length=0;
             element[name]=first;const event=new realm.Event(type,{cancelable:true});
             assert(!element.dispatchEvent(event) && event.defaultPrevented,'return false cancels event');
-            assert(log.slice().sort().join(',')==='after,before,first','reassignment restores the handler exactly once');
+            assert(log.join(',')==='before,after,first','new registration goes last');
             element[name]=null;element.removeEventListener(type,before);element.removeEventListener(type,after);
           }
         });
