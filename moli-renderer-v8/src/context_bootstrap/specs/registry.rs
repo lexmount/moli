@@ -1552,6 +1552,18 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioScheduledSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioBufferSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::AudioBufferSourceNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ConstantSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::ConstantSourceNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },

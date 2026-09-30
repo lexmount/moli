@@ -55,7 +55,7 @@ pub(super) fn install<'s>(
 }
 
 pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) {
-    let source = web_api_interfaces::OscillatorNode::is_instance(scope, node);
+    let source = web_api_interfaces::AudioScheduledSourceNode::is_instance(scope, node);
     let destination = web_api_interfaces::AudioDestinationNode::is_instance(scope, node);
     let compressor = web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node);
     set_web_audio_number_slot(scope, node, INPUT_COUNT, if source { 0.0 } else { 1.0 });

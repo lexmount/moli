@@ -12,6 +12,7 @@ const DESTINATION: &str = "__moliAudioContextDestination";
 const INPUTS: &str = "__moliAudioNodeInputs";
 const OUTPUTS: &str = "__moliAudioNodeOutputs";
 const START_TIME: &str = "__moliAudioSourceStartTime";
+const STOP_TIME: &str = "__moliAudioSourceStopTime";
 const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
 
 pub(super) fn initialize_node<'s>(
@@ -32,6 +33,7 @@ pub(super) fn initialize_source<'s>(
     node: v8::Local<'s, v8::Object>,
 ) {
     set_web_audio_number_slot(scope, node, START_TIME, f64::INFINITY);
+    set_web_audio_number_slot(scope, node, STOP_TIME, f64::INFINITY);
 }
 
 pub(super) fn set_destination<'s>(
@@ -234,68 +236,100 @@ pub(super) fn disconnect<'s>(
     }
 }
 
+pub(super) fn source_started<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> bool {
+    web_audio_number_slot(scope, node, START_TIME).is_some_and(f64::is_finite)
+}
+
 pub(super) fn start_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) {
-    let node = args.this();
-    let Some(start) = web_audio_number_slot(scope, node, START_TIME) else {
-        throw_type_error(scope, "Illegal invocation: expected an OscillatorNode.");
-        return;
-    };
-    let when = if args.get(0).is_undefined() {
-        0.0
-    } else {
-        let Some(when) = args.get(0).number_value(scope) else {
-            return;
-        };
-        when
-    };
-    if !when.is_finite() {
-        throw_type_error(scope, "Audio source start time must be finite.");
-        return;
-    }
-    if when < 0.0 {
-        throw_range_error(scope, "Audio source start time must not be negative.");
-        return;
-    }
-    if start.is_finite() {
+    node: v8::Local<'s, v8::Object>,
+    when: f64,
+    extra_times: &[f64],
+) -> bool {
+    // The bindings have already converted every restricted-double argument.
+    // The source-started state is checked before the operation's range rules.
+    if source_started(scope, node) {
         throw_dom_exception(
             scope,
             "InvalidStateError",
             11,
             "The audio source has already been started.",
         );
-        return;
+        return false;
+    }
+    if when < 0.0 || extra_times.iter().any(|value| *value < 0.0) {
+        throw_range_error(scope, "Audio source start arguments must not be negative.");
+        return false;
     }
     set_web_audio_number_slot(scope, node, START_TIME, when);
+    true
+}
+
+pub(super) fn stop_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    when: f64,
+) {
+    if !source_started(scope, node) {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "The audio source has not been started.",
+        );
+        return;
+    }
+    if when < 0.0 {
+        throw_range_error(scope, "Audio source stop time must not be negative.");
+        return;
+    }
+    set_web_audio_number_slot(scope, node, STOP_TIME, when);
 }
 
 fn has_started_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     end_time: f64,
-) -> bool {
+) -> Option<bool> {
     let mut pending = vec![node];
+    let mut has_input = false;
     let mut visited = Vec::new();
     while let Some(node) = pending.pop() {
         if visited.contains(&node) {
             continue;
         }
         visited.push(node);
-        if web_audio_number_slot(scope, node, START_TIME).is_some_and(|start| start < end_time) {
-            return true;
+        let active = web_audio_number_slot(scope, node, START_TIME).is_some_and(|start| {
+            start < end_time
+                && web_audio_number_slot(scope, node, STOP_TIME).is_some_and(|stop| stop > start)
+        });
+        if active {
+            if source::needs_rendering_backend(scope, node) {
+                throw_dom_exception(
+                    scope,
+                    "NotSupportedError",
+                    9,
+                    "PCM rendering for this audio source is not implemented.",
+                );
+                return None;
+            }
+            // Only the pre-existing oscillator backend supplies its synthetic
+            // signal. A null-buffer source must continue to render silence.
+            has_input |= web_api_interfaces::OscillatorNode::is_instance(scope, node);
         }
         pending.extend(objects(scope, node, INPUTS));
     }
-    false
+    Some(has_input)
 }
 
 pub(super) fn prepare_offline_render<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
     end_time: f64,
-) -> bool {
+) -> Option<bool> {
     let destination = web_audio_object_slot(scope, context, DESTINATION);
     let mut pending: Vec<_> = objects(scope, context, ANALYSERS)
         .into_iter()
@@ -303,17 +337,22 @@ pub(super) fn prepare_offline_render<'s>(
         .collect();
     pending.extend(destination);
     let mut visited = Vec::new();
+    let mut rendered_inputs = Vec::new();
     while let Some(node) = pending.pop() {
         if visited.contains(&node) {
             continue;
         }
         visited.push(node);
         pending.extend(objects(scope, node, INPUTS));
-        let has_input = has_started_source(scope, node, end_time);
+        let has_input = has_started_source(scope, node, end_time)?;
+        rendered_inputs.push((node, has_input));
+    }
+    // Reject unsupported processing before committing any render snapshot.
+    for (node, has_input) in rendered_inputs {
         let flag = v8::Boolean::new(scope, has_input);
         set_private_value(scope, node, RENDERED_INPUT, flag.into());
     }
-    destination.is_some_and(|node| rendered_with_input(scope, node))
+    Some(destination.is_some_and(|node| rendered_with_input(scope, node)))
 }
 
 pub(super) fn rendered_with_input<'s>(

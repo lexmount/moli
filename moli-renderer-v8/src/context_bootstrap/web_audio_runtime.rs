@@ -16,6 +16,11 @@ mod audio_param;
 mod biquad;
 mod graph;
 mod node;
+mod source;
+
+pub(in crate::context_bootstrap) use source::{
+    audio_buffer_source_constructor_callback, constant_source_constructor_callback,
+};
 
 use audio_param::{audio_param, detune_param};
 
@@ -169,8 +174,6 @@ struct OscillatorNodeObjectDeclaration<'scope> {
     frequency: v8::Local<'scope, v8::Object>,
     #[webapi(data_property, readonly)]
     detune: v8::Local<'scope, v8::Object>,
-    #[webapi(method, length = 1, callback = oscillator_start_callback)]
-    start: (),
 }
 
 #[derive(WebApiObject)]
@@ -383,6 +386,10 @@ struct AudioWorkletNodeTemplateDeclaration {}
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_buffer_source)]
+    create_buffer_source: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_constant_source)]
+    create_constant_source: (),
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
 
@@ -409,10 +416,11 @@ struct BaseAudioContextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable)]
+#[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable, receiver)]
 struct OfflineAudioContextPrototypeDeclaration {
     #[webapi(
         method = "startRendering",
+        returns_promise,
         length = 0,
         callback = offline_audio_context_start_rendering_callback
     )]
@@ -437,6 +445,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     interface_name: &str,
 ) {
     node::install(scope, template, interface_name);
+    source::install(scope, template, interface_name);
     match interface_name {
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
@@ -1358,7 +1367,7 @@ fn audio_context_create_oscillator_callback<'s>(
         .bind(scope)
         .expect("OscillatorNode declaration should bind");
     graph::initialize_node(scope, node, args.this());
-    graph::initialize_source(scope, node);
+    source::initialize_scheduling(scope, node);
     rv.set(node.into());
 }
 
@@ -1410,7 +1419,11 @@ fn offline_audio_context_start_rendering_callback<'s>(
         .unwrap_or(44_100);
     let sample_rate =
         web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0);
-    let has_input = graph::prepare_offline_render(scope, context, length as f64 / sample_rate);
+    let Some(has_input) =
+        graph::prepare_offline_render(scope, context, length as f64 / sample_rate)
+    else {
+        return;
+    };
     let rendered_buffer = build_audio_buffer(scope, length, sample_rate, has_input);
     define_non_enumerable_string_property(scope, context, "state", "closed");
 
@@ -1696,14 +1709,6 @@ fn copy_analyser_data<'s>(
             return;
         }
     }
-}
-
-fn oscillator_start_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    graph::start_source(scope, &args);
 }
 
 fn audio_param_set_value_at_time_callback<'s>(
