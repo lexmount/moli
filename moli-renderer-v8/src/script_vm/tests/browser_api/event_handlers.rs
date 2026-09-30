@@ -8,6 +8,7 @@ mod popup;
 mod popup_callback_owner;
 mod popup_window;
 mod surface;
+mod window_receivers;
 
 #[test]
 fn document_visibility_handler_is_native_and_can_be_cleared() {
