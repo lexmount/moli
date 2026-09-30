@@ -19,10 +19,7 @@ fn cache_interfaces_share_native_prototypes_and_promise_receiver_checks() {
 
 #[test]
 fn cache_interface_globals_require_a_secure_window() {
-    let mut vm = new_storage_test_vm("http://cache-interfaces.test/");
-    vm.document_runtime
-        .dom_host_mut()
-        .reset_html_document_shell();
+    let mut vm = new_storage_html_test_vm("http://cache-interfaces.test/");
     assert_eq!(
         vm.eval(
             r#"

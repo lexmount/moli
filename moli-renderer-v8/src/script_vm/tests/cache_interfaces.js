@@ -2,7 +2,9 @@
   const rows=[];
   const assert=(ok,message)=>{if(!ok)throw Error(message);};
   const check=async(name,run)=>{try{await run();rows.push({name,pass:true});}catch(e){rows.push({name,pass:false,error:e.name,message:e.message});}};
-  const realms=[['main',window],['child',document.getElementById('child').contentWindow]];
+  const popup=open();
+  const realms=[['main',window],['child',document.getElementById('child').contentWindow],['popup',popup]];
+  try {
     for(const [label,realm] of realms) {
       if(!realm.isSecureContext) {
         await check(label+'/insecure',()=>{
@@ -63,6 +65,7 @@
         });
       }finally{await realm.caches.delete(cacheName);}
     }
+  }finally{popup.close();}
   globalThis.__nodeReplacementResults={rows,failures:rows.filter(r=>!r.pass),passed:rows.filter(r=>r.pass).length,total:rows.length};
   return rows.every(r=>r.pass);
 })()
