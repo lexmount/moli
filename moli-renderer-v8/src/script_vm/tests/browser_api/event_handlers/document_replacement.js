@@ -13,18 +13,31 @@
       before[key] === after[key]);
   }
   function withWindow(owner, run) {
-    if (owner !== 'root') throw new Error('unexpected document owner');
-    // Finish a replacement stream first so write() starts a destructive stream.
-    document.open();
-    document.close();
-    return run(window);
+    let frame;
+    let target;
+    if (owner === 'root') target = window;
+    else if (owner === 'popup') target = open();
+    else {
+      frame = document.createElement('iframe');
+      document.body.appendChild(frame);
+      target = frame.contentWindow;
+    }
+    try {
+      // Finish a replacement stream first so the write case is destructive.
+      target.document.open();
+      target.document.close();
+      return run(target);
+    } finally {
+      if (frame) frame.remove();
+      if (owner === 'popup') target.close();
+    }
   }
   function replace(target, operation) {
     if (operation === 'open') target.document.open();
     else target.document.write('<!doctype html><body>replacement');
     target.document.close();
   }
-  for (const owner of ['root']) {
+  for (const owner of ['child', 'popup', 'root']) {
     for (const operation of ['open', 'write']) {
       for (const mode of ['native', 'deleted', 'replaced', 'throwing-setter', 'read-only']) {
         check(`${owner}:${operation}:${mode}`, () => withWindow(owner, target => {
@@ -51,7 +64,15 @@
           } finally { Object.defineProperty(target, 'onresize', native); }
         }));
       }
-
+      check(`${owner}:${operation}:pending-content-cleared`, () => withWindow(owner, target => {
+        target.document.body.setAttribute('onresize', '}');
+        replace(target, operation);
+        let errors = 0;
+        try {
+          target.onerror = () => { ++errors; return true; };
+          return target.onresize === null && errors === 0;
+        } finally { target.onerror = null; }
+      }));
     }
   }
   const failures = rows.filter(row => !row.pass);
