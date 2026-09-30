@@ -2275,6 +2275,7 @@ mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod close_watchers;
 mod credential_interface_exposure_interfaces;
+mod convolver_interfaces;
 mod credential_interfaces;
 
 mod audio_param_native_receivers;
@@ -2311,7 +2312,6 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
-mod gamepad_interfaces;
 mod geometry_point_conversion_order;
 mod headers_list;
 mod history_document_identity;
