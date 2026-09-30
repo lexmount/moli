@@ -10,9 +10,8 @@ use super::loaded_page_mut_for_owner;
 use super::node_references::{NodeReferenceParams, devtools_node_reference_from_ids};
 use super::resolve::{
     DevToolsDomCommandTaskStep, DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch,
-    PendingDomCommandKind, PendingDomCommandStartError, PendingDomCommandWork,
-    devtools_dom_command_task_complete, dom_object_reference_id_for_owner,
-    start_document_node_snapshot_for_reference,
+    PendingDomCommandKind, PendingDomCommandStartError, devtools_dom_command_task_complete,
+    dom_object_reference_id_for_owner, start_document_node_snapshot_for_reference,
 };
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::devtools_runtime::{
@@ -119,7 +118,7 @@ pub(super) fn start_devtools_set_file_input_files_command(
                 files: command.files,
                 append: command.append,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     }
     start_set_file_input_files_for_remote_reference(
@@ -436,7 +435,7 @@ fn start_set_file_input_files_frontend_node_binding(
             file_paths,
             append,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -485,7 +484,7 @@ fn start_set_file_input_files_preflight_dispatch(
             file_paths,
             append,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
@@ -502,7 +501,7 @@ fn start_set_file_input_files_for_reference_dispatch(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::SetFileInputFiles,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
@@ -543,7 +542,7 @@ fn start_set_file_input_files_for_runtime_object(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::SetFileInputFilesObjectReference,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 

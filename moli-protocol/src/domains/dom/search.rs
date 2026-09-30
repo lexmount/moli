@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::resolve::{
     DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch, PendingDomCommandKind,
-    PendingDomCommandStartError, PendingDomCommandWork,
+    PendingDomCommandStartError,
 };
 use super::*;
 use crate::devtools_runtime::{
@@ -102,7 +102,7 @@ pub(super) fn start_devtools_perform_search_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::PerformSearchLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -129,7 +129,7 @@ pub(super) fn start_devtools_get_search_results_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetSearchResultsLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -151,7 +151,7 @@ pub(super) fn start_devtools_discard_search_results_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::DiscardSearchResultsLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 

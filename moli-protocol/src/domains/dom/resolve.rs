@@ -130,14 +130,14 @@ pub(crate) struct PendingDomCommandDispatch {
     pub(super) command_id: Option<u64>,
     pub(super) owner_scope: CommandOwnerScope,
     pub(super) kind: PendingDomCommandKind,
-    pub(super) pending: PendingDomCommandWork,
+    pub(super) pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedDomCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingDomCommandKind,
-    completed: Result<CompletedDomCommandWork, String>,
+    completed: Result<Box<CompletedPageCommand>, String>,
 }
 
 impl CompletedDomCommandDispatch {
@@ -151,9 +151,7 @@ impl CompletedDomCommandDispatch {
 
     pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         match &self.completed {
-            Ok(CompletedDomCommandWork::Page(completion)) => {
-                completion.renderer_output_predecessor()
-            }
+            Ok(completion) => completion.renderer_output_predecessor(),
             Err(_) => None,
         }
     }
@@ -352,16 +350,8 @@ pub(super) fn start_disable_dom_agent_command(
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::DiscardDomAgentFrontendBindings,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
-}
-
-pub(super) enum PendingDomCommandWork {
-    Page(PendingPageCommand),
-}
-
-enum CompletedDomCommandWork {
-    Page(Box<CompletedPageCommand>),
 }
 
 #[derive(Clone)]
@@ -412,12 +402,10 @@ pub(super) enum PendingSetChildNodesAfter {
 
 impl PendingDomCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedDomCommandDispatch {
-        let completed = match self.pending {
-            PendingDomCommandWork::Page(pending) => Box::pin(pending.wait())
-                .await
-                .map(|completed| CompletedDomCommandWork::Page(Box::new(completed)))
-                .map_err(|error| error.to_string()),
-        };
+        let completed = Box::pin(self.pending.wait())
+            .await
+            .map(Box::new)
+            .map_err(|error| error.to_string());
         CompletedDomCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,

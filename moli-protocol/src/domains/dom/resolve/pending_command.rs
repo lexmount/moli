@@ -15,8 +15,7 @@ pub(super) fn complete_pending_dom_command(
             return DomCommandTaskStep::Complete;
         }
     };
-    let CompletedDomCommandWork::Page(completion) = completed_work;
-    let completion = *completion;
+    let completion = *completed_work;
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner_scope);
@@ -548,7 +547,7 @@ pub(super) fn complete_pending_dom_command(
                                 cache_object_id,
                                 top_frame_id,
                             },
-                            pending: PendingDomCommandWork::Page(pending),
+                            pending,
                         }))
                     }
                     Err(error) => {
@@ -620,7 +619,7 @@ pub(super) fn complete_pending_dom_command(
                                     object_group,
                                     cache_top_frame_id: None,
                                 },
-                                pending: PendingDomCommandWork::Page(pending),
+                                pending,
                             }))
                         }
                         Err(error) => {
@@ -651,7 +650,7 @@ pub(super) fn complete_pending_dom_command(
                             object_group,
                             cache_top_frame_id: resolution.cache_top_frame_id,
                         },
-                        pending: PendingDomCommandWork::Page(resolution.pending),
+                        pending: resolution.pending,
                     }))
                 }
                 Err(error) => {

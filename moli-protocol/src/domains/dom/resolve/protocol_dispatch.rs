@@ -44,7 +44,7 @@ pub(super) fn start_devtools_get_attributes_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetAttributesLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -75,7 +75,7 @@ pub(super) fn start_document_frontend_node_binding_command(
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -102,7 +102,7 @@ pub(super) fn start_devtools_get_text_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetTextLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -132,7 +132,7 @@ pub(super) fn start_devtools_get_property_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetPropertyLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -575,6 +575,6 @@ pub(super) fn start_devtools_scroll_into_view_if_needed_command(
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }

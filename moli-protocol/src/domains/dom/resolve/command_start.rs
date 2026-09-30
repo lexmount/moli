@@ -388,7 +388,7 @@ pub(super) fn start_cdp_dom_focus_command(
         kind: PendingDomCommandKind::Focus {
             missing_node_message: "No node found for given backend id",
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
@@ -473,7 +473,7 @@ pub(super) fn start_cdp_dom_edit_command(
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::EditDocumentNode,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
@@ -552,7 +552,7 @@ pub(super) fn start_devtools_remove_node_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::RemoveNode,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -607,7 +607,7 @@ pub(super) fn start_devtools_dom_geometry_command(
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -682,7 +682,7 @@ pub(super) fn start_devtools_describe_node_command(
             cached_object_node: None,
             top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -764,7 +764,7 @@ pub(super) fn start_devtools_request_child_nodes_command(
                 command_id,
                 owner_scope: owner.clone(),
                 kind,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
@@ -881,7 +881,7 @@ pub(super) fn start_devtools_query_selector_command(
             kind: PendingDomCommandKind::QuerySelectorLive {
                 multiple: command.multiple,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     };
 
@@ -927,7 +927,7 @@ pub(super) fn start_devtools_query_selector_command(
                 kind: PendingDomCommandKind::QuerySelectorLive {
                     multiple: command.multiple,
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
@@ -1110,7 +1110,7 @@ pub(super) fn start_devtools_get_document_command(
             operation,
             top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1153,7 +1153,7 @@ pub(super) fn start_devtools_get_frame_owner_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetFrameOwner { frame_id },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1214,7 +1214,7 @@ pub(super) fn start_devtools_get_node_for_location_command(
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetNodeForLocation { top_frame_id },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1316,7 +1316,7 @@ pub(super) fn start_devtools_resolve_node_command(
                 object_group: command.object_group,
                 top_frame_id,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     }
     let object_group = command.object_group;
@@ -1336,7 +1336,7 @@ pub(super) fn start_devtools_resolve_node_command(
             object_group,
             cache_top_frame_id: resolution.cache_top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(resolution.pending),
+        pending: resolution.pending,
     }))
 }
 
@@ -1474,7 +1474,7 @@ pub(super) fn start_dom_object_reference_operation(
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::RequestNodeObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::Focus => {
@@ -1487,7 +1487,7 @@ pub(super) fn start_dom_object_reference_operation(
                 kind: PendingDomCommandKind::Focus {
                     missing_node_message: "Could not find node with given id",
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::GetOuterHtml { include_shadow_dom } => {
@@ -1502,7 +1502,7 @@ pub(super) fn start_dom_object_reference_operation(
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::GetOuterHtmlObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::DescribeNode {
@@ -1527,7 +1527,7 @@ pub(super) fn start_dom_object_reference_operation(
                     cached_object_node,
                     top_frame_id,
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::GetBoxModel
@@ -1542,7 +1542,7 @@ pub(super) fn start_dom_object_reference_operation(
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::ObjectReferenceLiveClientRect { operation },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::ScrollIntoViewIfNeeded { rect } => {
@@ -1557,7 +1557,7 @@ pub(super) fn start_dom_object_reference_operation(
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
@@ -1591,7 +1591,7 @@ pub(super) fn start_devtools_push_nodes_by_backend_ids_command(
             node_ids,
             renderer_backend_positions,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1612,7 +1612,7 @@ pub(super) fn start_devtools_get_outer_html_command(
             command_id,
             owner_scope: owner.clone(),
             kind: PendingDomCommandKind::GetOuterHtmlDocument,
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     };
     if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
@@ -1634,6 +1634,6 @@ pub(super) fn start_devtools_get_outer_html_command(
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }

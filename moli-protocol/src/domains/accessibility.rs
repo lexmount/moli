@@ -16,14 +16,14 @@ pub(crate) struct PendingAccessibilityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
-    pending: PendingAccessibilityCommandWork,
+    pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedAccessibilityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
-    completed: CompletedAccessibilityCommandWork,
+    completed: Box<Result<CompletedPageCommand, String>>,
 }
 
 pub(crate) enum AccessibilityCommandDispatchStep {
@@ -57,14 +57,6 @@ enum PendingAccessibilityCommandKind {
     },
 }
 
-enum PendingAccessibilityCommandWork {
-    Page(PendingPageCommand),
-}
-
-enum CompletedAccessibilityCommandWork {
-    Page(Box<Result<CompletedPageCommand, String>>),
-}
-
 #[derive(Clone)]
 enum AccessibilityNodeOperation {
     Children,
@@ -88,7 +80,7 @@ impl PendingAccessibilityCommandDispatch {
         conn: &CdpConnection,
         cmd: &Cmd<'_>,
         kind: PendingAccessibilityCommandKind,
-        pending: PendingAccessibilityCommandWork,
+        pending: PendingPageCommand,
     ) -> Self {
         Self {
             command_id: cmd.id,
@@ -99,13 +91,7 @@ impl PendingAccessibilityCommandDispatch {
     }
 
     pub async fn wait(self) -> CompletedAccessibilityCommandDispatch {
-        let completed = match self.pending {
-            PendingAccessibilityCommandWork::Page(pending) => {
-                CompletedAccessibilityCommandWork::Page(Box::new(
-                    pending.wait().await.map_err(|error| error.to_string()),
-                ))
-            }
-        };
+        let completed = Box::new(self.pending.wait().await.map_err(|error| error.to_string()));
         CompletedAccessibilityCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
@@ -457,7 +443,7 @@ fn start_pending_object_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
@@ -501,7 +487,7 @@ fn start_pending_dom_node_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
@@ -565,7 +551,7 @@ fn start_pending_backend_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
@@ -644,10 +630,7 @@ fn start_pending_frame_scoped_accessibility_command(
         (child_frame_kind, pending)
     };
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
-        conn,
-        cmd,
-        kind,
-        PendingAccessibilityCommandWork::Page(pending),
+        conn, cmd, kind, pending,
     )))
 }
 
@@ -677,7 +660,6 @@ pub(crate) async fn complete_pending_accessibility_command(
         kind,
         completed,
     } = completed;
-    let CompletedAccessibilityCommandWork::Page(completed) = completed;
     let completed = *completed;
 
     if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
@@ -805,7 +787,7 @@ pub(crate) async fn complete_pending_accessibility_command(
                         top_frame_id,
                         operation,
                     },
-                    pending: PendingAccessibilityCommandWork::Page(pending),
+                    pending,
                 },
             );
         }

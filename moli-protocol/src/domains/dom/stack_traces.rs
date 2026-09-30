@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::resolve::{
     DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch, PendingDomCommandKind,
-    PendingDomCommandStartError, PendingDomCommandWork,
+    PendingDomCommandStartError,
 };
 use super::*;
 
@@ -39,7 +39,7 @@ pub(super) fn start_set_node_stack_traces_enabled_command(
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::SetNodeStackTracesEnabled,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -63,7 +63,7 @@ pub(super) fn start_get_node_stack_traces_command(
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::GetNodeStackTraces,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 

@@ -35,8 +35,7 @@ pub(super) fn complete_pending_dom_command_result(
             )));
         }
     };
-    let CompletedDomCommandWork::Page(completion) = completed_work;
-    let completion = *completion;
+    let completion = *completed_work;
 
     let result = match completed.kind {
         PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id } => {
@@ -389,7 +388,7 @@ pub(super) fn complete_pending_dom_command_result(
                                 cache_object_id,
                                 top_frame_id,
                             },
-                            pending: PendingDomCommandWork::Page(pending),
+                            pending,
                         }))
                     }
                     Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -835,7 +834,7 @@ where
             command_id,
             owner_scope: owner.clone(),
             kind,
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         })),
         Err(error) => {
             out.push_error(error.code, error.message);
@@ -874,7 +873,7 @@ where
                 command_id,
                 owner_scope: owner.clone(),
                 kind,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -1646,7 +1645,7 @@ pub(super) fn complete_resolve_node_execution_context_frame_result(
                             object_group,
                             cache_top_frame_id: None,
                         },
-                        pending: PendingDomCommandWork::Page(pending),
+                        pending,
                     }))
                 }
                 Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -1673,7 +1672,7 @@ pub(super) fn complete_resolve_node_execution_context_frame_result(
                     object_group,
                     cache_top_frame_id: resolution.cache_top_frame_id,
                 },
-                pending: PendingDomCommandWork::Page(resolution.pending),
+                pending: resolution.pending,
             }))
         }
         Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::from(error))),
