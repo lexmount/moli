@@ -2239,6 +2239,7 @@ mod element_animation_native_receivers;
 
 mod attr_accessors;
 mod attr_node_references;
+mod audio_param_node_interfaces;
 mod audio_source_interfaces;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_range;
@@ -2466,4 +2467,3 @@ mod window_restricted_accessors;
 mod window_scheduling_receivers;
 mod window_scroll_methods;
 mod window_sync_method_receivers;
-mod worklet_interfaces;
