@@ -529,11 +529,7 @@ impl NavigationAfterUnload {
         match self.completed {
             Ok(completed) => {
                 let source = navigation.unloaded_source.as_ref().expect("unload source");
-                let output = conn.settle_page_command_turn_for_owner(
-                    navigation.state.owner.session_id(),
-                    source,
-                    completed,
-                );
+                let output = conn.settle_page_command_turn_for_owner(source, completed);
                 let (mut completion, predecessor) = output.into_completion_and_predecessor();
                 assert!(
                     predecessor.as_ref().is_none_or(|fence| {
