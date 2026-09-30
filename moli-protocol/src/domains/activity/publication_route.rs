@@ -42,7 +42,7 @@ pub(crate) enum RendererPublicationRoute {
 }
 
 /// A current Page can project its complete renderer stream. A replaced Page
-/// remains routable for final Network facts and terminal Inspector responses
+/// remains routable for final Network facts and terminal command responses
 /// whose exact correlations are retained by the target/session. Other
 /// historical records must not affect the replacement document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +62,7 @@ impl RendererPublicationProjection {
             return true;
         }
         match item {
+            RendererOutputItem::NativeTerminal(_) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::Network { .. }) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
                 batch,

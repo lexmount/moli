@@ -181,8 +181,11 @@ async fn project_renderer_output_records_for_owner(
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
-        let (renderer_cause, item) = record.into_parts();
-        let mut item = match item {
+        let (renderer_cause, mut item) = record.into_parts();
+        if !projection.admit_record(&mut item) {
+            continue;
+        }
+        match item {
             RendererOutputItem::NativeTerminal(terminal) => {
                 command_context.protocol_events_mut().extend(
                     crate::domains::native::project_terminal_for_owner(
@@ -192,16 +195,6 @@ async fn project_renderer_output_records_for_owner(
                         terminal,
                     ),
                 );
-                continue;
-            }
-            item => item,
-        };
-        if !projection.admit_record(&mut item) {
-            continue;
-        }
-        match item {
-            RendererOutputItem::NativeTerminal(_) => {
-                unreachable!("terminals were projected in producer order above")
             }
             RendererOutputItem::OwnerAction(action) => {
                 // A Page stream can remain bound to its implicit primary owner while a
