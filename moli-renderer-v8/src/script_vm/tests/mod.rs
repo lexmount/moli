@@ -2269,6 +2269,7 @@ mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod close_watchers;
 mod credential_interface_exposure_interfaces;
+mod convolver_interfaces;
 mod credential_interfaces;
 
 mod audio_param_native_receivers;
