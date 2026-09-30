@@ -131,12 +131,13 @@ struct ServiceWorkerPeriodicSyncManagerDeclaration {
     unregister: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushManager)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushManager, enumerable)]
 struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
         callback = service_worker_push_manager_subscribe_callback,
+        returns_promise,
         length = 0
     )]
     subscribe: (),
@@ -144,6 +145,7 @@ struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "getSubscription",
         callback = service_worker_push_manager_get_subscription_callback,
+        returns_promise,
         length = 0
     )]
     get_subscription: (),
@@ -151,9 +153,17 @@ struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "permissionState",
         callback = service_worker_push_manager_permission_state_callback,
+        returns_promise,
         length = 0
     )]
     permission_state: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PushSubscription, enumerable)]
+struct PushSubscriptionMethods {
+    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0, returns_promise)]
+    unsubscribe: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -213,6 +223,12 @@ pub(in crate::context_bootstrap) fn install_service_worker_template_bindings<'s>
         }
         "ServiceWorker" => {
             ServiceWorkerPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PushManager" => {
+            ServiceWorkerPushManagerDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PushSubscription" => {
+            PushSubscriptionMethods::initialize_prototype_template(scope, prototype)
         }
         "NavigationPreloadManager" => {
             ServiceWorkerNavigationPreloadManagerDeclaration::initialize_prototype_template(
@@ -1894,11 +1910,29 @@ fn service_worker_push_manager_subscribe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(options) = crate::context_bootstrap::push_interfaces::parse_options(scope, &args)
+    else {
+        return;
+    };
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
+
+    if options.has_application_server_key {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "Push encryption and application server keys are not supported.",
+            "NotSupportedError",
+        );
+        return;
+    }
 
     if service_worker_push_permission_state(scope) != "granted" {
         reject_service_worker_promise_with_dom_exception(
@@ -1925,7 +1959,7 @@ fn service_worker_push_manager_subscribe_callback<'s>(
         );
         return;
     };
-    let user_visible_only = service_worker_push_subscribe_user_visible_only(scope, args.get(0));
+    let user_visible_only = options.user_visible_only;
     let host = unsafe { &*host_ptr };
     let Some(subscription) = host.subscribe_service_worker_push(&scope_url, user_visible_only)
     else {
@@ -1947,6 +1981,10 @@ fn service_worker_push_manager_get_subscription_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -1982,9 +2020,16 @@ fn service_worker_push_manager_get_subscription_callback<'s>(
 
 fn service_worker_push_manager_permission_state_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if crate::context_bootstrap::push_interfaces::parse_options(scope, &args).is_none() {
+        return;
+    }
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2011,18 +2056,6 @@ fn service_worker_push_permission_state(scope: &mut v8::PinScope<'_, '_>) -> Str
         _ => "prompt",
     }
     .to_owned()
-}
-
-fn service_worker_push_subscribe_user_visible_only(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return false;
-    };
-    options
-        .get(scope, v8str(scope, "userVisibleOnly").into())
-        .is_some_and(|value| value.boolean_value(scope))
 }
 
 pub(crate) fn settle_service_worker_unregister_completion<'s>(
@@ -2505,10 +2538,9 @@ fn build_service_worker_push_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let declaration = ServiceWorkerPushManagerDeclaration::new();
-    let push_manager = bind_declared_service_worker_object(scope, &declaration);
+    let push_manager = crate::context_bootstrap::push_interfaces::build_manager(scope)?;
     let scope_value = v8_string(scope, scope_url)?;
-    define_non_enumerable_value_property(
+    set_private_value(
         scope,
         push_manager,
         SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT,
@@ -2554,14 +2586,10 @@ fn build_service_worker_push_subscription_object<'s>(
     scope_url: &url::Url,
     snapshot: &crate::service_worker_runtime::ServiceWorkerPushSubscriptionSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let subscription = moli_webapi::push_values::new_subscription(
-        scope,
-        &snapshot.endpoint,
-        snapshot.user_visible_only,
-        service_worker_push_subscription_unsubscribe_callback,
-    )?;
+    let subscription =
+        crate::context_bootstrap::push_interfaces::build_subscription(scope, snapshot)?;
     let scope_value = v8_string(scope, scope_url.as_str())?;
-    define_non_enumerable_value_property(
+    set_private_value(
         scope,
         subscription,
         SERVICE_WORKER_PUSH_SUBSCRIPTION_SCOPE_SLOT,
@@ -2575,6 +2603,10 @@ fn service_worker_push_subscription_unsubscribe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -2621,21 +2653,20 @@ fn service_worker_sync_manager_scope_from_this(
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_push_manager_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    push_manager: v8::Local<'_, v8::Object>,
+fn service_worker_push_manager_scope_from_this<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    push_manager: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value =
-        object_own_hidden_value(scope, push_manager, SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT)?;
+    let value = get_private_value(scope, push_manager, SERVICE_WORKER_PUSH_MANAGER_SCOPE_SLOT)?;
     let scope_string = value.to_string(scope)?.to_rust_string_lossy(scope);
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_push_subscription_scope_from_this(
-    scope: &mut v8::PinScope<'_, '_>,
-    subscription: v8::Local<'_, v8::Object>,
+fn service_worker_push_subscription_scope_from_this<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    subscription: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    let value = object_own_hidden_value(
+    let value = get_private_value(
         scope,
         subscription,
         SERVICE_WORKER_PUSH_SUBSCRIPTION_SCOPE_SLOT,
