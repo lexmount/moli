@@ -16,6 +16,14 @@ pub(crate) const SECURE_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "ondeviceorientationabsolute",
 ];
 
+pub(crate) fn window_event_handler_properties() -> impl Iterator<Item = &'static str> {
+    WINDOW_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(SECURE_WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES)
+        .copied()
+}
+
 pub(crate) const WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onabort",
     "onafterprint",
@@ -146,10 +154,6 @@ pub(crate) fn is_window_event_handler_property(property: &str) -> bool {
         || SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES.contains(&property)
 }
 
-pub(crate) use accessors::{
-    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
-    window_body_onerror_handler_is_compiled,
-};
 pub(super) use accessors::{
     window_console_getter, window_event_getter, window_event_setter,
     window_onerror_getter_function, window_onerror_setter_function,
@@ -168,14 +172,12 @@ pub(crate) use error::{
     dispatch_window_callback_exception, dispatch_window_error_event,
     dispatch_window_error_event_with_details, dispatch_window_report_error_message,
 };
-pub(crate) use install::event_handler_property_is_exposed;
+
 pub(super) use install::install_window_global_accessors;
 pub(crate) use install::{
-    clear_simple_window_event_handler_values, install_simple_window_event_handlers,
+    clear_simple_window_event_handler_values, install_secure_window_event_handler_accessors,
+    install_simple_window_event_handlers,
 };
 pub(crate) use promise::dispatch_window_promise_rejection_event;
 
-pub(in crate::context_bootstrap) use install::{
-    finalize_secure_global_event_handler_realm_bindings,
-    install_secure_window_event_handler_accessors,
-};
+pub(in crate::context_bootstrap) use install::finalize_secure_global_event_handler_realm_bindings;
