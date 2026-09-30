@@ -40,7 +40,6 @@ pub(crate) const SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT: &str =
     "__moliSimpleEventTargetOrderedHandlers";
 pub(in crate::context_bootstrap) const OFFLINE_AUDIO_LISTENERS_SLOT: &str =
     "__moliOfflineAudioListeners";
-pub(in crate::context_bootstrap) const OFFLINE_AUDIO_BUFFER_SLOT: &str = "__moliOfflineAudioBuffer";
 pub(in crate::context_bootstrap) const SCREEN_EVENT_LISTENERS_SLOT: &str =
     "__moliScreenEventListeners";
 pub(in crate::context_bootstrap) const SCREEN_ORIENTATION_EVENT_LISTENERS_SLOT: &str =

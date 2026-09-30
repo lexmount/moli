@@ -74,10 +74,11 @@ use super::super::{
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
-        audio_buffer_source_constructor_callback, build_audio_context_constructor_template,
-        build_audio_worklet_node_constructor_template, channel_merger_constructor,
-        channel_splitter_constructor, constant_source_constructor_callback, delay_constructor,
-        gain_constructor, offline_audio_context_constructor_callback, stereo_panner_constructor,
+        audio_buffer_constructor, audio_buffer_source_constructor_callback,
+        build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
+        channel_merger_constructor, channel_splitter_constructor,
+        constant_source_constructor_callback, delay_constructor, gain_constructor,
+        offline_audio_context_constructor_callback, stereo_panner_constructor,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
@@ -1155,14 +1156,21 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(3)
             .build(scope)
         }
+        ConstructorKind::AudioBuffer => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::AudioBuffer,
+                audio_buffer_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::BaseAudioContext
         | ConstructorKind::AudioDestinationNode
         | ConstructorKind::OscillatorNode
         | ConstructorKind::DynamicsCompressorNode
         | ConstructorKind::AnalyserNode
         | ConstructorKind::BiquadFilterNode
-        | ConstructorKind::AudioParam
-        | ConstructorKind::AudioBuffer => {
+        | ConstructorKind::AudioParam => {
             v8::FunctionTemplate::builder(illegal_constructor_callback)
                 .length(0)
                 .build(scope)

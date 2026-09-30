@@ -14,12 +14,14 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod audio_param;
 mod biquad;
+mod buffer;
 mod channel_nodes;
 mod graph;
 mod node;
 mod param_nodes;
 mod source;
 
+pub(in crate::context_bootstrap) use buffer::constructor as audio_buffer_constructor;
 pub(in crate::context_bootstrap) use channel_nodes::{
     channel_merger_constructor, channel_splitter_constructor,
 };
@@ -251,19 +253,6 @@ struct OfflineAudioCompletePayloadDeclaration<'scope> {
 #[webapi(interface = web_api_interfaces::AudioDestinationNode)]
 struct AudioDestinationNodeObjectDeclaration {}
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::AudioBuffer)]
-struct AudioBufferObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    length: f64,
-    #[webapi(data_property = "sampleRate")]
-    sample_rate: f64,
-    #[webapi(data_property)]
-    duration: f64,
-    #[webapi(slot = OFFLINE_AUDIO_BUFFER_SLOT)]
-    channel_data: v8::Local<'scope, v8::Object>,
-}
-
 // Captured from the Chromium-on-Linux baseline we use for Zhihu probe parity.
 // If that browser profile changes, update this together with the audio probe
 // assertions in `script_vm/tests.rs`.
@@ -348,13 +337,6 @@ struct OfflineAudioContextConstructorArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AudioBuffer.getChannelData")]
-struct AudioBufferGetChannelDataArgs {
-    #[webidl(required)]
-    channel: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "AudioParam.setValueAtTime")]
 struct AudioParamSetValueAtTimeArgs {
     #[webidl(required)]
@@ -394,6 +376,8 @@ struct AudioWorkletNodeTemplateDeclaration {}
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 3, callback = buffer::create)]
+    create_buffer: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_gain)]
     create_gain: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
@@ -466,6 +450,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     param_nodes::install(scope, template, interface_name);
     source::install(scope, template, interface_name);
     match interface_name {
+        "AudioBuffer" => buffer::install(scope, template),
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
             template.prototype_template(scope),
@@ -1349,30 +1334,6 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
     rv.set(context.into());
 }
 
-pub(in crate::context_bootstrap) fn audio_buffer_get_channel_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let buffer = args.this();
-    let Some(parsed) = webidl::parse_args::<AudioBufferGetChannelDataArgs>(scope, &args) else {
-        return;
-    };
-    let requested_channel = parsed.channel.trunc();
-    if !requested_channel.is_finite() || requested_channel != 0.0 {
-        throw_range_error(
-            scope,
-            "Failed to execute 'getChannelData' on 'AudioBuffer': channel index is out of range.",
-        );
-        return;
-    }
-    let Some(data) = web_audio_object_slot(scope, buffer, OFFLINE_AUDIO_BUFFER_SLOT) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(data.into());
-}
-
 fn require_base_audio_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1456,7 +1417,15 @@ fn offline_audio_context_start_rendering_callback<'s>(
     else {
         return;
     };
-    let rendered_buffer = build_audio_buffer(scope, length, sample_rate, has_input);
+    let channels = web_audio_number_slot(scope, context, OFFLINE_AUDIO_CHANNEL_COUNT_SLOT)
+        .unwrap_or(1.0) as u32;
+    let rendered_buffer = {
+        let realm = context
+            .get_creation_context(scope)
+            .expect("Audio context should have a creation realm");
+        let scope = &mut v8::ContextScope::new(scope, realm);
+        build_audio_buffer(scope, length, sample_rate, channels, has_input)
+    };
     define_non_enumerable_string_property(scope, context, "state", "closed");
 
     let payload = OfflineAudioCompletePayloadDeclaration::new(context, rendered_buffer)
@@ -1818,17 +1787,10 @@ fn build_audio_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     length: usize,
     sample_rate: f64,
+    channels: u32,
     has_input: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let channel_data = build_channel_data_view(scope, length, has_input);
-    AudioBufferObjectDeclaration::new(
-        length as f64,
-        sample_rate,
-        (length as f64) / sample_rate.max(1.0),
-        channel_data,
-    )
-    .bind(scope)
-    .expect("AudioBuffer declaration should bind")
+    buffer::rendered(scope, length, sample_rate, channels, has_input)
 }
 
 fn build_channel_data_view<'s>(

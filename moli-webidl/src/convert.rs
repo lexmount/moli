@@ -1,9 +1,9 @@
 use crate::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, DomString, DomString16,
     Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong,
-    UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum,
-    WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
+    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
+    UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary,
+    WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
     symbol_property_result, throw_error, throw_type_error,
 };
 
