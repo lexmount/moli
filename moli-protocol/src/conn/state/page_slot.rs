@@ -99,6 +99,7 @@ pub(crate) struct PendingNavigationRequest {
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_work: BackgroundWorkState,
     committed: bool,
+    stop_requested: bool,
 }
 
 impl PendingNavigationRequest {
@@ -109,6 +110,7 @@ impl PendingNavigationRequest {
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_work: BackgroundWorkState::NotStarted,
             committed: false,
+            stop_requested: false,
         }
     }
 
@@ -754,6 +756,15 @@ impl TargetPageSlot {
         true
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|request| request.matches(token) && request.stop_requested)
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
@@ -764,6 +775,7 @@ impl TargetPageSlot {
         if let Some(request) = self.pending_navigation_request.as_mut() {
             // Keep the token installed: the existing completion path owns the
             // aborted response and must still settle this exact navigation.
+            request.stop_requested = true;
             request.cancel();
         }
     }

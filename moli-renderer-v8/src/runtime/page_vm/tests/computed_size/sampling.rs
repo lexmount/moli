@@ -77,7 +77,7 @@ async fn computed_size_held_getters_wait_for_explicit_publication() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() {
+async fn computed_size_grid_sampling_holds_dirty_geometry_until_publication() {
     run_page_vm_async_test(async move {
         let mut page = page_with_size_fixture(GRID)?;
         page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
@@ -132,18 +132,28 @@ async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() 
         );
         assert_eq!(
             page.vm_mut().eval("held.gridTemplateColumns")?,
+            "40px 120px"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(
+            held_sizes(&mut page)?,
+            json!(["160px", "40px", "160px", "40px"])
+        );
+        publish_size_layout(&mut page)?;
+        assert_eq!(
+            page.vm_mut().eval("held.gridTemplateColumns")?,
             "100px 100px"
         );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
         assert_eq!(
             held_sizes(&mut page)?,
             json!(["200px", "40px", "200px", "40px"])
         );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
         let refreshed = page.vm().layout_snapshot_cache_observability_for_test();
         assert_eq!(
             refreshed.2,
             sampled.2 + 1,
-            "the first exact demand must publish one replacement tree"
+            "explicit visual publication must replace the retained tree"
         );
 
         page.vm_mut().eval("'clean turn'")?;

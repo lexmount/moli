@@ -650,6 +650,13 @@ impl TargetRuntimeSlot {
             .settle_background_navigation_completion(token)
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.page_slot.background_navigation_stop_requested(token)
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.page_slot.has_inflight_background_navigation()
     }

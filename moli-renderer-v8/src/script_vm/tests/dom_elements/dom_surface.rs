@@ -75,7 +75,7 @@ fn drain_image_load_event_bodies_for_test(vm: &mut ScriptVm) -> usize {
 mod extracted;
 
 #[test]
-fn offset_parent_refreshes_a_connected_insertion_before_any_other_geometry_read() {
+fn offset_parent_uses_the_published_tree_until_connected_insertion_is_published() {
     let mut vm = new_storage_test_vm("https://offset-parent-layout.test/");
     vm.eval(
         r#"
@@ -120,7 +120,7 @@ fn offset_parent_refreshes_a_connected_insertion_before_any_other_geometry_read(
         "the connected insertion must mark layout dirty without rebuilding it eagerly"
     );
 
-    let result = vm
+    let frozen = vm
         .eval(
             r#"
             (() => {
@@ -130,16 +130,17 @@ fn offset_parent_refreshes_a_connected_insertion_before_any_other_geometry_read(
             })()
             "#,
         )
-        .expect("offsetParent-first geometry read should evaluate");
+        .expect("offsetParent-first frozen geometry read should evaluate");
     assert_eq!(
-        result, r#"{"parentIsMenu":true,"width":240}"#,
-        "offsetParent must refresh a dirty tree before answering for the inserted element"
+        frozen, r#"{"parentIsMenu":false,"width":0}"#,
+        "the inserted element must remain absent from the published tree"
     );
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        passes_after_initial_layout + 1,
-        "offsetParent and the following width read should share one fresh pass"
+        passes_after_initial_layout,
+        "geometry reads must not publish the connected insertion"
     );
+    publish_layout_for_test(&mut vm);
 
     assert_eq!(
         vm.eval("candidate.offsetParent === menu && candidate.offsetWidth === 240")
@@ -190,7 +191,7 @@ fn geometry_reuses_clean_layout_after_detached_subtree_mutations() {
 }
 
 #[test]
-fn geometry_refreshes_pseudo_class_inputs_on_demand() {
+fn geometry_publishes_pseudo_class_inputs_at_visual_boundaries() {
     let mut vm = new_storage_test_vm("https://layout-state.test/");
     vm.eval(r#"
         if (!document.documentElement) document.appendChild(document.createElement('html'));
@@ -200,6 +201,7 @@ fn geometry_refreshes_pseudo_class_inputs_on_demand() {
         target.getBoundingClientRect().width;
     "#).expect("fixture should evaluate");
     let mut passes = vm.layout_pass_observability_for_test().1;
+    let mut published = "40";
     for (mutation, expected) in [
         ("target.focus({preventScroll: true})", "80"),
         ("target.checked = true", "120"),
@@ -210,10 +212,12 @@ fn geometry_refreshes_pseudo_class_inputs_on_demand() {
         assert_eq!(vm.layout_pass_observability_for_test().1, passes);
         assert_eq!(
             vm.eval("target.getBoundingClientRect().width").unwrap(),
-            expected,
-            "geometry must reflect changed pseudo class: {mutation}"
+            published,
+            "geometry must retain the published pseudo-class state: {mutation}"
         );
+        publish_layout_for_test(&mut vm);
         passes += 1;
+        published = expected;
         assert_eq!(vm.layout_pass_observability_for_test().1, passes);
         assert_eq!(
             vm.eval("target.getBoundingClientRect().width").unwrap(),
@@ -224,7 +228,7 @@ fn geometry_refreshes_pseudo_class_inputs_on_demand() {
 }
 
 #[test]
-fn geometry_refreshes_attribute_selectors_and_cssom_on_demand() {
+fn geometry_publishes_attribute_selectors_and_cssom_at_visual_boundaries() {
     let mut vm = new_storage_test_vm("https://layout-inputs.test/");
     vm.eval(r#"
         if (!document.documentElement) document.appendChild(document.createElement('html'));
@@ -234,6 +238,7 @@ fn geometry_refreshes_attribute_selectors_and_cssom_on_demand() {
         target.getBoundingClientRect().width;
     "#).expect("fixture should evaluate");
     let mut passes = vm.layout_pass_observability_for_test().1;
+    let mut published = "40";
     for (mutation, expected) in [
         ("target.setAttribute('data-wide', '')", "80"),
         (
@@ -250,9 +255,12 @@ fn geometry_refreshes_attribute_selectors_and_cssom_on_demand() {
         );
         assert_eq!(
             vm.eval("target.getBoundingClientRect().width").unwrap(),
-            expected
+            published,
+            "geometry must retain the published style inputs: {mutation}"
         );
+        publish_layout_for_test(&mut vm);
         passes += 1;
+        published = expected;
         assert_eq!(vm.layout_pass_observability_for_test().1, passes);
         assert_eq!(
             vm.eval("target.getBoundingClientRect().width").unwrap(),
@@ -267,7 +275,7 @@ fn geometry_refreshes_attribute_selectors_and_cssom_on_demand() {
 }
 
 #[test]
-fn geometry_refreshes_inserted_and_existing_nodes_on_demand() {
+fn geometry_publishes_inserted_and_existing_nodes_at_visual_boundaries() {
     let mut vm = new_storage_test_vm("https://layout-mutation.test/");
 
     vm.eval(
@@ -312,7 +320,7 @@ fn geometry_refreshes_inserted_and_existing_nodes_on_demand() {
         "mutation should retain the sampled frozen tree"
     );
 
-    let result = vm
+    let frozen = vm
         .eval(
             r#"
             (() => {
@@ -322,13 +330,29 @@ fn geometry_refreshes_inserted_and_existing_nodes_on_demand() {
             })()
             "#,
         )
-        .expect("geometry after a connected insertion should evaluate");
+        .expect("frozen geometry after a connected insertion should evaluate");
 
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        passes_before + 1,
-        "all post-mutation geometry reads should share one fresh pass"
+        passes_before,
+        "post-mutation geometry reads must not publish a new tree"
     );
+    let frozen: serde_json::Value =
+        serde_json::from_str(&frozen).expect("frozen geometry result should be JSON");
+    assert_eq!(frozen["target"], serde_json::json!([0, 0]));
+    assert_eq!(frozen["markerTop"].as_f64(), Some(before_top));
+
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"JSON.stringify({
+              target: [document.getElementById("target").getBoundingClientRect().width,
+                       document.getElementById("target").getBoundingClientRect().height],
+              markerTop: document.getElementById("marker").getBoundingClientRect().top
+            })"#,
+        )
+        .expect("published geometry after a connected insertion should evaluate");
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
 
     let result: serde_json::Value =
         serde_json::from_str(&result).expect("geometry result should be JSON");
@@ -354,13 +378,21 @@ fn geometry_refreshes_inserted_and_existing_nodes_on_demand() {
         passes_before + 1,
         "removal itself must not run layout"
     );
+    assert!(
+        vm.eval("document.getElementById('marker').getBoundingClientRect().top")
+            .unwrap()
+            .parse::<f64>()
+            .unwrap()
+            > before_top,
+        "removal must retain the previous published geometry"
+    );
+    publish_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("document.getElementById('marker').getBoundingClientRect().top")
             .unwrap()
             .parse::<f64>()
             .unwrap(),
         before_top,
-        "removing previously connected siblings must invalidate old geometry"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
 }

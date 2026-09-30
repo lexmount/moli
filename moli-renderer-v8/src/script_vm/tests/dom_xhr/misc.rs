@@ -1507,7 +1507,7 @@ return [
 }
 
 #[test]
-fn adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering() {
+fn adopted_stylesheet_geometry_updates_on_explicit_publication() {
     for shadow in [false, true] {
         let mut vm = new_parsed_test_vm(
             "https://adopted-sheet-layout.test/",
@@ -1530,6 +1530,7 @@ fn adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering()
         .unwrap();
         let read = "[target.getBoundingClientRect().width,parseFloat(getComputedStyle(target).width),target.offsetWidth].join('|')";
         assert_eq!(vm.eval(read).unwrap(), "20|20|20");
+        let mut published_width = 20;
         for (mutation, width) in [
             ("adopter.adoptedStyleSheets=[sheet];", 40),
             ("sheet.replaceSync('#target {width:80px;height:10px}');", 80),
@@ -1556,19 +1557,34 @@ fn adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering()
                 before,
                 "stylesheet changes must not eagerly build layout: shadow={shadow} {mutation}"
             );
-            let expected = format!("{width}|{width}|{width}");
+            let frozen = format!("{published_width}|{published_width}|{published_width}");
             assert_eq!(
                 vm.eval(read).unwrap(),
-                expected,
-                "shadow={shadow} {mutation}"
+                frozen,
+                "ordinary reads retain the published tree: shadow={shadow} {mutation}"
             );
             assert_eq!(
                 vm._context_host
                     .borrow()
                     .layout_pass_observability_for_test()
                     .1,
+                before,
+            );
+            vm.publish_layout_for_test().unwrap();
+            let expected = format!("{width}|{width}|{width}");
+            assert_eq!(
+                vm.eval(read).unwrap(),
+                expected,
+                "shadow={shadow} {mutation}"
+            );
+            published_width = width;
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .layout_pass_observability_for_test()
+                    .1,
                 before + 1,
-                "first geometry read must refresh exactly once: shadow={shadow} {mutation}"
+                "explicit publication must refresh exactly once: shadow={shadow} {mutation}"
             );
             assert_eq!(vm.eval(read).unwrap(), expected);
             assert_eq!(
@@ -1584,7 +1600,7 @@ fn adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering()
 }
 
 #[test]
-fn geometry_getters_refresh_after_mutation_and_reuse_clean_layout() {
+fn geometry_getters_reuse_frozen_layout_until_the_next_publication() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1619,6 +1635,9 @@ yield; // Publish this scene before reading its geometry.
   const inserted = document.createElement('div');
   inserted.style.height = '5px';
   document.body.insertBefore(inserted, targets[0]);
+  const frozenAfterInsertion = targets[3].offsetTop;
+  const frozenInserted = inserted.offsetTop;
+  yield; // Publish the mutated scene before observing its new geometry.
   const afterInsertion = targets[3].offsetTop;
   return [
     initialLast,
@@ -1626,6 +1645,8 @@ yield; // Publish this scene before reading its geometry.
     first[3],
     second[0],
     second[3],
+    frozenAfterInsertion,
+    frozenInserted,
     afterInsertion,
     inserted.offsetTop
   ].join('|');
@@ -1634,7 +1655,7 @@ yield; // Publish this scene before reading its geometry.
     )
     .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|43|8");
+    assert_eq!(result, "38|8|38|8|38|38|0|43|8");
     let passes = vm
         ._context_host
         .borrow()
@@ -1643,11 +1664,11 @@ yield; // Publish this scene before reading its geometry.
         .saturating_sub(passes_before);
     assert_eq!(
         passes, 2,
-        "the explicit fixture publication and the first dirty geometry read build layout"
+        "the two explicit publication boundaries build layout"
     );
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 10);
-    assert_eq!(cache_after.1, cache_before.1 + 1);
+    assert_eq!(cache_after.0, cache_before.0 + 13);
+    assert_eq!(cache_after.1, cache_before.1);
     assert_eq!(cache_after.2, cache_before.2 + 2);
     assert!(cache_after.3.is_some());
 }

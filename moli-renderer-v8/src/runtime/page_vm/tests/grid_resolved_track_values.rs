@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_style_refreshes_dirty_used_grid_tracks_on_exact_demand() {
+async fn computed_style_holds_dirty_used_grid_tracks_until_publication() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -110,20 +110,37 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
             "marking the current frozen tree dirty must not discard or replace it eagerly",
         );
 
+        let frozen_tracks = page_vm.vm_mut().eval(
+            "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
+        )?;
+        assert_eq!(
+            frozen_tracks,
+            "[a] 21px [b c] 22px [d] 23px [e c] 22px [d] 23px [e f] 189px [g]",
+            "an exact used-track read must keep the published layout epoch",
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before_mutation,
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?
+            .expect("mutated used Grid tracks should publish for screenshot");
         assert_eq!(
             page_vm.vm_mut().eval(
                 "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
             )?,
             "[new] 200px 200px",
-            "an exact used-track read must refresh a dirty layout before answering",
+            "the next explicit publication must expose the changed used tracks",
         );
         let passes_after_demand = page_vm.vm().layout_pass_observability_for_test().1;
         let cache_after_demand = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert_eq!(passes_after_demand, passes_before_mutation + 1);
-        assert_eq!(cache_after_demand.0, cache_before_mutation.0);
-        assert_eq!(cache_after_demand.1, cache_before_mutation.1 + 1);
+        assert_eq!(cache_after_demand.0, cache_before_mutation.0 + 2);
+        assert_eq!(cache_after_demand.1, cache_before_mutation.1);
         assert_eq!(cache_after_demand.2, cache_before_mutation.2 + 1);
 
         page_vm.vm_mut().eval("'clean turn'")?;

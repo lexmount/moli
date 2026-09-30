@@ -17,7 +17,10 @@ use crate::conn::{BackgroundProtocolEvent, build_event};
 pub(crate) use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
 pub(crate) fn loading_failed_canceled(error_text: &str) -> bool {
-    error_text == NET_ERR_ABORTED_ERROR_TEXT
+    matches!(
+        error_text,
+        NET_ERR_ABORTED_ERROR_TEXT | "Navigation stopped"
+    )
 }
 
 pub(crate) trait CdpNetworkAutomationEventSink {
