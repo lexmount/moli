@@ -51,28 +51,29 @@ fn build_service_worker_global_registration<'s>(
     .map_err(|error| anyhow!("failed to build service worker push manager: {error:?}"))?;
     let navigation_preload =
         build_service_worker_global_navigation_preload_manager(scope, scope_url)?;
-    let registration = ServiceWorkerGlobalRegistrationDeclaration {
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "ServiceWorkerRegistration",
+    )?;
+    let update_via_cache = worker_service_worker_runtime(scope)
+        .and_then(|runtime| runtime.registration_snapshot_by_id(registration_id))
+        .map(|snapshot| snapshot.update_via_cache().as_str())
+        .unwrap_or("imports");
+    let registration = ServiceWorkerRegistrationObjectDeclaration {
+        prototype,
         scope: scope_url.as_str().to_owned(),
-        onupdatefound: (),
-        installing: (),
-        waiting: (),
-        active: (),
-        unregister: (),
-        update: (),
-        show_notification: (),
-        get_notifications: (),
-        sync: sync_manager,
-        periodic_sync: periodic_sync_manager,
-        push_manager,
-        navigation_preload,
+        update_via_cache,
+        sync: Some(sync_manager),
+        periodic_sync: Some(periodic_sync_manager),
+        push_manager: Some(push_manager),
+        navigation_preload: Some(navigation_preload),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker registration: {error:?}"))?;
-    install_simple_event_target_methods(
+    crate::context_bootstrap::mark_simple_event_target_slot(
         scope,
         registration,
         SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
-        false,
     );
     install_simple_event_target_ordered_handlers(scope, registration);
     let scope_value = v8_string(scope, scope_url.as_str())
@@ -98,49 +99,6 @@ fn build_service_worker_global_registration<'s>(
         version_id_value.into(),
     );
     Ok(registration)
-}
-
-pub(super) fn service_worker_registration_onupdatefound_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(
-        get_private_value(
-            scope,
-            args.this(),
-            SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        )
-        .unwrap_or_else(|| v8::null(scope).into()),
-    );
-}
-
-pub(super) fn service_worker_registration_onupdatefound_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = args.get(0);
-    let active = value.is_object();
-    let value = if active {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(
-        scope,
-        args.this(),
-        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        value,
-    );
-    simple_object_event_set_ordered_handler(
-        scope,
-        args.this(),
-        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
-        "updatefound",
-        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
-        active,
-    );
 }
 
 pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
@@ -175,15 +133,13 @@ fn build_service_worker_global_navigation_preload_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     scope_url: &Url,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
-    let navigation_preload = ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
-        enable: (),
-        disable: (),
-        set_header_value: (),
-        get_state: (),
-    }
-    .bind(scope)
-    .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "NavigationPreloadManager",
+    )?;
+    let navigation_preload = NavigationPreloadManagerObjectDeclaration::new(prototype)
+        .bind(scope)
+        .map_err(|error| anyhow!("failed to build navigation preload manager: {error:?}"))?;
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate navigation preload registration scope"))?;
     set_private_value(
@@ -261,11 +217,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    ensure_worker_interface_constructor(scope, "ServiceWorker")?;
-    let worker = ServiceWorkerGlobalServiceWorkerDeclaration {
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")?;
+    let worker = ServiceWorkerObjectDeclaration {
+        prototype,
         script_url: version.script_url().as_str().to_owned(),
-        state: version.state().to_owned(),
-        post_message: (),
+        state: version.state(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build worker ServiceWorker object: {error:?}"))?;
@@ -276,7 +233,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT, false);
+    crate::context_bootstrap::mark_simple_event_target_slot(
+        scope,
+        worker,
+        SERVICE_WORKER_WORKER_EVENTS_SLOT,
+    );
+    install_simple_event_target_ordered_handlers(scope, worker);
     Ok(worker)
 }
 

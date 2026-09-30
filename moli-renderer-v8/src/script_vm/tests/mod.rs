@@ -2276,6 +2276,7 @@ mod resize_observer_entries;
 mod response_blob_mime;
 mod retained_child_window;
 mod script_terminal_completion;
+mod service_worker_interfaces;
 mod streams;
 mod svg_filter_interfaces;
 mod svg_switch_mpath_interfaces;
