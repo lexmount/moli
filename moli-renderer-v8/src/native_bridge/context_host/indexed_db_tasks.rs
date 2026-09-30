@@ -1,7 +1,4 @@
-use super::{
-    JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
-    WindowExecutionContextOwner,
-};
+use super::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity};
 use moli_indexeddb::DatabaseHandle;
 use std::{
     cell::RefCell,
@@ -200,10 +197,6 @@ impl IndexedDbContextState {
     ) -> IndexedDbContextRetirement {
         self.retire_matching(|candidate| candidate.realm_token() == context_token)
     }
-
-    fn retire_owner(&self, owner: WindowExecutionContextOwner) -> IndexedDbContextRetirement {
-        self.retire_matching(|candidate| candidate.owner() == owner)
-    }
 }
 
 impl JsContextHost {
@@ -337,17 +330,6 @@ impl JsContextHost {
         self.signal_page_indexed_db_task_reconsideration_if_installed();
         retirement
     }
-
-    pub(super) fn retire_indexed_db_owner(
-        &self,
-        owner: WindowExecutionContextOwner,
-    ) -> IndexedDbContextRetirement {
-        let mut retirement = self.indexed_db_context_tasks.retire_owner(owner);
-        let drain_contexts = std::mem::take(&mut retirement.scheduled_drains);
-        self.schedule_indexed_db_blocked_drains(drain_contexts);
-        self.signal_page_indexed_db_task_reconsideration_if_installed();
-        retirement
-    }
 }
 
 #[cfg(test)]
@@ -412,7 +394,7 @@ mod tests {
     fn popup_identity(
         popup_id: u64,
         local_window_id: u64,
-        shared_realm: u64,
+        realm_token: u64,
     ) -> WindowExecutionContextIdentity {
         WindowExecutionContextIdentity::new(
             super::super::WindowExecutionContextOwner::LightweightPopup {
@@ -420,7 +402,7 @@ mod tests {
                 local_window_id: super::super::LightweightPopupLocalWindowId::new(local_window_id),
             },
             super::super::OwnerDispatchScope::LightweightPopup(popup_id),
-            RuntimeObservableContextToken::from_raw(shared_realm),
+            RuntimeObservableContextToken::from_raw(realm_token),
             super::super::WindowExecutionContextAccessPolicy::EnforceWebOrigin,
         )
     }
@@ -437,10 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn popup_owner_retirement_preserves_opener_state_in_the_shared_realm() {
+    fn popup_realm_retirement_preserves_opener_state() {
         let state = IndexedDbContextState::default();
         let opener = identity(31);
-        let popup = popup_identity(7, 9, opener.realm_token().as_u64());
+        let popup = popup_identity(7, 9, 32);
         state.register_blocked_context("shared".to_owned(), opener);
         state.register_blocked_context("shared".to_owned(), popup);
         assert_eq!(
@@ -448,7 +430,7 @@ mod tests {
             vec![opener, popup]
         );
 
-        let retirement = state.retire_owner(popup.owner());
+        let retirement = state.retire_context(popup.realm_token());
         assert!(retirement.retired_connections.is_empty());
         assert_eq!(state.blocked_contexts_for_key("shared"), vec![opener]);
         assert!(state.reserve_blocked_drains([opener]).is_empty());

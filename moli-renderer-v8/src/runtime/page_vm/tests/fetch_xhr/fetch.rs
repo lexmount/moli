@@ -1123,7 +1123,7 @@ async fn opener_calling_popup_fetch_uses_popup_response_csp() {
                                         blockedURI: event.blockedURI,
                                         effectiveDirective: event.effectiveDirective,
                                         disposition: event.disposition,
-                                        instance: event instanceof SecurityPolicyViolationEvent,
+                                        instance: event instanceof popup.SecurityPolicyViolationEvent,
                                     });
                                 });
                                 popup.fetch("data:text/plain,blocked").then(
@@ -1136,7 +1136,7 @@ async fn opener_calling_popup_fetch_uses_popup_response_csp() {
                                     error => {
                                         globalThis.__popupFetchCspObserved = JSON.stringify({
                                             name: error && error.name,
-                                            isTypeError: error instanceof TypeError,
+                                            isTypeError: error instanceof popup.TypeError,
                                             hasCspMessage: String(error && error.message)
                                                 .includes("Content Security Policy"),
                                             events: globalThis.__popupFetchCspEvents,

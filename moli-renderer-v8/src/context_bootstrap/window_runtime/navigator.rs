@@ -1164,17 +1164,14 @@ fn storage_bucket_manager_owner_is_live<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     manager: v8::Local<'s, v8::Object>,
 ) -> bool {
+    if !storage_bucket_receiver_execution_context_is_live(scope, manager) {
+        return false;
+    }
     if let Some(popup_id) = storage_bucket_manager_popup_id(scope, manager) {
         return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
             // SAFETY: the current V8 context owns a bridge ref for this host pointer.
-            // Lightweight popups still share the opener's concrete realm, so
-            // their explicit popup owner remains authoritative until P2 gives
-            // them an independent execution context.
             unsafe { (&*host_ptr).lightweight_popup_is_open(popup_id) }
         });
-    }
-    if !storage_bucket_receiver_execution_context_is_live(scope, manager) {
-        return false;
     }
     if let Some(handle) = storage_bucket_manager_child_handle(scope, manager) {
         return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {

@@ -1,6 +1,6 @@
 use super::super::{
-    ChildDefaultContextBootstrapConfig, JsContextHost, PrebootstrappedChildDefaultContext,
-    WeakPrebootstrappedChildDefaultContexts, WindowExecutionContextAccessPolicy,
+    JsContextHost, PrebootstrappedChildDefaultContext, WeakPrebootstrappedChildDefaultContexts,
+    WindowDefaultContextBootstrapConfig, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextOwner,
 };
 use super::realm_state::{
@@ -46,16 +46,18 @@ impl JsContextHost {
         Ok(())
     }
 
-    pub(crate) fn install_child_default_context_bootstrap(
+    pub(crate) fn install_window_default_context_bootstrap(
         &mut self,
         host: Weak<RefCell<JsContextHost>>,
         pending_contexts: WeakPrebootstrappedChildDefaultContexts,
+        popup_contexts: super::super::popups::realm::WeakPopupDefaultContexts,
         resource_owner_id: crate::resource_owner::ResourceOwnerId,
         promise_reject_dispatch: crate::script_vm::PromiseRejectDispatchSlot,
     ) {
-        self.child_default_context_bootstrap = Some(ChildDefaultContextBootstrapConfig {
+        self.window_default_context_bootstrap = Some(WindowDefaultContextBootstrapConfig {
             host,
             pending_contexts,
+            popup_contexts,
             resource_owner_id,
             promise_reject_dispatch,
         });
@@ -92,7 +94,7 @@ impl JsContextHost {
             return Ok(context);
         }
         let config = self
-            .child_default_context_bootstrap
+            .window_default_context_bootstrap
             .clone()
             .ok_or_else(|| anyhow::anyhow!("child default context bootstrap is unavailable"))?;
         let host = config
@@ -243,8 +245,6 @@ impl JsContextHost {
     ) -> Result<()> {
         let projection = initialize_child_window_realm_state(self, scope, global, init)?;
         if init.world.is_default() {
-            self.child_window_proxy_records
-                .set_realm_top(scope, init.handle, projection.top);
             self.install_default_world_state_for_child_window(
                 scope,
                 init.handle,

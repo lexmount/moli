@@ -248,7 +248,6 @@ pub(crate) use window_execution_context::{
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
-    WindowExecutionContextScopedRealmRegistration,
 };
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
@@ -265,10 +264,13 @@ pub(crate) type SharedPrebootstrappedChildDefaultContexts =
 pub(crate) type WeakPrebootstrappedChildDefaultContexts =
     Weak<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
 
+pub(crate) use popups::realm::SharedPopupDefaultContexts;
+
 #[derive(Clone)]
-struct ChildDefaultContextBootstrapConfig {
+struct WindowDefaultContextBootstrapConfig {
     host: Weak<RefCell<JsContextHost>>,
     pending_contexts: WeakPrebootstrappedChildDefaultContexts,
+    popup_contexts: popups::realm::WeakPopupDefaultContexts,
     resource_owner_id: crate::resource_owner::ResourceOwnerId,
     promise_reject_dispatch: crate::script_vm::PromiseRejectDispatchSlot,
 }
@@ -882,7 +884,7 @@ pub(crate) struct JsContextHost {
     child_document_parsers: ChildDocumentParserStore,
     child_window_proxy_records: ChildWindowProxyRecords,
     top_window_opener: Option<(PendingWindowMessageEndpoint, v8::Global<v8::Object>)>,
-    child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
+    window_default_context_bootstrap: Option<WindowDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
@@ -1088,8 +1090,7 @@ pub(crate) struct JsContextHost {
         HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
     lightweight_popup_window_names: HashMap<String, u64>,
     lightweight_popup_document_handles: HashMap<DomHandle, u64>,
-    // Popup Documents share a concrete realm with the opener. Keep their own
-    // origins for as long as their native Document handles can be retained.
+    // Retain each popup Document's origin after its Window has navigated away.
     lightweight_popup_document_origins:
         HashMap<DomHandle, window_security_tokens::WindowAccessOrigin>,
     pending_lightweight_popup_document_loads:

@@ -159,10 +159,7 @@ fn css_highlights_lazy_getter<'s>(
 }
 
 // Keep the CSS namespace cache on the concrete Window that owns the lazy
-// global property. Lightweight popups share their opener's V8 context, but
-// still have a distinct Window and Document; a Context::Global()-keyed cache
-// would collapse their observable CSS namespaces and register properties in
-// the opener document.
+// global property, including when a borrowed accessor runs in another realm.
 fn ensure_css_namespace<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,

@@ -1117,26 +1117,10 @@ fn location_navigation_initiator_scope(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
 ) -> crate::native_bridge::OwnerDispatchScope {
-    let incumbent = scope
+    scope
         .get_incumbent_context()
-        .and_then(|context| host.window_dispatch_scope_for_context(scope, context));
-    // A popup can share its opener's concrete realm. Preserve its own source
-    // identity, as well as that of a real child calling an ancestor's binding.
-    if let Some(
-        source @ (crate::native_bridge::OwnerDispatchScope::Child(_)
-        | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)),
-    ) = incumbent
-    {
-        return source;
-    }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
-    }
-    incumbent
-        .or_else(|| {
-            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
-                .map(crate::native_bridge::OwnerDispatchScope::Child)
-        })
+        .and_then(|context| host.window_dispatch_scope_for_context(scope, context))
+        .or_else(|| host.window_dispatch_scope_for_context(scope, scope.get_current_context()))
         .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top)
 }
 

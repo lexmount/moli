@@ -196,15 +196,11 @@ impl JsContextHost {
 
     pub(crate) fn window_dispatch_scope_for_context<'s>(
         &self,
-        scope: &mut v8::PinScope<'s, '_>,
+        _scope: &mut v8::PinScope<'s, '_>,
         context: v8::Local<'s, v8::Context>,
     ) -> Option<OwnerDispatchScope> {
-        super::popups::active_lightweight_popup_id_for_context(scope, context)
-            .map(OwnerDispatchScope::LightweightPopup)
-            .or_else(|| {
-                self.window_execution_context_identity_for_access_check(context)
-                    .map(|identity| identity.dispatch_scope())
-            })
+        self.window_execution_context_identity_for_access_check(context)
+            .map(|identity| identity.dispatch_scope())
     }
 
     pub(crate) fn window_security_origin_for_context<'s>(
@@ -214,14 +210,6 @@ impl JsContextHost {
     ) -> Option<WindowSecurityOrigin> {
         if let Some(owner) = crate::script_continuation::running_window(scope, context) {
             return Some(owner.origin);
-        }
-        // Read the scope of the requested realm, not the callback's current
-        // realm: popup bindings can call into a real child, and a popup can
-        // itself share a child opener's concrete V8 context.
-        if let Some(popup_id) =
-            super::popups::active_lightweight_popup_id_for_context(scope, context)
-        {
-            return self.lightweight_popup_security_origin(popup_id);
         }
         WindowSecurityOrigin::for_context(context)
     }
@@ -265,17 +253,10 @@ impl JsContextHost {
                     .get_slot::<WindowContextSecurityOrigin>()
                     .map(|security| security.origin.clone())
             });
-        let entry_origin = match crate::native_bridge::active_lightweight_popup_id(scope) {
-            Some(popup_id) => self.lightweight_popup_window_access_origin(popup_id),
-            None => {
-                // Borrowed functions run in their callee realm, but HTML checks
-                // the entry global's Document, including when entered by a microtask.
-                let context = scope.get_entered_or_microtask_context();
-                context
-                    .get_slot::<WindowContextSecurityOrigin>()
-                    .map(|security| security.origin.clone())
-            }
-        };
+        let context = scope.get_entered_or_microtask_context();
+        let entry_origin = context
+            .get_slot::<WindowContextSecurityOrigin>()
+            .map(|security| security.origin.clone());
         origin
             .zip(entry_origin)
             .is_some_and(|(origin, entry)| origin.has_same_origin(&entry))
@@ -295,8 +276,9 @@ impl JsContextHost {
         let domain = match dispatch_scope {
             OwnerDispatchScope::Top => Some(self.document_domain_override.clone()),
             OwnerDispatchScope::Child(handle) => self.child_document_domain_state(handle),
-            // Popups currently alias their opener's concrete realm.
-            OwnerDispatchScope::LightweightPopup(_) => return,
+            OwnerDispatchScope::LightweightPopup(id) => {
+                self.lightweight_popup_document_domain_state(id)
+            }
         };
         if let Some(domain) = &domain {
             domain.register_context(scope, context);
@@ -411,6 +393,18 @@ impl JsContextHost {
             return None;
         }
         window_security_token_key(origin)
+    }
+
+    pub(crate) fn popup_default_world_security_token_key(&self, popup_id: u64) -> Option<String> {
+        let origin = self.lightweight_popup_access_origin(popup_id)?;
+        if self
+            .lightweight_popup_document_domain_state(popup_id)?
+            .get()
+            .is_some()
+        {
+            return None;
+        }
+        window_security_token_key(origin.serialized_origin())
     }
 
     pub(crate) fn child_default_world_security_token_key(

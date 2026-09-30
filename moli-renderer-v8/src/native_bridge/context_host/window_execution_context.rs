@@ -19,10 +19,11 @@ mod registry;
 pub(crate) use binding::WindowExecutionContextBinding;
 pub(crate) use fetch::{DetachedWindowFetchContext, WindowFetchContext, WindowTaskTarget};
 pub(crate) use operation_receiver::WindowOperationReceiver;
+#[cfg(test)]
+pub(super) use registry::WindowExecutionContextScopedRealmRegistration;
 pub(crate) use registry::{
     WindowExecutionContextAccessPolicy, WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
 pub(super) use registry::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
-    WindowExecutionContextScopedRealmRegistration,
 };

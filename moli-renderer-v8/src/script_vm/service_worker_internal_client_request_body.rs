@@ -248,7 +248,6 @@ impl ScriptVm {
             let popup_id = host
                 .open_lightweight_popup_window(
                     scope,
-                    host_ptr,
                     None,
                     None,
                     None,
@@ -331,7 +330,6 @@ impl ScriptVm {
             let popup_id = host
                 .open_lightweight_popup_window(
                     scope,
-                    host_ptr,
                     None,
                     None,
                     None,

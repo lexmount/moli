@@ -2048,18 +2048,16 @@ pub(super) fn indexed_db_index_key_path<'s>(
 pub(super) fn current_indexed_db_execution_owner(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> IndexedDbExecutionOwner {
-    let dispatch_scope = inferred_indexed_db_dispatch_scope(scope);
     if let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &*host_ptr };
         let execution_context = host
-            .window_execution_context_identity_for_v8_context(scope, scope.get_current_context())
-            .filter(|identity| identity.dispatch_scope() == dispatch_scope);
+            .window_execution_context_identity_for_v8_context(scope, scope.get_current_context());
         if let Some(execution_context) = execution_context {
             return IndexedDbExecutionOwner::Window(execution_context);
         }
     }
 
-    IndexedDbExecutionOwner::PendingWindow(dispatch_scope)
+    IndexedDbExecutionOwner::PendingWindow(inferred_indexed_db_dispatch_scope(scope))
 }
 
 pub(super) fn indexed_db_execution_owner_for_object(

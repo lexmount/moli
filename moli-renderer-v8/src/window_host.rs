@@ -910,15 +910,9 @@ pub(crate) fn window_post_message_callback<'s>(
         rv.set_undefined();
         return;
     }
-    // Blink captures the incumbent DOMWindow at API acceptance. Lightweight
-    // popups still share the top-level V8 context, so their active execution
-    // scope is the one necessary override; the ambient source marker is only
-    // a fallback for legacy execution paths that do not expose an incumbent
-    // context.
-    let source_identity = active_lightweight_popup_id(scope)
-        .map(PendingWindowMessageEndpoint::LightweightPopup)
-        .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
-        .or_else(|| incumbent_window_message_source_identity(scope, host))
+    // postMessage captures the incumbent Window, independently of the target
+    // method's realm and of the native task that dispatched the caller.
+    let source_identity = incumbent_window_message_source_identity(scope, host)
         .or_else(|| {
             host.current_window_message_source()
                 .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
@@ -1228,8 +1222,7 @@ pub(crate) fn current_window_scroll_position(scope: &mut v8::PinScope<'_, '_>) -
 }
 
 fn current_scroll_window<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-    // Lightweight popups share a concrete V8 context with their creator, but
-    // the scroll state belongs to their own canonical Window.
+    // Native dispatch scopes retain the receiver's canonical Window.
     active_lightweight_popup_id(scope)
         .and_then(|popup_id| {
             let host_ptr = context_host_ptr_from_global_bridge(scope)?;
@@ -1822,14 +1815,16 @@ fn dispatch_window_message_event<'s>(
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
-    let global = scope.get_current_context().global(scope);
     let Some(origin) = v8_string(scope, origin) else {
         return;
     };
     let source: v8::Local<'_, v8::Value> = match source_endpoint {
         PendingWindowMessageEndpoint::TopWindow => {
-            top_window_message_source_for_target(scope, host, target)
-                .unwrap_or_else(|| global.into())
+            let source_scope = OwnerDispatchScope::Top;
+            host.current_window_execution_context_owner(source_scope)
+                .and_then(|owner| host.window_execution_context(scope, owner, source_scope))
+                .map(|(_, context)| context.global(scope).into())
+                .unwrap_or_else(|| v8::null(scope).into())
         }
         PendingWindowMessageEndpoint::ChildWindow(handle) => {
             child_window_message_source(scope, host, handle)
@@ -1872,29 +1867,6 @@ fn dispatch_window_message_event<'s>(
             host.dispatch_lightweight_popup_window_event(scope, popup_id, event_name, event);
         }
     }
-}
-
-fn top_window_message_source_for_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
-    target: PendingWindowMessageEndpoint,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let PendingWindowMessageEndpoint::ChildWindow(handle) = target else {
-        return None;
-    };
-    let top = host.child_browsing_context_top_window_for_current_realm(scope, handle);
-    if moli_trace::window_message_trace_enabled() {
-        tracing::info!(
-            target: "moli_window_message_trace",
-            handle = handle.index(),
-            relation_found = top.is_some(),
-            top_is_target_global = top.is_some_and(|top| {
-                top.strict_equals(scope.get_current_context().global(scope).into())
-            }),
-            stage = "top_window_message_source_resolved",
-        );
-    }
-    top.map(Into::into)
 }
 
 fn child_window_message_source<'s>(
@@ -2216,6 +2188,9 @@ fn window_message_endpoint_from_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<PendingWindowMessageEndpoint> {
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, object) {
+        return Some(PendingWindowMessageEndpoint::LightweightPopup(popup_id));
+    }
     let global = scope.get_current_context().global(scope);
     if object.strict_equals(global.into()) {
         return Some(
@@ -2223,10 +2198,6 @@ fn window_message_endpoint_from_receiver<'s>(
                 .map(PendingWindowMessageEndpoint::ChildWindow)
                 .unwrap_or(PendingWindowMessageEndpoint::TopWindow),
         );
-    }
-
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, object) {
-        return Some(PendingWindowMessageEndpoint::LightweightPopup(popup_id));
     }
 
     if let Some(popup_id) = crate::native_bridge::cross_origin_lightweight_popup_id(scope, object) {
@@ -2284,24 +2255,19 @@ fn incumbent_window_message_source_identity(
     WindowExecutionContextOwner,
     RuntimeObservableContextToken,
 )> {
-    let incumbent_context = scope.get_incumbent_context()?;
-    let incumbent_global = incumbent_context.global(scope);
-    let endpoint = if let Some(popup_id) =
-        crate::native_bridge::lightweight_popup_id_from_window(scope, incumbent_global)
-    {
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id)
-    } else {
-        object_child_window_handle(scope, incumbent_global)
-            .map(PendingWindowMessageEndpoint::ChildWindow)
-            .unwrap_or(PendingWindowMessageEndpoint::TopWindow)
+    let context = scope.get_incumbent_context()?;
+    let identity = host.window_execution_context_identity_for_access_check(context)?;
+    if !host.window_execution_context_identity_is_current(identity) {
+        return None;
+    }
+    let endpoint = match identity.dispatch_scope() {
+        OwnerDispatchScope::Top => PendingWindowMessageEndpoint::TopWindow,
+        OwnerDispatchScope::Child(handle) => PendingWindowMessageEndpoint::ChildWindow(handle),
+        OwnerDispatchScope::LightweightPopup(id) => {
+            PendingWindowMessageEndpoint::LightweightPopup(id)
+        }
     };
-    let incumbent_scope = &mut v8::ContextScope::new(scope, incumbent_context);
-    let identity = host.current_runtime_window_execution_context_identity(incumbent_scope)?;
-    (identity.dispatch_scope() == endpoint.dispatch_scope()).then_some((
-        endpoint,
-        identity.owner(),
-        identity.realm_token(),
-    ))
+    Some((endpoint, identity.owner(), identity.realm_token()))
 }
 
 #[cfg(test)]
