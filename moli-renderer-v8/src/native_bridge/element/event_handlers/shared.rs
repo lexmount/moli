@@ -2,21 +2,22 @@ use crate::{
     context_bootstrap::dispatch_window_error_event_with_details,
     document_runtime::DomHandle,
     exception_reporting::build_exception_report_without_stack,
+    host::{EventHandlerCspAdmission, UncompiledEventHandler},
     native_bridge::{OwnerDispatchScope, PageScriptHost},
-    util::{create_script_origin_with_base_url, v8_string},
+    util::{create_function_origin_with_base_url, v8_string_from_dom_string_value},
 };
 
-#[derive(Clone, Copy)]
-pub(crate) enum EventAttributeHandlerScope {
-    Element,
-    ChildWindow,
+pub(super) struct EventAttributeHandlerContext<'a> {
+    pub(super) owner: OwnerDispatchScope,
+    pub(super) element: Option<DomHandle>,
+    pub(super) base_url: &'a url::Url,
 }
 
 pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
     handle: DomHandle,
-    source: &str,
+    handler: &UncompiledEventHandler,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -27,52 +28,22 @@ pub(super) fn compile_event_attribute_handler<'s>(
     compile_event_attribute_handler_for_owner_with_context(
         scope,
         host_ptr,
-        owner,
-        &base_url,
-        source,
-        EventAttributeHandlerScope::Element,
+        EventAttributeHandlerContext {
+            owner,
+            element: Some(handle),
+            base_url: &base_url,
+        },
+        handler,
         arguments,
         context_extensions,
     )
 }
 
-pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
+pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
-    owner: OwnerDispatchScope,
-    source: &str,
-    handler_scope: EventAttributeHandlerScope,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let host = unsafe { &*host_ptr };
-    let base_url = match owner {
-        OwnerDispatchScope::Top => host.document_base_url_for_handle(host.document_handle()),
-        OwnerDispatchScope::Child(handle) => host
-            .child_browsing_context_base_url(handle)
-            .unwrap_or_else(|| host.document_url().clone()),
-        OwnerDispatchScope::LightweightPopup(popup_id) => host
-            .lightweight_popup_request_base_url(scope, popup_id)
-            .unwrap_or_else(|| host.document_url().clone()),
-    };
-    let event_argument = v8_string(scope, "event")?;
-    compile_event_attribute_handler_for_owner_with_context(
-        scope,
-        host_ptr,
-        owner,
-        &base_url,
-        source,
-        handler_scope,
-        &[event_argument],
-        &[],
-    )
-}
-
-fn compile_event_attribute_handler_for_owner_with_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut PageScriptHost,
-    owner: OwnerDispatchScope,
-    base_url: &url::Url,
-    source: &str,
-    handler_scope: EventAttributeHandlerScope,
+    context: EventAttributeHandlerContext<'_>,
+    handler: &UncompiledEventHandler,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -80,18 +51,21 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
     if !host.owner_scripting_enabled(owner) {
         return None;
     }
-    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(scope, owner, source) {
+    if handler.csp_admission == EventHandlerCspAdmission::Pending
+        && !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
+            scope,
+            context.owner,
+            context.element,
+            handler.source.as_str_lossy(),
+        )
+    {
         return None;
     }
-    let body = match handler_scope {
-        EventAttributeHandlerScope::Element => source.to_owned(),
-        EventAttributeHandlerScope::ChildWindow => format!("with (this) {{\n{source}\n}}"),
-    };
     compile_event_attribute_function(
         scope,
         host_ptr,
-        base_url,
-        &body,
+        context.base_url,
+        handler,
         arguments,
         context_extensions,
     )
@@ -101,13 +75,17 @@ fn compile_event_attribute_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
     base_url: &url::Url,
-    source: &str,
+    source: &UncompiledEventHandler,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
-    let source_text = v8_string(scope, source)?;
-    let source_url = unsafe { &*host_ptr }.document_url().to_string();
-    let origin = create_script_origin_with_base_url(scope, &source_url, 0, Some(base_url));
+    let source_text = v8_string_from_dom_string_value(scope, &source.source)?;
+    let origin = create_function_origin_with_base_url(
+        scope,
+        &source.source_location,
+        base_url,
+        context_extensions.len(),
+    )?;
     let mut compiler_source = v8::script_compiler::Source::new(source_text, Some(&origin));
 
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
