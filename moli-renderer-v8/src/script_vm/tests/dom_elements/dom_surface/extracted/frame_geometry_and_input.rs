@@ -240,7 +240,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
               const frame = document.getElementById('input-frame');
               const child = frame.contentDocument;
               return JSON.stringify({
-                hovered: child.getElementById('hover-target').matches(':hover'),
+                hovered: child.getElementById('hover-target').matches('#hover-target:hover'),
                 wheelTop: child.getElementById('wheel-target').scrollTop,
                 rootTop: document.scrollingElement.scrollTop,
                 events: frame.contentWindow.__inputEvents
@@ -524,7 +524,7 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
                 parentScroll: window.scrollY,
                 parentActive: document.activeElement === frame,
                 childActive: child.activeElement === child.getElementById('focus-target'),
-                hovered: child.getElementById('focus-target').matches(':hover'),
+                hovered: child.getElementById('focus-target').matches('#focus-target:hover'),
                 events: frame.contentWindow.__focusEvents
               });
             })()
