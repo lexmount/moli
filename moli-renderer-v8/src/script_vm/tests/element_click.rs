@@ -2,6 +2,98 @@ use super::*;
 use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
 
 #[test]
+fn native_element_click_reuses_first_fragment_in_view_center_for_all_pointer_phases() {
+    for (markup, fragmented, obscured) in [
+        (
+            "<div style='width:240px;text-indent:180px;line-height:48px'><a id='target'>AAAA BBBB CCCC</a></div>",
+            true,
+            false,
+        ),
+        (
+            "<a id='target' style='line-height:48px'>first<br><span style='margin-left:180px'>second</span></a>",
+            true,
+            false,
+        ),
+        (
+            "<button id='target' style='position:fixed;left:-150.5px;top:20.25px;width:200.75px;height:50.5px'>go</button>",
+            false,
+            false,
+        ),
+        (
+            "<button id='target' style='position:fixed;left:20.25px;top:70.75px;width:101.5px;height:31.25px'>go</button>",
+            false,
+            false,
+        ),
+        (
+            "<div style='width:240px;text-indent:180px;line-height:48px'><a id='target'>AAAA BBBB CCCC</a></div><div style='position:fixed;left:180px;top:0;width:60px;height:48px;z-index:2'>cover</div>",
+            true,
+            true,
+        ),
+    ] {
+        let html =
+            format!("<!doctype html><style>body {{margin:0;font:16px monospace}}</style>{markup}");
+        let mut vm = new_parsed_test_vm("https://click-fragments.test/", &html);
+        let target = vm.document_runtime.get_element_by_id("target").unwrap();
+        let geometry: serde_json::Value = serde_json::from_str(&vm.eval(r#"(() => {
+            const target = document.getElementById('target');
+            window.events = [];
+            for (const type of ['pointermove','pointerdown','mousedown','pointerup','mouseup','click'])
+                target.addEventListener(type, e => events.push([e.type,e.clientX,e.clientY,e.isTrusted]));
+            const rects = target.getClientRects(), r = rects[0], b = target.getBoundingClientRect();
+            return JSON.stringify({count:rects.length,
+                point:[Math.floor((Math.max(0,r.left)+Math.min(innerWidth,r.right))/2),
+                       Math.floor((Math.max(0,r.top)+Math.min(innerHeight,r.bottom))/2)],
+                boundingCenter:[(b.left+b.right)/2,(b.top+b.bottom)/2]});
+        })()"#).unwrap()).unwrap();
+        if fragmented {
+            assert!(geometry["count"].as_u64().unwrap() > 1, "{markup}");
+        }
+        assert_ne!(geometry["point"], geometry["boundingCenter"], "{markup}");
+        let prepared = vm.prepare_element_click(target);
+        if obscured {
+            assert_eq!(
+                prepared,
+                Err(crate::runtime::RendererElementClickError::Obscured)
+            );
+            assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
+            continue;
+        }
+        let RendererElementClickTarget::Pointer(click) = prepared.unwrap() else {
+            panic!("real layout must prepare pointer input");
+        };
+        assert_eq!(click.root_x, geometry["point"][0].as_f64().unwrap());
+        assert_eq!(click.root_y, geometry["point"][1].as_f64().unwrap());
+        vm.dispatch_prepared_element_click(click).unwrap();
+        let events: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(events)").unwrap()).unwrap();
+        let events = events.as_array().unwrap();
+        let names = events
+            .iter()
+            .map(|e| e[0].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "pointermove",
+                "pointerdown",
+                "mousedown",
+                "pointerup",
+                "mouseup",
+                "click"
+            ]
+        );
+        for event in events {
+            assert_eq!(
+                serde_json::json!([event[1], event[2]]),
+                geometry["point"],
+                "{markup}"
+            );
+            assert_eq!(event[3], true, "{markup}");
+        }
+    }
+}
+
+#[test]
 fn native_element_click_initializes_layout_once() {
     let mut vm = new_parsed_test_vm(
         "https://click-native-geometry.test/",

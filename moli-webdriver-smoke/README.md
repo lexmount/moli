@@ -139,15 +139,27 @@ uv sync
 uv run moli-webdriver-smoke
 ```
 
-With no `--group`, both local and CI runs execute all seven Moli groups:
+With no `--group`, both local and CI runs execute all eight Moli groups:
 
 ```text
-classic,bidi,selenium,semantics,url-policy,navigation-errors,script-interrupt
+element-click,classic,bidi,selenium,semantics,url-policy,navigation-errors,script-interrupt
 ```
 
 CI adds `--continue-on-failure` so one failing group does not hide later smoke
 results. The ChromeDriver-only `script-timeout-chromium` oracle remains an
 explicit external-target run.
+
+The `element-click` group checks multiline and fragmented inline elements,
+viewport-clipped and fractional rectangles, and an overlay covering only the
+first fragment. It requires every trusted pointer phase to use the floored
+in-view center of the first client rect. A managed Moli run starts a separate
+`--layout` process for this group; an external Moli endpoint must have layout
+enabled. Run it with `uv run moli-webdriver-smoke --group element-click`.
+The five cases were also run unchanged on 2026-09-30 against
+`/usr/bin/chromium` 145.0.7632.116 through ChromeDriver 145.0.7632.117,
+once with a fresh headless session. Each successful case emitted the full
+trusted pointer sequence at the expected point; the covered first fragment
+returned `element click intercepted` and emitted no pointer events.
 
 List available groups:
 

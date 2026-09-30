@@ -35,7 +35,7 @@ async def _collect_process_output(stream: asyncio.StreamReader | None, logs: lis
             print(f"[moli serve {label}] {text}", file=sys.stderr, flush=True)
 
 
-async def start_moli_serve(port: int) -> MoliServe:
+async def start_moli_serve(port: int, *, layout: bool = False) -> MoliServe:
     binary = moli_binary()
     process = await asyncio.create_subprocess_exec(
         str(binary),
@@ -45,6 +45,7 @@ async def start_moli_serve(port: int) -> MoliServe:
         "--port",
         str(port),
         "--image",
+        *(["--layout"] if layout else []),
         cwd=str(REPO_ROOT),
         env=clear_proxy_env(os.environ),
         stdout=asyncio.subprocess.PIPE,
