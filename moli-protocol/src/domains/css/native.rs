@@ -1,9 +1,9 @@
 use super::*;
-use crate::domains::native::{self, NativeCommandStep};
+use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::domains::native::{self, NativeCommandStep, NodeLookupExecution};
 use moli_core::{
-    RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
-    RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
-    RendererPageReply as Reply,
+    RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
+    RendererPageCommand as Command, RendererPageReply as Reply,
 };
 
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
@@ -133,29 +133,11 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                     move |reply| project_style(reply, query),
                 )
             } else if let Some(frontend_node_id) = params.node_id {
-                Operation::then_on_nested_main(
-                    Command::DocumentFrontendNodeBinding {
-                        inspector_session_id,
-                        frontend_node_id,
-                    },
-                    move |reply| match reply {
-                        Ok(Reply::DocumentFrontendNodeBinding(resolution)) => {
-                            match node_references::backend_node_id_from_frontend_resolution(
-                                resolution,
-                            ) {
-                                Some(id) => Step::Continue(backend_style_operation(id, query)),
-                                None => Step::Complete(Response::error(
-                                    -32000,
-                                    "Could not find node with given id",
-                                )),
-                            }
-                        }
-                        Err(error) => Step::Complete(Response::error(
-                            -32000,
-                            format!("Could not resolve frontend node binding: {error}"),
-                        )),
-                        _ => unreachable!("CSS frontend-node lookup reply"),
-                    },
+                native::with_backend_node(
+                    inspector_session_id,
+                    DevToolsDomNodeReference::FrontendNodeId(frontend_node_id),
+                    NodeLookupExecution::NestedMain,
+                    move |id| backend_style_operation(id, query),
                 )
             } else if let Some(backend_node_id) = params.backend_node_id {
                 backend_style_operation(backend_node_id, query)

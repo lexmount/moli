@@ -1,8 +1,10 @@
 use super::*;
-use crate::domains::native::{self, NativeCommandStep};
-use moli_core::page::{
-    RendererDomFrontendNodeBindingResolution, RendererDomSearchResultsResolution,
+use crate::domains::native::{
+    self, NativeCommandStep,
+    NodeLookupExecution::{NestedMain, OwnerTurn},
+    with_backend_node as with_backend,
 };
+use moli_core::page::RendererDomSearchResultsResolution;
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
     RendererNativeProtocolNotification as Notification, RendererNativeProtocolResponse as Response,
@@ -84,7 +86,7 @@ fn prepare(
         return remote_object::prepare(conn, cmd);
     }
     if action == DomAction::SetFileInputFiles {
-        return files::prepare(conn, cmd).map(Operation::require_owner_turn);
+        return files::prepare(conn, cmd);
     }
     if mutation::handles(action) {
         return mutation::prepare(conn, cmd, action);
@@ -146,23 +148,28 @@ fn prepare(
         }
         DomAction::GetAttributes => {
             let params = build_cdp_get_attributes_command(conn, cmd)?;
-            Ok(with_backend(session, params.reference, |backend_node_id| {
-                Operation::new(
-                    Command::DocumentNodeAttributesForBackendNodeId { backend_node_id },
-                    |reply| match reply {
-                        Ok(Reply::DocumentNodeAttributesResolution(resolution)) => {
-                            match attributes_result_from_renderer_resolution(resolution) {
-                                Ok(result) => Response::success(
-                                    json!({"attributes": result.attributes.into_iter().flat_map(|attr| [attr.name, attr.value]).collect::<Vec<_>>()}),
-                                ),
-                                Err(error) => Response::error(error.code, error.message),
+            Ok(with_backend(
+                session,
+                params.reference,
+                NestedMain,
+                |backend_node_id| {
+                    Operation::new(
+                        Command::DocumentNodeAttributesForBackendNodeId { backend_node_id },
+                        |reply| match reply {
+                            Ok(Reply::DocumentNodeAttributesResolution(resolution)) => {
+                                match attributes_result_from_renderer_resolution(resolution) {
+                                    Ok(result) => Response::success(
+                                        json!({"attributes": result.attributes.into_iter().flat_map(|attr| [attr.name, attr.value]).collect::<Vec<_>>()}),
+                                    ),
+                                    Err(error) => Response::error(error.code, error.message),
+                                }
                             }
-                        }
-                        Err(error) => Response::error(-32000, error.to_string()),
-                        _ => unreachable!("DOM attributes reply"),
-                    },
-                )
-            }))
+                            Err(error) => Response::error(-32000, error.to_string()),
+                            _ => unreachable!("DOM attributes reply"),
+                        },
+                    )
+                },
+            ))
         }
         DomAction::QuerySelector | DomAction::QuerySelectorAll => {
             let params =
@@ -181,24 +188,29 @@ fn prepare(
                 ),
                 Some(reference) => {
                     let frontend = matches!(reference, DevToolsDomNodeReference::FrontendNodeId(_));
-                    with_backend(session.clone(), reference, move |root_backend_node_id| {
-                        let command = if frontend {
-                            Command::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
+                    with_backend(
+                        session.clone(),
+                        reference,
+                        NestedMain,
+                        move |root_backend_node_id| {
+                            let command = if frontend {
+                                Command::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
                                 inspector_session_id: session, include_whitespace: whitespace, root_backend_node_id, selector, multiple,
                             }
-                        } else {
-                            Command::DocumentQuerySelectorForBackendNodeId {
-                                inspector_session_id: session,
-                                include_whitespace: whitespace,
-                                root_backend_node_id,
-                                selector,
-                                multiple,
-                            }
-                        };
-                        Operation::new(command, move |reply| {
-                            project_query(reply, multiple, top_frame)
-                        })
-                    })
+                            } else {
+                                Command::DocumentQuerySelectorForBackendNodeId {
+                                    inspector_session_id: session,
+                                    include_whitespace: whitespace,
+                                    root_backend_node_id,
+                                    selector,
+                                    multiple,
+                                }
+                            };
+                            Operation::new(command, move |reply| {
+                                project_query(reply, multiple, top_frame)
+                            })
+                        },
+                    )
                 }
             })
         }
@@ -212,6 +224,7 @@ fn prepare(
             Ok(with_backend(
                 session.clone(),
                 params.reference,
+                NestedMain,
                 move |backend_node_id| {
                     Operation::new(
                         Command::DocumentChildNodeSnapshotEventsForBackendNodeId {
@@ -299,6 +312,7 @@ fn prepare(
                 Ok(with_backend(
                     session.clone(),
                     reference,
+                    NestedMain,
                     move |backend_node_id| {
                         Operation::new(
                             Command::DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
@@ -359,15 +373,20 @@ fn prepare(
                 params.reference.node_id,
                 params.reference.backend_node_id,
             ) {
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::OuterHtmlForBackendNodeId {
-                            backend_node_id,
-                            include_shadow_dom: params.include_shadow_dom,
-                        },
-                        project,
-                    )
-                }))
+                Ok(with_backend(
+                    session,
+                    reference,
+                    NestedMain,
+                    move |backend_node_id| {
+                        Operation::new(
+                            Command::OuterHtmlForBackendNodeId {
+                                backend_node_id,
+                                include_shadow_dom: params.include_shadow_dom,
+                            },
+                            project,
+                        )
+                    },
+                ))
             } else {
                 Ok(Operation::new(
                     Command::OuterHtmlForDocument {
@@ -413,12 +432,17 @@ fn prepare(
                 let reference =
                     devtools_node_reference_from_ids(params.node_id, params.backend_node_id)
                         .ok_or_else(StartError::node_not_found)?;
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::DocumentGeometryForBackendNodeId { backend_node_id },
-                        project,
-                    )
-                }))
+                Ok(with_backend(
+                    session,
+                    reference,
+                    NestedMain,
+                    move |backend_node_id| {
+                        Operation::new(
+                            Command::DocumentGeometryForBackendNodeId { backend_node_id },
+                            project,
+                        )
+                    },
+                ))
             }
         }
         DomAction::PushNodesByBackendIdsToFrontend => {
@@ -513,37 +537,6 @@ fn prepare(
             ))
         }
         _ => unreachable!("native DOM preparation is selected at admission"),
-    }
-}
-
-fn with_backend(
-    session: Option<String>,
-    reference: DevToolsDomNodeReference,
-    next: impl FnOnce(u32) -> Operation + Send + 'static,
-) -> Operation {
-    match reference {
-        DevToolsDomNodeReference::BackendNodeId(id) => next(id),
-        DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) => {
-            Operation::then_on_nested_main(
-                Command::DocumentFrontendNodeBinding {
-                    inspector_session_id: session,
-                    frontend_node_id,
-                },
-                move |reply| match reply {
-                    Ok(Reply::DocumentFrontendNodeBinding(
-                        RendererDomFrontendNodeBindingResolution::BackendNodeId(id),
-                    )) => Step::Continue(next(id)),
-                    Ok(Reply::DocumentFrontendNodeBinding(
-                        RendererDomFrontendNodeBindingResolution::NotFound,
-                    )) => Step::Complete(node_not_found()),
-                    Err(error) => Step::Complete(Response::error(
-                        -32000,
-                        format!("Could not resolve frontend node binding: {error}"),
-                    )),
-                    _ => unreachable!("DOM node binding reply"),
-                },
-            )
-        }
     }
 }
 

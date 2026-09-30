@@ -1,4 +1,5 @@
 use crate::conn::CdpConnection;
+pub(super) use crate::domains::native::NodeReferenceParams;
 pub(super) use chromiumoxide_cdp::cdp::browser_protocol::accessibility::{
     GetChildAxNodesParams as ChildAxNodesParams, GetFullAxTreeParams,
 };
@@ -10,17 +11,6 @@ use serde::Deserialize;
 pub(super) struct FrameScopedParams {
     #[serde(default)]
     pub(super) frame_id: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct NodeReferenceParams {
-    #[serde(default)]
-    pub(super) node_id: Option<u32>,
-    #[serde(default)]
-    pub(super) backend_node_id: Option<u32>,
-    #[serde(default)]
-    pub(super) object_id: Option<String>,
 }
 
 #[derive(Deserialize)]

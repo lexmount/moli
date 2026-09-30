@@ -43,20 +43,26 @@ pub(super) fn prepare(
             // The first step only resolves a native node binding, but removal
             // enters V8. Keep the complete chain on its owner turn; agent-only
             // operations below inherit their backend entry requirement.
-            Ok(with_backend(session, params.reference, |backend_node_id| {
-                Operation::new(
-                    Command::RemoveDocumentBackendNodeId { backend_node_id },
-                    |reply| match reply {
-                        Ok(Reply::Bool(true)) => Response::success(json!({})),
-                        Ok(Reply::Bool(false)) => Response::error(-32000, "Could not remove node"),
-                        Err(error) => {
-                            Response::error(-32000, format!("Could not remove node: {error}"))
-                        }
-                        _ => unreachable!("DOM remove node reply"),
-                    },
-                )
-            })
-            .require_owner_turn())
+            Ok(with_backend(
+                session,
+                params.reference,
+                OwnerTurn,
+                |backend_node_id| {
+                    Operation::new(
+                        Command::RemoveDocumentBackendNodeId { backend_node_id },
+                        |reply| match reply {
+                            Ok(Reply::Bool(true)) => Response::success(json!({})),
+                            Ok(Reply::Bool(false)) => {
+                                Response::error(-32000, "Could not remove node")
+                            }
+                            Err(error) => {
+                                Response::error(-32000, format!("Could not remove node: {error}"))
+                            }
+                            _ => unreachable!("DOM remove node reply"),
+                        },
+                    )
+                },
+            ))
         }
         DomAction::Focus => {
             let params: NodeReferenceParams = cmd
@@ -83,13 +89,17 @@ pub(super) fn prepare(
                 } else {
                     "No node found for given backend id"
                 };
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::FocusDocumentBackendNode { backend_node_id },
-                        move |reply| focus(reply, missing),
-                    )
-                })
-                .require_owner_turn())
+                Ok(with_backend(
+                    session,
+                    reference,
+                    OwnerTurn,
+                    move |backend_node_id| {
+                        Operation::new(
+                            Command::FocusDocumentBackendNode { backend_node_id },
+                            move |reply| focus(reply, missing),
+                        )
+                    },
+                ))
             }
         }
         DomAction::SetAttributeValue | DomAction::RemoveAttribute => {
@@ -121,6 +131,7 @@ pub(super) fn prepare(
             Ok(with_backend(
                 session,
                 DevToolsDomNodeReference::FrontendNodeId(id),
+                OwnerTurn,
                 move |backend_node_id| {
                     Operation::new(
                         Command::MutateDocumentBackendNodeAttribute {
@@ -130,8 +141,7 @@ pub(super) fn prepare(
                         attribute,
                     )
                 },
-            )
-            .require_owner_turn())
+            ))
         }
         DomAction::MoveTo
         | DomAction::SetAttributesAsText
@@ -166,16 +176,20 @@ pub(super) fn prepare(
                     params.reference.backend_node_id,
                 )
                 .ok_or_else(StartError::node_not_found)?;
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::ScrollBackendNodeIntoViewIfNeeded {
-                            backend_node_id,
-                            rect,
-                        },
-                        scroll,
-                    )
-                })
-                .require_owner_turn())
+                Ok(with_backend(
+                    session,
+                    reference,
+                    OwnerTurn,
+                    move |backend_node_id| {
+                        Operation::new(
+                            Command::ScrollBackendNodeIntoViewIfNeeded {
+                                backend_node_id,
+                                rect,
+                            },
+                            scroll,
+                        )
+                    },
+                ))
             }
         }
         DomAction::GetNodeForLocation => {

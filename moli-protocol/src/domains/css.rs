@@ -3,6 +3,7 @@ pub(crate) mod native;
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::CssAction;
 use crate::domains::command_output::CommandOutputPlan;
+use crate::domains::native::NodeReferenceParams;
 use chromiumoxide_cdp::cdp::browser_protocol::css::{
     GetStyleSheetTextParams as StyleSheetIdParams, SetStyleSheetTextParams,
 };
@@ -10,22 +11,10 @@ use moli_core::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererDocumentNodeAttributesResolution,
 };
 use moli_css_parse::{DeclarationParseOptions, parse_declaration_list};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod node_references;
 mod style_sheets;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NodeReferenceParams {
-    #[serde(default)]
-    node_id: Option<u32>,
-    #[serde(default)]
-    backend_node_id: Option<u32>,
-    #[serde(default)]
-    object_id: Option<String>,
-}
 
 pub(crate) struct PendingCssCommandDispatch {
     command_id: Option<u64>,

@@ -33,38 +33,47 @@ pub(super) fn prepare(conn: &CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, 
         params.reference.backend_node_id,
     )
     .ok_or_else(StartError::invalid_params)?;
-    Ok(with_backend(session, reference, move |backend_node_id| {
-        Operation::then_on_nested_main(
-            Command::DocumentNodeSnapshotForBackendNodeId {
-                backend_node_id,
-                depth: 0,
-                pierce: false,
-            },
-            move |reply| match reply {
-                Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot)) if snapshot.is_some() => {
-                    match files {
-                        Ok(files) => Step::Continue(Operation::new(
-                            Command::SetFileInputFilesForBackendNodeId {
-                                backend_node_id,
-                                files,
-                                append: false,
-                            },
-                            project,
-                        )),
-                        Err(error) => Step::Complete(Response::error(error.code, error.message)),
+    Ok(with_backend(
+        session,
+        reference,
+        OwnerTurn,
+        move |backend_node_id| {
+            Operation::then(
+                Command::DocumentNodeSnapshotForBackendNodeId {
+                    backend_node_id,
+                    depth: 0,
+                    pierce: false,
+                },
+                move |reply| match reply {
+                    Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot))
+                        if snapshot.is_some() =>
+                    {
+                        match files {
+                            Ok(files) => Step::Continue(Operation::new(
+                                Command::SetFileInputFilesForBackendNodeId {
+                                    backend_node_id,
+                                    files,
+                                    append: false,
+                                },
+                                project,
+                            )),
+                            Err(error) => {
+                                Step::Complete(Response::error(error.code, error.message))
+                            }
+                        }
                     }
-                }
-                Ok(Reply::OptionalDocumentNodeObjectSnapshot(_)) => {
-                    Step::Complete(node_not_found())
-                }
-                Err(error) => Step::Complete(Response::error(
-                    -32000,
-                    format!("Could not preflight file input node: {error}"),
-                )),
-                _ => unreachable!("DOM file input preflight reply"),
-            },
-        )
-    }))
+                    Ok(Reply::OptionalDocumentNodeObjectSnapshot(_)) => {
+                        Step::Complete(node_not_found())
+                    }
+                    Err(error) => Step::Complete(Response::error(
+                        -32000,
+                        format!("Could not preflight file input node: {error}"),
+                    )),
+                    _ => unreachable!("DOM file input preflight reply"),
+                },
+            )
+        },
+    ))
 }
 
 fn project(reply: anyhow::Result<Reply>) -> Response {

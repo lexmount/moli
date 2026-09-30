@@ -1,9 +1,9 @@
 use super::*;
-use crate::domains::native::{self, NativeCommandStep};
+use crate::devtools_runtime::DevToolsDomNodeReference;
+use crate::domains::native::{self, NativeCommandStep, NodeLookupExecution};
 use moli_core::{
-    RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
-    RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
-    RendererPageReply as Reply,
+    RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
+    RendererPageCommand as Command, RendererPageReply as Reply,
 };
 
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
@@ -231,24 +231,11 @@ fn reference_operation(
     let frontend_node_id = reference.node_id.ok_or_else(StartError::node_not_found)?;
     let inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    Ok(Operation::then_on_nested_main(
-        Command::DocumentFrontendNodeBinding {
-            inspector_session_id,
-            frontend_node_id,
-        },
-        move |reply| match reply {
-            Ok(Reply::DocumentFrontendNodeBinding(
-                RendererDomFrontendNodeBindingResolution::BackendNodeId(id),
-            )) => Step::Continue(backend_operation(id, frame_id, top_frame_id, operation)),
-            Ok(Reply::DocumentFrontendNodeBinding(
-                RendererDomFrontendNodeBindingResolution::NotFound,
-            )) => Step::Complete(node_not_found()),
-            Err(error) => Step::Complete(Response::error(
-                -32000,
-                format!("Could not resolve frontend node binding: {error}"),
-            )),
-            _ => unreachable!("accessibility frontend-node lookup reply"),
-        },
+    Ok(native::with_backend_node(
+        inspector_session_id,
+        DevToolsDomNodeReference::FrontendNodeId(frontend_node_id),
+        NodeLookupExecution::NestedMain,
+        move |id| backend_operation(id, frame_id, top_frame_id, operation),
     ))
 }
 

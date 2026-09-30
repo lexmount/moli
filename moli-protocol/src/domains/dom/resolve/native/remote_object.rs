@@ -12,8 +12,11 @@ pub(super) fn prepare(conn: &CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, 
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let top_frame = top_frame_id_for_owner(conn, &owner);
     let whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner);
-    Ok(
-        with_backend(session.clone(), params.reference, move |backend_node_id| {
+    Ok(with_backend(
+        session.clone(),
+        params.reference,
+        OwnerTurn,
+        move |backend_node_id| {
             let prepare = move |cache| {
                 resolve(
                     session,
@@ -46,9 +49,8 @@ pub(super) fn prepare(conn: &CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, 
             } else {
                 prepare(true)
             }
-        })
-        .require_owner_turn(),
-    )
+        },
+    ))
 }
 
 fn resolve(

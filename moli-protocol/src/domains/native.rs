@@ -4,6 +4,9 @@
 //! Its wake-up order cannot decide when a successful reply reaches the client.
 //! Internal queries deliberately keep their ordinary typed result channel.
 
+mod node;
+pub(crate) use node::{NodeLookupExecution, NodeReferenceParams, with_backend_node};
+
 use serde_json::json;
 
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
