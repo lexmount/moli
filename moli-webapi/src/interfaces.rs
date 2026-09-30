@@ -148,6 +148,10 @@ interfaces! {
     GainNode: AudioNode;
     IIRFilterNode: AudioNode;
     PeriodicWave;
+    Gamepad;
+    GamepadButton;
+    GamepadEvent: Event;
+    GamepadHapticActuator;
     StereoPannerNode: AudioNode;
     WaveShaperNode: AudioNode;
     ConvolverNode: AudioNode;
@@ -317,14 +321,14 @@ interfaces! {
     GeolocationCoordinates;
     GeolocationPosition;
     GeolocationPositionError;
-    Gamepad;
-    GamepadButton;
-    GamepadEvent: Event;
 
 
 
 
-    GamepadHapticActuator;
+
+
+
+
     HTMLAllCollection;
     HTMLAnchorElement: HTMLElement;
     HTMLAreaElement: HTMLElement;
