@@ -565,7 +565,9 @@ pub(super) fn needs_rendering_backend<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if web_api_interfaces::ConstantSourceNode::is_instance(scope, node) {
+    if web_api_interfaces::ConstantSourceNode::is_instance(scope, node)
+        || oscillator::needs_rendering_backend(scope, node)
+    {
         return true;
     }
     web_api_interfaces::AudioBufferSourceNode::is_instance(scope, node)

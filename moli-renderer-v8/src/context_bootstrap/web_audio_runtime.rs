@@ -23,10 +23,14 @@ mod graph;
 mod iir;
 pub(in crate::context_bootstrap) use iir::constructor as iir_constructor;
 mod node;
+mod oscillator;
 mod param_nodes;
+mod periodic_wave;
 mod source;
 mod wave_shaper;
 
+pub(in crate::context_bootstrap) use oscillator::constructor as oscillator_constructor;
+pub(in crate::context_bootstrap) use periodic_wave::constructor as periodic_wave_constructor;
 pub(in crate::context_bootstrap) use wave_shaper::constructor as wave_shaper_constructor;
 
 pub(in crate::context_bootstrap) use buffer::constructor as audio_buffer_constructor;
@@ -181,17 +185,6 @@ struct OfflineAudioContextObjectDeclaration<'scope> {
     remove_event_listener: (),
     #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
     dispatch_event: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::OscillatorNode)]
-struct OscillatorNodeObjectDeclaration<'scope> {
-    #[webapi(data_property = "type")]
-    kind: &'static str,
-    #[webapi(data_property)]
-    frequency: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, readonly)]
-    detune: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -392,6 +385,8 @@ struct BaseAudioContextPrototypeDeclaration {
     create_convolver: (),
     #[webapi(method = "createIIRFilter", receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 2, callback = iir::create)]
     create_iir_filter: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 2, callback = periodic_wave::create)]
+    create_periodic_wave: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_gain)]
     create_gain: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
@@ -412,7 +407,8 @@ struct BaseAudioContextPrototypeDeclaration {
     #[webapi(
         method = "createOscillator",
         length = 0,
-        callback = audio_context_create_oscillator_callback
+        receiver = web_api_interfaces::BaseAudioContext::is_instance,
+        callback = oscillator::create
     )]
     create_oscillator: (),
 
@@ -468,6 +464,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
         "WaveShaperNode" => wave_shaper::install(scope, template),
         "ConvolverNode" => convolver::install(scope, template),
         "IIRFilterNode" => iir::install(scope, template),
+        "OscillatorNode" => oscillator::install(scope, template),
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
             template.prototype_template(scope),
@@ -1360,25 +1357,6 @@ fn require_base_audio_context<'s>(
     }
     throw_type_error(scope, "Illegal invocation: expected a BaseAudioContext.");
     false
-}
-
-fn audio_context_create_oscillator_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !require_base_audio_context(scope, args.this()) {
-        return;
-    }
-    let nyquist = audio_context_sample_rate(scope, args.this()) / 2.0;
-    let frequency = audio_param(scope, 440.0, -nyquist, nyquist);
-    let detune = detune_param(scope);
-    let node = OscillatorNodeObjectDeclaration::new("sine", frequency, detune)
-        .bind(scope)
-        .expect("OscillatorNode declaration should bind");
-    graph::initialize_node(scope, node, args.this());
-    source::initialize_scheduling(scope, node);
-    rv.set(node.into());
 }
 
 fn audio_context_create_dynamics_compressor_callback<'s>(
