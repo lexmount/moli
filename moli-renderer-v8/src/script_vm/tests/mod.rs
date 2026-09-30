@@ -2139,6 +2139,9 @@ mod canvas_transform_snapshots;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod device_events;
+
+mod gamepad_interfaces;
+
 mod dom_elements;
 mod dom_exception_proxy_identity;
 mod dom_xhr;

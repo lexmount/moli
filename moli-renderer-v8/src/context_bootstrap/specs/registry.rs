@@ -289,6 +289,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TouchEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::GamepadEvent::DESCRIPTOR,
+        kind: ConstructorKind::GamepadEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Gamepad::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::GamepadButton::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::GamepadHapticActuator::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MessageEvent::DESCRIPTOR,
         kind: ConstructorKind::MessageEvent,
     },
