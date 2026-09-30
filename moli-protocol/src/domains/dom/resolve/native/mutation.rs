@@ -3,34 +3,14 @@
 
 use super::*;
 
-pub(super) fn handles(action: DomAction) -> bool {
-    matches!(
-        action,
-        DomAction::Disable
-            | DomAction::RemoveNode
-            | DomAction::Focus
-            | DomAction::SetAttributeValue
-            | DomAction::RemoveAttribute
-            | DomAction::MoveTo
-            | DomAction::SetAttributesAsText
-            | DomAction::SetNodeName
-            | DomAction::SetNodeValue
-            | DomAction::SetOuterHtml
-            | DomAction::ScrollIntoViewIfNeeded
-            | DomAction::GetNodeForLocation
-            | DomAction::SetNodeStackTracesEnabled
-            | DomAction::GetNodeStackTraces
-    )
-}
-
 pub(super) fn prepare(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     action: DomAction,
-) -> Result<Operation, StartError> {
+) -> Result<Option<Operation>, StartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    match action {
+    let operation = match action {
         DomAction::Disable => Ok(Operation::new(
             Command::DiscardDomAgentFrontendBindings {
                 inspector_session_id: session,
@@ -286,8 +266,9 @@ pub(super) fn prepare(
                 },
             ))
         }
-        _ => unreachable!("DOM mutation preparation only handles its admitted actions"),
-    }
+        _ => return Ok(None),
+    };
+    operation.map(Some)
 }
 
 fn unit(reply: anyhow::Result<Reply>, prefix: &str) -> Response {

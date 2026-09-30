@@ -11,40 +11,19 @@ use moli_core::{
 
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
     let action = cmd.parse_action::<PageAction>()?;
-    if matches!(
-        action,
-        PageAction::CreateIsolatedWorld
-            | PageAction::AddScriptToEvaluateOnNewDocument
-            | PageAction::RemoveScriptToEvaluateOnNewDocument
-    ) {
-        return preload::native::try_start(conn, cmd, action);
+    match prepare(conn, cmd, action) {
+        Ok(Some(operation)) => Some(native::start_operation(conn, cmd, operation)),
+        Ok(None) => preload::native::try_start(conn, cmd, action),
+        Err(plan) => Some(NativeCommandStep::Complete(plan)),
     }
-
-    if !matches!(
-        action,
-        PageAction::GetFrameTree
-            | PageAction::GetResourceTree
-            | PageAction::GetLayoutMetrics
-            | PageAction::CaptureScreenshot
-            | PageAction::CaptureSnapshot
-            | PageAction::SetDocumentContent
-            | PageAction::SetBypassCsp
-            | PageAction::ResetNavigationHistory
-    ) {
-        return None;
-    }
-    Some(match prepare(conn, cmd, action) {
-        Ok(operation) => native::start_operation(conn, cmd, operation),
-        Err(plan) => NativeCommandStep::Complete(plan),
-    })
 }
 
 fn prepare(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     action: PageAction,
-) -> Result<Operation, CommandOutputPlan> {
-    match action {
+) -> Result<Option<Operation>, CommandOutputPlan> {
+    let operation = match action {
         PageAction::GetFrameTree | PageAction::GetResourceTree => {
             resource_tree::prepare_native_tree(conn, cmd, action == PageAction::GetResourceTree)
         }
@@ -196,6 +175,7 @@ fn prepare(
                 _ => unreachable!("Page history reset reply"),
             },
         )),
-        _ => unreachable!("Page native preparation handles its admitted actions"),
-    }
+        _ => return Ok(None),
+    };
+    operation.map(Some)
 }

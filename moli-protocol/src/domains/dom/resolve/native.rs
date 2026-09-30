@@ -19,31 +19,6 @@ type StartError = PendingDomCommandStartError;
 
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
     let action = cmd.parse_action::<DomAction>()?;
-    if !mutation::handles(action)
-        && !matches!(
-            action,
-            DomAction::ResolveNode
-                | DomAction::SetFileInputFiles
-                | DomAction::GetDocument
-                | DomAction::GetFlattenedDocument
-                | DomAction::QuerySelector
-                | DomAction::QuerySelectorAll
-                | DomAction::RequestChildNodes
-                | DomAction::GetFrameOwner
-                | DomAction::GetAttributes
-                | DomAction::DescribeNode
-                | DomAction::GetOuterHtml
-                | DomAction::GetBoxModel
-                | DomAction::GetContentQuads
-                | DomAction::RequestNode
-                | DomAction::PushNodesByBackendIdsToFrontend
-                | DomAction::PerformSearch
-                | DomAction::GetSearchResults
-                | DomAction::DiscardSearchResults
-        )
-    {
-        return None;
-    }
     if action == DomAction::DiscardSearchResults
         && search::build_cdp_discard_search_results_command(conn, cmd).is_none()
     {
@@ -69,33 +44,35 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
             "DOM agent hasn't been enabled",
         )));
     }
-    Some(match prepare(conn, cmd, action) {
-        Ok(operation) => native::start_operation(conn, cmd, operation),
-        Err(error) => {
-            NativeCommandStep::Complete(CommandOutputPlan::error(error.code, error.message))
-        }
-    })
+    match prepare(conn, cmd, action) {
+        Ok(Some(operation)) => Some(native::start_operation(conn, cmd, operation)),
+        Ok(None) => None,
+        Err(error) => Some(NativeCommandStep::Complete(CommandOutputPlan::error(
+            error.code,
+            error.message,
+        ))),
+    }
 }
 
 fn prepare(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     action: DomAction,
-) -> Result<Operation, StartError> {
+) -> Result<Option<Operation>, StartError> {
     if action == DomAction::ResolveNode {
-        return remote_object::prepare(conn, cmd);
+        return remote_object::prepare(conn, cmd).map(Some);
     }
     if action == DomAction::SetFileInputFiles {
-        return files::prepare(conn, cmd);
+        return files::prepare(conn, cmd).map(Some);
     }
-    if mutation::handles(action) {
-        return mutation::prepare(conn, cmd, action);
+    if let Some(operation) = mutation::prepare(conn, cmd, action)? {
+        return Ok(Some(operation));
     }
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let top_frame = top_frame_id_for_owner(conn, &owner);
     let whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner);
-    match action {
+    let operation = match action {
         DomAction::GetDocument | DomAction::GetFlattenedDocument => {
             let flattened = action == DomAction::GetFlattenedDocument;
             let kind = if flattened {
@@ -536,8 +513,9 @@ fn prepare(
                 },
             ))
         }
-        _ => unreachable!("native DOM preparation is selected at admission"),
-    }
+        _ => return Ok(None),
+    };
+    operation.map(Some)
 }
 
 fn node_not_found() -> Response {
