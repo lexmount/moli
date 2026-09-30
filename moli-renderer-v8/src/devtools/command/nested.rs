@@ -58,7 +58,7 @@ impl RendererPageCommand {
             | Self::RegisterDocumentBidiNodeBinding { .. }
             | Self::DocumentBidiNodeBinding { .. }
             | Self::DocumentBidiNodeSharedIdForBackendNodeId { .. }
-            | Self::DocumentNodeAttributesForBackendNodeId { .. }
+            | Self::DocumentNodeAttributes { .. }
             | Self::DocumentNodeTextForBackendNodeId { .. }
             | Self::DocumentNodePropertyForBackendNodeId { .. }
             | Self::AccessibilityTreePayloadsForDocument { .. }

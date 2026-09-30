@@ -752,9 +752,9 @@ impl PageVm {
                     backend_node_id,
                 ),
             )),
-            RendererPageCommand::DocumentNodeAttributesForBackendNodeId { backend_node_id } => {
+            RendererPageCommand::DocumentNodeAttributes { reference } => {
                 Ok(RendererPageReply::DocumentNodeAttributesResolution(
-                    self.document_node_attributes_for_backend_node_id(backend_node_id),
+                    self.document_node_attributes(reference),
                 ))
             }
             RendererPageCommand::DocumentNodeTextForBackendNodeId { backend_node_id } => {

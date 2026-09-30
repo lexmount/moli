@@ -34,9 +34,10 @@ pub use moli_renderer_v8::{
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomBidiNodeBindingResolution,
     RendererDomBidiNodeSharedIdResolution, RendererDomEdit, RendererDomEditOutcome,
     RendererDomFrontendNodeBindingResolution, RendererDomNodeCreationStackFrame,
-    RendererDomNodeCreationStackTrace, RendererDomNodeStackTraceResolution,
-    RendererDomSearchRegistration, RendererDomSearchResultNode, RendererDomSearchResultsResolution,
-    RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
+    RendererDomNodeCreationStackTrace, RendererDomNodeReference,
+    RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
+    RendererDomSearchResultNode, RendererDomSearchResultsResolution, RendererStyleSheetHeader,
+    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
 };
 
 pub use moli_renderer_v8::{PageVmInitStage, RendererReplyBoundary};

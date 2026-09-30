@@ -2727,10 +2727,27 @@ impl PageVm {
         }
     }
 
-    pub(crate) fn document_node_attributes_for_live_handle(
-        &self,
-        handle: DomHandle,
+    pub(crate) fn document_node_attributes(
+        &mut self,
+        reference: RendererDomNodeReference,
     ) -> RendererDocumentNodeAttributesResolution {
+        let backend_node_id = match reference {
+            RendererDomNodeReference::BackendNodeId(id) => id,
+            RendererDomNodeReference::FrontendNodeId {
+                inspector_session_id,
+                frontend_node_id,
+            } => match self
+                .document_frontend_node_binding(inspector_session_id.as_deref(), frontend_node_id)
+            {
+                RendererDomFrontendNodeBindingResolution::BackendNodeId(id) => id,
+                RendererDomFrontendNodeBindingResolution::NotFound => {
+                    return RendererDocumentNodeAttributesResolution::MissingNode;
+                }
+            },
+        };
+        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+            return RendererDocumentNodeAttributesResolution::MissingNode;
+        };
         let document = self.vm().document_runtime.dom_host().dom();
         let Some(node) = document.node(handle) else {
             return RendererDocumentNodeAttributesResolution::MissingNode;
@@ -2744,16 +2761,6 @@ impl PageVm {
             .map(|attribute| (attribute.name(), attribute.value().to_owned()))
             .collect();
         RendererDocumentNodeAttributesResolution::Found(attributes)
-    }
-
-    pub(crate) fn document_node_attributes_for_backend_node_id(
-        &mut self,
-        backend_node_id: u32,
-    ) -> RendererDocumentNodeAttributesResolution {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
-            return RendererDocumentNodeAttributesResolution::MissingNode;
-        };
-        self.document_node_attributes_for_live_handle(handle)
     }
 
     pub(crate) fn document_node_text_for_live_handle(

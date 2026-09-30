@@ -27,19 +27,12 @@ pub(super) fn start_devtools_get_attributes_command(
     owner: &CommandOwnerScope,
     command: DevToolsGetAttributesCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = command.reference {
-        return start_document_frontend_node_binding_command(
-            conn,
-            command_id,
-            owner,
-            frontend_node_id,
-            PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id },
-        );
-    }
-    let reference = command.reference;
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_attributes_for_reference(page, reference)?;
+    let pending = page
+        .start_document_node_attributes(command.reference.into_renderer_reference(session))
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),

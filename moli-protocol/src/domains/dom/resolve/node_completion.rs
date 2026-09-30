@@ -38,15 +38,6 @@ pub(super) fn complete_pending_dom_command_result(
     let completion = *completed_work;
 
     let result = match completed.kind {
-        PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id } => {
-            return complete_frontend_node_binding_for_get_attributes_result(
-                conn,
-                completed.command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForGetText { frontend_node_id } => {
             return complete_frontend_node_binding_for_get_text_result(
                 conn,
@@ -886,46 +877,6 @@ where
             error.message,
         ))),
     }
-}
-
-pub(super) fn complete_frontend_node_binding_for_get_attributes(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    complete_frontend_node_binding_followup(
-        conn,
-        command_id,
-        owner,
-        completion,
-        out,
-        |page, reference| {
-            start_document_node_attributes_for_reference(page, reference)
-                .map(|pending| (pending, PendingDomCommandKind::GetAttributesLive))
-        },
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_get_attributes_result(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-) -> DevToolsDomCommandTaskStep {
-    complete_frontend_node_binding_followup_result(
-        conn,
-        command_id,
-        owner,
-        completion,
-        |page, reference| {
-            start_document_node_attributes_for_reference(page, reference)
-                .map(|pending| (pending, PendingDomCommandKind::GetAttributesLive))
-        },
-    )
 }
 
 pub(super) fn complete_frontend_node_binding_for_remove_node(

@@ -21,7 +21,7 @@ use crate::renderer::{
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomAttributeMutation,
     RendererDomAttributeMutationOutcome, RendererDomBidiNodeBindingResolution,
     RendererDomBidiNodeSharedIdResolution, RendererDomEdit, RendererDomEditOutcome,
-    RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution,
+    RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution, RendererDomNodeReference,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
     RendererDomSearchResultsResolution, RendererDomSnapshotCaptureOptions,
     RendererDomSnapshotCapturePayload, RendererLayoutMetrics, RendererPageCommand,
@@ -1310,13 +1310,21 @@ impl Page {
         )
     }
 
+    /// Resolve the native reference and read attributes in one renderer turn.
+    pub fn start_document_node_attributes(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentNodeAttributes { reference })
+    }
+
     pub fn start_document_node_attributes_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentNodeAttributesForBackendNodeId { backend_node_id },
-        )
+        self.start_document_node_attributes(RendererDomNodeReference::BackendNodeId(
+            backend_node_id,
+        ))
     }
 
     pub fn finish_document_node_attributes(

@@ -1,6 +1,111 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
+    use super::{RendererDocumentNodeAttributesResolution as Attributes, RendererDomNodeReference};
+
+    async fn attributes(
+        page: &super::RendererPageHandle,
+        reference: RendererDomNodeReference,
+    ) -> Attributes {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::DocumentNodeAttributes { reference })
+            .await
+            .expect("typed attributes query completes");
+        let RendererPageReply::DocumentNodeAttributesResolution(result) = reply else {
+            panic!("expected typed attribute resolution");
+        };
+        result
+    }
+
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/attributes").unwrap(),
+        "<!doctype html><html><body><input id='probe' data-state='before'></body></html>",
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::DocumentQuerySelectorForDocument {
+            inspector_session_id: Some("attributes-a".to_owned()),
+            include_whitespace: false,
+            selector: "#probe".to_owned(),
+            multiple: false,
+        })
+        .await
+        .expect("bind the frontend node in session A");
+    let RendererPageReply::DocumentQuerySelectorResolution(
+        RendererDocumentQuerySelectorResolution::Found(nodes),
+    ) = reply
+    else {
+        panic!("expected probe node");
+    };
+    let node = nodes[0];
+    let frontend = RendererDomNodeReference::FrontendNodeId {
+        inspector_session_id: Some("attributes-a".to_owned()),
+        frontend_node_id: node.frontend_node_id,
+    };
+    assert_eq!(
+        attributes(&page, frontend.clone()).await,
+        Attributes::Found(vec![
+            ("id".to_owned(), "probe".to_owned()),
+            ("data-state".to_owned(), "before".to_owned()),
+        ])
+    );
+    assert_eq!(
+        attributes(
+            &page,
+            RendererDomNodeReference::FrontendNodeId {
+                inspector_session_id: Some("attributes-b".to_owned()),
+                frontend_node_id: node.frontend_node_id,
+            },
+        )
+        .await,
+        Attributes::MissingNode,
+        "a frontend node ID must not inherit another session's binding"
+    );
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.querySelector('#probe').setAttribute('data-state', 'after')"
+            .to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("mutate the live node");
+    let backend = RendererDomNodeReference::BackendNodeId(node.backend_node_id);
+    assert_eq!(
+        attributes(&page, frontend.clone()).await,
+        attributes(&page, backend.clone()).await,
+        "frontend and backend references must read the same live node"
+    );
+    assert!(matches!(
+        attributes(&page, backend.clone()).await,
+        Attributes::Found(values) if values.contains(&("data-state".to_owned(), "after".to_owned()))
+    ));
+    page.run_async_command(RendererPageCommand::DiscardDomAgentFrontendBindings {
+        inspector_session_id: Some("attributes-a".to_owned()),
+    })
+    .await
+    .expect("discard session A's frontend bindings");
+    assert_eq!(attributes(&page, frontend).await, Attributes::MissingNode);
+
+    let other_page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/other-attributes").unwrap(),
+        "<!doctype html><html><body><input id='other'></body></html>",
+    )
+    .await;
+    assert_eq!(
+        attributes(&other_page, backend).await,
+        Attributes::MissingNode,
+        "backend references must belong to the queried Page document"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn outer_html_document_command_includes_only_author_shadow_roots() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

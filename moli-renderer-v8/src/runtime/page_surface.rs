@@ -4273,6 +4273,19 @@ pub struct RendererRuntimeRealmInfo {
     pub grant_universal_access: Option<bool>,
 }
 
+/// A native DOM-agent reference, resolved against the current Page document.
+/// Frontend IDs belong to one Inspector session; backend IDs use the Page's
+/// live node registry. Inspector objects and WebDriver/BiDi handles require
+/// their own resolution and cannot enter this native-only query boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererDomNodeReference {
+    FrontendNodeId {
+        inspector_session_id: Option<String>,
+        frontend_node_id: u32,
+    },
+    BackendNodeId(u32),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RendererDocumentNodeAttributesResolution {
     Found(Vec<(String, String)>),
@@ -4958,8 +4971,8 @@ pub enum RendererPageCommand {
         inspector_session_id: Option<String>,
         backend_node_id: u32,
     },
-    DocumentNodeAttributesForBackendNodeId {
-        backend_node_id: u32,
+    DocumentNodeAttributes {
+        reference: RendererDomNodeReference,
     },
     DocumentNodeTextForBackendNodeId {
         backend_node_id: u32,
@@ -5591,9 +5604,7 @@ impl RendererPageCommand {
             Self::DocumentBidiNodeSharedIdForBackendNodeId { .. } => {
                 Some("DocumentBidiNodeSharedIdForBackendNodeId")
             }
-            Self::DocumentNodeAttributesForBackendNodeId { .. } => {
-                Some("DocumentNodeAttributesForBackendNodeId")
-            }
+            Self::DocumentNodeAttributes { .. } => Some("DocumentNodeAttributes"),
             Self::DocumentNodeTextForBackendNodeId { .. } => {
                 Some("DocumentNodeTextForBackendNodeId")
             }

@@ -161,9 +161,9 @@ fn backend_style_operation(backend_node_id: u32, query: StyleQuery) -> Operation
         StyleQuery::Computed => {
             Command::ComputedStylePropertiesForBackendNodeId { backend_node_id }
         }
-        StyleQuery::Inline(_) => {
-            Command::DocumentNodeAttributesForBackendNodeId { backend_node_id }
-        }
+        StyleQuery::Inline(_) => Command::DocumentNodeAttributes {
+            reference: moli_core::page::RendererDomNodeReference::BackendNodeId(backend_node_id),
+        },
     };
     Operation::new(command, move |reply| project_style(reply, query))
 }

@@ -922,6 +922,23 @@ pub enum DevToolsDomNodeReference {
     BackendNodeId(u32),
 }
 
+impl DevToolsDomNodeReference {
+    pub(crate) fn into_renderer_reference(
+        self,
+        inspector_session_id: Option<String>,
+    ) -> moli_core::page::RendererDomNodeReference {
+        match self {
+            Self::FrontendNodeId(frontend_node_id) => {
+                moli_core::page::RendererDomNodeReference::FrontendNodeId {
+                    inspector_session_id,
+                    frontend_node_id,
+                }
+            }
+            Self::BackendNodeId(id) => moli_core::page::RendererDomNodeReference::BackendNodeId(id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsRequestChildNodesCommand {
     pub context: AutomationContext,

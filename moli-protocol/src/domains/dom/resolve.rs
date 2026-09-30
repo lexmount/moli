@@ -226,9 +226,6 @@ pub(super) enum PendingDomCommandKind {
         object_group: Option<String>,
         top_frame_id: Option<String>,
     },
-    ResolveFrontendNodeForGetAttributes {
-        frontend_node_id: u32,
-    },
     ResolveFrontendNodeForGetText {
         frontend_node_id: u32,
     },
@@ -495,15 +492,6 @@ fn required_backend_node_id_for_reference(
             Err(PendingDomCommandStartError::node_not_found())
         }
     }
-}
-
-fn start_document_node_attributes_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_attributes_for_backend_node_id(backend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 fn start_document_node_text_for_reference(

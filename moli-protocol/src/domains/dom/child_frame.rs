@@ -199,10 +199,12 @@ async fn attributes_command(
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
 ) -> Result<DevToolsGetAttributesResult, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_attributes_for_reference(page, reference)?;
+    let pending = page
+        .start_document_node_attributes(reference.into_renderer_reference(session))
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
@@ -210,15 +212,6 @@ async fn attributes_command(
     page.finish_document_node_attributes(completion)
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(attributes_result_from_renderer_resolution)
-}
-
-fn start_document_node_attributes_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_attributes_for_backend_node_id(backend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 async fn text_command(

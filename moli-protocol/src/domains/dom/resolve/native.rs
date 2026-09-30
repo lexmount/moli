@@ -125,26 +125,21 @@ fn prepare(
         }
         DomAction::GetAttributes => {
             let params = build_cdp_get_attributes_command(conn, cmd)?;
-            Ok(with_backend(
-                session,
-                params.reference,
-                NestedMain,
-                |backend_node_id| {
-                    Operation::new(
-                        Command::DocumentNodeAttributesForBackendNodeId { backend_node_id },
-                        |reply| match reply {
-                            Ok(Reply::DocumentNodeAttributesResolution(resolution)) => {
-                                match attributes_result_from_renderer_resolution(resolution) {
-                                    Ok(result) => Response::success(
-                                        json!({"attributes": result.attributes.into_iter().flat_map(|attr| [attr.name, attr.value]).collect::<Vec<_>>()}),
-                                    ),
-                                    Err(error) => Response::error(error.code, error.message),
-                                }
-                            }
-                            Err(error) => Response::error(-32000, error.to_string()),
-                            _ => unreachable!("DOM attributes reply"),
-                        },
-                    )
+            Ok(Operation::new(
+                Command::DocumentNodeAttributes {
+                    reference: params.reference.into_renderer_reference(session),
+                },
+                |reply| match reply {
+                    Ok(Reply::DocumentNodeAttributesResolution(resolution)) => {
+                        match attributes_result_from_renderer_resolution(resolution) {
+                            Ok(result) => Response::success(json!({
+                                "attributes": flatten_dom_attributes(result.attributes),
+                            })),
+                            Err(error) => Response::error(error.code, error.message),
+                        }
+                    }
+                    Err(error) => Response::error(-32000, error.to_string()),
+                    _ => unreachable!("DOM attributes reply"),
                 },
             ))
         }

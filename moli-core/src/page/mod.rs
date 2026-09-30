@@ -185,7 +185,7 @@ pub use crate::renderer::{
     RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomBidiNodeBindingResolution,
     RendererDomBidiNodeSharedIdResolution, RendererDomFrontendNodeBindingResolution,
-    RendererDomNodeCreationStackFrame, RendererDomNodeCreationStackTrace,
+    RendererDomNodeCreationStackFrame, RendererDomNodeCreationStackTrace, RendererDomNodeReference,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
     RendererDomSearchResultNode, RendererDomSearchResultsResolution, RendererRuntimeRemoteObject,
     RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,

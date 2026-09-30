@@ -165,6 +165,7 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
         ("CSS.getComputedStyleForNode", {"nodeId": page.node}),
         ("Accessibility.getFullAXTree", {}),
         ("DOM.resolveNode", {"nodeId": page.node, "objectGroup": "cdp-ordering"}),
+        ("DOM.getAttributes", {"nodeId": page.node}),
         ("DOM.describeNode", {"backendNodeId": 2147483647}),
     ]
     ids = [await wire.send(method, params, session) for method, params in commands]
@@ -199,6 +200,8 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
     assert_equal(replies[ids[4]]["result"]["node"]["nodeName"], "INPUT", "native node snapshot")
     color = next(p["value"] for p in replies[ids[5]]["result"]["computedStyle"] if p["name"] == "color")
     assert_equal(color, "rgb(255, 0, 0)", "native computed style")
+    assert_equal(replies[ids[8]]["result"]["attributes"], ["id", "probe"],
+                 "native attributes share the renderer query and its ordered terminal")
     object_id = replies[ids[7]]["result"]["object"]["objectId"]
     resolved = await wire.call("Runtime.callFunctionOn", {
         "objectId": object_id, "functionDeclaration": "function() { return this.id; }",
@@ -270,10 +273,12 @@ async def _pause(wire: _Wire, page: _Page, *, instrumentation: bool = False) -> 
 async def _normal_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
     outer = await _pause(wire, page)
     commands = [("Page.getFrameTree", {}), ("DOM.describeNode", {"nodeId": page.node}),
-                ("CSS.getComputedStyleForNode", {"nodeId": page.node})]
+                ("CSS.getComputedStyleForNode", {"nodeId": page.node}),
+                ("DOM.getAttributes", {"nodeId": page.node})]
     ids = [await wire.send(method, params, page.session) for method, params in commands]
-    for rid in reversed(ids):
-        await wire.response(rid)
+    replies = {rid: await wire.response(rid) for rid in reversed(ids)}
+    assert_equal(replies[ids[-1]]["result"]["attributes"], ["id", "probe"],
+                 "native attributes resolve the frontend node while paused")
     if wire.has_response(outer):
         raise SmokeError("native queries must leave the outer evaluation paused")
     await wire.call("Debugger.resume", session=page.session)

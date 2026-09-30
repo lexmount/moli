@@ -51,16 +51,6 @@ pub(super) fn complete_pending_dom_command(
                 out,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id } => {
-            return complete_frontend_node_binding_for_get_attributes(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                out,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForGetText { frontend_node_id } => {
             return complete_frontend_node_binding_for_get_text(
                 conn,
@@ -664,7 +654,6 @@ pub(super) fn complete_pending_dom_command(
         | PendingDomCommandKind::DiscardSearchResultsLive
         | PendingDomCommandKind::SetNodeStackTracesEnabled
         | PendingDomCommandKind::GetNodeStackTraces
-        | PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForGetText { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForGetProperty { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForDomGeometry { .. }
