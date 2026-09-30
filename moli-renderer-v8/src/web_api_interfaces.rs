@@ -52,6 +52,9 @@ interfaces! {
     BeforeUnloadEvent: Event;
     BiquadFilterNode: AudioNode;
     ConstantSourceNode: AudioScheduledSourceNode;
+    DelayNode: AudioNode;
+    GainNode: AudioNode;
+    StereoPannerNode: AudioNode;
     Blob;
     BlobEvent: Event;
     BroadcastChannel: EventTarget;
