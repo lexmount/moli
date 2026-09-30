@@ -404,6 +404,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
+    profile: super::super::exposed_interfaces::TemplateBuildProfile,
 ) {
     install_node_mixin_unscopables(scope, template, spec.interface.name());
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
@@ -417,7 +418,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
-    install_geometry_template_bindings(scope, template, spec.interface.name());
+    install_geometry_template_bindings(scope, template, spec.interface.name(), profile);
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
@@ -524,7 +525,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     );
     install_svg_template_bindings(scope, template, spec.interface.name());
     install_opfs_constructor_template_bindings(scope, template, spec.interface.name());
-    install_css_typed_om_template_bindings(scope, template, spec.interface.name());
+    install_css_typed_om_template_bindings(scope, template, spec.interface.name(), profile);
     install_css_stylesheet_template_bindings(scope, template, spec.interface.name());
     install_range_template_bindings(scope, template, spec.interface.name());
     install_indexed_db_template_bindings(scope, template, spec.interface.name());
