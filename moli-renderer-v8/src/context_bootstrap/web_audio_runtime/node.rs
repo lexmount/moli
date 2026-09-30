@@ -34,8 +34,10 @@ pub(super) fn apply_options<'s>(
     {
         return false;
     }
-    if let Some(interpretation) = options.channel_interpretation {
-        set_interpretation(scope, node, interpretation);
+    if let Some(interpretation) = options.channel_interpretation
+        && !set_interpretation(scope, node, interpretation)
+    {
+        return false;
     }
     true
 }
@@ -109,6 +111,59 @@ pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'
     set_private_value(scope, node, CHANNEL_MODE, v8str(scope, mode).into());
     set_private_value(scope, node, INTERPRETATION, v8str(scope, "speakers").into());
     super::super::media_queries::mark_simple_event_target_slot(scope, node, LISTENERS);
+}
+
+pub(super) enum ChannelLayout {
+    Merger(u32),
+    Splitter(u32),
+}
+
+pub(super) fn initialize_channel_layout<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    layout: ChannelLayout,
+) {
+    let (inputs, outputs, channels, interpretation) = match layout {
+        ChannelLayout::Merger(count) => (count, 1, 1, "speakers"),
+        ChannelLayout::Splitter(count) => (1, count, count, "discrete"),
+    };
+    set_web_audio_number_slot(scope, node, INPUT_COUNT, f64::from(inputs));
+    set_web_audio_number_slot(scope, node, OUTPUT_COUNT, f64::from(outputs));
+    set_web_audio_number_slot(scope, node, CHANNEL_COUNT, f64::from(channels));
+    set_private_value(scope, node, CHANNEL_MODE, v8str(scope, "explicit").into());
+    set_private_value(
+        scope,
+        node,
+        INTERPRETATION,
+        v8str(scope, interpretation).into(),
+    );
+}
+
+pub(super) fn input_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> u32 {
+    web_audio_number_slot(scope, node, INPUT_COUNT).unwrap_or(0.0) as u32
+}
+
+pub(super) fn output_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> u32 {
+    web_audio_number_slot(scope, node, OUTPUT_COUNT).unwrap_or(0.0) as u32
+}
+
+fn fixed_channel_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> Option<u32> {
+    if web_api_interfaces::ChannelMergerNode::is_instance(scope, node) {
+        Some(1)
+    } else if web_api_interfaces::ChannelSplitterNode::is_instance(scope, node) {
+        Some(output_count(scope, node))
+    } else {
+        None
+    }
 }
 
 fn context_getter<'s>(
@@ -196,6 +251,17 @@ fn set_channel_count<'s>(
     node: v8::Local<'s, v8::Object>,
     value: u32,
 ) -> bool {
+    if let Some(count) = fixed_channel_count(scope, node) {
+        if value != count {
+            throw_dom_exception(
+                scope,
+                "InvalidStateError",
+                11,
+                "The channel count of this node is fixed.",
+            );
+        }
+        return value == count;
+    }
     if let Some(count) = offline_destination_channel_count(scope, node) {
         if f64::from(value) != count {
             throw_dom_exception(
@@ -277,14 +343,15 @@ fn set_channel_mode<'s>(
     node: v8::Local<'s, v8::Object>,
     value: ChannelCountMode,
 ) -> bool {
-    if offline_destination_channel_count(scope, node).is_some()
+    if (fixed_channel_count(scope, node).is_some()
+        || offline_destination_channel_count(scope, node).is_some())
         && !matches!(value, ChannelCountMode::Explicit)
     {
         throw_dom_exception(
             scope,
             "InvalidStateError",
             11,
-            "Offline destination channel count mode cannot be changed.",
+            "This audio node requires explicit channel count mode.",
         );
         return false;
     }
@@ -341,10 +408,22 @@ fn set_interpretation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     value: ChannelInterpretation,
-) {
+) -> bool {
+    if web_api_interfaces::ChannelSplitterNode::is_instance(scope, node)
+        && !matches!(value, ChannelInterpretation::Discrete)
+    {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "A channel splitter requires discrete channel interpretation.",
+        );
+        return false;
+    }
     let value = match value {
         ChannelInterpretation::Speakers => "speakers",
         ChannelInterpretation::Discrete => "discrete",
     };
     set_private_value(scope, node, INTERPRETATION, v8str(scope, value).into());
+    true
 }
