@@ -1,4 +1,4 @@
-use super::{JsContextHost, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES};
+use super::JsContextHost;
 use crate::{
     context_bootstrap::{
         EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
@@ -79,20 +79,6 @@ impl JsContextHost {
             .checked_add(1)
             .expect("child window event registration id overflow");
         ChildWindowEventRegistrationId(self.next_child_window_event_registration_id)
-    }
-
-    pub(in crate::native_bridge::context_host) fn clear_child_window_document_event_state(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-    ) {
-        if let Some(window) = self.child_window_proxy_records.live_window(scope, handle) {
-            let null = v8::null(scope).into();
-            for name in WINDOW_EVENT_HANDLER_PROPERTIES {
-                let _ = window.set(scope, v8str(scope, name).into(), null);
-            }
-        }
-        self.clear_child_window_event_listeners(handle);
     }
 
     pub(crate) fn child_window_event_listener_callback_ids(
