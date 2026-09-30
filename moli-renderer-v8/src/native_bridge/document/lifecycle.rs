@@ -395,9 +395,6 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<DomHandle> {
-        if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-            return self.lightweight_popup_document_handle(popup_id);
-        }
         // Borrowed methods execute in their callee realm. HTML instead uses
         // the Window that entered this script or microtask.
         let context = scope.get_entered_or_microtask_context();

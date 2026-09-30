@@ -99,9 +99,7 @@ async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
         .current_lightweight_popup_local_window_id(popup_id)
         .expect("initial popup LocalWindow owner");
 
-    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-        let previous_popup =
-            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
+    vm.with_popup_context_scope_and_checkpoint_for_test(popup_id, |scope, host_ptr| {
         let host = unsafe { &mut *host_ptr };
         let owner = host
             .current_runtime_window_execution_context_binding(scope)
@@ -125,7 +123,6 @@ async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
             outside_settings_load,
             owner,
         );
-        crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
         Ok(())
     })
     .expect("popup Worker should register");

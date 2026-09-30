@@ -498,7 +498,7 @@ const popup = open("about:blank");
 const popupTimer = popup.setTimeout(() => __scopedTimerEvents.push("popup"), 1);
 clearTimeout(popupTimer);
 const popupSourceTimer = popup.setTimeout(
-  "globalThis.__scopedTimerEvents.push('popup-source')",
+  "opener.__scopedTimerEvents.push(globalThis === opener ? 'wrong-realm' : 'popup-source')",
   1
 );
 clearTimeout(popupSourceTimer);
