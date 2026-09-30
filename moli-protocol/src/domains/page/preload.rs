@@ -224,7 +224,11 @@ fn start_document_start_script_remove(
 }
 
 pub(super) fn add_preload_script_result_plan(identifier: String) -> CommandOutputPlan {
-    CommandOutputPlan::from_devtools_result(DevToolsCommandResult::AddPreloadScript(
+    CommandOutputPlan::result(add_preload_script_result(identifier))
+}
+
+pub(super) fn add_preload_script_result(identifier: String) -> serde_json::Value {
+    CommandOutputPlan::devtools_result_payload(DevToolsCommandResult::AddPreloadScript(
         DevToolsAddPreloadScriptResult {
             script_id: DevToolsPreloadScriptId::from(identifier),
         },

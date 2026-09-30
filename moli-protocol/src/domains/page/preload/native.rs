@@ -105,7 +105,7 @@ fn add(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, CommandOutp
         },
         move |reply| match reply {
             Ok(Reply::DocumentStartScriptResult(_)) => {
-                add_preload_script_result_plan(identifier).into_native_response()
+                Response::success(add_preload_script_result(identifier))
             }
             Err(error) => Response::error(-32000, error.to_string()),
             _ => unreachable!("Page preload append reply"),

@@ -85,27 +85,32 @@ pub(crate) fn complete_pending_autofill_command(
             })
     });
     project_outcome(outcome)
+        .map(|()| CommandOutputPlan::success())
+        .unwrap_or_else(|(code, message)| CommandOutputPlan::error(code, message))
 }
 
-fn project_outcome(outcome: Result<RendererAutofillTriggerOutcome, String>) -> CommandOutputPlan {
+fn project_outcome(
+    outcome: Result<RendererAutofillTriggerOutcome, String>,
+) -> Result<(), (i32, String)> {
     match outcome {
-        Ok(RendererAutofillTriggerOutcome::Applied { .. }) => CommandOutputPlan::success(),
+        Ok(RendererAutofillTriggerOutcome::Applied { .. }) => Ok(()),
         Ok(RendererAutofillTriggerOutcome::FieldNotFound) => {
-            CommandOutputPlan::error(-32600, "Field not found")
+            Err((-32600, "Field not found".to_owned()))
         }
         Ok(RendererAutofillTriggerOutcome::FrameNotFound) => {
-            CommandOutputPlan::error(-32000, "Frame not found")
+            Err((-32000, "Frame not found".to_owned()))
         }
-        Ok(RendererAutofillTriggerOutcome::CardAndAddressProvided) => {
-            CommandOutputPlan::error(-32600, "Card and address cannot both be provided")
-        }
+        Ok(RendererAutofillTriggerOutcome::CardAndAddressProvided) => Err((
+            -32600,
+            "Card and address cannot both be provided".to_owned(),
+        )),
         Ok(RendererAutofillTriggerOutcome::MissingCardOrAddress) => {
-            CommandOutputPlan::error(-32600, "Either card or address must be provided")
+            Err((-32600, "Either card or address must be provided".to_owned()))
         }
         Ok(RendererAutofillTriggerOutcome::AddressNotSupported) => {
-            CommandOutputPlan::error(-32000, "Address autofill is not supported")
+            Err((-32000, "Address autofill is not supported".to_owned()))
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
+        Err(message) => Err((-32000, message)),
     }
 }
 fn prepare_request(
@@ -167,7 +172,10 @@ pub(crate) fn try_start_native_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Option<super::native::NativeCommandStep> {
-    use moli_core::{RendererPageCommand as Command, RendererPageReply as Reply};
+    use moli_core::{
+        RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
+        RendererPageReply as Reply,
+    };
     Some(match prepare_request(conn, cmd) {
         Ok(request) => {
             super::native::start(conn, cmd, Command::TriggerAutofill(request), |reply| {
@@ -176,7 +184,9 @@ pub(crate) fn try_start_native_command(
                     Err(error) => Err(error.to_string()),
                     _ => unreachable!("Autofill trigger reply"),
                 };
-                project_outcome(outcome).into_native_response()
+                project_outcome(outcome)
+                    .map(|()| Response::success(serde_json::json!({})))
+                    .unwrap_or_else(|(code, message)| Response::error(code, message))
             })
         }
         Err(plan) => super::native::NativeCommandStep::Complete(plan),

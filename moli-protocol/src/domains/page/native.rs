@@ -52,12 +52,13 @@ fn prepare(
             Ok(Operation::new(
                 Command::LayoutMetrics,
                 |reply| match reply {
-                    Ok(Reply::LayoutMetrics(metrics)) => CommandOutputPlan::from_devtools_result(
-                        DevToolsCommandResult::LayoutMetrics(layout_metrics_result_from_renderer(
-                            metrics,
-                        )),
-                    )
-                    .into_native_response(),
+                    Ok(Reply::LayoutMetrics(metrics)) => {
+                        Response::success(CommandOutputPlan::devtools_result_payload(
+                            DevToolsCommandResult::LayoutMetrics(
+                                layout_metrics_result_from_renderer(metrics),
+                            ),
+                        ))
+                    }
                     Err(error) => Response::error(
                         -32000,
                         format!("Failed to produce layout metrics: {error}"),
@@ -87,15 +88,14 @@ fn prepare(
                 |reply| match reply {
                     Ok(Reply::CaptureScreenshot(RendererCaptureScreenshotReply::Captured(
                         image,
-                    ))) => CommandOutputPlan::from_devtools_result(
+                    ))) => Response::success(CommandOutputPlan::devtools_result_payload(
                         DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
                             mime_type: image.mime_type,
                             width: image.width,
                             height: image.height,
                             bytes: image.bytes,
                         }),
-                    )
-                    .into_native_response(),
+                    )),
                     Ok(Reply::CaptureScreenshot(
                         RendererCaptureScreenshotReply::LayoutDisabled,
                     )) => Response::error(-32000, CAPTURE_SCREENSHOT_LAYOUT_DISABLED_MESSAGE),

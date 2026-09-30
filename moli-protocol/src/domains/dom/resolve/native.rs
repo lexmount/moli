@@ -392,9 +392,7 @@ fn prepare(
                 Ok(Reply::OptionalDocumentNodeGeometry(Some(value))) => {
                     match devtools_dom_geometry_result_from_renderer(geometry, value) {
                         Ok(result) => {
-                            let mut out = DomCommandOutput::default();
-                            push_devtools_dom_geometry_result(&result, &mut out);
-                            out.into_plan().into_native_response()
+                            Response::success(devtools_dom_geometry_result_value(&result))
                         }
                         Err(error) => Response::error(-32000, error.message),
                     }

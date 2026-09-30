@@ -88,11 +88,11 @@ pub(super) fn complete_enable_command_output_plan(
     plan
 }
 
-pub(super) fn get_style_sheet_command_output_plan(
+pub(super) fn get_style_sheet_result(
     style_sheet_id: &str,
     frame_id: &str,
     payload: RendererStyleSheetPayload,
-) -> CommandOutputPlan {
+) -> Value {
     let RendererStyleSheetPayload {
         text,
         title,
@@ -102,7 +102,7 @@ pub(super) fn get_style_sheet_command_output_plan(
     } = payload;
     let (end_line, end_column) = style_sheet_text_end_position(&text);
 
-    CommandOutputPlan::result(json!({
+    json!({
         "styleSheet": {
             "styleSheetId": style_sheet_id,
             "frameId": frame_id,
@@ -118,7 +118,7 @@ pub(super) fn get_style_sheet_command_output_plan(
             "length": text.len(),
             "text": text,
         }
-    }))
+    })
 }
 
 fn set_css_enabled(conn: &mut CdpConnection, cmd: &Cmd<'_>, enabled: bool) {

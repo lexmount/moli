@@ -67,10 +67,9 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                     style_sheet_id: id.clone(),
                 },
                 move |reply| match reply {
-                    Ok(Reply::OptionalStyleSheetPayload(Some(payload))) => {
-                        style_sheets::get_style_sheet_command_output_plan(&id, &frame_id, payload)
-                            .into_native_response()
-                    }
+                    Ok(Reply::OptionalStyleSheetPayload(Some(payload))) => Response::success(
+                        style_sheets::get_style_sheet_result(&id, &frame_id, payload),
+                    ),
                     Ok(Reply::OptionalStyleSheetPayload(None)) => {
                         Response::error(-32000, "Could not find stylesheet with given id")
                     }
@@ -192,7 +191,7 @@ fn backend_style_operation(backend_node_id: u32, query: StyleQuery) -> Operation
 fn project_style(reply: anyhow::Result<Reply>, query: StyleQuery) -> Response {
     match (query, reply) {
         (StyleQuery::Computed, Ok(Reply::ComputedStyleProperties(Some(properties)))) => {
-            computed_style_command_output_plan(properties).into_native_response()
+            Response::success(computed_style_result(properties))
         }
         (StyleQuery::Computed, Ok(Reply::ComputedStyleProperties(None))) => {
             Response::error(-32000, "Could not find node with given id")

@@ -78,34 +78,6 @@ enum CommandOwnerEvent {
 }
 
 impl CommandOutputPlan {
-    /// Reuses a pure result formatter inside a renderer-owned handler. A
-    /// formatter requiring Browser events, fences or continuations cannot be
-    /// moved across this boundary by silently dropping those responsibilities.
-    pub(crate) fn into_native_response(self) -> moli_core::RendererNativeProtocolResponse {
-        assert!(self.post_response_events.is_empty());
-        assert!(self.renderer_output_predecessor.is_none());
-        assert!(self.renderer_output_boundary.is_none());
-        assert_eq!(
-            self.outputs.len(),
-            1,
-            "native result formatter has one terminal"
-        );
-        match self.outputs.into_iter().next().unwrap() {
-            CommandOutput::Command(CommandResponseOutput::Success(result)) => {
-                moli_core::RendererNativeProtocolResponse::success(match result {
-                    CommandResponseResult::Empty => json!({}),
-                    CommandResponseResult::Json(result) => result,
-                })
-            }
-            CommandOutput::Command(CommandResponseOutput::Error {
-                code,
-                message,
-                data: None,
-            }) => moli_core::RendererNativeProtocolResponse::error(code, message),
-            _ => panic!("native result formatter cannot own Browser output"),
-        }
-    }
-
     pub(crate) fn success() -> Self {
         Self::from_devtools_result(DevToolsCommandResult::Empty)
     }

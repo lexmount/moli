@@ -547,10 +547,8 @@ pub(crate) fn complete_pending_css_command(
                 }
             };
             CssCommandDispatchStep::Complete(match page.finish_style_sheet_payload(completion) {
-                Ok(Some(payload)) => style_sheets::get_style_sheet_command_output_plan(
-                    &style_sheet_id,
-                    &frame_id,
-                    payload,
+                Ok(Some(payload)) => CommandOutputPlan::result(
+                    style_sheets::get_style_sheet_result(&style_sheet_id, &frame_id, payload),
                 ),
                 Ok(None) => {
                     CommandOutputPlan::error(-32000, "Could not find stylesheet with given id")
@@ -591,7 +589,9 @@ pub(crate) fn complete_pending_css_command(
             };
             CssCommandDispatchStep::Complete(
                 match page.finish_computed_style_properties(completion) {
-                    Ok(Some(properties)) => computed_style_command_output_plan(properties),
+                    Ok(Some(properties)) => {
+                        CommandOutputPlan::result(computed_style_result(properties))
+                    }
                     Ok(None) => {
                         CommandOutputPlan::error(-32000, "Could not find node with given id")
                     }
@@ -627,13 +627,13 @@ pub(crate) fn complete_pending_css_command(
     }
 }
 
-fn computed_style_command_output_plan(properties: Vec<(String, String)>) -> CommandOutputPlan {
-    CommandOutputPlan::result(json!({
+fn computed_style_result(properties: Vec<(String, String)>) -> Value {
+    json!({
                     "computedStyle": properties
                         .into_iter()
                         .map(|(name, value)| json!({ "name": name, "value": value }))
                         .collect::<Vec<_>>()
-    }))
+    })
 }
 
 fn inline_style_result_from_attributes_resolution(

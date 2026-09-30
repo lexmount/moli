@@ -2456,8 +2456,12 @@ pub(super) fn push_devtools_dom_geometry_result(
     result: &DevToolsDomGeometryResult,
     out: &mut DomCommandOutput,
 ) {
+    out.push_result(devtools_dom_geometry_result_value(result));
+}
+
+pub(super) fn devtools_dom_geometry_result_value(result: &DevToolsDomGeometryResult) -> Value {
     if let Some(model) = result.box_model.as_ref() {
-        out.push_result(json!({
+        json!({
             "model": {
                 "content": model.content.points,
                 "padding": model.padding.points,
@@ -2466,10 +2470,10 @@ pub(super) fn push_devtools_dom_geometry_result(
                 "width": model.width,
                 "height": model.height,
             }
-        }));
+        })
     } else {
-        out.push_result(json!({
+        json!({
             "quads": result.quads.iter().map(|quad| &quad.points).collect::<Vec<_>>()
-        }));
+        })
     }
 }
