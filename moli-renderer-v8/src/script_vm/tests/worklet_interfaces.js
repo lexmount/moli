@@ -1,7 +1,8 @@
 (async () => {
   const rows = [], assert = (ok, message) => { if (!ok) throw Error(message); };
   const check = async (name, run) => { try { await run(); rows.push({ name, pass: true }); } catch (error) { rows.push({ name, pass: false, message: String(error) }); } };
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
+  const popup = open(), realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       if (!w.isSecureContext) {
         await check(label + '/insecure', () => assert(!('Worklet' in w) && !('AudioWorklet' in w) && !('audioWorklet' in w.BaseAudioContext.prototype) && !('audioWorklet' in new w.OfflineAudioContext(1,1,44100)), 'secure globals and attribute hidden'));
@@ -83,6 +84,7 @@
         });
       } finally { if (context) await context.close(); }
     }
+  } finally {popup.close();}
   globalThis.__nodeReplacementResults={rows,failures:rows.filter(row=>!row.pass),passed:rows.filter(row=>row.pass).length,total:rows.length};
   return rows.every(row=>row.pass);
 })()
