@@ -1756,6 +1756,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::IIRFilterNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PeriodicWave::DESCRIPTOR,
+        kind: ConstructorKind::PeriodicWave,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::WaveShaperNode::DESCRIPTOR,
         kind: ConstructorKind::WaveShaperNode,
     },
