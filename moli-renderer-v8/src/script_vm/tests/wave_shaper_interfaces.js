@@ -7,9 +7,9 @@
   };
   const thrown = callback => { try { callback(); } catch (error) { return error; } throw Error('expected exception'); };
   const equal = (actual, expected) => actual.length === expected.length && expected.every((value, index) => Object.is(value, actual[index]));
-  
-  const realms = [['main', window], ['child', document.getElementById('child').contentWindow]];
-  
+  const popup = open();
+  const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
+  try {
     for (const [label, w] of realms) {
       const context = new w.AudioContext();
       try {
@@ -117,7 +117,7 @@
         });
       } finally { await context.close(); }
     }
-  
+  } finally { popup.close(); }
   globalThis.__nodeReplacementResults = {rows, passed: rows.filter(row => row.pass).length, total: rows.length, failures: rows.filter(row => !row.pass)};
   return rows.every(row => row.pass);
 })()
