@@ -3685,3 +3685,21 @@ async fn worker_postmessage_encoded_video_chunk_preserves_native_slots_and_alias
         other => panic!("expected Post, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn worker_does_not_expose_window_worklet_interfaces() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        "postMessage({Worklet: 'Worklet' in self, AudioWorklet: 'AudioWorklet' in self}); close();"
+            .to_owned(),
+        "https://worklet-worker.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(message),
+        r#"{"Worklet":false,"AudioWorklet":false}"#
+    );
+}
