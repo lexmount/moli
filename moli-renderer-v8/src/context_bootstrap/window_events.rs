@@ -192,7 +192,7 @@ pub(super) use error::window_report_error_callback;
 pub(crate) use error::{
     dispatch_window_error_event_with_details, dispatch_window_report_error_message,
 };
-pub(crate) use install::event_handler_property_is_exposed;
+pub(crate) use install::{event_handler_property_is_exposed, install_window_event_handler_accessor};
 pub(super) use install::install_window_global_accessors;
 pub(crate) use install::{
     clear_simple_window_event_handler_values, install_simple_window_event_handlers,
