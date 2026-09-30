@@ -89,6 +89,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumber::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -97,7 +101,27 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedString::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedLength::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedRect::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGPreserveAspectRatio::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedPreserveAspectRatio::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -113,11 +137,27 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedInteger::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumberList::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGPointList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGStringList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedNumberList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedBoolean::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {

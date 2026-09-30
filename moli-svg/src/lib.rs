@@ -12,6 +12,7 @@ pub use geometry::{
 };
 pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
+    parse_point_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use transform::{
@@ -26,12 +27,29 @@ mod tests {
         SvgMatrixComponents, SvgTransform, SvgTransformKind, bounding_box_for_element,
         bounding_box_for_segments, bounding_box_for_transformed_element,
         consolidate_transform_matrices, is_point_in_fill, parse_length, parse_length_list,
-        parse_number, parse_number_list, parse_transform_attribute, point_at_length,
-        segments_for_element, serialize_number, serialize_transform_list,
+        parse_number, parse_number_list, parse_point_list, parse_transform_attribute,
+        point_at_length, segments_for_element, serialize_number, serialize_transform_list,
     };
 
     fn path_segments(raw: &str) -> Vec<SvgGeometrySegment> {
         segments_for_element(SvgGeometryElement::Path { d: raw.to_owned() })
+    }
+
+    #[test]
+    fn point_list_parser_rejects_invalid_tokens_and_truncates_incomplete_pairs() {
+        assert_eq!(
+            parse_point_list("0,0 100,0 100,100 0,100"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20,"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(parse_point_list("0,0 100,0 INVALID"), None);
     }
 
     fn polyline_segments(raw: &str) -> Vec<SvgGeometrySegment> {
@@ -371,6 +389,7 @@ mod tests {
         assert_close(length.value, 1.5);
         assert_eq!(length.unit, SvgLengthUnit::Ems);
         assert_eq!(length.serialize(), "1.5em");
+        assert_eq!(parse_length("1pX").unwrap().unit, SvgLengthUnit::Px);
         assert_eq!(serialize_number(3.0), "3");
         assert_eq!(serialize_number(3.25), "3.25");
         assert!(parse_length("1 px").is_none());
@@ -381,6 +400,18 @@ mod tests {
         assert_eq!(lengths[3].unit, SvgLengthUnit::Number);
         assert_close(lengths[4].value, -5.0);
         assert!(parse_length_list("1px nope 2px").is_none());
+
+        let modern = parse_length_list("10cap, 2rlh 3vw-4q").unwrap();
+        assert_eq!(modern.len(), 4);
+        assert_eq!(modern[0].unit, SvgLengthUnit::Cap);
+        assert_eq!(modern[1].unit, SvgLengthUnit::Rlh);
+        assert_eq!(modern[2].unit, SvgLengthUnit::Vw);
+        assert_close(modern[3].value, -4.0);
+        assert_eq!(modern[3].unit, SvgLengthUnit::Q);
+        assert_eq!(modern[0].serialize(), "10cap");
+        assert_eq!(parse_length_list(" 10cap ").unwrap().len(), 1);
+        assert!(parse_length_list("10cap,").is_none());
+        assert!(parse_length_list("10cap nope").is_none());
 
         assert_close(parse_number(" .5 ").unwrap(), 0.5);
         assert_eq!(

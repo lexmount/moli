@@ -12,7 +12,11 @@ pub(crate) use body_window::compile_window_body_onmessageerror_attribute;
 pub(super) use body_window::{
     body_onmessageerror_getter_function, body_onmessageerror_setter_function,
 };
-pub(crate) use generic::{GlobalEventHandlerOwner, install_global_event_handler_template_bindings};
+pub(crate) use generic::{
+    GlobalEventHandlerOwner, event_handler_content_attribute_name,
+    install_global_event_handler_template_bindings, node_event_handler_getter_function,
+    node_event_handler_setter_function,
+};
 pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 
 fn is_body_or_frameset_element(

@@ -100,6 +100,7 @@ mod trusted_types;
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };
+pub(crate) use trusted_types::set_svg_animated_string_base_value;
 use trusted_types::{
     TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
 };
@@ -258,7 +259,8 @@ pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
-    initialize_parser_inserted_body_window_event_handlers,
+    event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
+    node_event_handler_getter_function, node_event_handler_setter_function,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
