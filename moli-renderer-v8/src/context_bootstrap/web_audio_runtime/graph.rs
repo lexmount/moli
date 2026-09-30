@@ -14,6 +14,15 @@ const OUTPUTS: &str = "__moliAudioNodeOutputs";
 const START_TIME: &str = "__moliAudioSourceStartTime";
 const STOP_TIME: &str = "__moliAudioSourceStopTime";
 const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
+const UNSUPPORTED_PROCESSOR: &str = "__moliAudioNodeNeedsProcessingBackend";
+
+pub(super) fn mark_unsupported_processor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) {
+    let required = v8::Boolean::new(scope, true);
+    set_private_value(scope, node, UNSUPPORTED_PROCESSOR, required.into());
+}
 
 pub(super) fn initialize_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -345,6 +354,18 @@ pub(super) fn prepare_offline_render<'s>(
         visited.push(node);
         pending.extend(objects(scope, node, INPUTS));
         let has_input = has_started_source(scope, node, end_time)?;
+        if has_input
+            && get_private_value(scope, node, UNSUPPORTED_PROCESSOR)
+                .is_some_and(|value| value.boolean_value(scope))
+        {
+            throw_dom_exception(
+                scope,
+                "NotSupportedError",
+                9,
+                "Signal processing for this audio node is not implemented.",
+            );
+            return None;
+        }
         rendered_inputs.push((node, has_input));
     }
     // Reject unsupported processing before committing any render snapshot.
