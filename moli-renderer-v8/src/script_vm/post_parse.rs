@@ -215,6 +215,9 @@ impl ScriptVmContextBootstrap {
                 unsafe { &mut *host_ptr }
                     .take_child_window_proxy_shell_for_realm(scope, child_handle)
             }
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                unsafe { &mut *host_ptr }.take_popup_window_proxy_for_realm(scope, popup_id)
+            }
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
                 expected_owner,
@@ -310,6 +313,9 @@ impl ScriptVmContextBootstrap {
             WindowContextBootstrapMode::ChildDefault { child_handle, .. } => {
                 unsafe { &*host_ptr }.child_default_world_security_token_key(child_handle)
             }
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                unsafe { &*host_ptr }.popup_default_world_security_token_key(popup_id)
+            }
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
                 ..
@@ -319,6 +325,9 @@ impl ScriptVmContextBootstrap {
             } => unsafe { &*host_ptr }.main_isolated_world_security_token_key(),
         };
         let dispatch_scope = match mode {
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+            }
             WindowContextBootstrapMode::ChildDefault { child_handle, .. }
             | WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
@@ -348,7 +357,8 @@ impl ScriptVmContextBootstrap {
         }
         match mode {
             WindowContextBootstrapMode::MainDefault
-            | WindowContextBootstrapMode::ChildDefault { .. } => {
+            | WindowContextBootstrapMode::ChildDefault { .. }
+            | WindowContextBootstrapMode::PopupDefault { .. } => {
                 unsafe { &*host_ptr }
                     .install_default_world_wrapper_cache_for_context(local_context);
             }
@@ -367,6 +377,13 @@ impl ScriptVmContextBootstrap {
         // Window-owned accessors installed below must resolve against this
         // context's LocalWindow from their first observable bootstrap call.
         match mode {
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                unsafe { &*host_ptr }.bind_popup_window_context_owner_before_runtime_bootstrap(
+                    scope,
+                    bootstrap_global,
+                    popup_id,
+                )?;
+            }
             WindowContextBootstrapMode::ChildDefault { child_handle, .. }
             | WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
@@ -393,24 +410,48 @@ impl ScriptVmContextBootstrap {
             runtime_observable_context_token,
             resource_owner_id,
         )?;
+        if let WindowContextBootstrapMode::PopupDefault {
+            popup_id,
+            local_window_id,
+        } = mode
+        {
+            unsafe { &mut *host_ptr }.register_window_execution_context(
+                crate::native_bridge::WindowExecutionContextBinding::new(
+                    crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
+                        popup_id,
+                        local_window_id,
+                    },
+                    dispatch_scope,
+                    runtime_observable_context_token,
+                    v8::Global::new(scope, local_context),
+                ),
+            );
+        }
         // SecureContext is origin-based, not document-URL-based. Initial
         // about:blank/srcdoc child contexts can keep about:* document URLs while
         // inheriting the creator's origin, so child bootstrap must ask the
         // context host for the origin-aware URL instead of using current_url().
-        let secure_context_url = match mode {
+        let secure_context_available = match mode {
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                unsafe { &*host_ptr }.popup_secure_context_available(popup_id)
+            }
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
                 ..
             }
             | WindowContextBootstrapMode::ChildDefault { child_handle, .. } => {
-                unsafe { &*host_ptr }
-                    .child_browsing_context_secure_context_url(child_handle)
-                    .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone())
+                moli_url::is_potentially_trustworthy_url(
+                    &unsafe { &*host_ptr }
+                        .child_browsing_context_secure_context_url(child_handle)
+                        .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone()),
+                )
             }
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
-            } => unsafe { &*host_ptr }.main_document_secure_context_url(),
+            } => moli_url::is_potentially_trustworthy_url(
+                &unsafe { &*host_ptr }.main_document_secure_context_url(),
+            ),
         };
         if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
             let owner_context = match child_handle {
@@ -426,8 +467,12 @@ impl ScriptVmContextBootstrap {
             crate::context_bootstrap::bind_isolated_window_history_owner(scope, global, owner);
             crate::context_bootstrap::bind_isolated_window_selection_owner(scope, global, owner);
         }
-        finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
+        finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, secure_context_available)?;
         match mode {
+            WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
+                unsafe { &mut *host_ptr }
+                    .configure_popup_default_world_global(scope, global, popup_id)?;
+            }
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
                 expected_owner,
@@ -554,9 +599,43 @@ pub(crate) fn bootstrap_isolated_window_context_in_scope<'s>(
     .into_runtime())
 }
 
+pub(crate) fn bootstrap_popup_default_context_in_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    global_template: v8::Local<'s, v8::ObjectTemplate>,
+    context_host: Rc<RefCell<PageScriptHost>>,
+    resource_owner_id: ResourceOwnerId,
+    promise_reject_dispatch: &PromiseRejectDispatchSlot,
+    indexed_db_manager: Option<WeakIndexedDbManager>,
+    storage_bucket_store: Option<SharedStorageBucketStore>,
+    popup_id: u64,
+    local_window_id: crate::window_document_identity::LightweightPopupLocalWindowId,
+) -> Result<super::WindowRealmRuntime> {
+    Ok(ScriptVmContextBootstrap::new_in_scope(
+        scope,
+        global_template,
+        context_host,
+        resource_owner_id,
+        promise_reject_dispatch,
+        indexed_db_manager,
+        storage_bucket_store,
+        WindowContextBootstrapMode::PopupDefault {
+            popup_id,
+            local_window_id,
+        },
+        None,
+        false,
+        None,
+    )?
+    .into_runtime())
+}
+
 #[derive(Clone, Copy, Debug)]
 enum WindowContextBootstrapMode {
     MainDefault,
+    PopupDefault {
+        popup_id: u64,
+        local_window_id: crate::window_document_identity::LightweightPopupLocalWindowId,
+    },
     ChildDefault {
         child_handle: DomHandle,
         expected_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
@@ -627,6 +706,17 @@ impl WindowContextBootstrapMode {
     )> {
         match self {
             Self::MainDefault => None,
+            Self::PopupDefault {
+                popup_id,
+                local_window_id,
+            } => Some((
+                crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
+                    popup_id,
+                    local_window_id,
+                },
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
+                crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+            )),
             Self::ChildDefault {
                 child_handle,
                 expected_owner,

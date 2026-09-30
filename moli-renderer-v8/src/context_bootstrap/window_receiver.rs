@@ -23,6 +23,9 @@ fn is_current_window_receiver<'s>(
     let current_context = scope.get_current_context();
     receiver.strict_equals(current_context.global(scope).into())
         && context_host_ptr_from_context_slot(current_context).is_some()
+        && receiver
+            .get_creation_context(scope)
+            .is_none_or(|context| context == current_context)
 }
 
 /// Apply Window access policy to the Window subtype of EventTarget receivers.

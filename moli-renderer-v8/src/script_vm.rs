@@ -854,6 +854,7 @@ pub(crate) use worker_host_bridge_body::WorkerHostBridgeBodyEffect;
 
 pub(crate) use post_parse::{
     bootstrap_child_default_context_in_scope, bootstrap_isolated_window_context_in_scope,
+    bootstrap_popup_default_context_in_scope,
 };
 
 #[cfg(feature = "devtools")]
@@ -1000,6 +1001,7 @@ pub(super) struct ScriptVm {
     page_isolated_world_contexts: PageIsolatedWorldRegistry,
     child_frame_realm_store: child_frame_realm::ChildFrameRealmStore,
     prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
+    pub(super) popup_default_contexts: crate::native_bridge::SharedPopupDefaultContexts,
     child_document_modulator_store: ChildDocumentModulatorStore,
     root_frame_id: Option<String>,
     // `PageScriptHost` stores a non-owning pointer into `document_runtime`, so it
@@ -1232,23 +1234,11 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .set_indexed_db_manager(manager.clone());
-        let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
-            1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
-        );
-        context_ptrs.extend(
-            self.current_main_world()
-                .map(WindowRealmRuntime::context_ptr),
-        );
-        context_ptrs.extend(
-            self.page_isolated_world_contexts
-                .contexts()
-                .map(|world| &world.context as *const _),
-        );
-        context_ptrs.extend(
-            self.child_frame_realm_store
-                .values()
-                .map(|world| &world.context as *const _),
-        );
+        let context_ptrs = self
+            .page_runtime_observable_contexts()
+            .into_iter()
+            .map(|context| context.context)
+            .collect::<Vec<_>>();
 
         let _ = self
             .renderer_document_isolate
@@ -1274,23 +1264,11 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .set_storage_bucket_store(store.clone());
-        let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
-            1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
-        );
-        context_ptrs.extend(
-            self.current_main_world()
-                .map(WindowRealmRuntime::context_ptr),
-        );
-        context_ptrs.extend(
-            self.page_isolated_world_contexts
-                .contexts()
-                .map(|world| &world.context as *const _),
-        );
-        context_ptrs.extend(
-            self.child_frame_realm_store
-                .values()
-                .map(|world| &world.context as *const _),
-        );
+        let context_ptrs = self
+            .page_runtime_observable_contexts()
+            .into_iter()
+            .map(|context| context.context)
+            .collect::<Vec<_>>();
 
         let _ = self
             .renderer_document_isolate
@@ -2248,11 +2226,13 @@ impl ScriptVmPageRealmBootstrap {
         }
         let promise_reject_dispatch = promise_reject_dispatch_slot(context_host.clone());
         let prebootstrapped_child_default_contexts = Rc::new(RefCell::new(Default::default()));
+        let popup_default_contexts = Rc::new(RefCell::new(HashMap::new()));
         context_host
             .borrow_mut()
-            .install_child_default_context_bootstrap(
+            .install_window_default_context_bootstrap(
                 Rc::downgrade(&context_host),
                 Rc::downgrade(&prebootstrapped_child_default_contexts),
+                Rc::downgrade(&popup_default_contexts),
                 resource_owner_id,
                 promise_reject_dispatch.clone(),
             );
@@ -2272,6 +2252,7 @@ impl ScriptVmPageRealmBootstrap {
             root_frame_id,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
@@ -2296,6 +2277,7 @@ impl ScriptVmPageRealmBootstrap {
             root_frame_id,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
@@ -2351,6 +2333,7 @@ impl ScriptVmPageRealmBootstrap {
             root_frame_id,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
@@ -2537,6 +2520,7 @@ impl ScriptVmDefaultWorldBootstrap {
             document_runtime,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
@@ -2556,6 +2540,7 @@ impl ScriptVmDefaultWorldBootstrap {
             page_isolated_world_contexts: PageIsolatedWorldRegistry::new(),
             child_frame_realm_store: child_frame_realm::ChildFrameRealmStore::default(),
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             child_document_modulator_store: ChildDocumentModulatorStore::default(),
             root_frame_id,
             document_runtime: ScriptVmDocumentRuntimeOwner::new(document_runtime),
@@ -2783,6 +2768,13 @@ impl ScriptVm {
             pending_isolated
                 .iter()
                 .map(|world| &world.runtime.context as *const _),
+        );
+
+        context_ptrs.extend(
+            self.popup_default_contexts
+                .borrow()
+                .values()
+                .map(|realm| &realm.context as *const _),
         );
 
         for (index, context_ptr) in context_ptrs.into_iter().enumerate() {

@@ -49,7 +49,6 @@ pub(crate) use picture_in_picture_tests::closed_window_for_test as closed_pictur
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
-mod javascript_url;
 pub(crate) use self::idle_detection::{
     apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
 };
@@ -389,8 +388,8 @@ pub(crate) use self::file_api::{build_clipboard_data_transfer, clipboard_data_tr
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
-    finish_file_reader_read, flush_one_pending_file_reading_task, is_file_list_object,
-    queue_file_reading_task, selected_file_from_object, set_file_relative_path,
+    finish_file_reader_read, flush_one_pending_file_reading_task, queue_file_reading_task,
+    selected_file_from_object, set_file_relative_path,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -429,10 +428,6 @@ pub(crate) use self::indexed_db::{
 };
 pub(in crate::context_bootstrap) use self::indexed_db::{
     indexed_db_usage_bytes_for_storage_key, scoped_storage_bucket_indexed_db_factory,
-};
-pub(crate) use self::javascript_url::{
-    arm_internal_javascript_url_eval, consume_internal_javascript_url_eval,
-    restore_internal_javascript_url_eval,
 };
 pub(crate) use self::location_runtime::refresh_global_location_security_origin;
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
@@ -473,7 +468,6 @@ pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
 pub(crate) use self::navigation_bootstrap::{
-    install_window_location_history_navigation_runtime_state,
     reset_window_location_history_navigation_runtime_state, reset_window_location_runtime_state,
 };
 pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navigate_event_for_window;
@@ -521,6 +515,7 @@ pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
 pub(crate) use self::runtime_state::set_window_origin_runtime_state;
+pub(crate) use self::runtime_state::window_realm_secure_context_available;
 pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,
