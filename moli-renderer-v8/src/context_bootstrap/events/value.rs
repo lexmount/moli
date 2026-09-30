@@ -16,6 +16,7 @@ const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
+const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -23,6 +24,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Transition,
     Blob,
     WebGlContext,
+    Gamepad,
 }
 
 impl ValueEventKind {
@@ -32,6 +34,7 @@ impl ValueEventKind {
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
             Self::WebGlContext => "WebGLContextEvent",
+            Self::Gamepad => "GamepadEvent",
         }
     }
 
@@ -145,6 +148,45 @@ struct BlobEventInit<'s> {
     timecode: Option<f64>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::GamepadEvent, enumerable, receiver)]
+struct GamepadEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, GAMEPAD_SLOT))]
+    gamepad: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "GamepadEventInit")]
+struct GamepadEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(with = gamepad_member)]
+    gamepad: Option<v8::Local<'s, v8::Object>>,
+}
+
+fn gamepad_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
+    let context = webidl::Context::member("GamepadEventInit", name);
+    let value = webidl::property_result(scope, object, name, context)?
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    let gamepad = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "Gamepad"))?;
+    if !web_api_interfaces::Gamepad::is_instance(scope, gamepad) {
+        return Err(webidl::WebIdlError::cannot_convert(context, "Gamepad"));
+    }
+    Ok(Some(gamepad))
+}
+
 fn string_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -196,6 +238,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "BlobEvent" => {
             BlobEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "GamepadEvent" => {
+            GamepadEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -231,6 +276,7 @@ fn value_event_constructor<'s>(
         Some(1) => ValueEventKind::Transition,
         Some(2) => ValueEventKind::Blob,
         Some(3) => ValueEventKind::WebGlContext,
+        Some(4) => ValueEventKind::Gamepad,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -309,6 +355,16 @@ fn value_event_constructor<'s>(
                     TIMECODE_SLOT,
                     v8::Number::new(scope, parsed.timecode.unwrap_or(f64::NAN)).into(),
                 );
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::Gamepad => {
+                let parsed =
+                    webidl::parse_dictionary_object::<GamepadEventInit>(scope, dictionary)?;
+                let gamepad = parsed
+                    .gamepad
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, GAMEPAD_SLOT, gamepad);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };

@@ -882,6 +882,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_navigator_collection_template_bindings(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::wake_lock::install(scope, template, interface_name);
+    super::gamepad::install(scope, template, interface_name);
     super::user_activation::install_user_activation_template_bindings(
         scope,
         template,

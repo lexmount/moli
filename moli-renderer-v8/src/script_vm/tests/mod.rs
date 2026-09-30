@@ -2239,6 +2239,7 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
+mod gamepad_interfaces;
 mod headers_list;
 mod history_document_identity;
 mod history_referrer;
