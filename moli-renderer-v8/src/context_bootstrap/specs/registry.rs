@@ -1276,6 +1276,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::OfflineAudioContext,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },

@@ -15,6 +15,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 mod audio_param;
 mod biquad;
 mod graph;
+mod node;
 
 use audio_param::{audio_param, detune_param};
 
@@ -73,8 +74,6 @@ struct AudioWorkletObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::AudioWorkletNode)]
 struct AudioWorkletNodeObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    context: v8::Local<'scope, v8::Object>,
     #[webapi(data_property)]
     port: v8::Local<'scope, v8::Object>,
 }
@@ -170,10 +169,6 @@ struct OscillatorNodeObjectDeclaration<'scope> {
     frequency: v8::Local<'scope, v8::Object>,
     #[webapi(data_property, readonly)]
     detune: v8::Local<'scope, v8::Object>,
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
     #[webapi(method, length = 1, callback = oscillator_start_callback)]
     start: (),
 }
@@ -193,10 +188,6 @@ struct DynamicsCompressorNodeObjectDeclaration<'scope> {
     release: v8::Local<'scope, v8::Object>,
     #[webapi(slot = DYNAMICS_COMPRESSOR_REDUCTION_SLOT)]
     reduction: f64,
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -217,10 +208,6 @@ struct AnalyserNodeObjectDeclaration {
     max_decibels: f64,
     #[webapi(data_property = "smoothingTimeConstant")]
     smoothing_time_constant: f64,
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -391,12 +378,7 @@ struct AudioContextTemplateDeclaration {
     constructor_length = 2,
     enumerable
 )]
-struct AudioWorkletNodeTemplateDeclaration {
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
-}
+struct AudioWorkletNodeTemplateDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
@@ -454,16 +436,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
-    if matches!(
-        interface_name,
-        "OscillatorNode"
-            | "DynamicsCompressorNode"
-            | "AnalyserNode"
-            | "BiquadFilterNode"
-            | "AudioDestinationNode"
-    ) {
-        graph::install(scope, template);
-    }
+    node::install(scope, template, interface_name);
     match interface_name {
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
@@ -911,7 +884,7 @@ fn audio_worklet_node_constructor_callback<'s>(
     };
 
     let node = args.this();
-    AudioWorkletNodeObjectDeclaration::new(context, port1)
+    AudioWorkletNodeObjectDeclaration::new(port1)
         .initialize(scope, node)
         .expect("AudioWorkletNode declaration should initialize object");
     graph::initialize_node(scope, node, context);
