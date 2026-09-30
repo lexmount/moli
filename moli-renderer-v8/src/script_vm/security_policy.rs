@@ -244,9 +244,6 @@ fn check_string_code_generation<'s>(
             let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
                 return code_generation_result(true, None);
             };
-            if crate::context_bootstrap::consume_internal_javascript_url_eval(scope) {
-                return code_generation_result(true, None);
-            }
             (
                 unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope),
                 unsafe { &*host_ptr }.allows_trusted_types_eval(scope),

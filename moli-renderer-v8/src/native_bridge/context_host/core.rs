@@ -419,7 +419,7 @@ impl PageScriptHost {
             child_document_parsers: ChildDocumentParserStore::default(),
             child_window_proxy_records: ChildWindowProxyRecords::default(),
             top_window_opener: None,
-            child_default_context_bootstrap: None,
+            window_default_context_bootstrap: None,
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
             #[cfg(test)]
