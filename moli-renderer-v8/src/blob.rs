@@ -1,4 +1,4 @@
-use crate::web_api_interfaces;
+use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
     BlobId, BlobLineEndings, BlobStore, blob_slice_relative_index, clamp_blob_long_long,
     normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
@@ -348,9 +348,12 @@ pub(super) fn create_object_url_for_object<'s>(
     let blob_id = blob_id_from_object(scope, object)?;
     let partition = current_blob_storage_partition_identity(scope)?;
     let owner_id = current_resource_owner_id(scope);
+    let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
+        .map(native_bridge::RuntimeObservableContextToken::as_u64);
     let origin = storage_key.origin().to_owned();
-    blob_store().create_object_url_with_access_key(
+    blob_store().create_object_url_with_lifetime_and_access_key(
         owner_id,
+        lifetime_id,
         blob_id,
         &origin,
         Some(ObjectUrlAccessKey {
@@ -488,6 +491,13 @@ fn blob_mime_type(blob_id: BlobId) -> Option<String> {
 
 pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
     blob_store().cleanup_owner_resources(owner_id);
+}
+
+pub(crate) fn cleanup_object_urls_for_context(
+    owner_id: ResourceOwnerId,
+    context_token: native_bridge::RuntimeObservableContextToken,
+) -> usize {
+    blob_store().cleanup_object_url_lifetime(owner_id, context_token.as_u64())
 }
 
 fn release_blob_wrapper_ref(blob_id: BlobId) {
