@@ -2362,6 +2362,7 @@ mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
 mod midi_owner_interfaces;
+mod media_device_interfaces;
 mod mouse_snapshot;
 mod multipart_encoding;
 mod native_bridge_identity;
