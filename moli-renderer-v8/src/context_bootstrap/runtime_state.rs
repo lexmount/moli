@@ -1648,6 +1648,7 @@ pub(crate) fn finish_context_bootstrap(
         ("OfflineAudioContext", "OfflineAudioContext"),
         ("AudioDestinationNode", "AudioDestinationNode"),
         ("OscillatorNode", "OscillatorNode"),
+        ("PeriodicWave", "PeriodicWave"),
         ("DynamicsCompressorNode", "DynamicsCompressorNode"),
         ("AnalyserNode", "AnalyserNode"),
         ("BiquadFilterNode", "BiquadFilterNode"),

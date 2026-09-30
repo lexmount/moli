@@ -60,6 +60,7 @@ interfaces! {
     DelayNode: AudioNode;
     GainNode: AudioNode;
     IIRFilterNode: AudioNode;
+    PeriodicWave;
     Gamepad;
     GamepadButton;
     GamepadEvent: Event;
