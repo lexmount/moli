@@ -92,13 +92,16 @@ promise_test(async function () {
     });
 
     const defaultPrevented = await wait_for(listenerSeen, "worker error listener");
-    await wait_for(handlerSeen, "worker.onerror truthy handler");
+    await wait_for(handlerSeen, "worker.onerror non-boolean truthy handler");
     await wait(30);
 
-    assert_true(defaultPrevented, "truthy worker.onerror should mark the error as handled");
+    assert_false(
+      defaultPrevented,
+      "a non-boolean truthy worker.onerror return should not mark the error as handled",
+    );
   } finally {
     window.onerror = previousOnerror;
     worker.terminate();
   }
-}, "Truthy worker.onerror marks the worker error as handled for later listeners");
+}, "A non-boolean truthy Worker.onerror return does not cancel the error event");
 </script>

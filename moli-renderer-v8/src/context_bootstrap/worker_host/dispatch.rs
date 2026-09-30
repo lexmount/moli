@@ -5,7 +5,7 @@ use moli_webapi_declare::WebApiObject;
 
 use super::{WORKER_LISTENERS_SLOT, WORKER_ONERROR_SLOT};
 use crate::context_bootstrap::{
-    dispatch_simple_event_target_event,
+    EventHandlerType, apply_event_handler_return_value, dispatch_simple_event_target_event,
     events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
     invoke_simple_event_listener, simple_object_event_listeners_snapshot,
 };
@@ -269,12 +269,12 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
         if event_kind == WorkerParentErrorEventKind::ErrorEvent
             && listener.handler_slot.as_deref() == Some(WORKER_ONERROR_SLOT)
             && let Some(returned) = callback_result
-            && v8::Local::new(scope, &returned).boolean_value(scope)
         {
-            let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            apply_event_handler_return_value(
                 scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
+                event,
+                v8::Local::new(scope, &returned),
+                EventHandlerType::EventHandler,
             );
         }
     }
