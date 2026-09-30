@@ -216,16 +216,16 @@ pub(crate) fn project_terminal_for_owner(
             continue;
         };
         match update {
-            moli_core::RendererNativeProtocolStateUpdate::RemoteObjects {
-                result,
-                object_group,
-            } => {
+            moli_core::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
+                let Ok(result) = &response.result else {
+                    continue;
+                };
                 if let Some(group) = object_group {
                     conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner, &result, &group,
+                        owner, result, &group,
                     );
                 } else {
-                    conn.register_runtime_remote_object_ids_from_value_for_owner(owner, &result);
+                    conn.register_runtime_remote_object_ids_from_value_for_owner(owner, result);
                 }
             }
             moli_core::RendererNativeProtocolStateUpdate::DomRemoteObjectNode {

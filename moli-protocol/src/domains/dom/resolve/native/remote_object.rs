@@ -137,9 +137,8 @@ fn registered_response(
     group: Option<String>,
     cached: Option<(String, Value)>,
 ) -> Response {
-    let mut response = Response::success(result.clone());
+    let mut response = Response::success(result);
     response.state_updates.push(Update::RemoteObjects {
-        result,
         object_group: group,
     });
     if let Some((object_id, node)) = cached {

@@ -34,11 +34,8 @@ fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal)
     });
     for update in &response.state_updates {
         charge = charge.saturating_add(match update {
-            super::RendererNativeProtocolStateUpdate::RemoteObjects {
-                result,
-                object_group,
-            } => {
-                json_charge(result).saturating_add(object_group.as_deref().map_or(0, string_charge))
+            super::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
+                object_group.as_deref().map_or(0, string_charge)
             }
             super::RendererNativeProtocolStateUpdate::DomRemoteObjectNode { object_id, node } => {
                 string_charge(object_id).saturating_add(json_charge(node))

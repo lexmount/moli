@@ -73,10 +73,9 @@ impl RendererNativeProtocolResponse {
 /// never callbacks into a live Page, and are discarded on attachment retirement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererNativeProtocolStateUpdate {
-    RemoteObjects {
-        result: serde_json::Value,
-        object_group: Option<String>,
-    },
+    /// Register object IDs from the successful terminal result before delivery.
+    /// The reply already owns the payload; this update only retains its group.
+    RemoteObjects { object_group: Option<String> },
     DomRemoteObjectNode {
         object_id: String,
         node: serde_json::Value,
