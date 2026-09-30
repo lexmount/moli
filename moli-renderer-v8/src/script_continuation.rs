@@ -1,5 +1,5 @@
-//! Data V8 carries across Promise reactions and async continuations. Popup
-//! execution owners share a concrete realm, so the realm alone is insufficient.
+//! Data V8 carries across Promise reactions and async continuations, including
+//! the Window generation and origin captured before a subsequent navigation.
 use crate::{
     native_bridge::{
         RuntimeObservableContextToken, WindowExecutionContextIdentity, WindowSecurityOrigin,

@@ -8,9 +8,7 @@ use super::{WindowExecutionContextIdentity, WindowExecutionContextOwner};
 ///
 /// The registry remains authoritative for the access policy. Keeping policy
 /// out of this locator prevents copied bindings from becoming a second source
-/// of truth. A lightweight popup is the one temporary exception to "concrete
-/// realm": until popups own V8 contexts, the registry gives each popup an
-/// explicit alias over its opener's context token.
+/// of truth. Each Window, including a popup, registers its own concrete realm.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct WindowExecutionContextLocator {
     owner: WindowExecutionContextOwner,
