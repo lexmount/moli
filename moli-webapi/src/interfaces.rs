@@ -101,6 +101,10 @@ interfaces! {
     ReportingObserver;
     SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
     SpeechSynthesisEvent: Event;
+    WebTransport;
+    WebTransportBidirectionalStream;
+    WebTransportDatagramDuplexStream;
+    WebTransportError: DOMException;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
@@ -765,9 +769,9 @@ interfaces! {
     WebGLTransformFeedback: WebGLObject;
     WebGLVertexArrayObject: WebGLObject;
     WebGLUniformLocation;
-    WebTransportError: DOMException;
-    WebTransportBidirectionalStream;
-    WebTransportDatagramDuplexStream;
+
+
+
     WebSocket: EventTarget;
     WebSocketError: DOMException;
     WebSocketStream;
