@@ -121,6 +121,86 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CanvasCaptureMediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ImageBitmapRenderingContext::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaEncryptedEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaMetadata::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 0 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaRecorder::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaSession::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaSourceHandle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStream::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 0 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamTrackEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::OverconstrainedError::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureWindow::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RemotePlayback::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SourceBuffer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SourceBufferList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TimeRanges::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoColorSpace::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 0 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoFrame::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoPlaybackQuality::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
