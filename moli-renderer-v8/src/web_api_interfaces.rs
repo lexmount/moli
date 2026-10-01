@@ -306,6 +306,10 @@ interfaces! {
     CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     MediaDevices: EventTarget;
     MediaError;
+    MediaKeySession: EventTarget;
+    MediaKeyStatusMap;
+    MediaKeySystemAccess;
+    MediaKeys;
     MediaList;
     MediaQueryList: EventTarget;
     MediaQueryListEvent: Event;
