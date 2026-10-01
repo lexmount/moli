@@ -173,6 +173,7 @@ pub struct ElementControlState {
     custom_validation_message: String,
     popover_open: bool,
     dialog_modal: bool,
+    dialog_previously_focused_element: Option<NativeNodeId>,
     dialog_return_value: String,
     custom_states: IndexSet<String>,
     explicit_element_references: Option<Box<ExplicitElementReferenceState>>,
@@ -454,6 +455,10 @@ impl ElementControlState {
 
     pub fn dialog_modal(&self) -> bool {
         self.dialog_modal
+    }
+
+    pub fn dialog_previously_focused_element(&self) -> Option<NativeNodeId> {
+        self.dialog_previously_focused_element
     }
 
     pub fn dialog_return_value(&self) -> &str {
@@ -852,6 +857,14 @@ impl ElementControlState {
             return false;
         }
         self.dialog_modal = modal;
+        true
+    }
+
+    pub fn set_dialog_previously_focused_element(&mut self, element: Option<NativeNodeId>) -> bool {
+        if self.dialog_previously_focused_element == element {
+            return false;
+        }
+        self.dialog_previously_focused_element = element;
         true
     }
 
