@@ -20,6 +20,8 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    AudioListener;
+    AudioParamMap;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
