@@ -32,8 +32,8 @@ use moli_fetch::{
 };
 
 use super::{
-    PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, next_fetch_id,
-    record_worker_subresource_failure_with_handle, request_body_text,
+    PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, get_worker_state,
+    next_fetch_id, record_worker_subresource_failure_with_handle, request_body_text,
 };
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
@@ -961,6 +961,55 @@ pub(super) fn worker_content_security_policy_error_message(
     )
 }
 
+pub(in crate::worker) fn dispatch_worker_csp_violation_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    loader: &crate::network::context::WorkerResourceLoader,
+    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+) {
+    self::dispatch_worker_content_security_policy_violation_event(scope, loader, violation);
+}
+
+pub(crate) fn worker_allows_trusted_type_policy_name(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+            name,
+        ),
+    )
+}
+
+pub(crate) fn worker_requires_trusted_types_for_script(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_allows_trusted_types_eval(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn dispatch_worker_trusted_types_sink_violation_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    sink: &str,
+    sample: &str,
+) {
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    self::dispatch_worker_trusted_types_sink_violation_event_for_state(scope, &state, sink, sample);
+}
+
 pub(super) fn worker_compilation_content_security_policy_violations(
     state: &WorkerGlobalState,
     protected_url: &Url,
@@ -985,4 +1034,82 @@ pub(super) fn worker_compilation_content_security_policy_violations(
             )
         })
         .collect()
+}
+
+pub(crate) fn worker_allows_eval_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+) -> Option<bool> {
+    use crate::content_security_policy::ContentSecurityPolicyNonUrlKind;
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    worker_allows_compilation_by_csp(scope, kind, source)
+}
+
+fn worker_allows_compilation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    kind: crate::content_security_policy::ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
+) -> Option<bool> {
+    let state = get_worker_state(scope)?;
+    let (wake_tx, mut report_only_violations, mut enforce_violations) = {
+        let state = state.borrow();
+        let Some(protected_url) = state.current_script_url.as_ref() else {
+            return Some(true);
+        };
+        (
+            state.worker_wake_tx.clone(),
+            worker_compilation_content_security_policy_violations(
+                &state,
+                protected_url,
+                kind,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+            ),
+            worker_compilation_content_security_policy_violations(
+                &state,
+                protected_url,
+                kind,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+            ),
+        )
+    };
+    if kind != crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval
+        && (!report_only_violations.is_empty() || !enforce_violations.is_empty())
+        && let Some((source_file, line_number, column_number)) =
+            crate::content_security_policy::current_script_violation_location(scope)
+    {
+        for violation in [&mut report_only_violations, &mut enforce_violations]
+            .into_iter()
+            .flatten()
+        {
+            violation.source_file.clone_from(&source_file);
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
+    }
+    let allowed = enforce_violations.is_empty();
+    for violation in report_only_violations.into_iter().chain(enforce_violations) {
+        let _ = wake_tx.send(
+            crate::worker::handle::WorkerMessage::DispatchContentSecurityPolicyViolation(Box::new(
+                violation,
+            )),
+        );
+    }
+    Some(allowed)
+}
+
+pub(in crate::worker) fn dispatch_worker_csp_violation_event_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+) {
+    self::dispatch_worker_content_security_policy_violation_event_for_state(
+        scope, state, violation,
+    );
 }

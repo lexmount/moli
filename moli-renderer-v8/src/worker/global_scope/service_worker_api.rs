@@ -1827,3 +1827,319 @@ pub(super) fn service_worker_window_client_navigate_callback<'s>(
 fn service_worker_window_client_can_display_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
+
+const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
+
+const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
+
+pub(super) const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
+
+const SERVICE_WORKER_WORKER_EVENTS_SLOT: &str = "__moliServiceWorkerWorkerEvents";
+
+const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
+    "__moliServiceWorkerNavigationPreloadManagerScope";
+
+pub(super) const SERVICE_WORKER_CLIENT_ID_SLOT: &str = "__lmServiceWorkerClientId";
+
+#[derive(Default, WebApiObject)]
+#[webapi(interface = web_api_interfaces::Clients, prototype = "Object")]
+struct ServiceWorkerClientsDeclaration {
+    #[webapi(method, callback = service_worker_clients_claim_callback, length = 0)]
+    claim: (),
+    #[webapi(method, callback = service_worker_clients_get_callback, length = 1)]
+    get: (),
+    #[webapi(
+        method = "matchAll",
+        callback = service_worker_clients_match_all_callback,
+        length = 0
+    )]
+    match_all: (),
+    #[webapi(
+        method = "openWindow",
+        callback = service_worker_clients_open_window_callback,
+        length = 1
+    )]
+    open_window: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct ServiceWorkerGlobalRuntimeDeclaration<'scope> {
+    #[webapi(data_property, readonly)]
+    registration: v8::Local<'scope, v8::Object>,
+    #[webapi(data_property, readonly)]
+    clients: v8::Local<'scope, v8::Object>,
+    #[webapi(method = "skipWaiting", callback = service_worker_skip_waiting_callback, length = 0)]
+    skip_waiting: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration,)]
+struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
+    #[webapi(data_property, readonly)]
+    scope: String,
+
+    #[webapi(
+        accessor_property = "installing",
+        getter = service_worker_registration_installing_getter
+    )]
+    installing: (),
+
+    #[webapi(
+        accessor_property = "waiting",
+        getter = service_worker_registration_waiting_getter
+    )]
+    waiting: (),
+
+    #[webapi(
+        accessor_property = "active",
+        getter = service_worker_registration_active_getter
+    )]
+    active: (),
+
+    #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
+    unregister: (),
+
+    #[webapi(
+        method = "showNotification",
+        callback = service_worker_registration_show_notification_callback,
+        length = 1
+    )]
+    show_notification: (),
+
+    #[webapi(
+        method = "getNotifications",
+        callback = service_worker_registration_get_notifications_callback,
+        length = 0
+    )]
+    get_notifications: (),
+
+    #[webapi(data_property, readonly)]
+    sync: v8::Local<'scope, v8::Object>,
+
+    #[webapi(data_property = "periodicSync", readonly)]
+    periodic_sync: v8::Local<'scope, v8::Object>,
+
+    #[webapi(data_property = "pushManager", readonly)]
+    push_manager: v8::Local<'scope, v8::Object>,
+
+    #[webapi(data_property = "navigationPreload", readonly)]
+    navigation_preload: v8::Local<'scope, v8::Object>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::ServiceWorker,)]
+struct ServiceWorkerGlobalServiceWorkerDeclaration {
+    #[webapi(data_property = "scriptURL", readonly)]
+    script_url: String,
+
+    #[webapi(data_property, readonly)]
+    state: String,
+
+    #[webapi(method = "postMessage", callback = service_worker_worker_post_message_callback, length = 1)]
+    post_message: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::SyncManager)]
+struct ServiceWorkerGlobalSyncManagerDeclaration {
+    #[webapi(
+        method = "register",
+        callback = service_worker_sync_manager_register_callback,
+        length = 1
+    )]
+    register: (),
+
+    #[webapi(
+        method = "getTags",
+        callback = service_worker_sync_manager_get_tags_callback,
+        length = 0
+    )]
+    get_tags: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PeriodicSyncManager)]
+struct ServiceWorkerGlobalPeriodicSyncManagerDeclaration {
+    #[webapi(
+        method = "register",
+        callback = service_worker_periodic_sync_manager_register_callback,
+        length = 1
+    )]
+    register: (),
+
+    #[webapi(
+        method = "getTags",
+        callback = service_worker_periodic_sync_manager_get_tags_callback,
+        length = 0
+    )]
+    get_tags: (),
+
+    #[webapi(
+        method = "unregister",
+        callback = service_worker_periodic_sync_manager_unregister_callback,
+        length = 1
+    )]
+    unregister: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PushManager)]
+struct ServiceWorkerGlobalPushManagerDeclaration {
+    #[webapi(
+        method = "subscribe",
+        callback = service_worker_push_manager_subscribe_callback,
+        length = 0
+    )]
+    subscribe: (),
+
+    #[webapi(
+        method = "getSubscription",
+        callback = service_worker_push_manager_get_subscription_callback,
+        length = 0
+    )]
+    get_subscription: (),
+
+    #[webapi(
+        method = "permissionState",
+        callback = service_worker_push_manager_permission_state_callback,
+        length = 0
+    )]
+    permission_state: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
+struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
+    #[webapi(
+        method,
+        callback = service_worker_navigation_preload_manager_enable_callback,
+        length = 0
+    )]
+    enable: (),
+
+    #[webapi(
+        method,
+        callback = service_worker_navigation_preload_manager_disable_callback,
+        length = 0
+    )]
+    disable: (),
+
+    #[webapi(
+        method = "setHeaderValue",
+        callback = service_worker_navigation_preload_manager_set_header_value_callback,
+        length = 1
+    )]
+    set_header_value: (),
+
+    #[webapi(
+        method = "getState",
+        callback = service_worker_navigation_preload_manager_get_state_callback,
+        length = 0
+    )]
+    get_state: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PushSubscription)]
+struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
+    #[webapi(data_property, readonly)]
+    endpoint: String,
+
+    #[webapi(data_property = "expirationTime", readonly)]
+    expiration_time: v8::Local<'scope, v8::Value>,
+
+    #[webapi(data_property, readonly)]
+    options: v8::Local<'scope, v8::Object>,
+
+    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0)]
+    unsubscribe: (),
+
+    #[webapi(
+        method = "toJSON",
+        callback = service_worker_push_subscription_to_json_callback,
+        length = 0
+    )]
+    to_json: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
+struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
+    #[webapi(data_property = "userVisibleOnly", readonly)]
+    user_visible_only: bool,
+
+    #[webapi(data_property = "applicationServerKey", readonly)]
+    application_server_key: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct WorkerNavigationPreloadStateDeclaration {
+    #[webapi(data_property, enumerable)]
+    enabled: bool,
+
+    #[webapi(data_property = "headerValue", enumerable)]
+    header_value: String,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::Client)]
+pub(in crate::worker) struct ServiceWorkerBaseClientDeclaration<'scope> {
+    #[webapi(data_property, readonly)]
+    id: String,
+
+    #[webapi(data_property, readonly)]
+    url: v8::Local<'scope, v8::String>,
+
+    #[webapi(data_property = "type", readonly)]
+    client_type: &'static str,
+
+    #[webapi(method = "postMessage", callback = service_worker_client_post_message_callback, length = 1)]
+    post_message: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::WindowClient)]
+pub(in crate::worker) struct ServiceWorkerWindowClientDeclaration<'scope> {
+    #[webapi(data_property, readonly)]
+    id: String,
+
+    #[webapi(data_property, readonly)]
+    url: v8::Local<'scope, v8::String>,
+
+    #[webapi(data_property = "type", readonly)]
+    client_type: &'static str,
+
+    #[webapi(data_property = "frameType", readonly)]
+    frame_type: &'static str,
+
+    #[webapi(data_property = "lifecycleState", readonly)]
+    lifecycle_state: &'static str,
+
+    #[webapi(data_property = "visibilityState", readonly)]
+    visibility_state: &'static str,
+
+    #[webapi(data_property, readonly)]
+    focused: bool,
+
+    #[webapi(method = "postMessage", callback = service_worker_client_post_message_callback, length = 1)]
+    post_message: (),
+
+    #[webapi(method, callback = service_worker_window_client_focus_callback, length = 0)]
+    focus: (),
+
+    #[webapi(method, callback = service_worker_window_client_navigate_callback, length = 1)]
+    navigate: (),
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "BackgroundSyncOptions")]
+struct BackgroundSyncOptions {
+    #[webidl(
+        name = "minInterval",
+        converter = "enforce_range_unsigned_long_long",
+        default = 0
+    )]
+    min_interval: u64,
+}

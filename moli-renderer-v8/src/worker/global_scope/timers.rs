@@ -262,3 +262,79 @@ pub(super) fn worker_request_animation_frame_callback<'s>(
     }
     rv.set_uint32(timer_id);
 }
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain)]
+pub(super) struct WorkerGlobalTimerOperationsDeclaration {
+    #[webapi(method = "setTimeout", callback = worker_set_timeout_callback, length = 1)]
+    set_timeout: (),
+    #[webapi(method = "clearTimeout", callback = worker_clear_timeout_callback, length = 1)]
+    clear_timeout: (),
+    #[webapi(method = "setInterval", callback = worker_set_interval_callback, length = 1)]
+    set_interval: (),
+    #[webapi(method = "clearInterval", callback = worker_clear_interval_callback, length = 1)]
+    clear_interval: (),
+    #[webapi(
+        method = "requestAnimationFrame",
+        callback = worker_request_animation_frame_callback,
+        length = 1
+    )]
+    request_animation_frame: (),
+    #[webapi(
+        method = "cancelAnimationFrame",
+        callback = worker_clear_timeout_callback,
+        length = 1
+    )]
+    cancel_animation_frame: (),
+    #[webapi(
+        method = "queueMicrotask",
+        callback = worker_queue_microtask_callback,
+        length = 1
+    )]
+    queue_microtask: (),
+}
+
+#[derive(Clone, Default)]
+pub(in crate::worker) struct WorkerIsolateTimerQueues {
+    pending: Rc<RefCell<Vec<TimerInfo>>>,
+    cancelled: Rc<RefCell<Vec<u32>>>,
+}
+
+impl WorkerIsolateTimerQueues {
+    pub(in crate::worker) fn push_pending(&self, timer: TimerInfo) {
+        self.pending.borrow_mut().push(timer);
+    }
+
+    pub(in crate::worker) fn clear_pending_and_active(&self, timer_id: u32) {
+        self.pending
+            .borrow_mut()
+            .retain(|timer| timer.id != timer_id);
+        self.cancel_active(timer_id);
+    }
+
+    pub(in crate::worker) fn cancel_active(&self, timer_id: u32) {
+        self.cancelled.borrow_mut().push(timer_id);
+    }
+
+    pub(in crate::worker) fn drain_pending(&self) -> Vec<TimerInfo> {
+        self.pending.borrow_mut().drain(..).collect()
+    }
+
+    pub(in crate::worker) fn drain_cancelled(&self) -> Vec<u32> {
+        self.cancelled.borrow_mut().drain(..).collect()
+    }
+}
+
+pub(in crate::worker) fn worker_isolate_timer_queues(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<WorkerIsolateTimerQueues> {
+    scope.get_slot::<WorkerIsolateTimerQueues>().cloned()
+}
+
+pub(in crate::worker) struct TimerInfo {
+    pub(in crate::worker) id: u32,
+    pub(in crate::worker) callback: crate::worker::timer_callback::WorkerTimerCallback,
+    pub(in crate::worker) delay_ms: u64,
+    pub(in crate::worker) is_interval: bool,
+    pub(in crate::worker) extra_args: Vec<v8::Global<v8::Value>>,
+}

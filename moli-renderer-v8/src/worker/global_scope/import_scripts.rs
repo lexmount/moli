@@ -7,7 +7,7 @@ pub(super) struct WorkerImportScriptSource {
     resource: Option<crate::worker::WorkerScriptResource>,
 }
 
-pub(super) fn resolve_import_script_url(
+fn resolve_import_script_url(
     state: Rc<RefCell<WorkerGlobalState>>,
     input: &str,
 ) -> Result<Url, WorkerImportScriptError> {
@@ -36,7 +36,7 @@ pub(super) fn resolve_import_script_url(
     Ok(url)
 }
 
-pub(super) fn materialize_worker_import_source(
+fn materialize_worker_import_source(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     script_url: &Url,
@@ -244,7 +244,7 @@ fn report_service_worker_imported_script_loaded(
         });
 }
 
-pub(super) fn evaluate_worker_script(
+fn evaluate_worker_script(
     scope: &mut v8::PinScope<'_, '_>,
     state: Rc<RefCell<WorkerGlobalState>>,
     script_url: &Url,
@@ -317,3 +317,209 @@ pub(super) fn evaluate_worker_script(
 }
 
 // ─── console ────────────────────────────────────────────────────────────────
+
+pub(in crate::worker) const WORKER_EXCEPTION_SOURCE_SLOT: &str = "__moliWorkerExceptionSource";
+
+pub(in crate::worker) const WORKER_EXCEPTION_LINE_SLOT: &str = "__moliWorkerExceptionLine";
+
+pub(in crate::worker) const WORKER_EXCEPTION_COLUMN_SLOT: &str = "__moliWorkerExceptionColumn";
+
+enum WorkerImportScriptError {
+    DomException { name: &'static str, message: String },
+    Exception(v8::Global<v8::Value>),
+}
+
+impl WorkerImportScriptError {
+    fn syntax(message: impl Into<String>) -> Self {
+        Self::DomException {
+            name: "SyntaxError",
+            message: message.into(),
+        }
+    }
+
+    fn network(message: impl Into<String>) -> Self {
+        Self::DomException {
+            name: "NetworkError",
+            message: message.into(),
+        }
+    }
+
+    fn error<'s>(scope: &mut v8::PinScope<'s, '_>, message: impl Into<String>) -> Self {
+        let message = message.into();
+        let value = v8_string(scope, &message)
+            .map(|value| v8::Exception::error(scope, value))
+            .unwrap_or_else(|| v8::Exception::error(scope, v8::String::empty(scope)));
+        Self::Exception(v8::Global::new(scope, value))
+    }
+
+    fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
+        match self {
+            Self::DomException { name, message } => {
+                let exception = worker_dom_exception_value(scope, &message, name);
+                scope.throw_exception(exception);
+            }
+            Self::Exception(value) => {
+                let value = v8::Local::new(scope, value);
+                scope.throw_exception(value);
+            }
+        }
+    }
+}
+
+struct PreparedWorkerImportScript {
+    final_url: Url,
+    source: Option<String>,
+    muted_errors: bool,
+}
+
+fn annotate_worker_exception_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    exception: v8::Local<'s, v8::Value>,
+    message: Option<v8::Local<'s, v8::Message>>,
+) {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(exception) else {
+        return;
+    };
+    let source = message
+        .and_then(|message| message.get_script_resource_name(scope))
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .filter(|value| !value.is_empty());
+    if let Some(source) = source
+        && let Some(value) = v8_string(scope, &source)
+    {
+        set_worker_exception_location_if_missing(
+            scope,
+            object,
+            WORKER_EXCEPTION_SOURCE_SLOT,
+            value.into(),
+        );
+    }
+    if let Some(line) = message.and_then(|message| message.get_line_number(scope)) {
+        let value = v8::Number::new(scope, line as f64);
+        set_worker_exception_location_if_missing(
+            scope,
+            object,
+            WORKER_EXCEPTION_LINE_SLOT,
+            value.into(),
+        );
+    }
+    if let Some(column) = message.and_then(|message| message.get_start_column().checked_add(1)) {
+        let value = v8::Number::new(scope, column as f64);
+        set_worker_exception_location_if_missing(
+            scope,
+            object,
+            WORKER_EXCEPTION_COLUMN_SLOT,
+            value.into(),
+        );
+    }
+}
+
+fn set_worker_exception_location_if_missing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    slot: &str,
+    value: v8::Local<'s, v8::Value>,
+) {
+    if get_private_value(scope, object, slot).is_none() {
+        set_private_value(scope, object, slot, value);
+    }
+}
+
+pub(super) fn worker_import_scripts_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    if state.borrow().script_kind == crate::worker::thread::WorkerScriptKind::Module {
+        throw_type_error(scope, "Module scripts don't support importScripts().");
+        return;
+    }
+    let require_trusted_types_for_script =
+        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+            &state.borrow().content_security_policies,
+        );
+    let mut prepared = Vec::with_capacity(args.length() as usize);
+    for i in 0..args.length() {
+        let Some(specifier) = crate::context_bootstrap::trusted_script_url_string_or_throw(
+            scope,
+            args.get(i),
+            crate::content_security_policy::TrustedTypesForScriptRequirements::enforced_only(
+                require_trusted_types_for_script,
+            ),
+            "WorkerGlobalScope importScripts",
+            "importScripts",
+        ) else {
+            return;
+        };
+        let resolved_url = match resolve_import_script_url(state.clone(), &specifier) {
+            Ok(url) => url,
+            Err(error) => {
+                error.throw(scope);
+                return;
+            }
+        };
+        let source = if matches!(resolved_url.scheme(), "data" | "blob") {
+            match materialize_worker_import_source(scope, &state, &resolved_url) {
+                Ok(import_source) => Some(import_source.source),
+                Err(error) => {
+                    error.throw(scope);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        prepared.push(PreparedWorkerImportScript {
+            final_url: resolved_url,
+            source,
+            muted_errors: false,
+        });
+    }
+    for mut script in prepared {
+        if script.source.is_none() {
+            let import_source =
+                match materialize_worker_import_source(scope, &state, &script.final_url) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        error.throw(scope);
+                        return;
+                    }
+                };
+            script.final_url = import_source.final_url;
+            script.source = Some(import_source.source);
+            script.muted_errors = import_source.muted_errors;
+        }
+        let source = script.source.as_deref().unwrap_or_default();
+        if let Err(error) = evaluate_worker_script(
+            scope,
+            state.clone(),
+            &script.final_url,
+            source,
+            script.muted_errors,
+        ) {
+            error.throw(scope);
+            return;
+        }
+    }
+}
+
+fn create_script_origin<'s>(scope: &mut v8::PinScope<'s, '_>, url: &str) -> v8::ScriptOrigin<'s> {
+    let name = v8::String::new(scope, url).expect("worker script origin");
+    v8::ScriptOrigin::new(
+        scope,
+        name.into(),
+        0,
+        0,
+        false,
+        -1,
+        None,
+        false,
+        false,
+        false,
+        None,
+    )
+}
