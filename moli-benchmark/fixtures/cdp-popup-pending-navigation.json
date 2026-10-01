@@ -1,0 +1,8 @@
+{
+  "popup-replaces-pending-load": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "child": "C", "path": "/ready", "name": "pending"},
+    {"op": "popup_supersede", "page": "A", "child": "C", "method": "named", "name": "pending"},
+    {"op": "popup_supersede", "page": "A", "child": "C", "method": "replace"}
+  ]
+}

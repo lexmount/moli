@@ -1,0 +1,90 @@
+{
+  "R01-close-selects-wrong-tab": [
+    {"op": "create", "page": "A"},
+    {"op": "create", "page": "B"},
+    {"op": "create", "page": "C"},
+    {"op": "activate", "page": "A"},
+    {"op": "close", "page": "A"}
+  ],
+  "R02-background-title": [
+    {"op": "create", "page": "A"},
+    {"op": "create", "page": "B"},
+    {"op": "navigate", "page": "A", "path": "/new-title"},
+    {"op": "delay", "seconds": 1}
+  ],
+  "R03-same-document-discovery": [
+    {"op": "create", "page": "A"},
+    {"op": "discover_samedoc_event", "page": "A"}
+  ],
+  "R04-context-focus": [
+    {"op": "create", "page": "A"},
+    {"op": "new_context", "context": "private"},
+    {"op": "create", "page": "B", "context": "private"},
+    {"op": "activate", "page": "A"},
+    {"op": "dispose_context", "context": "private"}
+  ],
+  "R05-new-window": [
+    {"op": "create", "page": "A"},
+    {"op": "create", "page": "B", "newWindow": true},
+    {"op": "window_map"}
+  ],
+  "R06-window-name-navigation": [
+    {"op": "create", "page": "A"},
+    {"op": "name", "page": "A", "value": "keep-me"},
+    {"op": "navigate", "page": "A", "path": "/same-origin-next"}
+  ],
+  "R07-renamed-popup-reuse": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/named-original", "child": "C", "name": "old-name"},
+    {"op": "name", "page": "C", "value": "new-name"},
+    {"op": "popup_reuse", "page": "A", "path": "/named-reused", "child": "C", "name": "new-name"}
+  ],
+  "R08-popup-history": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/popup-history", "child": "C"},
+    {"op": "history_dump", "page": "C"},
+    {"op": "back", "page": "C"}
+  ],
+  "R09-missing-opener": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/popup-opener", "child": "C"},
+    {"op": "opener_reference", "page": "C"}
+  ],
+  "R10-stale-window-reference": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/popup-original", "child": "C"},
+    {"op": "navigate", "page": "C", "path": "/popup-new"},
+    {"op": "popup_reference", "page": "A"}
+  ],
+  "R11-reference-navigation": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/ref-original", "child": "C"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/ref-destination"},
+    {"op": "popup_reference", "page": "A"}
+  ],
+  "R12-popup-self-close": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/close-self", "child": "C"},
+    {"op": "js_close", "page": "C"}
+  ],
+  "R13-popup-reference-close": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/close-reference", "child": "C"},
+    {"op": "popup_ref_close", "page": "A", "child": "C"},
+    {"op": "popup_reference", "page": "A"}
+  ],
+  "R14-popup-message": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/popup-message", "child": "C"},
+    {"op": "popup_message", "page": "A", "child": "C"}
+  ],
+  "R15-duplicate-popup-request": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/count-popup-requests", "child": "C"}
+  ],
+  "R16-tab-resume": [
+    {"op": "auto_enable", "wait": true, "tabs": true},
+    {"op": "auto_create_tab", "page": "A"},
+    {"op": "resume_tab", "page": "A"}
+  ]
+}
