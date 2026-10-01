@@ -201,6 +201,34 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioListener::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioParamMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaElementAudioSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamAudioDestinationNode::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamAudioSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PannerNode::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ScriptProcessorNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
