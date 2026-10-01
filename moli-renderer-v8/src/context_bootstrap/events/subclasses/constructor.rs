@@ -91,6 +91,14 @@ fn event_subclass_constructor_callback<'s>(
         } else {
             None
         };
+    let storage_event_init = if kind == EventSubclassKind::StorageEvent {
+        let Some(init) = data::parse_storage_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = clipboard_event_init
         .as_ref()
         .map(data::ClipboardEventInitMembers::event_flags)
@@ -108,6 +116,11 @@ fn event_subclass_constructor_callback<'s>(
             current_entry_change_event_init
                 .as_ref()
                 .map(navigation_init::NavigationCurrentEntryChangeEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            storage_event_init
+                .as_ref()
+                .map(data::StorageEventInitMembers::event_flags)
         })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
@@ -193,9 +206,11 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::MessageEvent => data::initialize_message_event(scope, event, init),
         EventSubclassKind::StorageEvent => {
-            if !data::initialize_storage_event(scope, event, init) {
-                return;
-            }
+            data::initialize_storage_event(
+                scope,
+                event,
+                storage_event_init.expect("StorageEvent init should be parsed"),
+            );
         }
         EventSubclassKind::ErrorEvent => data::initialize_error_event(scope, event, init),
         EventSubclassKind::PromiseRejectionEvent => {

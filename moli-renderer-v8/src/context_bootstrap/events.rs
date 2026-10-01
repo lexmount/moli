@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{get_private_value, utf16_units, v8_string, v8_string_from_utf16_units, v8str};
+use crate::util::{get_private_value, v8_string, v8_string_from_utf16_units, v8str};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 mod base;
@@ -285,29 +285,6 @@ pub(crate) fn construct_original_storage_event_utf16<'s>(
         storage_area,
     );
     Some(event)
-}
-
-pub(in crate::context_bootstrap) fn define_storage_event_properties<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    key: Option<&str>,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-    url: &str,
-    storage_area: Option<v8::Local<'s, v8::Value>>,
-) {
-    let key = key.map(utf16_units);
-    let old_value = old_value.map(utf16_units);
-    let new_value = new_value.map(utf16_units);
-    define_storage_event_properties_utf16(
-        scope,
-        event,
-        key.as_deref(),
-        old_value.as_deref(),
-        new_value.as_deref(),
-        url,
-        storage_area,
-    );
 }
 
 pub(in crate::context_bootstrap) fn define_storage_event_properties_utf16<'s>(

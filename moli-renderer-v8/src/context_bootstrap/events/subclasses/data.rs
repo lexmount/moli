@@ -19,6 +19,7 @@ use crate::context_bootstrap::navigation_window::{
     navigation_document_is_active, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder,
 };
+use crate::context_bootstrap::web_storage::StorageReference;
 use crate::native_bridge::element::scroll_to_url_fragment_or_top;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::context_host_ptr_from_global_bridge;
@@ -385,19 +386,51 @@ struct CommandEventInitMembers<'s> {
     source: Option<v8::Local<'s, v8::Value>>,
 }
 
+/// Convert inherited EventInit members first, then StorageEventInit members in
+/// lexicographic order, before initializing either base or subclass state.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "StorageEventInit")]
-struct StorageEventInitMembers<'s> {
-    #[webidl(nullable)]
-    key: Option<String>,
-    #[webidl(name = "oldValue", nullable)]
-    old_value: Option<String>,
-    #[webidl(name = "newValue", nullable)]
-    new_value: Option<String>,
+pub(super) struct StorageEventInitMembers<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(nullable, converter = "raw")]
+    key: Option<webidl::DomString16>,
+    #[webidl(name = "newValue", nullable, converter = "raw")]
+    new_value: Option<webidl::DomString16>,
+    #[webidl(name = "oldValue", nullable, converter = "raw")]
+    old_value: Option<webidl::DomString16>,
+    #[webidl(name = "storageArea", converter = "raw", nullable)]
+    storage_area: Option<StorageReference<'s>>,
     #[webidl(default = "", converter = "usv_string")]
     url: String,
-    #[webidl(name = "storageArea", converter = "raw", nullable)]
-    storage_area: Option<v8::Local<'s, v8::Value>>,
+}
+
+impl StorageEventInitMembers<'_> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        (self.bubbles, self.cancelable, self.composed)
+    }
+}
+
+pub(super) fn parse_storage_event_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<StorageEventInitMembers<'s>> {
+    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument("StorageEvent", 2))
+        .and_then(|object| match object {
+            Some(object) => webidl::parse_dictionary_object(scope, object),
+            None => Ok(StorageEventInitMembers::default()),
+        });
+    match parsed {
+        Ok(init) => Some(init),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
 }
 
 fn toggle_event_source_member<'s>(
@@ -701,30 +734,17 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_message_event
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<StorageEventInitMembers>(scope, init) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => StorageEventInitMembers::default(),
-    };
-    crate::context_bootstrap::events::define_storage_event_properties(
+    parsed: StorageEventInitMembers<'s>,
+) {
+    crate::context_bootstrap::events::define_storage_event_properties_utf16(
         scope,
         event,
-        parsed.key.as_deref(),
-        parsed.old_value.as_deref(),
-        parsed.new_value.as_deref(),
+        parsed.key.as_ref().map(|value| value.0.as_slice()),
+        parsed.old_value.as_ref().map(|value| value.0.as_slice()),
+        parsed.new_value.as_ref().map(|value| value.0.as_slice()),
         &parsed.url,
-        parsed.storage_area,
+        parsed.storage_area.map(|value| value.0.into()),
     );
-    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_input_event<'s>(

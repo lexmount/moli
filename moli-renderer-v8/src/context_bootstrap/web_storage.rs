@@ -1,4 +1,25 @@
 use super::*;
+use crate::webidl;
+
+pub(crate) struct StorageReference<'scope>(pub(crate) v8::Local<'scope, v8::Object>);
+
+impl<'scope> webidl::WebIdlConverter<'scope> for StorageReference<'scope> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'scope, '_>,
+        value: v8::Local<'scope, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
+            && crate::web_api_interfaces::Storage::is_instance(scope, object)
+        {
+            return Ok(Self(object));
+        }
+        Err(webidl::WebIdlError::cannot_convert(context, "Storage"))
+    }
+}
 
 mod accessors;
 mod callbacks;

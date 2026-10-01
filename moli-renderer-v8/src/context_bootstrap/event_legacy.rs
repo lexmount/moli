@@ -49,16 +49,16 @@ struct InitStorageEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(index = 3, nullable)]
-    key: Option<String>,
-    #[webidl(name = "oldValue", index = 4, nullable)]
-    old_value: Option<String>,
-    #[webidl(name = "newValue", index = 5, nullable)]
-    new_value: Option<String>,
+    #[webidl(index = 3, nullable, converter = "raw")]
+    key: Option<webidl::DomString16>,
+    #[webidl(name = "oldValue", index = 4, nullable, converter = "raw")]
+    old_value: Option<webidl::DomString16>,
+    #[webidl(name = "newValue", index = 5, nullable, converter = "raw")]
+    new_value: Option<webidl::DomString16>,
     #[webidl(default = "", index = 6, converter = "usv_string")]
     url: String,
     #[webidl(index = 7, converter = "raw", nullable)]
-    storage_area: Option<v8::Local<'s, v8::Value>>,
+    storage_area: Option<super::web_storage::StorageReference<'s>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -489,13 +489,13 @@ pub(super) fn storage_event_init_callback<'s>(
     ) {
         return;
     }
-    super::events::define_storage_event_properties(
+    super::events::define_storage_event_properties_utf16(
         scope,
         event,
-        parsed.key.as_deref(),
-        parsed.old_value.as_deref(),
-        parsed.new_value.as_deref(),
+        parsed.key.as_ref().map(|value| value.0.as_slice()),
+        parsed.old_value.as_ref().map(|value| value.0.as_slice()),
+        parsed.new_value.as_ref().map(|value| value.0.as_slice()),
         &parsed.url,
-        parsed.storage_area,
+        parsed.storage_area.map(|value| value.0.into()),
     );
 }
