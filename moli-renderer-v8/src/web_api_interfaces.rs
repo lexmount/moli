@@ -101,6 +101,10 @@ interfaces! {
     ReportingObserver;
     SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
     SpeechSynthesisEvent: Event;
+    WebTransport;
+    WebTransportBidirectionalStream;
+    WebTransportDatagramDuplexStream;
+    WebTransportError: DOMException;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
