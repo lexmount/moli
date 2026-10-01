@@ -1,3 +1,4 @@
+use crate::event_type::{EventType, EventTypeKey};
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
@@ -68,7 +69,7 @@ struct AbortSignalState {
 
 struct AbortLinkedTargetListener {
     target: EventTargetHandle,
-    event_type: String,
+    event_type: EventType,
     callback_id: super::EventCallbackId,
     capture: bool,
 }
@@ -345,7 +346,7 @@ impl AbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: super::EventCallbackId,
         capture: bool,
     ) {
@@ -359,7 +360,7 @@ impl AbortStore {
             .linked_target_listeners
             .push(AbortLinkedTargetListener {
                 target,
-                event_type: event_type.to_owned(),
+                event_type: event_type.to_event_type(),
                 callback_id,
                 capture,
             });

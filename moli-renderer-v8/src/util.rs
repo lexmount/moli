@@ -10,7 +10,7 @@ pub use moli_v8_util::{
     initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_bool_property,
     object_chain_contains, object_defined_string_property, object_non_empty_string_property,
     object_number_property, object_own_static_bool_property,
-    object_own_static_string_property, object_property_as_array, object_property_as_object,
+    object_own_static_string_property, object_property_as_object,
     object_string_property, private_key, register_ecmascript_intrinsic,
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
     set_private_value, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,

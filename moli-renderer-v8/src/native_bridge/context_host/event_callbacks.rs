@@ -1,4 +1,5 @@
 use super::{JsContextHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
+use crate::event_type::EventTypeKey;
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
 
@@ -142,7 +143,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback: v8::Local<'s, v8::Object>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
@@ -207,7 +208,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback: v8::Local<'s, v8::Object>,
         capture: bool,
     ) -> bool {
@@ -255,7 +256,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         handler: Option<v8::Local<'s, v8::Object>>,
     ) {
         let relevant_context = handler
@@ -278,7 +279,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
@@ -301,7 +302,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         handler: Option<v8::Local<'s, v8::Object>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
@@ -323,7 +324,7 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<v8::Local<'s, v8::Value>> {
         match self.event_handler_property_callback_id(target, event_type)? {
             Some(callback_id) => self.event_callback_value(scope, callback_id),
