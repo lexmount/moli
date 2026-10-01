@@ -116,6 +116,10 @@
     ['KeyboardEvent', () => new KeyboardEvent('before', {...flags, key: 'key'}), e => e.key],
     ['CompositionEvent', () => new CompositionEvent('before', {...flags, data: 'data'}), e => e.data],
     ['StorageEvent', () => new StorageEvent('before', {...flags, key: 'key'}), e => e.key],
+    ['RTCErrorEvent', () => new RTCErrorEvent('before', {...flags,
+      error: new RTCError({errorDetail: 'data-channel-failure'})}), e => e.error],
+    ['RTCPeerConnectionIceErrorEvent', () => new RTCPeerConnectionIceErrorEvent('before', {...flags,
+      errorCode: 701, url: 'stun:event.test'}), e => e.url],
     ['AnimationEvent', () => new AnimationEvent('before', {...flags, animationName: 'animation'}), e => e.animationName],
     ['TransitionEvent', () => new TransitionEvent('before', {...flags, propertyName: 'color'}), e => e.propertyName]
   ];
