@@ -55,6 +55,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "RTCEncodedVideoFrame",
     "EncodedVideoChunk",
     "PerformanceServerTiming",
+    "ReportBody",
+    "ReportingObserver",
     "EventTarget",
     "Event",
     "CustomEvent",
