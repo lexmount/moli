@@ -154,6 +154,11 @@ fn event_subclass_constructor_callback<'s>(
                 .as_ref()
                 .map(navigation_init::NavigationCurrentEntryChangeEventInitMembers::event_flags)
         })
+        .or_else(|| {
+            storage_event_init
+                .as_ref()
+                .map(data::StorageEventInitMembers::event_flags)
+        })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
