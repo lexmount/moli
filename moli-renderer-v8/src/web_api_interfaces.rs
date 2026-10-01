@@ -45,6 +45,8 @@ interfaces! {
     PaymentRequest: EventTarget;
     PaymentRequestUpdateEvent: Event;
     PaymentResponse: EventTarget;
+    VideoDecoder: EventTarget;
+    VideoEncoder: EventTarget;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
