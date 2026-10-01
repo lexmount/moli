@@ -83,7 +83,6 @@ pub(crate) use element::{
 };
 pub(super) use helpers::*;
 pub(crate) use node::NativeNodeReference;
-pub(crate) use node::branded_node_handle;
 pub(crate) use node::{
     branded_node_handle, current_or_live_delegate_node_arg_handle,
     node_or_foreign_arg_handle_allow_detached, node_owner_document_relevant_context,
