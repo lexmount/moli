@@ -19,8 +19,8 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 ];
 
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
-    "DOMRectReadOnly",
-    "DOMRect",
+    "Lock",
+    "LockManager",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -157,6 +157,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "PublicKeyCredential",
     "Credential",
     "CredentialsContainer",
+    "Lock",
+    "LockManager",
     "Worklet",
     "AudioWorklet",
     "ServiceWorker",
