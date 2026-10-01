@@ -10,7 +10,8 @@ mod ice_candidate;
 mod ice_candidate_parser;
 mod session_description;
 pub(in crate::context_bootstrap) use events::{
-    rtc_data_channel_event_constructor_callback, rtc_peer_connection_ice_event_constructor_callback,
+    rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
+    rtc_peer_connection_ice_event_constructor_callback,
 };
 pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
 pub(in crate::context_bootstrap) use session_description::rtc_session_description_constructor_callback;
@@ -219,6 +220,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
+        "RTCErrorEvent" => events::install_event_template_bindings(scope, template, interface_name),
         "RTCRtpReceiver" => {
             RtcRtpReceiverConstructorDeclaration::initialize_template(scope, template);
         }

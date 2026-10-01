@@ -369,6 +369,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::DomException,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RTCError::DESCRIPTOR,
+        kind: ConstructorKind::RtcError,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcErrorEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::DOMError::DESCRIPTOR,
         kind: ConstructorKind::DomError,
     },

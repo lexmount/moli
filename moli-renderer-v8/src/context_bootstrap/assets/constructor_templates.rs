@@ -62,8 +62,8 @@ use super::super::{
         offline_audio_context_constructor_callback,
     },
     webrtc::{
-        rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
-        rtc_peer_connection_constructor_callback,
+        rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
+        rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
         rtc_peer_connection_ice_event_constructor_callback,
         rtc_session_description_constructor_callback,
     },
@@ -241,6 +241,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 dom_exception_constructor_callback
             ))
             .length(0)
+            .build(scope)
+        }
+        ConstructorKind::RtcError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCError,
+                rtc_error_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcErrorEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCErrorEvent,
+                rtc_error_event_constructor_callback
+            ))
+            .length(2)
             .build(scope)
         }
         ConstructorKind::DomError => {
