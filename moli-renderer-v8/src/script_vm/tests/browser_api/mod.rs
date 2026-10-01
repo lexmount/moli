@@ -1,6 +1,5 @@
 mod document_node_factory_realms;
 mod insert_adjacent_element_conversion;
-mod event_constructor_type;
 
 use super::*;
 
@@ -33,6 +32,7 @@ mod document_domain_lifetime;
 mod document_domain_setter;
 mod document_open_navigation_abort;
 mod document_open_origin;
+mod event_constructor_type;
 mod event_handlers;
 mod event_listener_options;
 mod events_selection_storage;
