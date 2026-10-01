@@ -21,9 +21,9 @@ pub(super) struct IntrinsicInterfaceRegistry {
 }
 
 struct RealmInterfaceObjects {
-    constructor: v8::Global<v8::Object>,
-    prototype: v8::Global<v8::Object>,
-    public_interface: v8::Global<v8::Object>,
+    constructor: crate::util::RealmObjectHandle,
+    prototype: crate::util::RealmObjectHandle,
+    public_interface: crate::util::RealmObjectHandle,
 }
 
 impl IntrinsicInterfaceRegistry {
@@ -117,11 +117,20 @@ impl IntrinsicInterfaceRegistry {
         {
             let objects = self.objects.borrow();
             if let Some(existing) = objects.get(id.index()).and_then(Option::as_ref) {
-                let same_constructor =
-                    v8::Local::new(scope, &existing.constructor).strict_equals(constructor.into());
-                let same_prototype =
-                    v8::Local::new(scope, &existing.prototype).strict_equals(prototype.into());
-                let same_public_interface = v8::Local::new(scope, &existing.public_interface)
+                let same_constructor = existing
+                    .constructor
+                    .to_local(scope)
+                    .expect("registered intrinsic object")
+                    .strict_equals(constructor.into());
+                let same_prototype = existing
+                    .prototype
+                    .to_local(scope)
+                    .expect("registered intrinsic object")
+                    .strict_equals(prototype.into());
+                let same_public_interface = existing
+                    .public_interface
+                    .to_local(scope)
+                    .expect("registered intrinsic object")
                     .strict_equals(public_interface.into());
                 if same_constructor && same_prototype && same_public_interface {
                     return Ok(());
@@ -141,9 +150,9 @@ impl IntrinsicInterfaceRegistry {
         })?;
         debug_assert!(slot.is_none());
         *slot = Some(RealmInterfaceObjects {
-            constructor: v8::Global::new(scope, constructor),
-            prototype: v8::Global::new(scope, prototype),
-            public_interface: v8::Global::new(scope, public_interface),
+            constructor: crate::util::RealmObjectHandle::new(scope, constructor),
+            prototype: crate::util::RealmObjectHandle::new(scope, prototype),
+            public_interface: crate::util::RealmObjectHandle::new(scope, public_interface),
         });
         Ok(())
     }
@@ -155,7 +164,7 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.constructor))
+        object.constructor.to_local(scope)
     }
 
     pub(super) fn prototype<'s>(
@@ -165,7 +174,7 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.prototype))
+        object.prototype.to_local(scope)
     }
 
     pub(super) fn public_interface<'s>(
@@ -175,8 +184,21 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.public_interface))
+        object.public_interface.to_local(scope)
     }
+}
+
+pub(crate) fn retain_intrinsic_interfaces_in_realm(scope: &mut v8::PinScope<'_, '_>) {
+    let context = scope.get_current_context();
+    let Some(registry) = context.get_slot::<IntrinsicInterfaceRegistry>() else {
+        return;
+    };
+    for objects in registry.objects.borrow_mut().iter_mut().flatten() {
+        objects.constructor.retain_in_realm(scope);
+        objects.prototype.retain_in_realm(scope);
+        objects.public_interface.retain_in_realm(scope);
+    }
+    crate::util::retain_context_v8_handle_state_for_safe_release(context, registry);
 }
 
 #[cfg(test)]

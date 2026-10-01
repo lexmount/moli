@@ -817,6 +817,8 @@ pub(crate) struct JsContextHost {
     root_document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     page_context_resources_closed: bool,
+    context_host_lifecycle: Rc<Cell<crate::util::ContextHostLifecycle>>,
+    deferred_context_host_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
     page_default_context: Option<v8::Weak<v8::Context>>,
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     pub(super) bridge: NativeDomBridge,
@@ -1096,6 +1098,8 @@ pub(crate) struct JsContextHost {
     stylo_computed_style_property_reads: Cell<u64>,
     #[cfg(test)]
     style_observation_environment_resolutions: Cell<u64>,
+    retained_document_runtime: Option<Box<DocumentRuntime>>,
+    published_document_host: bool,
 }
 
 struct PendingTextControlChangeCommit {
@@ -1250,15 +1254,65 @@ impl JsContextHost {
         self.app_manifest_link_change_epoch
     }
 
+    pub(crate) fn document_host_is_published(&self) -> bool {
+        self.published_document_host
+    }
+
+    pub(crate) fn publish_document_host(&mut self) {
+        self.published_document_host = true;
+    }
+
+    pub(crate) fn mark_page_context_detached(&self) {
+        if self.context_host_lifecycle.get() == crate::util::ContextHostLifecycle::Active {
+            self.context_host_lifecycle
+                .set(crate::util::ContextHostLifecycle::Detached);
+        }
+    }
+
+    pub(crate) fn context_host_lifecycle_handle(
+        &self,
+    ) -> Rc<Cell<crate::util::ContextHostLifecycle>> {
+        self.context_host_lifecycle.clone()
+    }
+
+    pub(crate) fn deferred_context_host_release_queue(
+        &self,
+    ) -> crate::script_vm::RendererDeferredContextHostReleaseQueue {
+        self.deferred_context_host_release_queue.clone()
+    }
+
+    pub(crate) fn adopt_retained_document_runtime(
+        &mut self,
+        document_runtime: Box<DocumentRuntime>,
+    ) {
+        assert!(
+            self.retained_document_runtime.is_none(),
+            "JsContextHost must adopt its DocumentRuntime at most once"
+        );
+        assert!(
+            std::ptr::eq(self.runtime.cast_const(), document_runtime.as_ref()),
+            "retained DocumentRuntime transfer must preserve the host raw pointer"
+        );
+        self.retained_document_runtime = Some(document_runtime);
+    }
+    pub(crate) fn bind_deferred_context_host_release_queue(
+        &mut self,
+        queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
+    ) {
+        self.deferred_context_host_release_queue = queue;
+    }
+
     pub(crate) fn close_page_context_resources_for_teardown(&mut self) {
+        self.mark_page_context_detached();
         if self.page_context_resources_closed {
             return;
         }
         self.page_context_resources_closed = true;
+        self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
-        self.v8_finalizers.clear_for_context_teardown();
+
         self.clear_pending_top_level_navigation();
         self.unregister_all_service_worker_child_clients();
         self.unregister_all_service_worker_popup_clients();
@@ -1268,11 +1322,20 @@ impl JsContextHost {
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        self.output_journal = None;
+        self.root_document_lifecycle = None;
+        self.child_default_context_bootstrap = None;
+        self.command_turn_output = None;
+        self.lightweight_popup_browsing_contexts.clear();
+        self.internal_inspector_value_references.clear();
     }
 }
 
 impl Drop for JsContextHost {
     fn drop(&mut self) {
         self.close_page_context_resources_for_teardown();
+        self.context_host_lifecycle
+            .set(crate::util::ContextHostLifecycle::Destroyed);
+        self.v8_finalizers.clear_for_context_teardown();
     }
 }

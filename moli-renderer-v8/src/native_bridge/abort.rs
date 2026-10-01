@@ -23,6 +23,9 @@ pub(crate) use statics::{
 };
 
 const ABORT_SIGNAL_ID_SLOT: &str = "__lmAbortSignalId";
+const ABORT_SIGNAL_STATE_SLOT: &str = "__moliAbortSignalState";
+const ABORT_SIGNAL_ABORTED_SLOT: &str = "__moliAbortSignalAborted";
+const ABORT_SIGNAL_REASON_SLOT: &str = "__moliAbortSignalReason";
 const ABORT_CONTROLLER_ID_SLOT: &str = "__lmAbortControllerId";
 const ABORT_CONTROLLER_SIGNAL_SLOT: &str = "__lmAbortControllerSignal";
 
@@ -35,6 +38,9 @@ pub(crate) fn bind_signal_wrapper<'s>(
         return false;
     };
     set_private_value(scope, wrapper, ABORT_SIGNAL_ID_SLOT, id);
+    if let Some(state) = get_private_value(scope, signal, ABORT_SIGNAL_STATE_SLOT) {
+        set_private_value(scope, wrapper, ABORT_SIGNAL_STATE_SLOT, state);
+    }
     true
 }
 
@@ -44,13 +50,14 @@ pub(super) struct AbortStore {
     next_controller_id: u32,
     signals: HashMap<u32, AbortSignalState>,
     controllers: HashMap<u32, u32>,
+    detached: bool,
 }
 
 #[derive(Default)]
 struct AbortSignalState {
-    signal: Option<v8::Global<v8::Object>>,
+    signal: Option<crate::util::RealmObjectHandle>,
     aborted: bool,
-    reason: Option<v8::Global<v8::Value>>,
+    detached: bool,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
@@ -68,9 +75,82 @@ struct AbortLinkedTargetListener {
 struct AbortSignalDispatch {
     algorithms: Vec<v8::Global<v8::Function>>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
+    dispatch_event: bool,
 }
 
 impl AbortStore {
+    pub(super) fn clear_for_context_teardown(&mut self) {
+        self.detached = true;
+        for state in self.signals.values_mut() {
+            state.detached = true;
+            state.abort_algorithms.clear();
+            state.linked_target_listeners.clear();
+        }
+    }
+
+    pub(crate) fn retire_context<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        context: v8::Local<'s, v8::Context>,
+    ) {
+        for state in self.signals.values_mut() {
+            let Some(handle) = state.signal.as_mut() else {
+                continue;
+            };
+            let Some(signal) = handle.to_local(scope) else {
+                continue;
+            };
+            if signal.get_creation_context(scope) != Some(context) {
+                continue;
+            }
+            handle.retain_in_realm(scope);
+            state.detached = true;
+            state.abort_algorithms.clear();
+            state.linked_target_listeners.clear();
+        }
+    }
+
+    fn signal_passive_state<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        get_private_value(scope, signal, ABORT_SIGNAL_STATE_SLOT)
+            .and_then(|state| v8::Local::<v8::Object>::try_from(state).ok())
+    }
+
+    fn signal_aborted_from_object<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        Self::signal_passive_state(scope, signal)
+            .and_then(|state| get_private_value(scope, state, ABORT_SIGNAL_ABORTED_SLOT))
+            .is_some_and(|value| value.is_true())
+    }
+
+    fn signal_reason_from_object<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let state = Self::signal_passive_state(scope, signal)?;
+        get_private_value(scope, state, ABORT_SIGNAL_REASON_SLOT)
+    }
+
+    fn publish_signal_abort<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+        reason: v8::Local<'s, v8::Value>,
+    ) {
+        if let Some(state) = Self::signal_passive_state(scope, signal) {
+            set_private_value(
+                scope,
+                state,
+                ABORT_SIGNAL_ABORTED_SLOT,
+                v8::Boolean::new(scope, true).into(),
+            );
+            set_private_value(scope, state, ABORT_SIGNAL_REASON_SLOT, reason);
+        }
+    }
+
     fn alloc_signal_id(&mut self) -> u32 {
         self.next_signal_id = self
             .next_signal_id
@@ -102,9 +182,7 @@ impl AbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> bool {
-        Self::signal_id_from_object(scope, object)
-            .and_then(|id| self.signal_state(id))
-            .is_some()
+        Self::signal_id_from_object(scope, object).is_some()
     }
 
     fn controller_id_from_object<'s>(
@@ -127,13 +205,25 @@ impl AbortStore {
         let signal_id = self.alloc_signal_id();
         let mut state = AbortSignalState {
             aborted,
+            detached: self.detached,
             ..AbortSignalState::default()
         };
-        state.signal = Some(v8::Global::new(scope, signal));
-        if let Some(reason) = reason {
-            state.reason = Some(v8::Global::new(scope, reason));
-        }
+        state.signal = Some(crate::util::RealmObjectHandle::new(scope, signal));
         self.signals.insert(signal_id, state);
+        let passive_state = v8::Object::new(scope);
+        set_private_value(
+            scope,
+            passive_state,
+            ABORT_SIGNAL_ABORTED_SLOT,
+            v8::Boolean::new(scope, aborted).into(),
+        );
+        set_private_value(
+            scope,
+            passive_state,
+            ABORT_SIGNAL_REASON_SLOT,
+            reason.unwrap_or_else(|| v8::undefined(scope).into()),
+        );
+        set_private_value(scope, signal, ABORT_SIGNAL_STATE_SLOT, passive_state.into());
         set_private_value(
             scope,
             signal,
@@ -182,7 +272,7 @@ impl AbortStore {
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.signal_state(id)
             .and_then(|state| state.signal.as_ref())
-            .map(|signal| v8::Local::new(scope, signal))
+            .and_then(|signal| signal.to_local(scope))
     }
 
     pub(super) fn signal_aborted<'s>(
@@ -190,9 +280,7 @@ impl AbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
     ) -> bool {
-        Self::signal_id_from_object(scope, signal)
-            .and_then(|id| self.signal_state(id))
-            .is_some_and(|state| state.aborted)
+        Self::signal_aborted_from_object(scope, signal)
     }
 
     pub(super) fn signal_reason<'s>(
@@ -200,10 +288,7 @@ impl AbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Value>> {
-        Self::signal_id_from_object(scope, signal)
-            .and_then(|id| self.signal_state(id))
-            .and_then(|state| state.reason.as_ref())
-            .map(|reason| v8::Local::new(scope, reason))
+        Self::signal_reason_from_object(scope, signal)
     }
 
     pub(crate) fn register_abort_algorithm<'s>(
@@ -218,6 +303,9 @@ impl AbortStore {
         let Some(state) = self.signal_state_mut(signal_id) else {
             return false;
         };
+        if state.detached {
+            return false;
+        }
         state
             .abort_algorithms
             .push(v8::Global::new(scope, algorithm));
@@ -283,12 +371,15 @@ impl AbortStore {
         reason: v8::Local<'s, v8::Value>,
     ) -> Option<Vec<(u32, v8::Local<'s, v8::Object>)>> {
         let signal_id = Self::signal_id_from_object(scope, signal)?;
+        if Self::signal_aborted_from_object(scope, signal) {
+            return None;
+        }
+        Self::publish_signal_abort(scope, signal, reason);
         let state = self.signal_state_mut(signal_id)?;
         if state.aborted {
             return None;
         }
         state.aborted = true;
-        state.reason = Some(v8::Global::new(scope, reason));
         let dependent_signals = state.dependent_signals.clone();
         // Publish every reason before any author callback can reenter abort.
         let mut signals = vec![(signal_id, signal)];
@@ -300,9 +391,13 @@ impl AbortStore {
                 continue;
             }
             state.aborted = true;
-            state.reason = Some(v8::Global::new(scope, reason));
-            if let Some(signal) = &state.signal {
-                signals.push((dependent_signal_id, v8::Local::new(scope, signal)));
+            if let Some(signal) = state
+                .signal
+                .as_ref()
+                .and_then(|signal| signal.to_local(scope))
+            {
+                Self::publish_signal_abort(scope, signal, reason);
+                signals.push((dependent_signal_id, signal));
             }
         }
         Some(signals)
@@ -313,6 +408,7 @@ impl AbortStore {
         Some(AbortSignalDispatch {
             algorithms: std::mem::take(&mut state.abort_algorithms),
             linked_target_listeners: std::mem::take(&mut state.linked_target_listeners),
+            dispatch_event: !state.detached,
         })
     }
 
@@ -384,7 +480,9 @@ pub(crate) fn abort_signal<'s>(
             );
         }
         // Snapshot listeners after earlier signals and abort algorithms.
-        abort_signal_events::dispatch_abort(scope, signal);
+        if dispatch.dispatch_event {
+            abort_signal_events::dispatch_abort(scope, signal);
+        }
     }
 }
 

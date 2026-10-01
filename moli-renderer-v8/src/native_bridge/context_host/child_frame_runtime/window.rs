@@ -950,7 +950,11 @@ impl JsContextHost {
         else {
             return false;
         };
-        crate::util::install_context_host_pointer_slot(context, self as *mut Self);
+        crate::util::install_context_host_pointer_slot(
+            context,
+            self as *mut Self,
+            self.context_host_lifecycle_handle(),
+        );
         let previous = context.set_slot(Rc::new(ChildWindowProxyFacadeContextHandle(handle)));
         debug_assert!(previous.is_none());
         // Keep V8's unique default security token. A facade is not a real

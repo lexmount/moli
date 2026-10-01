@@ -530,6 +530,16 @@ pub(crate) fn new_dom_exception_value<'s>(
             scope,
             "DOMException",
         )
+        .or_else(|| {
+            // A native exception must materialize its own realm's intrinsic.
+            // Reading the public Window property can run author code or enter
+            // an access check again after navigation detaches its global.
+            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+                scope,
+                "DOMException",
+            )
+            .ok()
+        })
     {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);

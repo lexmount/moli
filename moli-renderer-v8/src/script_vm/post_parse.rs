@@ -363,6 +363,13 @@ impl ScriptVmContextBootstrap {
         if let Some(registration) = realm_registration.as_mut() {
             registration.commit();
         }
+        // Child Window exposure can reach bootstrap while the caller holds
+        // the host's RefCell borrow. Follow the bootstrap's raw host access
+        // discipline and end each native read before touching V8 again.
+        if unsafe { &*host_ptr }.document_host_is_published() {
+            let queue = unsafe { &*host_ptr }.deferred_context_host_release_queue();
+            crate::util::retain_context_host_for_document_realm(local_context, context_host, queue);
+        }
         Ok(Self {
             context: v8::Global::new(scope, local_context),
             runtime_observable_context_token,

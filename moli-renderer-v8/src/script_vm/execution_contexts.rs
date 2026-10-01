@@ -406,6 +406,8 @@ impl ScriptVm {
                 Some(context)
             }
             Some(context) => {
+                let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
@@ -549,6 +551,8 @@ impl ScriptVm {
         };
         if !stale_prebootstrapped_contexts.is_empty() {
             for context in &stale_prebootstrapped_contexts {
+                let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
@@ -611,6 +615,8 @@ impl ScriptVm {
         let Some(context) = self.child_frame_realm_store.remove(&execution_context_id) else {
             return;
         };
+        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
+        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         self.cancel_history_traversals_for_retiring_window(
             crate::native_bridge::WindowExecutionContextOwner::Frame(context.local_window_id),
         );
@@ -684,8 +690,6 @@ impl ScriptVm {
             retired_timer_count,
             "retired child Runtime binding context"
         );
-        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
-        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
@@ -786,6 +790,8 @@ impl ScriptVm {
                 .destroy_context_registration(context.inspector_context_registration_id),
             "isolated context must retain its document-owned Inspector registration"
         );
+        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
+        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         // V8 Inspector consumes the still-identifiable realm while processing
         // `context_destroyed` (including Runtime lifecycle projection for
         // named child worlds). Only after that notification may the strict

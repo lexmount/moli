@@ -37,6 +37,19 @@ fn image_is_small_for_priority_boost(element: &crate::dom::native::Element) -> b
 // the host document state accessors, current-script/parser visibility
 // bookkeeping, and pending resource-load delivery that feed DCL/load decisions.
 impl DocumentRuntime {
+    pub(crate) fn retire_v8_execution_state_for_context_teardown(&mut self) {
+        self.timeouts = HostTimeoutScheduler::default();
+        self.events = HostEventTargetRegistry::default();
+        self.script_lifecycle.clear_for_document_replacement();
+        self.root_document_parser = None;
+        self.document_write_script_preload_scanner = None;
+        self.document_write_script_preloads.clear();
+        self.pending_parser_blocking_work = None;
+        self.pending_parser_post_step_runtime_work = Default::default();
+        self.reset_main_parser_continuation_for_document_replacement();
+        self.main_document_script_preloads.clear();
+    }
+
     pub(crate) fn bind_main_document_script_preload_store(
         &mut self,
         store: crate::runtime::DocumentScriptPreloadStore,

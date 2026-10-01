@@ -246,6 +246,32 @@ where
         Some((String::from_utf8_lossy(&bytes).into_owned(), mime_type))
     }
 
+    /// Revoke a departing context's URLs while preserving bytes retained by
+    /// wrappers, readers, or URLs created by another context.
+    pub fn retire_owner_resources(&self, owner_id: OwnerId) {
+        let retired = {
+            let mut urls = self.object_urls.lock();
+            let mut retired = Vec::new();
+            urls.retain(|_, state| {
+                if state.owner_id == Some(owner_id) {
+                    retired.push(state.blob_id);
+                    false
+                } else {
+                    true
+                }
+            });
+            retired
+        };
+        for blob_id in retired {
+            self.release_blob_object_url_ref(blob_id);
+        }
+        for blob in self.blobs.lock().by_id.values_mut() {
+            if blob.owner_id == Some(owner_id) {
+                blob.owner_id = None;
+            }
+        }
+    }
+
     /// Remove Blob/object URL entries owned by a context.
     pub fn cleanup_owner_resources(&self, owner_id: OwnerId) {
         let removed_blob_ids = {
@@ -502,6 +528,30 @@ mod tests {
 
         assert!(store.blob_uuid(blob).is_none());
         assert!(store.blob_bytes_by_uuid_in_partition(&uuid, &10).is_none());
+    }
+
+    #[test]
+    fn retiring_owner_preserves_wrappers_readers_and_foreign_urls() {
+        let store = BlobStore::<u64, u64>::default();
+        let blob = store.create_blob(Some(1), Some(10), b"retained".to_vec(), "text/plain".into());
+        let own_url = store
+            .create_object_url(Some(1), blob, "https://example.test")
+            .unwrap();
+        let foreign_url = store
+            .create_object_url(Some(2), blob, "https://example.test")
+            .unwrap();
+        store.retain_blob_reader_ref(blob);
+        store.retire_owner_resources(1);
+        assert!(store.object_url_bytes_and_type(&own_url).is_none());
+        assert_eq!(store.blob_bytes(blob).unwrap(), b"retained");
+        store.release_blob_wrapper_ref(blob);
+        store.release_blob_reader_ref(blob);
+        assert_eq!(
+            store.object_url_bytes_and_type(&foreign_url).unwrap().0,
+            b"retained"
+        );
+        assert!(store.revoke_object_url(&foreign_url));
+        assert!(store.blob_bytes(blob).is_none());
     }
 
     #[test]

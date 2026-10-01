@@ -487,7 +487,7 @@ fn blob_mime_type(blob_id: BlobId) -> Option<String> {
 }
 
 pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
-    blob_store().cleanup_owner_resources(owner_id);
+    blob_store().retire_owner_resources(owner_id);
 }
 
 fn release_blob_wrapper_ref(blob_id: BlobId) {

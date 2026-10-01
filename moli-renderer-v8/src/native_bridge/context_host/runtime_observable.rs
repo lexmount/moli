@@ -100,6 +100,103 @@ impl PendingRuntimeObservableConsoleSourceEvent {
 }
 
 impl JsContextHost {
+    pub(crate) fn retire_all_window_execution_context_resources_for_teardown(&mut self) {
+        let owners = self
+            .window_execution_contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut realm_tokens = self
+            .window_execution_contexts
+            .values()
+            .map(WindowExecutionContextBinding::realm_token)
+            .chain(
+                self.window_execution_context_realms
+                    .concrete_by_token
+                    .keys()
+                    .copied(),
+            )
+            .collect::<Vec<_>>();
+        realm_tokens.sort_unstable();
+        realm_tokens.dedup();
+
+        for realm_token in realm_tokens {
+            self.cancel_timers_for_context_token(realm_token);
+            self.retire_runtime_binding_context_token(realm_token);
+            self.retire_image_decode_requests_for_context_token(realm_token);
+            self.retire_webcrypto_context_token(realm_token);
+            self.retire_opfs_context_token(realm_token);
+            self.retire_workers_for_context_token(realm_token);
+            self.disconnect_shared_worker_clients_for_context_token(realm_token);
+            self.retire_window_xhrs_for_context_token(realm_token);
+            self.retire_window_fetches_for_context_token(realm_token);
+            self.retire_window_event_sources_for_context_token(realm_token);
+            self.retire_message_ports_for_context_token(realm_token);
+            self.retire_window_messages_for_context_token(realm_token);
+            self.close_broadcast_channels_for_context_token(realm_token);
+            self.retire_websockets_for_context_token(realm_token);
+            self.retire_window_execution_contexts_for_context_token(realm_token);
+        }
+
+        for owner in owners {
+            self.cancel_window_execution_context_timers(owner);
+            self.retire_webcrypto_execution_context_owner(owner);
+            self.retire_opfs_execution_context_owner(owner);
+            self.retire_workers_for_execution_context_owner(owner);
+            self.disconnect_shared_worker_clients_for_execution_context_owner(owner);
+            self.retire_window_xhrs_for_execution_context_owner(owner);
+            self.retire_window_fetches_for_execution_context_owner(owner);
+            self.retire_window_event_sources_for_execution_context_owner(owner);
+            self.retire_window_messages_for_execution_context_owner(owner);
+            self.close_broadcast_channels_for_execution_context_owner(owner);
+            self.retire_websockets_for_execution_context_owner(owner);
+            self.retire_image_decode_requests_for_execution_context_owner(owner);
+            self.retire_message_ports_for_execution_context_owner(owner);
+            self.retire_window_execution_context(owner);
+        }
+
+        self.retire_v8_execution_state_for_context_teardown();
+
+        // A detached Document realm may keep this host and its native DOM
+        // alive through the V8 Context slot. None of the host's active
+        // execution registries may in turn keep that Context alive with a
+        // strong Global handle: that would form an untraceable
+        // Context -> Rust host -> Global -> Context cycle. Chromium retires
+        // these LocalDOMWindow/ExecutionContext-owned services when the frame
+        // is detached while ordinary retained Document/Node values remain
+        // usable.
+        drop(std::mem::take(&mut self.custom_elements));
+        self.child_custom_elements.clear();
+        self.scoped_custom_elements.clear();
+        drop(std::mem::take(&mut self.custom_element_reactions));
+        drop(std::mem::take(&mut self.observers));
+        drop(std::mem::take(&mut self.child_window_proxy_records));
+        self.pending_service_worker_registers.clear();
+        self.pending_service_worker_unregisters.clear();
+        self.pending_service_worker_ready.clear();
+        self.service_worker_registration_watchers.clear();
+        self.pending_window_messages.clear();
+        drop(std::mem::take(&mut self.directory_reader_callbacks));
+        drop(std::mem::take(&mut self.misc_platform_api_tasks));
+        drop(std::mem::take(&mut self.file_entry_file_callbacks));
+        drop(std::mem::take(&mut self.user_interaction_tasks));
+        self.pending_image_load_events.clear();
+        self.pending_media_load_sequences.clear();
+        self.pending_text_track_load_sequences.clear();
+        self.pending_media_text_track_gates.clear();
+        self.resource_timing_buffers =
+            super::resource_timing::SharedResourceTimingBufferRegistry::new();
+        drop(std::mem::take(&mut self.history_queue));
+        drop(std::mem::take(&mut self.rendering_updates));
+        drop(std::mem::take(&mut self.view_transition_updates));
+        drop(std::mem::take(&mut self.media_element_events));
+        drop(std::mem::take(&mut self.element_toggle_events));
+        drop(std::mem::take(&mut self.text_track_default_modes));
+        self.child_window_event_listeners.clear();
+        drop(std::mem::take(&mut self.event_callbacks));
+        self.bridge.abort.clear_for_context_teardown();
+    }
+
     pub(crate) fn register_lightweight_popup_execution_context(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

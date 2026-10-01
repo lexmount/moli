@@ -34,7 +34,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -43,6 +43,67 @@ static DOCUMENT_ISOLATE_CREATED_COUNT: AtomicU64 = AtomicU64::new(0);
 static DOCUMENT_ISOLATE_DESTROYED_COUNT: AtomicU64 = AtomicU64::new(0);
 static DOCUMENT_ISOLATE_LIVE_COUNT: AtomicU64 = AtomicU64::new(0);
 static DOCUMENT_ISOLATE_RESERVED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RendererDeferredContextHostReleaseQueue {
+    inner: Rc<RendererDeferredContextHostReleaseQueueInner>,
+}
+
+struct RendererDeferredContextHostRelease {
+    _host: Rc<RefCell<JsContextHost>>,
+    retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
+}
+
+impl std::fmt::Debug for RendererDeferredContextHostRelease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RendererDeferredContextHostRelease")
+            .field(
+                "retained_v8_handle_state_count",
+                &self.retained_v8_handle_state.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default)]
+struct RendererDeferredContextHostReleaseQueueInner {
+    pending: RefCell<Vec<RendererDeferredContextHostRelease>>,
+    isolate_shutting_down: Cell<bool>,
+}
+
+impl RendererDeferredContextHostReleaseQueue {
+    pub(crate) fn defer(
+        &self,
+        host: Rc<RefCell<JsContextHost>>,
+        retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
+    ) {
+        let release = RendererDeferredContextHostRelease {
+            _host: host,
+            retained_v8_handle_state,
+        };
+        if self.inner.isolate_shutting_down.get() {
+            drop(release);
+            return;
+        }
+        self.inner.pending.borrow_mut().push(release);
+    }
+
+    fn drain_on_entered_isolate(&self) {
+        loop {
+            let pending = std::mem::take(&mut *self.inner.pending.borrow_mut());
+            if pending.is_empty() {
+                return;
+            }
+            drop(pending);
+        }
+    }
+
+    fn begin_isolate_shutdown(&self) {
+        self.drain_on_entered_isolate();
+        self.inner.isolate_shutting_down.set(true);
+    }
+}
 
 pub(crate) fn renderer_document_isolate_accounting_diagnostics()
 -> crate::runtime::RendererDocumentIsolateAccountingDiagnostics {
@@ -93,11 +154,8 @@ pub(super) struct ScriptVmPageRealmBootstrap {
     pub(super) resource_owner_id: ResourceOwnerId,
     pub(super) promise_reject_dispatch: PromiseRejectDispatchSlot,
     pub(super) page_inspector: DocumentInspectorBinding,
-    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
-    pub(super) document_runtime: Box<DocumentRuntime>,
     pub(super) root_frame_id: Option<String>,
-    pub(super) context_host: Rc<RefCell<JsContextHost>>,
     pub(super) prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
     pub(super) post_domcontentloaded_page_task_tx: PageTaskSender,
@@ -105,6 +163,12 @@ pub(super) struct ScriptVmPageRealmBootstrap {
     pub(super) storage_bucket_store: crate::context_bootstrap::SharedStorageBucketStore,
     pub(super) renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
     pub(super) reuse_main_window_proxy: bool,
+    // Partial bootstrap can drop before publication. Release bridge owners
+    // before their native backing, and keep V8 alive until all of it
+    // has been released.
+    pub(super) context_host: Rc<RefCell<JsContextHost>>,
+    pub(super) document_runtime: Box<DocumentRuntime>,
+    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
 }
 
 pub(super) struct ScriptVmContextBootstrap {
@@ -269,21 +333,24 @@ pub(crate) struct ScriptVmDefaultWorldBootstrap {
     pub(super) resource_owner_id: ResourceOwnerId,
     pub(super) promise_reject_dispatch: PromiseRejectDispatchSlot,
     pub(super) page_inspector: DocumentInspectorBinding,
-    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     pub(super) renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
     pub(super) page_default_context: v8::Global<v8::Context>,
     pub(super) bridge_ref: JsContextHostBridgeRef,
     pub(super) runtime_observable_context_token: RuntimeObservableContextToken,
     pub(super) baseline_globals: super::ScriptGlobalsBaseline,
-    pub(super) document_runtime: Box<DocumentRuntime>,
     pub(super) root_frame_id: Option<String>,
-    pub(super) context_host: Rc<RefCell<JsContextHost>>,
     pub(super) prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
     pub(super) post_domcontentloaded_page_task_tx: PageTaskSender,
     pub(super) page_runtime_wake_tx: PageRuntimeWakeSender,
     pub(super) storage_bucket_store: crate::context_bootstrap::SharedStorageBucketStore,
+    // Partial bootstrap can drop before publication. Release bridge owners
+    // before their native backing, and keep V8 alive until all of it
+    // has been released.
+    pub(super) context_host: Rc<RefCell<JsContextHost>>,
+    pub(super) document_runtime: Box<DocumentRuntime>,
+    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -342,6 +409,7 @@ impl RendererDocumentIsolateTeardown {
 #[derive(Clone)]
 pub(crate) struct RendererDocumentIsolateHandle {
     inner: Rc<RefCell<RendererDocumentIsolateHolder>>,
+    deferred_context_host_releases: RendererDeferredContextHostReleaseQueue,
 }
 
 impl std::fmt::Debug for RendererDocumentIsolateHandle {
@@ -352,6 +420,12 @@ impl std::fmt::Debug for RendererDocumentIsolateHandle {
 }
 
 impl RendererDocumentIsolateHandle {
+    pub(crate) fn deferred_context_host_release_queue(
+        &self,
+    ) -> RendererDeferredContextHostReleaseQueue {
+        self.deferred_context_host_releases.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn new_standalone_without_owner_reservation_for_test(
         v8_foreground_task_sender: RendererPageV8ForegroundTaskSender,
@@ -384,7 +458,11 @@ impl RendererDocumentIsolateHandle {
                 foreground_wake,
                 devtools_target_shutdown_registry,
             )?;
+        let deferred_context_host_releases = renderer_document_isolate
+            .deferred_context_host_releases
+            .clone();
         let renderer_document_isolate = Self {
+            deferred_context_host_releases,
             inner: Rc::new(RefCell::new(renderer_document_isolate)),
         };
         let isolate_backend = renderer_document_isolate.inspector_isolate_backend_handle();
@@ -445,7 +523,12 @@ impl RendererDocumentIsolateHandle {
         let inspector_backend = inspector_backend
             .as_mut()
             .expect("document isolate Inspector backend missing before ScriptVm drop");
-        with_entered_owned_isolate(isolate, |isolate| op(isolate, inspector_backend))
+        with_entered_owned_isolate(isolate, |isolate| {
+            let result = op(isolate, inspector_backend);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate();
+            result
+        })
     }
 
     pub(super) fn with_entered_renderer_document_isolate_and_inspector_mut<T>(
@@ -461,7 +544,12 @@ impl RendererDocumentIsolateHandle {
         let inspector_backend = inspector_backend
             .as_mut()
             .ok_or_else(|| anyhow!("document isolate Inspector backend unavailable"))?;
-        with_entered_owned_isolate(isolate, |isolate| op(isolate, inspector_backend))
+        with_entered_owned_isolate(isolate, |isolate| {
+            let result = op(isolate, inspector_backend);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate();
+            result
+        })
     }
 
     pub(super) fn with_renderer_document_isolate_mut<T>(
@@ -469,7 +557,12 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
     ) -> T {
         let mut holder = self.inner.borrow_mut();
-        with_entered_owned_isolate(&mut holder.isolate, op)
+        with_entered_owned_isolate(&mut holder.isolate, |isolate| {
+            let result = op(isolate);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate();
+            result
+        })
     }
 
     pub(super) fn with_entered_renderer_document_isolate<T>(
@@ -477,7 +570,12 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate) -> Result<T>,
     ) -> Result<T> {
         let mut holder = self.inner.borrow_mut();
-        with_entered_owned_isolate(&mut holder.isolate, op)
+        with_entered_owned_isolate(&mut holder.isolate, |isolate| {
+            let result = op(isolate);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate();
+            result
+        })
     }
 
     pub(super) fn with_entered_renderer_document_isolate_and_bootstrap<T>(
@@ -488,7 +586,12 @@ impl RendererDocumentIsolateHandle {
         let RendererDocumentIsolateHolder {
             isolate, bootstrap, ..
         } = &mut *holder;
-        with_entered_owned_isolate(isolate, |isolate| op(isolate, &*bootstrap))
+        with_entered_owned_isolate(isolate, |isolate| {
+            let result = op(isolate, &*bootstrap);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate();
+            result
+        })
     }
 
     pub(super) fn unregister_renderer_document_isolate_platform(&self) {
@@ -506,6 +609,7 @@ impl RendererDocumentIsolateHandle {
 }
 
 pub(super) struct RendererDocumentIsolateHolder {
+    deferred_context_host_releases: RendererDeferredContextHostReleaseQueue,
     // Unregister before destroying the Inspector backend so owner shutdown
     // never observes a target whose isolate has already been disposed.
     _devtools_target_shutdown_registration: Option<RendererDevToolsTargetShutdownRegistration>,
@@ -675,6 +779,7 @@ impl RendererDocumentIsolateHolder {
         isolate: v8::OwnedIsolate,
     ) -> Self {
         Self {
+            deferred_context_host_releases: RendererDeferredContextHostReleaseQueue::default(),
             _devtools_target_shutdown_registration: devtools_target_shutdown_registration,
             inspector_backend: Some(inspector_backend),
             bootstrap,
@@ -694,6 +799,7 @@ impl Drop for RendererDocumentIsolateHolder {
         unsafe {
             self.isolate.enter();
         }
+        self.deferred_context_host_releases.begin_isolate_shutdown();
     }
 }
 
