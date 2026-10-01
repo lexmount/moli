@@ -152,6 +152,11 @@ fn handler_setter<'s>(
         return;
     };
     media_queries::simple_object_event_set_ordered_handler(
-        scope, target, &listeners, event_type, slot, active,
+        scope,
+        target,
+        &listeners,
+        *event_type,
+        slot,
+        active,
     );
 }

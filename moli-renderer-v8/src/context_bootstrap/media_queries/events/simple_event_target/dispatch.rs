@@ -1,4 +1,5 @@
 use super::*;
+use crate::event_type::EventTypeKey;
 use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
@@ -46,7 +47,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     slot_name: &str,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     dispatch_simple_event_target_event_collecting_errors(
@@ -64,7 +65,7 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     slot_name: &str,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
@@ -84,7 +85,7 @@ pub(crate) fn dispatch_simple_event_target_event_with_original_target<'s>(
     target: v8::Local<'s, v8::Object>,
     original_target: v8::Local<'s, v8::Object>,
     slot_name: &str,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     dispatch_simple_event_target_event_with_original_target_collecting_errors(
@@ -104,7 +105,7 @@ fn dispatch_simple_event_target_event_with_original_target_collecting_errors<'s>
     target: v8::Local<'s, v8::Object>,
     original_target: v8::Local<'s, v8::Object>,
     slot_name: &str,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
@@ -117,7 +118,7 @@ fn dispatch_simple_event_target_event_with_original_target_collecting_errors<'s>
             event,
         );
 
-    let error_arguments = if event_type == "error"
+    let error_arguments = if event_type.is_type("error")
         && (crate::web_api_interfaces::WorkerGlobalScope::is_instance(scope, target)
             || crate::web_api_interfaces::Window::is_instance(scope, target))
     {
@@ -136,7 +137,8 @@ fn dispatch_simple_event_target_event_with_original_target_collecting_errors<'s>
     };
     if can_invoke && !simple_event_target_uses_ordered_handlers(scope, target) {
         let handler_name = format!("on{event_type}");
-        if let Some(handler_key) = v8_string(scope, &handler_name)
+        if let Some(event_key) = event_type.to_v8(scope)
+            && let Some(handler_key) = v8::String::concat(scope, v8str(scope, "on"), event_key)
             && let Some(handler_value) = target.get(scope, handler_key.into())
             && let Ok(handler) = v8::Local::<v8::Object>::try_from(handler_value)
             && handler.is_callable()
@@ -223,7 +225,7 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     slot_name: &str,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
     capture_phase: bool,
     handler_arguments: &[v8::Local<'s, v8::Value>],
@@ -303,7 +305,7 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
 
 pub(crate) fn invoke_simple_event_listener<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     callback_name: &str,
     listener: &SimpleObjectEventListenerSnapshot<'s>,
     callback_this: v8::Local<'s, v8::Value>,
@@ -332,7 +334,7 @@ struct SimpleEventCallbackResult {
 #[allow(clippy::too_many_arguments)]
 fn invoke_simple_event_listener_collecting_errors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     callback_name: &str,
     listener: &SimpleObjectEventListenerSnapshot<'s>,
     callback_this: v8::Local<'s, v8::Value>,
@@ -365,7 +367,7 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
 #[allow(clippy::too_many_arguments)]
 fn invoke_simple_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     callback_name: &str,
     callback: v8::Local<'s, v8::Object>,
     relevant_context: v8::Local<'s, v8::Context>,
@@ -417,7 +419,7 @@ fn simple_event_target_interface_name<'s>(
 #[allow(clippy::too_many_arguments)]
 fn invoke_simple_event_callback_with_invocation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     callback_name: &str,
     callback_target: v8::Local<'s, v8::Value>,
     relevant_context: v8::Local<'s, v8::Context>,

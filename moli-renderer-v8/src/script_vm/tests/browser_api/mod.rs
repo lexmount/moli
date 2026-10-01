@@ -28,6 +28,7 @@ mod document_open_origin;
 mod event_constructor_type;
 mod event_handlers;
 mod event_listener_options;
+mod event_listener_type;
 mod events_selection_storage;
 mod fontface_descriptors;
 mod fullscreen;

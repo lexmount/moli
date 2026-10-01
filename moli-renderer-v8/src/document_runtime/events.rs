@@ -1,4 +1,5 @@
 use super::*;
+use crate::event_type::EventTypeKey;
 use crate::host::HostTimerOwner;
 use crate::host::PublicEventDispatchResult;
 use crate::script_provenance::CompiledStringProvenance;
@@ -388,7 +389,7 @@ impl DocumentRuntime {
     pub(crate) fn event_listener_callback_ids(
         &self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         capture: bool,
     ) -> Vec<crate::native_bridge::EventCallbackId> {
         self.events
@@ -405,7 +406,7 @@ impl DocumentRuntime {
     pub(crate) fn insert_event_listener(
         &mut self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         registration: crate::host::EventListenerRegistration,
     ) {
         if !self
@@ -427,7 +428,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_event_listener_by_id(
         &mut self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: crate::native_bridge::EventCallbackId,
         capture: bool,
     ) -> bool {
@@ -445,7 +446,7 @@ impl DocumentRuntime {
     pub(crate) fn set_event_handler_property(
         &mut self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
         self.events
@@ -455,7 +456,7 @@ impl DocumentRuntime {
     pub(crate) fn set_compiled_event_handler_property(
         &mut self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
         self.events
@@ -465,7 +466,7 @@ impl DocumentRuntime {
     pub(crate) fn set_event_handler_content_attribute(
         &mut self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         owner: Option<DomHandle>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
         self.events
@@ -527,7 +528,7 @@ impl DocumentRuntime {
     pub(crate) fn uncompiled_event_handler_content_attribute_owner(
         &self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<DomHandle> {
         self.events
             .uncompiled_event_handler_content_attribute_owner(target, event_type)
@@ -536,13 +537,17 @@ impl DocumentRuntime {
     pub(crate) fn event_handler_property_callback_id(
         &self,
         target: EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<Option<crate::native_bridge::EventCallbackId>> {
         self.events
             .event_handler_property_callback_id(target, event_type)
     }
 
-    pub(crate) fn has_event_listener(&self, target: EventTargetHandle, event_type: &str) -> bool {
+    pub(crate) fn has_event_listener(
+        &self,
+        target: EventTargetHandle,
+        event_type: &(impl EventTypeKey + ?Sized),
+    ) -> bool {
         self.events.has_listener(target, event_type)
     }
 

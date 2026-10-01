@@ -50,6 +50,7 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
+use crate::event_type::{EventType, EventTypeKey};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -280,7 +281,7 @@ fn register_dom_event_target_listener<'s>(
     ) else {
         return;
     };
-    if call.event_type == "selectionchange"
+    if call.event_type.is_type("selectionchange")
         && target == EventTargetHandle::Node(host.document_handle())
     {
         define_non_enumerable_static_bool_property(
@@ -300,7 +301,9 @@ fn register_dom_event_target_listener<'s>(
             capture,
         );
     }
-    if !matches!(target, EventTargetHandle::ChildWindow(_)) && call.event_type == "animationstart" {
+    if !matches!(target, EventTargetHandle::ChildWindow(_))
+        && call.event_type.is_type("animationstart")
+    {
         queue_animation_start_for_listener_target(scope, host_ptr, target);
     }
 }
@@ -308,11 +311,11 @@ fn register_dom_event_target_listener<'s>(
 fn default_passive_value(
     host: &JsContextHost,
     target: EventTargetHandle,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
 ) -> bool {
     if !matches!(
-        event_type,
-        "touchstart" | "touchmove" | "wheel" | "mousewheel"
+        event_type.as_str(),
+        Some("touchstart" | "touchmove" | "wheel" | "mousewheel")
     ) {
         return false;
     }
@@ -459,7 +462,9 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     }
 
     set_event_trusted(scope, event, false);
-    let event_type = event_type_string(scope, event);
+    let Some(event_type) = event_type_value(scope, event) else {
+        return;
+    };
     if let Some(receiver) = window_receiver {
         let Some(binding) = receiver.resolve_live_binding(host) else {
             rv.set_bool(true);
@@ -470,12 +475,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
             let event = v8::Local::new(scope, &event);
             let host = unsafe { &mut *host_ptr };
             if let OwnerDispatchScope::Child(handle) = dispatch_scope {
-                host.dispatch_child_window_event(
-                    scope,
-                    handle,
-                    event_type.as_deref().unwrap_or_default(),
-                    event,
-                );
+                host.dispatch_child_window_event(scope, handle, &event_type, event);
                 Ok(!crate::context_bootstrap::event_bool_attribute(
                     scope,
                     event,
@@ -484,7 +484,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
             } else {
                 host.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)
                     .map(|dispatch| {
-                        if let Some(event_type) = event_type.as_deref() {
+                        if let Some(event_type) = event_type.as_str() {
                             increment_performance_event_count(scope, event_type);
                         }
                         dispatch.dispatch_event_return_value()
@@ -502,7 +502,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    let click_activation_target = if event_type.as_deref() == Some("click")
+    let click_activation_target = if event_type.is_type("click")
         && event_is_mouse_event(scope, event)
         && let EventTargetHandle::Node(handle) = target
     {
@@ -520,7 +520,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     match host.dispatch_public_event(scope, host_ptr, target, event) {
         Ok(dispatch) => {
             let return_value = dispatch.dispatch_event_return_value();
-            if let Some(event_type) = event_type.as_deref() {
+            if let Some(event_type) = event_type.as_str() {
                 increment_performance_event_count(scope, event_type);
             }
             if let Some(activation) = legacy_click_activation {
@@ -540,14 +540,14 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     }
 }
 
-fn event_type_string(
+fn event_type_value(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
-) -> Option<String> {
+) -> Option<EventType> {
     crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "type").into())
         .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+        .map(|value| EventType::from_v8(scope, value))
 }
 
 pub(super) fn window_set_timeout_callback<'s>(

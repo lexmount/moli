@@ -57,6 +57,7 @@ mod document_task_lane;
 mod dom_parser;
 mod dynamic_script_owner;
 mod event_listener_args;
+mod event_type;
 mod exception_reporting;
 mod frame_owner_model;
 mod host;

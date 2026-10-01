@@ -23,7 +23,7 @@ pub(in crate::context_bootstrap) fn media_query_list_add_listener_callback<'s>(
         scope,
         args.this(),
         MEDIA_QUERY_LIST_LISTENERS_SLOT,
-        "change".to_owned(),
+        "change".into(),
         listener,
         webidl::EventListenerOptions::default(),
         None,

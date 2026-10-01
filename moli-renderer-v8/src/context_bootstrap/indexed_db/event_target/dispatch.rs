@@ -2,6 +2,7 @@ use super::*;
 use crate::context_bootstrap::{
     EventHandlerType, event_target_dispatch, events, invoke_simple_event_target_listeners,
 };
+use crate::event_type::EventTypeKey;
 use crate::util::get_private_object;
 
 #[derive(Clone, Copy)]
@@ -61,7 +62,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
 ) -> IdbEventDispatchResult {
     let mut result = IdbEventDispatchResult::default();
     let mut path = vec![target];

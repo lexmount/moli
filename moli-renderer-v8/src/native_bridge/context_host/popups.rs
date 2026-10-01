@@ -4,6 +4,7 @@ use super::{
     JsContextHost, NavigationHistoryEntrySeed, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::document_response_decoder::decode_document_response;
+use crate::event_type::EventTypeKey;
 use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
@@ -3626,7 +3627,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: PopupWindowEventTarget,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
         capture_only: bool,
         at_target: bool,
@@ -3649,7 +3650,7 @@ impl JsContextHost {
         let previous_message_source = self.enter_window_message_source_scope(
             super::PendingWindowMessageEndpoint::LightweightPopup(popup_id),
         );
-        let error_arguments = (event_type == "error")
+        let error_arguments = (event_type.is_type("error"))
             .then(|| crate::context_bootstrap::error_event_handler_arguments(scope, event))
             .flatten();
         let ordinary_arguments = [event.into()];
