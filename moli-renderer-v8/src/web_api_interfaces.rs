@@ -296,6 +296,8 @@ interfaces! {
     IntersectionObserverEntry;
     KeyboardEvent: UIEvent;
     KeyframeEffect: AnimationEffect;
+    Lock;
+    LockManager;
     Location;
     MathMLElement: Element;
     MediaCapabilities;
