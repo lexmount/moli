@@ -36,6 +36,11 @@ interfaces! {
     MIDIOutput: MIDIPort;
     MIDIOutputMap;
     MIDIPort: EventTarget;
+    MediaKeyMessageEvent: Event;
+    MediaKeySession: EventTarget;
+    MediaKeyStatusMap;
+    MediaKeySystemAccess;
+    MediaKeys;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
