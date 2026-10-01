@@ -38,6 +38,18 @@ pub(crate) fn parse_style_property_entries_with_base(
         return None;
     }
 
+    if crate::detached_css_style::css_style_declaration_is_shell_property(&name) {
+        let value = crate::css_style::parse_css_style_shell_keyword(value)?;
+        return Some(ParsedStylePropertyEntries {
+            entries: vec![StyleEntry {
+                name: name.clone(),
+                value: value.to_owned(),
+                priority,
+            }],
+            affected_names: vec![name],
+        });
+    }
+
     if mask_compat_property_name(&name)
         && !stylo_mask_property_name(&name)
         && !mask_compat_value_is_supported(&name, value)

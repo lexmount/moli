@@ -20,6 +20,14 @@ pub(crate) fn stylo_property_is_chromium_exposed(name: &str) -> bool {
         && !matches!(name, "mask-position-x" | "mask-position-y")
 }
 
+pub(crate) fn parse_css_style_shell_keyword(value: &str) -> Option<&'static str> {
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+    style::properties::CSSWideKeyword::parse(&mut parser)
+        .ok()
+        .map(|keyword| keyword.to_str())
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.item")]
 pub(crate) struct CssStyleDeclarationItemArgs {

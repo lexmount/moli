@@ -84,7 +84,9 @@ fn eval_stylo_supports_condition(condition: &SupportsCondition, context: &Parser
         SupportsCondition::Or(conditions) => conditions
             .iter()
             .any(|condition| eval_stylo_supports_condition(condition, context)),
-        SupportsCondition::Declaration(declaration) => declaration.eval(context),
+        SupportsCondition::Declaration(declaration) => {
+            shell_supports_declaration(&declaration.0).unwrap_or_else(|| declaration.eval(context))
+        }
         SupportsCondition::Selector(selector) => selector.eval(context),
         SupportsCondition::FontFormat(_) | SupportsCondition::FontTech(_) => {
             let css = condition.to_css_string();
@@ -94,6 +96,27 @@ fn eval_stylo_supports_condition(condition: &SupportsCondition, context: &Parser
             .or_else(|| condition::css_supports_at_rule_condition(css))
             .unwrap_or(false),
     }
+}
+
+fn shell_supports_declaration(declaration: &str) -> Option<bool> {
+    let mut input = ParserInput::new(declaration);
+    let mut parser = Parser::new(&mut input);
+    let property = parser.expect_ident_cloned().ok()?;
+    let property = crate::css_style::canonical_style_property_name(&property);
+    if !crate::detached_css_style::css_style_declaration_is_shell_property(&property) {
+        return None;
+    }
+    if parser.expect_colon().is_err() {
+        return Some(false);
+    }
+    let supported = parser
+        .parse_until_before(cssparser::Delimiter::Bang, |input| {
+            style::properties::CSSWideKeyword::parse(input)
+                .map_err(|()| input.new_custom_error::<(), ()>(()))
+        })
+        .is_ok();
+    let _ = parser.try_parse(cssparser::parse_important);
+    Some(supported && parser.expect_exhausted().is_ok())
 }
 
 fn with_stylo_supports_context<R>(f: impl FnOnce(&ParserContext) -> R) -> Option<R> {
