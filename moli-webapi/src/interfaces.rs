@@ -99,6 +99,8 @@ interfaces! {
     PerformanceServerTiming;
     ReportBody;
     ReportingObserver;
+    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
+    SpeechSynthesisEvent: Event;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
@@ -679,8 +681,8 @@ interfaces! {
     SharedWorker: EventTarget;
     SharedWorkerGlobalScope: WorkerGlobalScope;
     SpeechSynthesis: EventTarget;
-    SpeechSynthesisEvent: Event;
-    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
+
+
     SpeechSynthesisUtterance: EventTarget;
     SpeechSynthesisVoice;
     StaticRange: AbstractRange;
