@@ -91,28 +91,37 @@ fn remove_stylo_declaration_block(id: u64) {
     });
 }
 
-pub(crate) fn create_lightweight_css_style_stylo_declaration_block(
-    block: &moli_css_parse::CssDeclarationBlock,
-) -> u64 {
+pub(crate) fn create_lightweight_css_style_stylo_declaration_block() -> u64 {
     let id = next_stylo_declaration_block_id();
     STYLO_DECLARATION_BLOCKS.with(|blocks| {
-        blocks.borrow_mut().insert(id, block.clone());
+        blocks
+            .borrow_mut()
+            .insert(id, moli_css_parse::CssDeclarationBlock::default());
     });
     id
-}
-
-pub(crate) fn store_lightweight_css_style_stylo_declaration_block(
-    id: u64,
-    block: &moli_css_parse::CssDeclarationBlock,
-) {
-    STYLO_DECLARATION_BLOCKS.with(|blocks| {
-        blocks.borrow_mut().insert(id, block.clone());
-    });
 }
 
 pub(crate) fn lightweight_css_style_stylo_declaration_block_css_text(id: u64) -> Option<String> {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     STYLO_DECLARATION_BLOCKS.with(|blocks| blocks.borrow().get(&id).map(|block| block.css_text()))
+}
+
+pub(crate) fn set_lightweight_css_style_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    block: moli_css_parse::CssDeclarationBlock,
+) {
+    debug_assert!(lightweight_style_interface_uses_standard_declarations(
+        scope, style
+    ));
+    // Callers supply a fresh style or one backed solely by a declaration block.
+    // Replacing that block must not clear and rebuild the indexed names twice.
+    ensure_stylo_declaration_block(scope, style);
+    let id =
+        stylo_declaration_block_id(scope, style).expect("style declaration block is initialized");
+    let names = stylo_declaration_block_property_names(&block);
+    STYLO_DECLARATION_BLOCKS.with(|blocks| blocks.borrow_mut().insert(id, block));
+    set_style_names(scope, style, &names);
 }
 
 pub(crate) fn remove_lightweight_css_style_stylo_declaration_block(id: u64) {
@@ -928,7 +937,11 @@ fn set_lightweight_css_style_css_text_internal<'s>(
         && set_css_text_as_stylo_declaration_block(scope, style, css_text).is_some()
     {
         if notify {
-            notify_style_changed(scope, style);
+            notify_style_changed(
+                scope,
+                style,
+                crate::css_style::CssDeclarationMutation::CssText(css_text),
+            );
         }
         return true;
     }
@@ -936,7 +949,11 @@ fn set_lightweight_css_style_css_text_internal<'s>(
         set_style_entry(scope, style, &entry.name, &entry.value, entry.priority);
     }
     if notify {
-        notify_style_changed(scope, style);
+        notify_style_changed(
+            scope,
+            style,
+            crate::css_style::CssDeclarationMutation::CssText(css_text),
+        );
     }
     true
 }
@@ -1189,12 +1206,7 @@ fn ensure_stylo_declaration_block<'s>(
     if stylo_declaration_block_id(scope, style).is_some() {
         return;
     }
-    let id = next_stylo_declaration_block_id();
-    STYLO_DECLARATION_BLOCKS.with(|blocks| {
-        blocks
-            .borrow_mut()
-            .insert(id, moli_css_parse::CssDeclarationBlock::default());
-    });
+    let id = create_lightweight_css_style_stylo_declaration_block();
     set_stylo_declaration_block_id(scope, style, id);
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, style, move || {
         remove_stylo_declaration_block(id)
@@ -1430,17 +1442,44 @@ fn set_style_property_priority(
     }
 }
 
-fn notify_style_changed<'s>(scope: &mut v8::PinScope<'s, '_>, style: v8::Local<'s, v8::Object>) {
+fn notify_style_changed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    mutation: crate::css_style::CssDeclarationMutation<'_>,
+) {
     let Some(callback) = style_private_value(scope, style, STYLE_CHANGE_CALLBACK_SLOT)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
         return;
     };
+    // Internal callbacks keep the style receiver in argument 0. A null property
+    // means cssText replacement; otherwise pass the single authored operation.
+    let (name, value, important) = match mutation {
+        crate::css_style::CssDeclarationMutation::CssText(text) => (None, text, false),
+        crate::css_style::CssDeclarationMutation::Property {
+            name,
+            value,
+            important,
+        } => (Some(name), value, important),
+    };
+    let name: v8::Local<v8::Value> = match name {
+        Some(name) => {
+            let Some(name) = v8_string(scope, name) else {
+                return;
+            };
+            name.into()
+        }
+        None => v8::null(scope).into(),
+    };
+    let Some(value) = v8_string(scope, value) else {
+        return;
+    };
+    let important = v8::Boolean::new(scope, important);
     let _ = call_script_visible_function(
         scope,
         callback,
         style.into(),
-        &[style.into()],
+        &[style.into(), name, value.into(), important.into()],
         "lightweight CSS style change callback",
     );
 }
@@ -2829,7 +2868,15 @@ fn style_named_property_setter_callback<'s>(
         return;
     };
     set_style_entry(scope, style, &name, &value, false);
-    notify_style_changed(scope, style);
+    notify_style_changed(
+        scope,
+        style,
+        crate::css_style::CssDeclarationMutation::Property {
+            name: &name,
+            value: &value,
+            important: false,
+        },
+    );
 }
 
 fn style_set_property_callback<'s>(
@@ -2862,7 +2909,15 @@ fn style_set_property_callback<'s>(
         &parsed.value,
         parsed.priority.eq_ignore_ascii_case("important"),
     );
-    notify_style_changed(scope, style);
+    notify_style_changed(
+        scope,
+        style,
+        crate::css_style::CssDeclarationMutation::Property {
+            name: &parsed.property,
+            value: &parsed.value,
+            important: parsed.priority.eq_ignore_ascii_case("important"),
+        },
+    );
 }
 
 fn style_get_property_value_callback<'s>(
@@ -2936,7 +2991,15 @@ fn style_remove_property_callback<'s>(
     } else {
         set_style_entry(scope, style, &name, "", false);
     }
-    notify_style_changed(scope, style);
+    notify_style_changed(
+        scope,
+        style,
+        crate::css_style::CssDeclarationMutation::Property {
+            name: &name,
+            value: "",
+            important: false,
+        },
+    );
     if let Some(previous) = v8_string(scope, &previous) {
         rv.set(previous.into());
     } else {

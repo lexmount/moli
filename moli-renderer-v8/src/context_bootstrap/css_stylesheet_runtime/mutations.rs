@@ -18,30 +18,20 @@ fn sync_css_rule_pdb_style_wrapper_from_declaration_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
     style_object_slot: &'static str,
-    kind: CssRulePdbDeclarationKind,
     declaration_text: &str,
 ) {
-    seed_css_rule_stylo_declaration_block_from_declaration_text(
-        scope,
-        rule,
-        declaration_text,
-        kind,
-    );
     let Some(style) = get_private_value(scope, rule, style_object_slot)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
         return;
     };
-    attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text_without_notify(scope, style, declaration_text);
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
+    initialize_css_rule_style_object(scope, rule, style, declaration_text);
 }
 
 fn sync_css_rule_pdb_style_wrapper_from_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
     style_object_slot: &'static str,
-    kind: CssRulePdbDeclarationKind,
     snapshot: &CssRuleSnapshot,
 ) {
     let Some(declaration_text) = snapshot.declaration_text.as_deref() else {
@@ -52,7 +42,6 @@ fn sync_css_rule_pdb_style_wrapper_from_snapshot<'s>(
         scope,
         rule,
         style_object_slot,
-        kind,
         declaration_text,
     );
 }
@@ -175,14 +164,13 @@ pub(crate) fn build_css_rule_object_from_live_stylesheet_rule_path<'s>(
                 style_rule_context,
             )
             .ok()?;
-            Some(build_css_style_rule_object_from_stylo_view(
+            Some(build_css_style_rule_object(
                 scope,
                 CssStyleRuleTextParts {
                     css_text: String::new(),
                     selector_text,
-                    style_text: declaration_text.clone(),
+                    style_text: declaration_text,
                 },
-                &declaration_text,
                 Some(parent_style_sheet),
                 parent_rule,
             ))
@@ -651,32 +639,27 @@ fn freeze_css_rule_wrapper_from_native_snapshot<'s>(
     rule: v8::Local<'s, v8::Object>,
     snapshot: &CssRuleSnapshot,
     child_snapshots: v8::Local<'s, v8::Array>,
+    declaration_source: Option<v8::Local<'s, v8::Object>>,
     exposed_parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
 ) {
     set_css_rule_snapshot_type(scope, rule, Some(snapshot.rule_type));
+    set_css_rule_detached_declaration_source(scope, rule, declaration_source);
     if snapshot.rule_type == CssRuleType::Keyframe {
         sync_css_keyframe_rule_object_from_native_snapshot(scope, rule, snapshot);
-        sync_css_rule_pdb_style_wrapper_from_snapshot(
-            scope,
-            rule,
-            CSS_KEYFRAME_RULE_STYLE_OBJECT_SLOT,
-            CssRulePdbDeclarationKind::KeyframeRule,
-            snapshot,
-        );
     } else {
         let selector_context = exposed_parent_style_sheet
             .map(|sheet| css_style_sheet_selector_namespace_context(scope, sheet))
             .unwrap_or_default();
         sync_css_rule_object_from_native_snapshot(scope, rule, snapshot, &selector_context);
-        if snapshot.rule_type == CssRuleType::Style {
-            sync_css_rule_pdb_style_wrapper_from_snapshot(
-                scope,
-                rule,
-                CSS_STYLE_RULE_STYLE_OBJECT_SLOT,
-                CssRulePdbDeclarationKind::StyleRule,
-                snapshot,
-            );
-        }
+    }
+    let style_slot = match snapshot.rule_type {
+        CssRuleType::Style => Some(CSS_STYLE_RULE_STYLE_OBJECT_SLOT),
+        CssRuleType::Keyframe => Some(CSS_KEYFRAME_RULE_STYLE_OBJECT_SLOT),
+        CssRuleType::NestedDeclarations => Some(CSS_NESTED_DECLARATIONS_STYLE_OBJECT_SLOT),
+        _ => None,
+    };
+    if let Some(slot) = style_slot {
+        sync_css_rule_pdb_style_wrapper_from_snapshot(scope, rule, slot, snapshot);
     }
 
     let _ = set_detached_css_rule_snapshot_text(scope, rule, &snapshot.css_text);
@@ -705,12 +688,14 @@ fn freeze_css_rule_wrapper_from_native_snapshot<'s>(
             continue;
         };
         let child_snapshots = entry.child_snapshots;
+        let declaration_source = entry.declaration_source;
         let child_snapshot = entry.complete_snapshot(scope);
         freeze_css_rule_wrapper_from_native_snapshot(
             scope,
             child,
             &child_snapshot,
             child_snapshots,
+            declaration_source,
             exposed_parent_style_sheet,
         );
     }
@@ -720,19 +705,18 @@ pub(crate) fn freeze_css_rule_wrapper_from_retained_native_binding<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(snapshot) = css_rule_retained_native_snapshot_for_detach(scope, rule) else {
+    let Some(retained) = css_rule_retained_native_snapshot_for_detach(scope, rule) else {
         return false;
     };
     let parent_style_sheet = get_private_value(scope, rule, CSS_RULE_PARENT_STYLE_SHEET_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-    set_detached_css_rule_child_snapshots(scope, rule, &snapshot.child_rules);
-    let child_snapshots = detached_css_rule_child_snapshot_array(scope, rule)
-        .expect("detached CSSRule child snapshot backing should initialize");
+    let entry = encode_retained_css_rule_snapshot(scope, retained);
     freeze_css_rule_wrapper_from_native_snapshot(
         scope,
         rule,
-        &snapshot,
-        child_snapshots,
+        &entry.snapshot,
+        entry.child_snapshots,
+        entry.declaration_source,
         parent_style_sheet,
     );
     true
@@ -767,15 +751,49 @@ pub(crate) fn nested_rule_block_text_from_stylo_mutation(
     parts.join("\n")
 }
 
-pub(crate) fn apply_live_stylesheet_rule_declaration_block_mutation<'s>(
+pub(crate) fn apply_live_stylesheet_cssom_declaration_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
-    kind: CssRulePdbDeclarationKind,
+    args: &v8::FunctionCallbackArguments<'s>,
 ) -> bool {
-    let Some(declaration_text) = css_rule_stylo_declaration_block_css_text(scope, rule) else {
+    use crate::css_style::CssDeclarationMutation;
+    let style = args.this();
+    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
+    if args.length() != 4 || !css_rule_stylo_declaration_block_is_valid(scope, rule) {
+        return false;
+    }
+    let Some(sheet) = get_private_object(scope, rule, CSS_RULE_PARENT_STYLE_SHEET_SLOT) else {
         return false;
     };
-    apply_live_stylesheet_rule_declaration_text_mutation(scope, rule, kind, &declaration_text)
+    let Some(path) = css_rule_attached_native_path(scope, rule, sheet) else {
+        return false;
+    };
+    let Some(value) = args.get(2).to_string(scope) else {
+        return false;
+    };
+    let value = value.to_rust_string_lossy(scope);
+    let name = (!args.get(1).is_null()).then(|| args.get(1).to_rust_string_lossy(scope));
+    let mutation = match name.as_deref() {
+        Some(name) => CssDeclarationMutation::Property {
+            name,
+            value: &value,
+            important: args.get(3).boolean_value(scope),
+        },
+        None => CssDeclarationMutation::CssText(&value),
+    };
+    if require_css_style_sheet_live_stylesheet(scope, sheet)
+        .mutate_rule_declarations(&path, mutation)
+        .is_err()
+    {
+        return false;
+    }
+    // The stylesheet parser owns URL, quirks-mode and rule-type context. Keep
+    // the CSSOM cache in sync with its result, including rejected declarations.
+    let block = css_rule_attached_native_declaration_block(scope, rule)
+        .expect("a successful declaration mutation retains its attached rule");
+    set_lightweight_css_style_declaration_block(scope, style, block);
+    sync_css_style_sheet_change(scope, sheet);
+    true
 }
 
 pub(crate) fn apply_live_stylesheet_rule_declaration_text_mutation<'s>(
@@ -1130,7 +1148,6 @@ fn sync_attached_css_rule_root_from_seed<'s>(
                 scope,
                 rule,
                 CSS_STYLE_RULE_STYLE_OBJECT_SLOT,
-                CssRulePdbDeclarationKind::StyleRule,
                 &declaration_text,
             );
             CssRuleType::Style
@@ -1150,7 +1167,6 @@ fn sync_attached_css_rule_root_from_seed<'s>(
                 scope,
                 rule,
                 CSS_KEYFRAME_RULE_STYLE_OBJECT_SLOT,
-                CssRulePdbDeclarationKind::KeyframeRule,
                 &declaration_text,
             );
             CssRuleType::Keyframe
@@ -1168,7 +1184,6 @@ fn sync_attached_css_rule_root_from_seed<'s>(
                 scope,
                 rule,
                 CSS_NESTED_DECLARATIONS_STYLE_OBJECT_SLOT,
-                CssRulePdbDeclarationKind::NestedDeclarations,
                 &declaration_text,
             );
             CssRuleType::NestedDeclarations

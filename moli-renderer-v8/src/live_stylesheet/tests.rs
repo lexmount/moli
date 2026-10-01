@@ -737,6 +737,7 @@ fn parent_rule_replacement_rebinds_root_and_detaches_old_descendants() {
         registry
             .retained_rule_wrapper_snapshot_for_detach(child_id)
             .unwrap()
+            .snapshot
             .css_text,
         ".old { color: red; }"
     );

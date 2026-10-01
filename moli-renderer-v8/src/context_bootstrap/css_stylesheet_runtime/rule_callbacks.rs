@@ -6,6 +6,19 @@ thread_local! {
     static CSS_RULE_WRAPPER_CONSTRUCTION_COUNT: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
+    static CSS_RULE_DECLARATION_BLOCK_CREATION_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_css_rule_declaration_block_creation_count_for_test() {
+    CSS_RULE_DECLARATION_BLOCK_CREATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn css_rule_declaration_block_creation_count_for_test() -> usize {
+    CSS_RULE_DECLARATION_BLOCK_CREATION_COUNT.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -123,6 +136,7 @@ pub(crate) fn build_detached_css_rule_object_from_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &CssRuleSnapshot,
     child_snapshots: v8::Local<'s, v8::Array>,
+    declaration_source: Option<v8::Local<'s, v8::Object>>,
     parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
     parent_rule: Option<v8::Local<'s, v8::Object>>,
     selector_context: &CssomSelectorNamespaceContext,
@@ -148,14 +162,13 @@ pub(crate) fn build_detached_css_rule_object_from_snapshot<'s>(
         let declaration_text = snapshot.declaration_text.as_deref().unwrap_or_default();
         let child_text = detached_css_rule_snapshot_array_texts(scope, child_snapshots).join("\n");
         let style_text = join_css_rule_blocks(declaration_text, &child_text);
-        build_css_style_rule_object_from_stylo_view(
+        build_css_style_rule_object(
             scope,
             CssStyleRuleTextParts {
                 css_text: snapshot.css_text.clone(),
                 selector_text,
                 style_text,
             },
-            declaration_text,
             parent_style_sheet,
             parent_rule,
         )
@@ -209,6 +222,7 @@ pub(crate) fn build_detached_css_rule_object_from_snapshot<'s>(
     let _ = set_detached_css_rule_snapshot_text(scope, rule, &snapshot.css_text);
     set_css_rule_snapshot_type(scope, rule, Some(snapshot.rule_type));
     set_detached_css_rule_child_snapshot_array(scope, rule, child_snapshots);
+    set_css_rule_detached_declaration_source(scope, rule, declaration_source);
     rule
 }
 
@@ -832,16 +846,16 @@ pub(crate) fn css_rule_stylo_declaration_block_is_valid<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-pub(crate) fn ensure_css_rule_stylo_declaration_block_id<'s>(
+fn ensure_css_rule_stylo_declaration_block_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
 ) -> u64 {
     if let Some(id) = css_rule_stylo_declaration_block_id(scope, rule) {
         return id;
     }
-    let id = create_lightweight_css_style_stylo_declaration_block(
-        &moli_css_parse::CssDeclarationBlock::default(),
-    );
+    #[cfg(test)]
+    CSS_RULE_DECLARATION_BLOCK_CREATION_COUNT.with(|count| count.set(count.get() + 1));
+    let id = create_lightweight_css_style_stylo_declaration_block();
     set_css_rule_stylo_declaration_block_id(scope, rule, id);
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, rule, move || {
         remove_lightweight_css_style_stylo_declaration_block(id)
@@ -854,14 +868,37 @@ pub(crate) fn attach_css_rule_stylo_declaration_block_to_style<'s>(
     rule: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
 ) {
+    // Rule enumeration reads the native rule or its detached snapshot. Only a
+    // materialized style wrapper needs its own mutable declaration block; its
+    // cssText initialization and subsequent synchronization populate this id.
     let id = ensure_css_rule_stylo_declaration_block_id(scope, rule);
     let _ = set_lightweight_css_style_stylo_declaration_block_id(scope, style, id);
+}
+
+pub(crate) fn initialize_css_rule_style_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    style: v8::Local<'s, v8::Object>,
+    fallback_text: &str,
+) {
+    attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
+    if let Some(block) = css_rule_attached_native_declaration_block(scope, rule)
+        .or_else(|| css_rule_detached_native_declaration_block(scope, rule))
+    {
+        set_lightweight_css_style_declaration_block(scope, style, block);
+    } else {
+        set_style_object_css_text_without_notify(scope, style, fallback_text);
+    }
+    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
 }
 
 pub(crate) fn css_rule_stylo_declaration_block_css_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    if css_rule_stylo_declaration_block_id(scope, rule).is_none() {
+        return css_rule_detached_native_declaration_text(scope, rule);
+    }
     css_rule_stylo_declaration_block_is_valid(scope, rule)
         .then(|| css_rule_stylo_declaration_block_id(scope, rule))
         .flatten()
@@ -875,43 +912,6 @@ pub(crate) fn sync_css_rule_stylo_declaration_block_validity_from_style<'s>(
 ) {
     let valid = lightweight_css_style_uses_only_stylo_declaration_block(scope, style);
     set_css_rule_stylo_declaration_block_valid(scope, rule, valid);
-}
-
-pub(crate) fn seed_css_rule_stylo_declaration_block_from_style_text<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    style_text: &str,
-    kind: CssRulePdbDeclarationKind,
-) {
-    let Some(declaration_text) =
-        css_rule_declaration_text_for_pdb_for_rule(scope, rule, style_text, kind)
-    else {
-        set_css_rule_stylo_declaration_block_valid(scope, rule, false);
-        return;
-    };
-    seed_css_rule_stylo_declaration_block_from_declaration_text(
-        scope,
-        rule,
-        &declaration_text,
-        kind,
-    );
-}
-
-pub(crate) fn seed_css_rule_stylo_declaration_block_from_declaration_text<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    declaration_text: &str,
-    kind: CssRulePdbDeclarationKind,
-) {
-    let id = ensure_css_rule_stylo_declaration_block_id(scope, rule);
-    let Some(block) =
-        css_rule_pdb_safe_declaration_block_from_declaration_text(declaration_text, kind)
-    else {
-        set_css_rule_stylo_declaration_block_valid(scope, rule, false);
-        return;
-    };
-    store_lightweight_css_style_stylo_declaration_block(id, &block);
-    set_css_rule_stylo_declaration_block_valid(scope, rule, true);
 }
 
 pub(crate) fn css_rule_pdb_safe_declaration_block(
@@ -963,22 +963,6 @@ pub(crate) fn css_rule_declaration_text_for_pdb(
     match kind {
         CssRulePdbDeclarationKind::StyleRule => {
             css_style_rule_first_declaration_text_with_stylo(style_text)
-        }
-        CssRulePdbDeclarationKind::KeyframeRule | CssRulePdbDeclarationKind::NestedDeclarations => {
-            Some(style_text.to_owned())
-        }
-    }
-}
-
-pub(crate) fn css_rule_declaration_text_for_pdb_for_rule<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    style_text: &str,
-    kind: CssRulePdbDeclarationKind,
-) -> Option<String> {
-    match kind {
-        CssRulePdbDeclarationKind::StyleRule => {
-            css_style_rule_first_declaration_text_with_stylo_context(scope, rule, style_text)
         }
         CssRulePdbDeclarationKind::KeyframeRule | CssRulePdbDeclarationKind::NestedDeclarations => {
             Some(style_text.to_owned())

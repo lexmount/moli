@@ -26,6 +26,16 @@ pub(crate) fn parse_css_style_shell_keyword(value: &str) -> Option<&'static str>
     Some(keyword.to_str())
 }
 
+/// The author operation, before declaration serialization discards parser state.
+pub(crate) enum CssDeclarationMutation<'a> {
+    CssText(&'a str),
+    Property {
+        name: &'a str,
+        value: &'a str,
+        important: bool,
+    },
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.item")]
 pub(crate) struct CssStyleDeclarationItemArgs {

@@ -227,14 +227,87 @@ pub(crate) enum NativeStylesheetRule {
     Keyframe(ServoArc<Locked<Keyframe>>),
 }
 
+/// Keeps parsed declarations alive without making a mutable CSSOM copy.
+#[derive(Clone)]
+pub(crate) struct NativeCssDeclarationSource {
+    block: ServoArc<Locked<PropertyDeclarationBlock>>,
+    shared_lock: SharedRwLock,
+}
+
+impl NativeCssDeclarationSource {
+    pub(crate) fn declaration_block(&self) -> moli_css_parse::CssDeclarationBlock {
+        let guard = self.shared_lock.read();
+        moli_css_parse::CssDeclarationBlock::new(self.block.read_with(&guard).clone())
+    }
+
+    pub(crate) fn css_text(&self) -> String {
+        let guard = self.shared_lock.read();
+        let mut text = CssStringWriter::new();
+        self.block
+            .read_with(&guard)
+            .to_css(&mut text)
+            .expect("serializing native declarations into a string cannot fail");
+        text.trim_end().to_owned()
+    }
+}
+
+pub(crate) struct RetainedStylesheetRuleSnapshot {
+    pub(crate) snapshot: CssRuleSnapshot,
+    // Preorder, including entries for rules without declarations. This is the
+    // same traversal used by CssRuleSnapshot, including keyframe children.
+    pub(crate) declaration_sources: Vec<Option<NativeCssDeclarationSource>>,
+}
+
 impl NativeStylesheetRule {
-    fn snapshot(&self, shared_lock: &SharedRwLock) -> CssRuleSnapshot {
+    fn snapshot(&self, shared_lock: &SharedRwLock) -> RetainedStylesheetRuleSnapshot {
         #[cfg(test)]
         note_recursive_rule_snapshot_for_test();
         let guard = shared_lock.read();
-        match self {
+        let snapshot = match self {
             Self::Css(rule) => css_rule_snapshot_from_native_with_stylo(rule, &guard),
             Self::Keyframe(rule) => keyframe_rule_snapshot_from_native_with_stylo(rule, &guard),
+        };
+        let mut declaration_sources = Vec::new();
+        self.collect_declaration_sources(shared_lock, &guard, &mut declaration_sources);
+        RetainedStylesheetRuleSnapshot {
+            snapshot,
+            declaration_sources,
+        }
+    }
+
+    fn collect_declaration_sources(
+        &self,
+        shared_lock: &SharedRwLock,
+        guard: &SharedRwLockReadGuard<'_>,
+        sources: &mut Vec<Option<NativeCssDeclarationSource>>,
+    ) {
+        sources.push(
+            self.declaration_block(guard)
+                .map(|block| NativeCssDeclarationSource {
+                    block,
+                    shared_lock: shared_lock.clone(),
+                }),
+        );
+        match self {
+            Self::Css(CssRule::Keyframes(rule)) => {
+                for child in &rule.read_with(guard).keyframes {
+                    Self::Keyframe(child.clone()).collect_declaration_sources(
+                        shared_lock,
+                        guard,
+                        sources,
+                    );
+                }
+            }
+            Self::Css(rule) => {
+                for child in rule.children(guard) {
+                    Self::Css(child.clone()).collect_declaration_sources(
+                        shared_lock,
+                        guard,
+                        sources,
+                    );
+                }
+            }
+            Self::Keyframe(_) => {}
         }
     }
 
@@ -242,6 +315,20 @@ impl NativeStylesheetRule {
         match self {
             Self::Css(rule) => rule.rule_type(),
             Self::Keyframe(_) => CssRuleType::Keyframe,
+        }
+    }
+
+    fn declaration_block(
+        &self,
+        guard: &SharedRwLockReadGuard<'_>,
+    ) -> Option<ServoArc<Locked<PropertyDeclarationBlock>>> {
+        match self {
+            Self::Css(CssRule::Style(rule)) => Some(rule.read_with(guard).block.clone()),
+            Self::Css(CssRule::NestedDeclarations(rule)) => {
+                Some(rule.read_with(guard).block.clone())
+            }
+            Self::Keyframe(rule) => Some(rule.read_with(guard).block.clone()),
+            _ => None,
         }
     }
 
@@ -499,7 +586,7 @@ pub(crate) struct StylesheetRuleWrapperBinding {
 }
 
 impl StylesheetRuleWrapperBinding {
-    fn snapshot(&self) -> CssRuleSnapshot {
+    fn snapshot(&self) -> RetainedStylesheetRuleSnapshot {
         self.rule.snapshot(&self.shared_lock)
     }
 
@@ -509,6 +596,14 @@ impl StylesheetRuleWrapperBinding {
 
     pub(crate) fn css_text(&self) -> String {
         self.rule.css_text(&self.shared_lock)
+    }
+
+    pub(crate) fn declaration_block(&self) -> Option<moli_css_parse::CssDeclarationBlock> {
+        let guard = self.shared_lock.read();
+        let block = self.rule.declaration_block(&guard)?;
+        Some(moli_css_parse::CssDeclarationBlock::new(
+            block.read_with(&guard).clone(),
+        ))
     }
 
     pub(crate) fn style_selector_text(&self) -> Option<String> {

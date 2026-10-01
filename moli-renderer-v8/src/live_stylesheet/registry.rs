@@ -589,7 +589,7 @@ impl LiveStylesheetRegistry {
     pub(crate) fn retained_rule_wrapper_snapshot_for_detach(
         &self,
         id: StylesheetRuleWrapperLeaseId,
-    ) -> Option<CssRuleSnapshot> {
+    ) -> Option<RetainedStylesheetRuleSnapshot> {
         let lease = self
             .rule_wrapper_leases
             .borrow()

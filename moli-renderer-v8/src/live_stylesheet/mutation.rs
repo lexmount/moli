@@ -613,21 +613,7 @@ impl LiveStylesheet {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
         let declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
-        self.ensure_owned_contents_for_mutation();
-        let Some(NativeStylesheetRule::Css(CssRule::Style(rule))) =
-            self.native_rule_at_path(rule_path)
-        else {
-            return Err(CssRuleInsertError::HierarchyRequest);
-        };
-        let block = {
-            let guard = self.stylesheet.shared_lock.read();
-            rule.read_with(&guard).block.clone()
-        };
-        let mut guard = self.stylesheet.shared_lock.write();
-        *block.write_with(&mut guard) = declarations;
-        drop(guard);
-        self.note_rule_value_mutation_at_path(rule_path, RuleChangeKind::StyleRuleDeclarations);
-        Ok(())
+        self.set_rule_declaration_block(rule_path, declarations)
     }
 
     pub(crate) fn set_nested_declarations_rule_declarations(
@@ -642,21 +628,7 @@ impl LiveStylesheet {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
         let declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
-        self.ensure_owned_contents_for_mutation();
-        let Some(NativeStylesheetRule::Css(CssRule::NestedDeclarations(rule))) =
-            self.native_rule_at_path(rule_path)
-        else {
-            return Err(CssRuleInsertError::HierarchyRequest);
-        };
-        let block = {
-            let guard = self.stylesheet.shared_lock.read();
-            rule.read_with(&guard).block.clone()
-        };
-        let mut guard = self.stylesheet.shared_lock.write();
-        *block.write_with(&mut guard) = declarations;
-        drop(guard);
-        self.note_rule_value_mutation_at_path(rule_path, RuleChangeKind::Generic);
-        Ok(())
+        self.set_rule_declaration_block(rule_path, declarations)
     }
 
     pub(crate) fn set_keyframe_rule_declarations(
@@ -673,19 +645,114 @@ impl LiveStylesheet {
             return Err(CssRuleInsertError::IndexSize);
         }
         let declarations = self.parse_declaration_block(declaration_text, CssRuleType::Keyframe);
-        self.ensure_owned_contents_for_mutation();
-        let Some(NativeStylesheetRule::Keyframe(rule)) = self.native_rule_at_path(&rule_path)
-        else {
-            return Err(CssRuleInsertError::IndexSize);
+        self.set_rule_declaration_block(&rule_path, declarations)
+    }
+
+    pub(crate) fn mutate_rule_declarations(
+        &self,
+        rule_path: &[usize],
+        mutation: crate::css_style::CssDeclarationMutation<'_>,
+    ) -> Result<(), CssRuleInsertError> {
+        use crate::css_style::CssDeclarationMutation;
+        use style::properties::{
+            Importance, PropertyId, SourcePropertyDeclaration, parse_one_declaration_into,
         };
+
+        let rule = self
+            .native_rule_at_path(rule_path)
+            .ok_or(CssRuleInsertError::HierarchyRequest)?;
+        let rule_type = match rule.rule_type() {
+            CssRuleType::Style | CssRuleType::NestedDeclarations => CssRuleType::Style,
+            CssRuleType::Keyframe => CssRuleType::Keyframe,
+            _ => return Err(CssRuleInsertError::HierarchyRequest),
+        };
+        let declarations = match mutation {
+            CssDeclarationMutation::CssText(text) => self.parse_declaration_block(text, rule_type),
+            CssDeclarationMutation::Property {
+                name,
+                value,
+                important,
+            } => {
+                let name = crate::css_style::canonical_style_property_name(name);
+                let mut source = SourcePropertyDeclaration::default();
+                let property = self.with_parser_context(rule_type, None, |context| {
+                    let property = PropertyId::parse(&name, context).ok()?;
+                    if !value.is_empty() {
+                        parse_one_declaration_into(
+                            &mut source,
+                            property.clone(),
+                            value,
+                            context.stylesheet_origin,
+                            context.url_data,
+                            None,
+                            ParsingMode::DEFAULT,
+                            context.quirks_mode,
+                            rule_type,
+                        )
+                        .ok()?;
+                    }
+                    Some(property)
+                });
+                let Some(property) = property else {
+                    return Ok(());
+                };
+                let mut block = {
+                    let guard = self.stylesheet.shared_lock.read();
+                    rule.declaration_block(&guard)
+                        .ok_or(CssRuleInsertError::HierarchyRequest)?
+                        .read_with(&guard)
+                        .clone()
+                };
+                if let Some(first) = block.first_declaration_to_remove(&property) {
+                    block.remove_property(&property, first);
+                }
+                block.extend(
+                    source.drain(),
+                    if important {
+                        Importance::Important
+                    } else {
+                        Importance::Normal
+                    },
+                );
+                block
+            }
+        };
+        self.set_rule_declaration_block(rule_path, declarations)
+    }
+
+    // All callers parse with this stylesheet's URL and rule context. Never
+    // transfer a context-free CSSOM block here: relative URLs depend on it.
+    fn set_rule_declaration_block(
+        &self,
+        rule_path: &[usize],
+        declarations: PropertyDeclarationBlock,
+    ) -> Result<(), CssRuleInsertError> {
+        let rule_type = self
+            .native_rule_at_path(rule_path)
+            .map(|rule| rule.rule_type())
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    CssRuleType::Style | CssRuleType::NestedDeclarations | CssRuleType::Keyframe
+                )
+            })
+            .ok_or(CssRuleInsertError::HierarchyRequest)?;
+        self.ensure_owned_contents_for_mutation();
         let block = {
             let guard = self.stylesheet.shared_lock.read();
-            rule.read_with(&guard).block.clone()
+            self.native_rule_at_path(rule_path)
+                .and_then(|rule| rule.declaration_block(&guard))
+                .ok_or(CssRuleInsertError::HierarchyRequest)?
         };
         let mut guard = self.stylesheet.shared_lock.write();
         *block.write_with(&mut guard) = declarations;
         drop(guard);
-        self.note_rule_value_mutation_at_path(parent_path, RuleChangeKind::Generic);
+        let (mutation_path, change_kind) = match rule_type {
+            CssRuleType::Style => (rule_path, RuleChangeKind::StyleRuleDeclarations),
+            CssRuleType::Keyframe => (&rule_path[..rule_path.len() - 1], RuleChangeKind::Generic),
+            _ => (rule_path, RuleChangeKind::Generic),
+        };
+        self.note_rule_value_mutation_at_path(mutation_path, change_kind);
         Ok(())
     }
 

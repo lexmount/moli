@@ -120,6 +120,13 @@ pub(crate) fn css_rule_attached_native_css_text<'s>(
     with_css_rule_attached_native_binding(scope, rule, |binding| binding.css_text())
 }
 
+pub(crate) fn css_rule_attached_native_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> Option<moli_css_parse::CssDeclarationBlock> {
+    with_css_rule_attached_native_binding(scope, rule, |binding| binding.declaration_block())?
+}
+
 fn with_css_rule_attached_native_binding<'s, R>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
@@ -248,7 +255,7 @@ pub(crate) fn css_style_sheet_live_rule_wrapper_seed_at_path<'s>(
 pub(crate) fn css_rule_retained_native_snapshot_for_detach<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
-) -> Option<CssRuleSnapshot> {
+) -> Option<crate::live_stylesheet::RetainedStylesheetRuleSnapshot> {
     let lease_id = private_u64(scope, rule, CSS_RULE_NATIVE_WRAPPER_LEASE_ID_SLOT)
         .and_then(crate::live_stylesheet::StylesheetRuleWrapperLeaseId::from_raw)?;
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;

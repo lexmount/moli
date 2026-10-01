@@ -1,4 +1,24 @@
 use super::*;
+use crate::live_stylesheet::{NativeCssDeclarationSource, RetainedStylesheetRuleSnapshot};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+const DECLARATION_SOURCE_ID_SLOT: &str = "__moliDetachedDeclarationSourceId";
+const RULE_DECLARATION_SOURCE_SLOT: &str = "__moliCssRuleDetachedDeclarationSource";
+static NEXT_DECLARATION_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static DECLARATION_SOURCES: RefCell<HashMap<u64, NativeCssDeclarationSource>> =
+        RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+pub(crate) fn detached_declaration_source_count_for_test() -> usize {
+    DECLARATION_SOURCES.with(|sources| sources.borrow().len())
+}
 
 const SNAPSHOT_RULE_TYPE_INDEX: u32 = 0;
 const SNAPSHOT_CSS_TEXT_INDEX: u32 = 1;
@@ -32,6 +52,7 @@ pub(crate) fn css_rule_snapshot_type<'s>(
 pub(crate) struct DetachedCssRuleSnapshotEntry<'s> {
     pub(crate) snapshot: CssRuleSnapshot,
     pub(crate) child_snapshots: v8::Local<'s, v8::Array>,
+    pub(crate) declaration_source: Option<v8::Local<'s, v8::Object>>,
 }
 
 impl<'s> DetachedCssRuleSnapshotEntry<'s> {
@@ -39,6 +60,99 @@ impl<'s> DetachedCssRuleSnapshotEntry<'s> {
         self.snapshot.child_rules = decode_rule_snapshots(scope, self.child_snapshots);
         self.snapshot
     }
+}
+
+/// Text is only the CSSOM presentation. Its empty pending-substitution
+/// longhands cannot be parsed back into the original declarations.
+pub(crate) fn encode_retained_css_rule_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    retained: RetainedStylesheetRuleSnapshot,
+) -> DetachedCssRuleSnapshotEntry<'s> {
+    let encoded = encode_rule_snapshot(scope, &retained.snapshot);
+    let mut sources = retained.declaration_sources.into_iter();
+    bind_snapshot_declaration_sources(scope, encoded, &mut sources);
+    assert!(
+        sources.next().is_none(),
+        "native declaration sources must match the snapshot tree"
+    );
+    let entry = decode_rule_snapshot_entry(scope, encoded.into())
+        .expect("a freshly encoded native snapshot is valid");
+    DetachedCssRuleSnapshotEntry {
+        snapshot: retained.snapshot,
+        ..entry
+    }
+}
+
+fn bind_snapshot_declaration_sources<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    encoded: v8::Local<'s, v8::Array>,
+    sources: &mut std::vec::IntoIter<Option<NativeCssDeclarationSource>>,
+) {
+    if let Some(source) = sources
+        .next()
+        .expect("native declaration sources must cover every snapshot")
+    {
+        let id = NEXT_DECLARATION_SOURCE_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("detached declaration source id space exhausted");
+        DECLARATION_SOURCES.with(|sources| sources.borrow_mut().insert(id, source));
+        set_private_u64(scope, encoded.into(), DECLARATION_SOURCE_ID_SLOT, id);
+        // The encoded snapshot itself is the lifetime token. A materialized
+        // rule retains it too, so neither owner can invalidate the other.
+        crate::v8_finalizer::track_context_owned_v8_finalizer(scope, encoded.into(), move || {
+            DECLARATION_SOURCES.with(|sources| sources.borrow_mut().remove(&id));
+        });
+    }
+    let children = encoded
+        .get_index(scope, SNAPSHOT_CHILDREN_INDEX)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .expect("every encoded snapshot has a children array");
+    for index in 0..children.length() {
+        let child = children
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+            .expect("every encoded child is a snapshot array");
+        bind_snapshot_declaration_sources(scope, child, sources);
+    }
+}
+
+pub(crate) fn set_css_rule_detached_declaration_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    source: Option<v8::Local<'s, v8::Object>>,
+) {
+    let value = source
+        .map(|source| source.into())
+        .unwrap_or_else(|| v8::null(scope).into());
+    set_private_value(scope, rule, RULE_DECLARATION_SOURCE_SLOT, value);
+}
+
+fn with_css_rule_detached_declaration_source<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    read: impl FnOnce(&NativeCssDeclarationSource) -> T,
+) -> Option<T> {
+    let source = get_private_object(scope, rule, RULE_DECLARATION_SOURCE_SLOT)?;
+    let id = private_u64(scope, source, DECLARATION_SOURCE_ID_SLOT)?;
+    DECLARATION_SOURCES.with(|sources| sources.borrow().get(&id).map(read))
+}
+
+pub(crate) fn css_rule_detached_native_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> Option<moli_css_parse::CssDeclarationBlock> {
+    with_css_rule_detached_declaration_source(
+        scope,
+        rule,
+        NativeCssDeclarationSource::declaration_block,
+    )
+}
+
+pub(crate) fn css_rule_detached_native_declaration_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    with_css_rule_detached_declaration_source(scope, rule, NativeCssDeclarationSource::css_text)
 }
 
 #[cfg(test)]
@@ -70,6 +184,7 @@ pub(crate) fn clear_css_rule_detached_snapshot<'s>(
     rule: v8::Local<'s, v8::Object>,
 ) {
     set_css_rule_snapshot_type(scope, rule, None);
+    set_css_rule_detached_declaration_source(scope, rule, None);
     set_private_string(scope, rule, CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT, "");
     set_private_value(
         scope,
@@ -91,15 +206,6 @@ pub(crate) fn set_detached_css_rule_snapshot_text<'s>(
     DETACHED_CSS_RULE_SNAPSHOT_WRITE_COUNT.with(|count| count.set(count.get() + 1));
     set_private_string(scope, rule, CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT, css_text);
     true
-}
-
-pub(crate) fn set_detached_css_rule_child_snapshots<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    snapshots: &[CssRuleSnapshot],
-) {
-    let snapshots = encode_rule_snapshots(scope, snapshots);
-    set_detached_css_rule_child_snapshot_array(scope, rule, snapshots);
 }
 
 pub(crate) fn set_detached_css_rule_child_snapshot_array<'s>(
@@ -218,6 +324,48 @@ fn encode_rule_snapshots<'s>(
     array
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum DetachedCssRuleListChange {
+    Insert(u32),
+    Delete(u32),
+}
+
+pub(crate) fn encode_css_rule_list_snapshot_change<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    snapshots: &[CssRuleSnapshot],
+    change: DetachedCssRuleListChange,
+) -> v8::Local<'s, v8::Array> {
+    let Some(previous) = css_rule_list_detached_snapshot_array(scope, list) else {
+        return encode_rule_snapshots(scope, snapshots);
+    };
+    let expected_length = match change {
+        DetachedCssRuleListChange::Insert(_) => previous.length() as usize + 1,
+        DetachedCssRuleListChange::Delete(_) => previous.length() as usize - 1,
+    };
+    assert_eq!(snapshots.len(), expected_length);
+    let array = v8::Array::new(scope, snapshots.len() as i32);
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        let index = index as u32;
+        let previous_index = match change {
+            DetachedCssRuleListChange::Insert(at) if index == at => None,
+            DetachedCssRuleListChange::Insert(at) => Some(index - u32::from(index > at)),
+            DetachedCssRuleListChange::Delete(at) => Some(index + u32::from(index >= at)),
+        };
+        // Reuse the encoded object, including its native declaration source
+        // and unread descendants. CSSOM text is not a reversible serialization.
+        let encoded = if let Some(previous_index) = previous_index {
+            previous
+                .get_index(scope, previous_index)
+                .expect("an unchanged detached rule must have a snapshot")
+        } else {
+            encode_rule_snapshot(scope, snapshot).into()
+        };
+        let _ = array.set_index(scope, index, encoded);
+    }
+    array
+}
+
 fn encode_rule_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &CssRuleSnapshot,
@@ -303,6 +451,8 @@ fn decode_rule_snapshot_entry<'s>(
             child_rules: Vec::new(),
         },
         child_snapshots,
+        declaration_source: private_u64(scope, encoded.into(), DECLARATION_SOURCE_ID_SLOT)
+            .map(|_| encoded.into()),
     })
 }
 
