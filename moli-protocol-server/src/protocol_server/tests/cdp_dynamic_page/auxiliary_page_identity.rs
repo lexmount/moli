@@ -852,3 +852,100 @@ async fn auxiliary_blank_reload_preserves_origin_storage_and_fallback_base() {
     }
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_cross_origin_functions_and_descriptors_use_each_accessing_realm() {
+    // Chromium's cross-origin-objects.html WPT checks local Function.prototype,
+    // distinct per-observer functions, and shared Window/Location identity.
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async { axum::response::Html("<p>page</p>") })),
+        "auxiliary-cross-origin-realms",
+    );
+    let base = format!("http://{fixture_addr}");
+    let cross = format!("http://localhost:{}", fixture_addr.port());
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/parent")).await;
+    let (child_id, mut child) =
+        open_auxiliary(addr, &mut opener, "p.name='target';window.w=p").await;
+    let (_, mut observer) = open_auxiliary(addr, &mut opener, "p.name='observer'").await;
+    evaluate_window_name_probe(&mut observer, 2, "window.w=opener.w;true").await;
+    navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("{cross}/child")).await;
+    evaluate_window_name_probe(
+        &mut child,
+        3,
+        "window.received=[];onmessage=e=>received.push([e.data,e.origin,e.source===opener]);true",
+    )
+    .await;
+    let realm_probe = r#"
+        (()=>{
+          window.remoteClose=w.close;
+          window.remoteLocation=w.location;
+          window.remoteParentGetter=Object.getOwnPropertyDescriptor(w,'parent').get;
+          window.remoteHrefSetter=Object.getOwnPropertyDescriptor(w.location,'href').set;
+          const functions=[w.postMessage,w.close,w.focus,w.blur,w.location.replace,
+            remoteParentGetter,remoteHrefSetter,
+            Object.getOwnPropertyDescriptor(w,'location').get,
+            Object.getOwnPropertyDescriptor(w,'location').set];
+          return [functions.every(f=>Object.getPrototypeOf(f)===Function.prototype),
+            Object.getPrototypeOf(Object.getOwnPropertyDescriptor(w,'parent'))===Object.prototype,
+            Object.getPrototypeOf(Object.getOwnPropertyDescriptor(w.location,'href'))===Object.prototype,
+            remoteClose===w.close,
+            remoteParentGetter===Object.getOwnPropertyDescriptor(w,'parent').get,
+            remoteHrefSetter===Object.getOwnPropertyDescriptor(w.location,'href').set,
+            Reflect.ownKeys(w.location).includes('href'),
+            Reflect.ownKeys(w.location).includes('replace')];
+        })()
+    "#;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 3, realm_probe).await,
+        json!([true, true, true, true, true, true, true, true])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut observer, 3, realm_probe).await,
+        json!([true, true, true, true, true, true, true, true])
+    );
+    assert_eq!(evaluate_window_name_probe(&mut observer, 4,
+        "[w===opener.w,remoteLocation===opener.remoteLocation,remoteClose!==opener.remoteClose,remoteParentGetter!==opener.remoteParentGetter,remoteHrefSetter!==opener.remoteHrefSetter]"
+    ).await, json!([true,true,true,true,true]));
+    evaluate_window_name_probe(
+        &mut opener,
+        4,
+        r#"
+        Object.getPrototypeOf(w.postMessage).__moliRealmProbe=73;
+        Object.getPrototypeOf(Object.getPrototypeOf(w.postMessage)).__moliObjectRealmProbe=91;
+        w.postMessage('opener','*');true
+    "#,
+    )
+    .await;
+    assert_eq!(evaluate_window_name_probe(&mut child, 4,
+        "[Function.prototype.__moliRealmProbe===undefined,Object.prototype.__moliObjectRealmProbe===undefined]"
+    ).await, json!([true,true]));
+    assert_eq!(evaluate_window_name_probe(&mut observer, 5,
+        "[Function.prototype.__moliRealmProbe===undefined,Object.prototype.__moliObjectRealmProbe===undefined]"
+    ).await, json!([true,true]));
+    wait_for_value(&mut child, "received", json!([["opener", base, true]])).await;
+    evaluate_window_name_probe(&mut observer, 6, "w.postMessage('observer','*');true").await;
+    wait_for_value(
+        &mut child,
+        "received",
+        json!([["opener", base, true], ["observer", base, false]]),
+    )
+    .await;
+    evaluate_window_name_probe(&mut observer, 7, "w.close();true").await;
+    wait_for_target_list(addr, "cross-origin close retains its target", |targets| {
+        !targets.iter().any(|t| t["id"] == child_id)
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut observer, 8, "[w.closed,w.parent===null,w.length]").await,
+        json!([true, true, 0])
+    );
+    abort_test_cdp_server(server).await;
+}

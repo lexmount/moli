@@ -716,6 +716,8 @@ struct CrossOriginLocationProxyHandlerDeclaration {
     get: (),
     #[webapi(method, length = 4, callback = cross_origin_location_proxy_set_callback)]
     set: (),
+    #[webapi(method, length = 2, callback = cross_origin_location_proxy_descriptor_callback)]
+    get_own_property_descriptor: (),
     #[webapi(method, length = 2, callback = cross_origin_window_denied_callback)]
     delete_property: (),
     #[webapi(method, length = 3, callback = cross_origin_window_denied_callback)]
@@ -2054,6 +2056,7 @@ fn wrap_cross_origin_location_proxy<'s>(
     let handler = CrossOriginLocationProxyHandlerDeclaration {
         get: (),
         set: (),
+        get_own_property_descriptor: (),
         delete_property: (),
         define_property: (),
     }
@@ -2152,9 +2155,8 @@ fn child_window_cross_origin_handler_data<'s>(
         .is_some()
         && host.browsing_context_is_closed()
     {
-        let scope = &mut v8::ContextScope::new(scope, holder_context);
         return Some((
-            main_page::access_surface(scope),
+            main_page::access_surface(scope, holder_context),
             holder_context.global(scope),
         ));
     }
@@ -2165,9 +2167,8 @@ fn child_window_cross_origin_handler_data<'s>(
             return None;
         }
         if identity.dispatch_scope() == super::super::OwnerDispatchScope::Top {
-            let scope = &mut v8::ContextScope::new(scope, holder_context);
             let window = holder_context.global(scope);
-            return Some((main_page::access_surface(scope), window));
+            return Some((main_page::access_surface(scope, holder_context), window));
         }
         let super::super::OwnerDispatchScope::Child(handle) = identity.dispatch_scope() else {
             return None;
@@ -2453,10 +2454,8 @@ pub(crate) fn cross_origin_lightweight_popup_id<'s>(
 fn cross_origin_accessing_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Context> {
-    // Our access surface lives in the target realm. For cross-origin function
-    // callbacks V8 exposes the initiating realm as the incumbent context;
-    // direct access-check failures can still fall back to the target realm
-    // until the optional per-accessing-realm membrane milestone.
+    // Proxy traps may execute in the target context; their initiating script
+    // settings object determines the realm of exposed functions and errors.
     scope
         .get_incumbent_context()
         .unwrap_or_else(|| scope.get_current_context())
@@ -2505,10 +2504,45 @@ fn cross_origin_location_proxy_get_callback<'s>(
         return;
     };
     let receiver = v8::Local::<v8::Object>::try_from(args.get(2)).unwrap_or(target);
-    match target.get_with_receiver(scope, args.get(1), receiver) {
+    let surface = main_page::location_access_surface(scope, target).unwrap_or(target);
+    let accessing_context = cross_origin_accessing_context(scope);
+    let scope = &mut v8::ContextScope::new(scope, accessing_context);
+    match surface.get_with_receiver(scope, args.get(1), receiver) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
     }
+}
+
+fn cross_origin_location_proxy_descriptor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        return;
+    };
+    let Ok(key) = v8::Local::<v8::Name>::try_from(args.get(1)) else {
+        return;
+    };
+    let main_surface = main_page::location_access_surface(scope, target);
+    let surface = main_surface.unwrap_or(target);
+    let accessing_context = cross_origin_accessing_context(scope);
+    let scope = &mut v8::ContextScope::new(scope, accessing_context);
+    let Some(descriptor) = surface.get_own_property_descriptor(scope, key) else {
+        return;
+    };
+    if main_surface.is_some()
+        && let Ok(descriptor) = v8::Local::<v8::Object>::try_from(descriptor)
+    {
+        // Main Location's target holds placeholders. Its descriptors are
+        // projected into each accessor realm and must remain configurable.
+        let _ = descriptor.set(
+            scope,
+            v8str(scope, "configurable").into(),
+            v8::Boolean::new(scope, true).into(),
+        );
+    }
+    rv.set(descriptor);
 }
 
 fn cross_origin_location_proxy_set_receiver<'s>(
@@ -2635,6 +2669,7 @@ fn cross_origin_location_navigate<'s>(
     if main_page::is_main_location(scope, receiver) {
         return main_page::navigate(
             scope,
+            receiver,
             value,
             crate::context_bootstrap::LocationNavigationKind::Assign,
         );
@@ -2706,6 +2741,7 @@ fn cross_origin_location_replace_callback<'s>(
         };
         main_page::navigate(
             scope,
+            args.this(),
             value.into(),
             crate::context_bootstrap::LocationNavigationKind::Replace,
         );
