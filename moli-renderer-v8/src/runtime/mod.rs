@@ -114,6 +114,7 @@ pub(crate) use self::page_turn_scheduler::{
 };
 pub(crate) use self::page_vm::AuthorizedCurrentBroadcastChannelDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageBitmapTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageCanvasBlobSerializationTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildClassicScriptSourceLoad;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildDocumentLifecycle;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildDocumentScriptReady;

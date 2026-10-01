@@ -1,5 +1,6 @@
 mod bitmap_task;
 mod broadcast_channel_delivery;
+mod canvas_blob_serialization;
 mod child_frame_task;
 mod child_module_dependency_fetch_start;
 mod child_module_script_terminal;
@@ -170,6 +171,12 @@ pub(crate) use self::broadcast_channel_delivery::{
     PageBroadcastChannelDeliveryTurnOutcome, RendererPageBroadcastChannelDeliveryOwner,
     RendererPageBroadcastChannelDeliveryProducer, RendererPageBroadcastChannelDeliverySender,
     RendererPageBroadcastChannelDeliveryTask,
+};
+pub(crate) use self::canvas_blob_serialization::{
+    PageCanvasBlobSerializationTargetEffect, PageCanvasBlobSerializationTurnAction,
+    PageCanvasBlobSerializationTurnOutcome, RendererPageCanvasBlobSerializationOwner,
+    RendererPageCanvasBlobSerializationSender, RendererPageCanvasBlobSerializationTask,
+    RendererPageCanvasBlobSerializationTaskId, RendererPageCanvasBlobSerializationTaskKind,
 };
 pub(crate) use self::child_frame_task::{
     PageChildClassicScriptSourceLoadTargetEffect, PageChildClassicScriptSourceLoadTurnAction,

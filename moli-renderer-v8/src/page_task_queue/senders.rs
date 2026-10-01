@@ -18,6 +18,7 @@ use super::{
 };
 use crate::page_resource_completion::RendererPageResourceCompletionSender;
 use crate::page_task_queue::RendererPageBitmapTaskSender;
+use crate::page_task_queue::RendererPageCanvasBlobSerializationSender;
 use crate::page_task_queue::RendererPageChildFrameTaskSender;
 use crate::page_task_queue::RendererPageChildModuleDependencyFetchStartSender;
 use crate::page_task_queue::RendererPageChildModuleScriptTerminalSender;
@@ -74,6 +75,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     user_interaction: RendererPageUserInteractionSender,
     file_reading: RendererPageFileReadingSender,
     misc_platform_api: RendererPageMiscPlatformApiSender,
+    canvas_blob_serialization: RendererPageCanvasBlobSerializationSender,
     navigation_and_traversal: RendererPageNavigationAndTraversalSender,
     rendering_update: RendererPageRenderingUpdateSender,
     media_element_event: RendererPageMediaElementEventSender,
@@ -143,6 +145,9 @@ impl RendererPageJsContextTaskSenders {
 
     pub(crate) fn misc_platform_api(&self) -> &RendererPageMiscPlatformApiSender {
         &self.misc_platform_api
+    }
+    pub(crate) fn canvas_blob_serialization(&self) -> &RendererPageCanvasBlobSerializationSender {
+        &self.canvas_blob_serialization
     }
 
     pub(crate) fn navigation_and_traversal(&self) -> &RendererPageNavigationAndTraversalSender {
@@ -349,6 +354,7 @@ impl PageRuntimeTaskSource {
                 user_interaction: routes.user_interaction_sender(root_document),
                 file_reading: routes.file_reading_sender(root_document),
                 misc_platform_api: routes.misc_platform_api_sender(root_document),
+                canvas_blob_serialization: routes.canvas_blob_serialization_sender(root_document),
                 navigation_and_traversal: routes.navigation_and_traversal_sender(root_document),
                 rendering_update: routes.rendering_update_sender(root_document),
                 media_element_event: routes.media_element_event_sender(root_document),
