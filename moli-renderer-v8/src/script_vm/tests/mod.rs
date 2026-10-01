@@ -2149,6 +2149,7 @@ mod dom_elements;
 mod dom_exception_proxy_identity;
 mod dom_xhr;
 mod element_click;
+mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
 mod geometry_point_conversion_order;
