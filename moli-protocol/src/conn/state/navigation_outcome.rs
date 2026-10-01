@@ -80,6 +80,7 @@ pub(crate) struct RendererMainDocumentCommitSeed {
     inherited_security_origin: String,
     inherited_secure_context_type: String,
     browsing_context_group: Option<super::navigation::NavigationBrowsingContextGroup>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 }
 
 impl RendererMainDocumentCommitSeed {
@@ -89,11 +90,22 @@ impl RendererMainDocumentCommitSeed {
             loader_id: navigation.loader_id.clone(),
             timestamp: navigation.timestamp,
             browsing_context_group: None,
-            inherited_security_origin: navigation.source_document_security.security_origin.clone(),
+            navigation_initiator: navigation.navigation_initiator.clone(),
+            inherited_security_origin: navigation
+                .initial_document_environment
+                .as_ref()
+                .map(|environment| environment.origin().to_owned())
+                .unwrap_or_else(|| navigation.source_document_security.security_origin.clone()),
             inherited_secure_context_type: navigation
-                .source_document_security
-                .secure_context_type
-                .clone(),
+                .initial_document_environment
+                .as_ref()
+                .map(|environment| environment.secure_context_type().to_owned())
+                .unwrap_or_else(|| {
+                    navigation
+                        .source_document_security
+                        .secure_context_type
+                        .clone()
+                }),
         }
     }
 
@@ -114,6 +126,7 @@ impl RendererMainDocumentCommitSeed {
             inherited_security_origin: source_document_security.security_origin,
             inherited_secure_context_type: source_document_security.secure_context_type,
             browsing_context_group: None,
+            navigation_initiator: None,
         }
     }
 
@@ -155,6 +168,10 @@ impl RendererMainDocumentCommitSeed {
                 .map(|error_page| error_page.unreachable_url().as_str().to_owned()),
             security_origin,
             secure_context_type,
+            document_referrer: self
+                .navigation_initiator
+                .as_ref()
+                .map(|initiator| initiator.document_referrer(final_url)),
             timestamp: self.timestamp,
             session_history_position: None,
             browsing_context_group: self
@@ -310,6 +327,9 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    pub(crate) initial_document_environment:
+        Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     pub(crate) auxiliary_document_response:
         Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,

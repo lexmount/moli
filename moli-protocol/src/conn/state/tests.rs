@@ -25,6 +25,8 @@ use url::Url;
 
 fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchState {
     NavigationDispatchState {
+        navigation_initiator: None,
+        initial_document_environment: None,
         auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,

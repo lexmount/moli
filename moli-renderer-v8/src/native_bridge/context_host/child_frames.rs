@@ -795,6 +795,7 @@ impl ChildBrowsingContextEntry {
             .entries
             .push(NavigationHistorySerializedEntry {
                 url: url.as_str().to_owned(),
+                inherited_origin: None,
                 history_state: None,
                 navigation_state: None,
                 scroll_restoration: Default::default(),

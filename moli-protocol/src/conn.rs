@@ -64,6 +64,7 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::PendingPopupNavigation;
 mod target;
 mod top_level_navigation_work;
 

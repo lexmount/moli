@@ -1920,6 +1920,38 @@ async fn window_post_message_array_second_argument_uses_options_defaults_without
 }
 
 #[test]
+fn lightweight_blank_popup_document_domain_uses_its_inherited_origin() {
+    let mut vm = new_storage_test_vm("https://sub.example.test/creator");
+    assert_eq!(
+        vm.eval(
+            r#"(()=>{
+        const popup=open('about:blank','child');const doc=popup.document;
+        const initial=doc.domain;doc.domain='sub.example.test';
+        return JSON.stringify([initial,doc.domain]);
+    })()"#
+        )
+        .unwrap(),
+        r#"["sub.example.test","sub.example.test"]"#
+    );
+}
+
+#[test]
+fn opaque_top_document_domain_cannot_use_the_document_urls_host() {
+    let mut vm = new_storage_test_vm("data:text/html,opaque");
+    assert_eq!(
+        vm.eval(
+            r#"(()=>{
+        const initial=document.domain;let result;
+        try{document.domain='example.test';result='accepted'}catch(e){result=e.name}
+        return JSON.stringify([initial,result]);
+    })()"#
+        )
+        .unwrap(),
+        r#"["","SecurityError"]"#
+    );
+}
+
+#[test]
 fn document_domain_setter_records_explicit_parent_domain() {
     let mut vm = new_storage_test_vm("https://www.example.com/path");
 

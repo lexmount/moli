@@ -43,6 +43,8 @@ pub(crate) enum RendererPageStateCapturePolicy {
 mod access;
 mod auxiliary_page;
 mod browser_context_runtime;
+mod captured_document_environment;
+pub use captured_document_environment::RendererCapturedDocumentEnvironment;
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod document_replacement;
@@ -327,7 +329,6 @@ pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::RendererPageState;
 use self::page_surface::RendererPageTable;
-pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
     PendingWorkerRuntimeInspectorSessionResponse, RendererAccessibilityPayloadsForObjectId,
@@ -363,39 +364,43 @@ pub use self::page_surface::{
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
     RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
-    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
-    RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
-    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
-    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
+    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
+    RendererNavigationInitiator, RendererPageCommand, RendererPageCommandPostResponseContinuation,
+    RendererPageCookieFacadeSnapshotReply, RendererPageCreationDiagnostics,
+    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
+    RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationParts, RendererPopupActivationSource, RendererPopupDisposition,
-    RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,
-    RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
-    RendererRuntimeInspectorProtocolMessageValueMut, RendererRuntimeInspectorResponseChannel,
-    RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
-    RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
-    RendererRuntimeRemoteObjectResolution, RendererScriptExecutionMemoryDiagnostics,
-    RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
-    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
-    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
-    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
-    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
-    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
-    RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
-    RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererResourceTextSearchOutcome,
+    RendererRuntimeCommandOutput, RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage,
+    RendererRuntimeHeapUsage, RendererRuntimeInspectorAsyncCompletion,
+    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
+    RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
+    RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
+    RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
+    RendererRuntimeRealmInfo, RendererRuntimeRemoteObject, RendererRuntimeRemoteObjectResolution,
+    RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
+    RendererScrollIntoViewResult, RendererServiceWorkerConsoleMessage,
+    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
+    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerTargetEvent,
+    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
+    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
+    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
+    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
+    RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
+    RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
     RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,
     RendererInspectorPageCommand, RendererRuntimeCommandOutputRecorder,
     RendererRuntimeCommandOutputSettlement, RendererRuntimeInspectorResponsePublication,
     RendererRuntimeInspectorSessionResponseSettlement, RendererRuntimeObservableSourceQueue,
+};
+pub use self::page_surface::{
+    RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;

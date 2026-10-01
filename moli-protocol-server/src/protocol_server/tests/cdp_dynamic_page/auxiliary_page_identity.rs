@@ -4,7 +4,7 @@ use super::*;
 // external/wpt/html/browsers/windows/auxiliary-browsing-contexts tests. These
 // cases additionally observe the same browsing context through its CDP target.
 
-async fn open_auxiliary(
+pub(super) async fn open_auxiliary(
     addr: std::net::SocketAddr,
     opener: &mut TestCdpSocket,
     synchronous_script: &str,
@@ -687,6 +687,11 @@ async fn explicit_browser_and_noopener_blank_documents_keep_their_committed_hist
         evaluate_window_name_probe(&mut child, 2, "history.length").await,
         1
     );
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 20, "navigation.entries().map(entry=>entry.url)")
+            .await,
+        json!(["about:blank"])
+    );
     let history =
         send_cdp_command(&mut child, 3, "Page.getNavigationHistory", None, json!({})).await;
     let entry = &response_by_id(&history, 3)["result"]["entries"][0];
@@ -709,6 +714,18 @@ async fn explicit_browser_and_noopener_blank_documents_keep_their_committed_hist
             .map(|entry| entry["url"].as_str().unwrap())
             .collect::<Vec<_>>(),
         vec!["about:blank", destination.as_str()]
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 21, "navigation.entries().map(entry=>entry.url)")
+            .await,
+        json!(["about:blank", destination])
+    );
+    let cross_origin_destination = format!("http://localhost:{}/foreign", fixture_addr.port());
+    navigate_dynamic_page_and_wait_for_load(&mut child, 22, &cross_origin_destination).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 23, "navigation.entries().map(entry=>entry.url)")
+            .await,
+        json!([cross_origin_destination])
     );
     abort_test_cdp_server(server).await;
 }

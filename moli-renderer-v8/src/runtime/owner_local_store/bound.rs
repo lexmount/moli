@@ -37,6 +37,35 @@ pub(in crate::runtime) fn has_current_render_runtime_owner_local_store() -> bool
     CURRENT_RENDER_RUNTIME_OWNER_LOCAL_STORE.with(|current_store| current_store.borrow().is_some())
 }
 
+pub(in crate::runtime) fn capture_document_environment_on_bound_owner_local_store(
+    id: u64,
+    environment: crate::script_vm::ScriptVmCapturedDocumentEnvironment,
+) {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        assert!(
+            session
+                .store
+                .captured_document_environments
+                .insert(id, environment)
+                .is_none()
+        );
+    });
+}
+
+pub(in crate::runtime) fn take_document_environment_on_bound_owner_local_store(
+    id: u64,
+    isolate_identity: usize,
+) -> Result<crate::script_vm::ScriptVmInitialDocumentEnvironment> {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        session
+            .store
+            .captured_document_environments
+            .remove(&id)
+            .ok_or_else(|| anyhow!("captured document environment is no longer available"))?
+            .take(isolate_identity)
+    })
+}
+
 pub(in crate::runtime) fn owner_local_store_session(
     store: &mut RendererOwnerLocalStore,
 ) -> RendererOwnerLocalStoreSession<'_> {

@@ -189,11 +189,34 @@ pub(crate) fn window_open_callback<'s>(
         let host = unsafe { &*host_ptr };
         window_open_entered_policy_container(scope, host)
     };
-    creator_policy_container.document_referrer = if suppress_opener {
-        String::new()
+    creator_policy_container.referrer_policy =
+        crate::context_bootstrap::current_document_referrer_policy(scope, entered_window)
+            .or(creator_policy_container.referrer_policy);
+    let host = unsafe { &*host_ptr };
+    let initiator_url = host
+        .document_referrer_source_url_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+        .unwrap_or_else(|| window_open_entered_document_url(scope, host));
+    let initiator_origin = if creator_policy_container.sandbox.forces_opaque_origin {
+        moli_url::WebOrigin::Opaque
     } else {
         let host = unsafe { &*host_ptr };
-        window_open_entered_document_url(scope, host).to_string()
+        host.document_resource_loader_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+            .map(|loader| loader.fetch_context().request_origin())
+            .unwrap_or(moli_url::WebOrigin::Opaque)
+    };
+    let navigation_initiator = crate::runtime::RendererNavigationInitiator::new(
+        initiator_url.clone(),
+        initiator_origin,
+        if parsed_features.suppresses_referrer() {
+            Some("no-referrer".to_owned())
+        } else {
+            creator_policy_container.referrer_policy.clone()
+        },
+    );
+    creator_policy_container.document_referrer = if suppress_opener {
+        navigation_initiator.document_referrer(&url)
+    } else {
+        navigation_initiator.outgoing_referrer()
     };
     if url.scheme() == "javascript" {
         let source = crate::javascript_url::csp_source(&url);
@@ -256,15 +279,17 @@ pub(crate) fn window_open_callback<'s>(
         _ if parsed_features.is_popup() => crate::RendererPopupDisposition::NewWindow,
         _ => crate::RendererPopupDisposition::Foreground,
     };
-    if let Some(opener) = opener
-        && host.has_browser_owned_auxiliary_page_factory()
+    if host.has_browser_owned_auxiliary_page_factory()
+        && (!suppress_opener || Url::parse(&url).is_ok_and(|url| moli_url::is_about_blank(&url)))
     {
+        let creator_child_handle = window_receiver_child_handle(scope, entered_window);
         match host.open_renderer_owned_auxiliary_window(
             scope,
-            opener,
-            opener_child_handle,
+            entered_window,
+            !suppress_opener,
+            creator_child_handle,
             &parsed.target_name,
-            &url,
+            if parsed.raw_url.is_empty() { "" } else { &url },
             entered_base_url,
             creator_policy_container,
             true,
@@ -283,13 +308,15 @@ pub(crate) fn window_open_callback<'s>(
                     RendererPendingPopupActivation::window(
                         root_document,
                         source,
-                        true,
+                        !suppress_opener,
                         opened.window.as_ref().map(|window| window.id()),
                         url,
                         parsed.target_name,
                         disposition,
                     )
                     .with_navigation_requested(!parsed.raw_url.is_empty())
+                    .with_navigation_initiator(navigation_initiator)
+                    .with_initial_document_environment(opened.initial_document_environment)
                     .with_browsing_context_name(opened.name)
                     .with_auxiliary_window(opened.window)
                     .with_pending_auxiliary_page(opened.pending_page)
@@ -299,7 +326,11 @@ pub(crate) fn window_open_callback<'s>(
                     ),
                     window_event,
                 );
-                rv.set(opened.window_proxy.into());
+                if suppress_opener {
+                    rv.set_null();
+                } else {
+                    rv.set(opened.window_proxy.into());
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to create synchronous auxiliary Page");
@@ -347,6 +378,7 @@ pub(crate) fn window_open_callback<'s>(
                 disposition,
             )
             .with_navigation_requested(!parsed.raw_url.is_empty())
+            .with_navigation_initiator(navigation_initiator)
             .with_document_response(opened_popup.document_response)
             .with_initial_auxiliary_state(
                 session_storage_store,
@@ -371,6 +403,7 @@ pub(crate) fn window_open_callback<'s>(
             parsed.target_name,
             popup_disposition,
         )
+        .with_navigation_initiator(navigation_initiator)
         .with_initial_auxiliary_state(None, None),
         Some(window_open_event),
     );

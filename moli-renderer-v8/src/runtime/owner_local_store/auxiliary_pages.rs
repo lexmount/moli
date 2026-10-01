@@ -1,6 +1,10 @@
 use super::*;
 
 impl RendererOwnerLocalStore {
+    pub(in crate::runtime) fn release_captured_document_environment(&mut self, id: u64) {
+        self.captured_document_environments.remove(&id);
+    }
+
     pub(super) fn stage_related_initial_empty_page(
         &mut self,
         owner: &RendererOwnerLocalContext,
@@ -84,7 +88,7 @@ impl RendererOwnerLocalStore {
         environment
             .bind_auxiliary_allocator(RendererAuxiliaryPageAllocator::new(owner.clone(), page_id));
         environment.bind_window_identity(name, Some(window));
-        environment.set_opener(Some(opener));
+        environment.set_opener(opener);
         let bootstrap = bootstrap
             .with_page_inspector(page_inspector.with_output_journal(journal.clone()))
             .with_renderer_page_script_environment(environment.clone());

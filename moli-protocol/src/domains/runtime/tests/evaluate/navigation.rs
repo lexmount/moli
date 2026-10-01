@@ -642,6 +642,8 @@ async fn page_navigate_network_failure_commits_error_document() {
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
         old_document_token.clone(),
         crate::conn::NavigationDispatchState {
+            navigation_initiator: None,
+            initial_document_environment: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,

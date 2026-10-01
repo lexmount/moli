@@ -909,7 +909,7 @@ impl RendererOwnerHandle {
                 } else {
                     reserved_service_worker_client.map(RendererReservedServiceWorkerClient::release)
                 };
-                let env = PageVmEnvConfig {
+                let mut env = PageVmEnvConfig {
                     web_storage,
                     document_start_scripts,
                     runtime_bindings,
@@ -942,6 +942,7 @@ impl RendererOwnerHandle {
                     navigation_bootstrap_entry: None,
                     reserved_service_worker_client_id,
                 };
+                env.apply_main_document_commit_referrer();
                 if let Some(mut page_vm) = staged_auxiliary_page {
                     ensure!(
                         moli_url::is_about_blank(&final_url),

@@ -501,6 +501,10 @@ impl RendererOwnerHandle {
                 owner_local_store.cancel_staged_auxiliary_page(reservation);
                 Ok(RendererOwnerReply::PendingAuxiliaryPageCanceled).into()
             }
+            RendererOwnerCommand::ReleaseCapturedDocumentEnvironment { id } => {
+                owner_local_store.release_captured_document_environment(id);
+                Ok(RendererOwnerReply::CapturedDocumentEnvironmentReleased).into()
+            }
             RendererOwnerCommand::PrepareStreamingRawDocument { token, request } => {
                 let outcome = self
                     .prepare_renderer_document_on_owner_local_store(

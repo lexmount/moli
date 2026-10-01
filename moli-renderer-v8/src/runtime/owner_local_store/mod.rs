@@ -460,6 +460,8 @@ pub(super) struct RendererOwnerLocalStore {
     page_hosts: HashMap<RendererOwnerLocalHostId, RendererOwnerLocalPageHost>,
     prepared_documents: HashMap<RendererPageReservationToken, RendererPreparedDocumentResidence>,
     staged_auxiliary_pages: HashMap<RendererPageReservationToken, PageVm>,
+    captured_document_environments:
+        HashMap<u64, crate::script_vm::ScriptVmCapturedDocumentEnvironment>,
     page_replacement_reservations: HashMap<RendererPageToken, RendererPageReservationToken>,
     page_task_deadline_index: OwnerDeadlineIndex<RendererPageToken>,
     owner_maintenance_deadline_index: OwnerDeadlineIndex<RendererPageToken>,

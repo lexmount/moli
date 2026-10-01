@@ -52,7 +52,9 @@ fn apply_navigation_request_load_policy(
 fn document_replacement_for_navigation(
     target: RendererPageReplacementTarget,
     policy: NavigationRequestLoadPolicy,
+    environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
 ) -> RendererPageReplacementTarget {
+    let target = target.with_initial_document_environment(environment);
     match policy {
         NavigationRequestLoadPolicy::Reload => target.with_document_reload(true),
         NavigationRequestLoadPolicy::DocumentInitiatedReload => target.with_document_reload(false),
@@ -985,6 +987,8 @@ impl BackgroundNavigationLoadJob {
                     self.load_inputs.navigation_initiator_url.as_ref(),
                     self.load_inputs.browser_navigation_kind,
                     self.load_inputs.infer_navigation_referrer,
+                    self.load_inputs.navigation_request_metadata.clone(),
+                    self.load_inputs.navigation_request_origin.clone(),
                     &self.method,
                     &self.raw_url,
                     self.body,
@@ -1629,6 +1633,7 @@ impl CdpConnection {
                     target: document_replacement_for_navigation(
                         page.document_replacement_target(cancellation.clone()),
                         navigation.request_load_policy,
+                        navigation.initial_document_environment.clone(),
                     ),
                     identity: StablePageNavigationCommitTarget {
                         target_page,
@@ -1667,6 +1672,7 @@ impl CdpConnection {
                     target: document_replacement_for_navigation(
                         page.document_replacement_target(cancellation),
                         navigation.request_load_policy,
+                        navigation.initial_document_environment.clone(),
                     ),
                     identity: StablePageNavigationCommitTarget {
                         target_page: self
@@ -1695,6 +1701,11 @@ impl CdpConnection {
                 .with_browsing_context_group(group),
         );
         inputs.auxiliary_document_response = navigation.auxiliary_document_response.clone();
+        if let Some(initiator) = navigation.navigation_initiator.as_ref() {
+            inputs.navigation_initiator_url = Some(initiator.url().clone());
+            inputs.navigation_request_metadata = Some(initiator.request_metadata());
+            inputs.navigation_request_origin = Some(initiator.origin());
+        }
         inputs.redirect_headers = navigation.redirect_headers.clone();
         inputs.redirect_chain = navigation.redirect_chain.clone();
         inputs
@@ -3086,6 +3097,8 @@ impl CdpConnection {
                 load_inputs.navigation_initiator_url.as_ref(),
                 load_inputs.browser_navigation_kind,
                 load_inputs.infer_navigation_referrer,
+                load_inputs.navigation_request_metadata.clone(),
+                load_inputs.navigation_request_origin.clone(),
                 method,
                 raw_url,
                 body,
@@ -3102,37 +3115,15 @@ impl CdpConnection {
         auth: SubresourceAuthCredentials,
     ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
         let load_inputs = self.navigation_request_load_inputs(navigation);
-        let method = &navigation.request_method;
         let raw_url = navigation.requested_url.as_str();
-        let body = navigation.clone_request_body_bytes();
-        let request_headers = navigation.request_headers.clone();
-        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
-
-        let mut request = Request::new_browser_bytes(
-            method,
+        let request = build_navigation_network_request(
+            &load_inputs,
+            &navigation.request_method,
             raw_url,
-            body,
-            request_headers,
-            load_inputs
-                .navigation_initiator_url
-                .as_ref()
-                .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
-        )
-        .with_context(|| format!("failed to build request for `{raw_url}`"))?
-        .with_redirect_headers(load_inputs.redirect_headers.clone())
-        .with_redirect_chain(load_inputs.redirect_chain.clone())
-        .with_top_level_navigation_cookie_context()
-        .with_page_network_policy()
-        .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
-        if !load_inputs.infer_navigation_referrer {
-            request = request.without_inferred_referrer();
-        }
-        if let Some(initiator_url) = load_inputs.navigation_initiator_url.as_ref() {
-            request = request
-                .with_initiator_url(initiator_url)
-                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
-        }
-        request.set_auth(Some(auth.into()));
+            navigation.clone_request_body_bytes(),
+            navigation.request_headers.clone(),
+            Some(auth),
+        )?;
 
         let loader = self
             .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
@@ -3189,33 +3180,14 @@ impl CdpConnection {
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
-
-        let mut request = Request::new_browser_bytes(
+        let request = build_navigation_network_request(
+            load_inputs,
             method,
             raw_url,
             body,
             request_headers,
-            load_inputs
-                .navigation_initiator_url
-                .as_ref()
-                .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
-        )
-        .with_context(|| format!("failed to build request for `{raw_url}`"))?
-        .with_redirect_headers(load_inputs.redirect_headers.clone())
-        .with_redirect_chain(load_inputs.redirect_chain.clone())
-        .with_top_level_navigation_cookie_context()
-        .with_page_network_policy()
-        .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
-        if !load_inputs.infer_navigation_referrer {
-            request = request.without_inferred_referrer();
-        }
-        if let Some(initiator_url) = load_inputs.navigation_initiator_url.as_ref() {
-            request = request
-                .with_initiator_url(initiator_url)
-                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
-        }
-        request.set_auth(auth.map(Into::into));
+            auth,
+        )?;
 
         let loader = self
             .ensure_resource_request_client_for_navigation_load_inputs(load_inputs)?
@@ -3899,6 +3871,49 @@ async fn prepare_captured_document_response_with_engine_async(
         main_document_commit,
         network_error_page,
     })
+}
+
+fn build_navigation_network_request(
+    load_inputs: &TargetNavigationLoadInputs,
+    method: &str,
+    raw_url: &str,
+    body: Option<Vec<u8>>,
+    request_headers: moli_fetch::RequestHeaders,
+    auth: Option<SubresourceAuthCredentials>,
+) -> anyhow::Result<Request> {
+    validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
+    let mut request = Request::new_browser_bytes(
+        method,
+        raw_url,
+        body,
+        request_headers,
+        load_inputs
+            .navigation_request_origin
+            .clone()
+            .unwrap_or_else(|| {
+                load_inputs
+                    .navigation_initiator_url
+                    .as_ref()
+                    .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url)
+            }),
+    )
+    .with_context(|| format!("failed to build request for `{raw_url}`"))?
+    .with_redirect_headers(load_inputs.redirect_headers.clone())
+    .with_redirect_chain(load_inputs.redirect_chain.clone())
+    .with_top_level_navigation_cookie_context()
+    .with_page_network_policy()
+    .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
+    if !load_inputs.infer_navigation_referrer {
+        request = request.without_inferred_referrer();
+    }
+    if let Some(metadata) = load_inputs.navigation_request_metadata.as_ref() {
+        request = request.with_subresource_request_metadata(metadata.clone());
+    }
+    if let Some(initiator_url) = load_inputs.navigation_initiator_url.as_ref() {
+        request = request.with_initiator_url(initiator_url);
+    }
+    request.set_auth(auth.map(Into::into));
+    Ok(request)
 }
 
 fn validate_navigation_network_request(

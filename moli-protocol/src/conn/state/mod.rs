@@ -130,8 +130,8 @@ pub use emulation::{
 };
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{
-    PendingBidiChannelListener, PendingInspectorAwait, TargetInitialEmptyDocumentCreator,
-    TargetOwnerState, TargetWindowSurfaceState,
+    PendingBidiChannelListener, PendingInspectorAwait, PendingPopupNavigation,
+    TargetInitialEmptyDocumentCreator, TargetOwnerState, TargetWindowSurfaceState,
 };
 
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};

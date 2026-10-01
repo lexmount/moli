@@ -44,10 +44,19 @@ impl ScriptVmDefaultWorldBootstrap {
                 policy_container: env.document_policy_container.clone(),
             }),
         )?;
-        bootstrap
-            .context_host
-            .borrow_mut()
-            .mark_main_document_initial_empty();
+        // Noopener blank pages commit a navigation; only pages exposing an
+        // opener retain a provisional initial Document and empty history.
+        if bootstrap
+            .renderer_page_script_environment
+            .as_ref()
+            .and_then(|environment| environment.opener_in_scope(scope))
+            .is_some()
+        {
+            bootstrap
+                .context_host
+                .borrow_mut()
+                .mark_main_document_initial_empty();
+        }
         let bootstrap = bootstrap.default_world_in_entered_scope(scope, global_template)?;
         let context = v8::Local::new(scope, &bootstrap.page_default_context);
         // A propagated origin sandbox gives the popup a fresh opaque origin.

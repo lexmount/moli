@@ -233,6 +233,9 @@ pub struct RendererCreateStreamingRawPageRequest {
 }
 
 pub enum RendererOwnerCommand {
+    ReleaseCapturedDocumentEnvironment {
+        id: u64,
+    },
     CreateHtmlPage(RendererCreateHtmlPageRequest),
     CancelPendingAuxiliaryPage {
         reservation: RendererPageReservationToken,
@@ -309,6 +312,7 @@ pub enum RendererOwnerCommand {
 }
 
 pub enum RendererOwnerReply {
+    CapturedDocumentEnvironmentReleased,
     PageCreated(Box<RendererAttachedPage>),
     PendingAuxiliaryPageCanceled,
     PageReplacementCommitted(Box<RendererPageReplacementCommit>),

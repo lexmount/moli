@@ -1011,6 +1011,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -1022,7 +1024,9 @@ impl NavigationEngine {
             raw_url,
             body,
             request_headers,
-            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+            request_origin.unwrap_or_else(|| {
+                initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url)
+            }),
         )
         .map(|request| {
             let request = request.with_top_level_navigation_cookie_context();
@@ -1030,10 +1034,11 @@ impl NavigationEngine {
             if !infer_referrer_from_initiator {
                 request = request.without_inferred_referrer();
             }
+            if let Some(metadata) = request_metadata {
+                request = request.with_subresource_request_metadata(metadata);
+            }
             if let Some(initiator_url) = initiator_url {
-                request
-                    .with_initiator_url(initiator_url)
-                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+                request.with_initiator_url(initiator_url)
             } else {
                 request
             }
@@ -1057,6 +1062,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<String>,
@@ -1069,6 +1076,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body.map(String::into_bytes),
@@ -1084,6 +1093,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -1096,7 +1107,9 @@ impl NavigationEngine {
             raw_url,
             body,
             request_headers,
-            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+            request_origin.unwrap_or_else(|| {
+                initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url)
+            }),
         )
         .map(|request| {
             let request = request.with_top_level_navigation_cookie_context();
@@ -1104,10 +1117,11 @@ impl NavigationEngine {
             if !infer_referrer_from_initiator {
                 request = request.without_inferred_referrer();
             }
+            if let Some(metadata) = request_metadata {
+                request = request.with_subresource_request_metadata(metadata);
+            }
             if let Some(initiator_url) = initiator_url {
-                request
-                    .with_initiator_url(initiator_url)
-                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+                request.with_initiator_url(initiator_url)
             } else {
                 request
             }
@@ -1152,6 +1166,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<String>,
@@ -1164,6 +1180,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body.map(String::into_bytes),
@@ -1181,6 +1199,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -1194,6 +1214,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body,

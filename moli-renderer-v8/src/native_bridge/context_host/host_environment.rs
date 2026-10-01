@@ -524,6 +524,32 @@ impl JsContextHost {
         self.document_resource_loader_for_window_owner(target.owner())
     }
 
+    pub(crate) fn document_referrer_source_url_for_dispatch_scope(
+        &self,
+        dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+    ) -> Option<url::Url> {
+        use crate::native_bridge::OwnerDispatchScope;
+        let mut document = match dispatch_scope {
+            OwnerDispatchScope::Top => self.document_handle(),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_document_handle(handle)?
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_document_handle(popup_id)?
+            }
+        };
+        loop {
+            let url = self.document_url_for_handle(document);
+            if url.scheme() != "about" || url.path() != "srcdoc" {
+                return Some(url);
+            }
+            // Srcdoc uses its containing Document's URL, repeating for nested
+            // srcdoc. Its own base URL still belongs to URL resolution only.
+            let frame = self.child_browsing_context_handle_for_stored_document(document)?;
+            document = self.dom_host().node(frame).and_then(Node::owner_document)?;
+        }
+    }
+
     pub(crate) fn subresource_request_environment(
         &self,
         loader: &DocumentResourceLoader,

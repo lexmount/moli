@@ -2072,6 +2072,8 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) -> NavigateCommandStart {
     let session_id = owner.session_id();
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, owner);
@@ -2134,6 +2136,8 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             },
             NavigationStartInitiator::Renderer,
             document_response,
+            initial_document_environment,
+            navigation_initiator,
         )
     };
     clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
@@ -2679,6 +2683,8 @@ fn start_navigate_to_url_command_with_background_policy(
         request_load_policy,
         initiator,
         None,
+        None,
+        None,
     )
 }
 
@@ -2704,6 +2710,8 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) -> NavigateCommandStart {
     let command_session_id = owner.session_id();
     let mut out = Vec::new();
@@ -2753,6 +2761,8 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
     let mut navigation_state = NavigationDispatchState {
+        navigation_initiator,
+        initial_document_environment,
         auxiliary_document_response: document_response,
         redirect_chain: Vec::new(),
         redirect_headers: None,

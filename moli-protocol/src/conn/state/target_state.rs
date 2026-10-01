@@ -467,11 +467,17 @@ impl TargetInitialEmptyDocumentState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPopupNavigation {
+    pub(crate) url: String,
+    pub(crate) response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    pub(crate) initiator: Option<moli_core::page::RendererNavigationInitiator>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetOwnerState {
     pub(crate) initial_empty_document: Option<TargetInitialEmptyDocumentState>,
-    pub(crate) pending_popup_document_response:
-        Option<(String, moli_core::page::RendererAuxiliaryDocumentResponse)>,
+    pub(crate) pending_popup_navigation: Option<PendingPopupNavigation>,
     pub(crate) committed_document_title: Option<String>,
     pub(crate) cached_empty_document_display_title: std::sync::OnceLock<String>,
     pub(crate) next_document_start_script_id: u32,
@@ -599,7 +605,7 @@ impl TargetOwnerState {
     }
 
     pub(crate) fn mark_initial_empty_document_pending_cross_document_navigation(&mut self) {
-        self.pending_popup_document_response = None;
+        self.pending_popup_navigation = None;
         if let Some(state) = self.initial_empty_document.as_mut() {
             state.mark_pending_cross_document_navigation();
         }

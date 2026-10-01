@@ -40,8 +40,9 @@ mod window_document_source;
 pub use javascript_dialog::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
 };
+pub use popup_activation::RendererPopupActivationParts;
 pub use popup_activation::{
-    RendererPendingPopupActivation, RendererPopupActivationParts, RendererPopupActivationSource,
+    RendererNavigationInitiator, RendererPendingPopupActivation, RendererPopupActivationSource,
     RendererPopupDisposition,
 };
 pub use window_document_source::RendererWindowDocumentSource;
@@ -834,6 +835,8 @@ pub struct RendererMainDocumentCommit {
     pub unreachable_url: Option<String>,
     pub security_origin: String,
     pub secure_context_type: String,
+    /// Selected request referrer, including an explicitly suppressed empty value.
+    pub document_referrer: Option<String>,
     pub timestamp: f64,
     /// Browser-owned session-history cursor and length at this document's commit.
     pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,

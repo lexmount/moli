@@ -1133,6 +1133,7 @@ impl PageVmEnvConfig {
                 headers, final_url,
             )
             .with_content_security_policy_bypass(self.bypass_content_security_policy);
+        self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container
                 .navigation_response_frame_ancestors_check(
@@ -1146,6 +1147,16 @@ impl PageVmEnvConfig {
             crate::document_language::document_default_language_from_headers(headers);
         self.document_last_modified =
             crate::document_last_modified::document_last_modified_from_headers(headers);
+    }
+
+    pub(crate) fn apply_main_document_commit_referrer(&mut self) {
+        if let Some(referrer) = self
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.document_referrer.as_ref())
+        {
+            self.document_policy_container.document_referrer = referrer.clone();
+        }
     }
 }
 

@@ -2,6 +2,7 @@ use super::super::tests_cdp_smoke_fixture::SmokeFixtureServer;
 use super::super::*;
 use super::support::evaluate_return_by_value;
 use crate::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::{Value, json};
 
 fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
@@ -1298,6 +1299,94 @@ async fn rust_cdp_chromium_target_named_reuse_updates_dom_opener_before_returnin
         take_response_by_id(&mut ctx, 269_026)["result"]["targetInfo"]["openerId"],
         "TID-dom-opener-parent"
     );
+}
+
+async fn assert_named_blank_security_uses_initiator(source_is_secure: bool) {
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new().run_until(async {
+        let source = if source_is_secure {
+            "https://blank-security.test/source"
+        } else {
+            "http://blank-security.test/source"
+        };
+        let previous_target = if source_is_secure {
+            "http://blank-security.test/old-target"
+        } else {
+            "https://blank-security.test/old-target"
+        };
+        load_bc_with_target(&mut ctx, "BID-blank-security", "TID-blank-source");
+        ctx.install_buffered_navigation_fixture_for_session_owner(
+            url::Url::parse(source).unwrap(), "<body>source</body>".into(), None,
+        ).await;
+        let source_session = attach_to_target(&mut ctx, 269_051, None, "TID-blank-source").await;
+        ctx.take_all();
+        let opened = evaluate_return_by_value(&mut ctx, &source_session, 269_052,
+            "window.child=open('about:blank','security-child');true").await;
+        assert_eq!(opened["result"]["result"]["value"], true);
+        let target = event(&ctx.sent, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
+            .as_str().unwrap().to_owned();
+        let target_session = attach_to_target(&mut ctx, 269_053, None, &target).await;
+        // Fetch fulfillment keeps the actual auxiliary Page and its related
+        // group; installing a fresh fixture Page would discard that identity.
+        ctx.process_async(json!({
+            "id":269_060,"method":"Fetch.enable","sessionId":target_session,
+            "params":{"patterns":[{"urlPattern":"*","resourceType":"Document"}]}
+        })).await;
+        take_response_by_id(&mut ctx, 269_060);
+        evaluate_return_by_value(&mut ctx, &target_session, 269_061,
+            format!("location.href={};true", json!(previous_target))).await;
+        let paused = ctx.wait_for_scheduler_message("old target request", |message| {
+            message["method"] == "Fetch.requestPaused" && message["sessionId"] == target_session
+        }).await;
+        ctx.process_async(json!({
+            "id":269_062,"method":"Fetch.fulfillRequest","sessionId":target_session,
+            "params":{"requestId":paused["params"]["requestId"],"responseCode":200,
+                "responseHeaders":[{"name":"Content-Type","value":"text/html"}],
+                "body":BASE64_STANDARD.encode(b"<body>old target</body>")}
+        })).await;
+        take_response_by_id(&mut ctx, 269_062);
+        ctx.wait_until_scheduler_state("old target document commit", |conn| {
+            conn.browser_context_by_id("BID-blank-security")
+                .and_then(|bc| loaded_page_for_target(bc, &target))
+                .is_some_and(|page| page.final_url().as_str() == previous_target)
+        }).await;
+        ctx.process_async(json!({
+            "id":269_063,"method":"Fetch.disable","sessionId":target_session
+        })).await;
+        take_response_by_id(&mut ctx, 269_063);
+        let old_state = evaluate_return_by_value(&mut ctx, &target_session, 269_054, "isSecureContext").await;
+        assert_eq!(old_state["result"]["result"]["value"], !source_is_secure);
+        ctx.take_all();
+        let reused = evaluate_return_by_value(&mut ctx, &source_session, 269_055, format!(
+            "Object.defineProperty(window,'isSecureContext',{{value:{}}});open('about:blank','security-child')===child",
+            !source_is_secure,
+        )).await;
+        assert_eq!(reused["result"]["result"]["value"], true);
+        ctx.wait_until_scheduler_state("named blank security commit", |conn| {
+            conn.browser_context_by_id("BID-blank-security")
+                .and_then(|bc| loaded_page_for_target(bc, &target))
+                .is_some_and(|page| page.final_url().as_str() == "about:blank")
+        }).await;
+        let current = evaluate_return_by_value(&mut ctx, &target_session, 269_056, "[origin,isSecureContext]").await;
+        let origin = url::Url::parse(source).unwrap().origin().ascii_serialization();
+        assert_eq!(current["result"]["result"]["value"], json!([origin, source_is_secure]));
+        ctx.process_async(json!({"id":269_057,"method":"Page.getFrameTree","sessionId":target_session})).await;
+        let tree = take_response_by_id(&mut ctx, 269_057);
+        let frame = &tree["result"]["frameTree"]["frame"];
+        assert_eq!(frame["securityOrigin"], origin);
+        assert_eq!(frame["secureContextType"], if source_is_secure { "Secure" } else { "InsecureScheme" });
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_named_blank_inherits_secure_initiator_over_insecure_target() {
+    assert_named_blank_security_uses_initiator(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_named_blank_inherits_insecure_initiator_over_secure_target() {
+    assert_named_blank_security_uses_initiator(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

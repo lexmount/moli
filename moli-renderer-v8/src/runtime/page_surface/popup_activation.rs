@@ -3,6 +3,74 @@ use std::sync::Arc;
 use super::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
 use crate::SharedWebStorageStore;
 
+/// Request context frozen in the initiating Document, before target selection
+/// or an Inspector startup pause can change the source's URL or policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererNavigationInitiator {
+    data: Arc<RendererNavigationInitiatorData>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RendererNavigationInitiatorData {
+    url: url::Url,
+    origin: String,
+    referrer_policy: String,
+}
+
+impl RendererNavigationInitiator {
+    pub(crate) fn new(
+        url: url::Url,
+        origin: moli_url::WebOrigin,
+        referrer_policy: Option<String>,
+    ) -> Self {
+        Self {
+            data: Arc::new(RendererNavigationInitiatorData {
+                url,
+                referrer_policy: if origin.is_opaque() {
+                    "no-referrer".to_owned()
+                } else {
+                    referrer_policy
+                        .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned())
+                },
+                origin: origin.ascii_serialization().to_owned(),
+            }),
+        }
+    }
+
+    pub fn url(&self) -> &url::Url {
+        &self.data.url
+    }
+
+    pub fn origin(&self) -> moli_url::WebOrigin {
+        moli_url::WebOrigin::from_serialized(&self.data.origin)
+    }
+
+    pub fn request_metadata(&self) -> moli_fetch::SubresourceRequestMetadata {
+        moli_fetch::SubresourceRequestMetadata {
+            referrer_policy: Some(self.data.referrer_policy.clone()),
+            ..Default::default()
+        }
+    }
+
+    pub fn document_referrer(&self, destination: &url::Url) -> String {
+        moli_fetch::referrer_value(
+            &self.data.url,
+            destination,
+            Some(&self.data.referrer_policy),
+            None,
+        )
+        .unwrap_or_default()
+    }
+
+    pub(crate) fn outgoing_referrer(&self) -> String {
+        if self.origin().is_opaque() {
+            return String::new();
+        }
+        moli_fetch::referrer_value(&self.data.url, &self.data.url, Some("unsafe-url"), None)
+            .unwrap_or_default()
+    }
+}
+
 /// Exact renderer-side initiator of one auxiliary browsing-context action.
 ///
 /// Window-originated actions retain the root lifecycle identity as causal
@@ -53,10 +121,12 @@ pub struct RendererPopupActivationParts {
     pub source: RendererPopupActivationSource,
     pub disposition: RendererPopupDisposition,
     pub navigation_requested: bool,
+    pub navigation_initiator: Option<RendererNavigationInitiator>,
     pub popup_id: Option<u64>,
     pub browsing_context_name: Option<super::RendererBrowsingContextName>,
     pub auxiliary_window: Option<super::RendererAuxiliaryWindow>,
     pub document_response: Option<super::RendererAuxiliaryDocumentResponse>,
+    pub initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
     pub pending_auxiliary_page: Option<crate::runtime::RendererPendingAuxiliaryPage>,
     pub url: String,
     pub target_name: String,
@@ -65,6 +135,26 @@ pub struct RendererPopupActivationParts {
 }
 
 impl RendererPendingPopupActivation {
+    pub(crate) fn with_navigation_initiator(
+        mut self,
+        initiator: RendererNavigationInitiator,
+    ) -> Self {
+        self.parts.navigation_initiator = Some(initiator);
+        self
+    }
+
+    pub fn navigation_initiator(&self) -> Option<&RendererNavigationInitiator> {
+        self.parts.navigation_initiator.as_ref()
+    }
+
+    pub(crate) fn with_initial_document_environment(
+        mut self,
+        environment: Option<super::RendererCapturedDocumentEnvironment>,
+    ) -> Self {
+        self.parts.initial_document_environment = environment;
+        self
+    }
+
     pub fn window(
         root_document: RendererDocumentLifecycleIdentity,
         window: RendererWindowDocumentSource,
@@ -87,10 +177,12 @@ impl RendererPendingPopupActivation {
                 },
                 disposition,
                 navigation_requested: true,
+                navigation_initiator: None,
                 popup_id,
                 browsing_context_name: None,
                 auxiliary_window: None,
                 document_response: None,
+                initial_document_environment: None,
                 pending_auxiliary_page: None,
                 url,
                 target_name,
@@ -115,10 +207,12 @@ impl RendererPendingPopupActivation {
                 source: RendererPopupActivationSource::BrowserContext,
                 disposition,
                 navigation_requested: true,
+                navigation_initiator: None,
                 popup_id,
                 browsing_context_name: None,
                 auxiliary_window: None,
                 document_response: None,
+                initial_document_environment: None,
                 pending_auxiliary_page: None,
                 url,
                 target_name,
@@ -225,11 +319,13 @@ impl PartialEq for RendererPopupActivationParts {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
             && self.navigation_requested == other.navigation_requested
+            && self.navigation_initiator == other.navigation_initiator
             && self.disposition == other.disposition
             && self.popup_id == other.popup_id
             && self.browsing_context_name == other.browsing_context_name
             && self.auxiliary_window == other.auxiliary_window
             && self.document_response == other.document_response
+            && self.initial_document_environment == other.initial_document_environment
             && self.pending_auxiliary_page == other.pending_auxiliary_page
             && self.url == other.url
             && self.target_name == other.target_name

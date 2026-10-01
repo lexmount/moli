@@ -19,6 +19,8 @@ pub(crate) struct PopupTargetNavigationOwnerAction {
     url: String,
     kind: PopupTargetNavigationKind,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +46,8 @@ impl PopupTargetNavigationOwnerAction {
             url,
             kind,
             document_response: None,
+            initial_document_environment: None,
+            navigation_initiator: None,
         })
     }
 
@@ -55,8 +59,24 @@ impl PopupTargetNavigationOwnerAction {
         self
     }
 
+    pub(crate) fn with_initial_document_environment(
+        mut self,
+        environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    ) -> Self {
+        self.initial_document_environment = environment;
+        self
+    }
+
     pub(crate) fn browser_context_id(&self) -> &str {
         &self.browser_context_id
+    }
+
+    pub(crate) fn with_navigation_initiator(
+        mut self,
+        initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    ) -> Self {
+        self.navigation_initiator = initiator;
+        self
     }
 
     pub(crate) fn target_id(&self) -> &str {
@@ -92,6 +112,8 @@ impl PopupTargetNavigationOwnerAction {
         String,
         PopupTargetNavigationKind,
         Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+        Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+        Option<moli_core::page::RendererNavigationInitiator>,
     ) {
         (
             CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
@@ -104,6 +126,8 @@ impl PopupTargetNavigationOwnerAction {
             self.url,
             self.kind,
             self.document_response,
+            self.initial_document_environment,
+            self.navigation_initiator,
         )
     }
 }

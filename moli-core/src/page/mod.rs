@@ -77,7 +77,6 @@ pub use moli_page_types::{
     renderer_inspector_protocol_configuration_command_from_message,
     renderer_inspector_protocol_configuration_command_from_method,
 };
-pub use moli_renderer_v8::RendererRuntimeInspectorMessageResponseOrder;
 pub use moli_renderer_v8::dom::native::SelectedFile;
 pub use moli_renderer_v8::network::{
     RendererNetworkResourceLoadOutcome, RendererNetworkResourceLoadPreparation,
@@ -91,9 +90,9 @@ pub use moli_renderer_v8::{
     RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
     RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCommandTurnCompletion, RendererCommandTurnOutput,
-    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
+    RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
+    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -110,33 +109,33 @@ pub use moli_renderer_v8::{
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
     RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
-    RendererMainDocumentCommit, RendererPageCommandPostResponseContinuation,
-    RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPageReplacementError,
+    RendererMainDocumentCommit, RendererNavigationInitiator,
+    RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
+    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
+    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReplacementError,
     RendererPageReplacementFailureDisposition, RendererPendingAuxiliaryPage,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationParts, RendererPopupActivationSource, RendererPopupDisposition,
-    RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
-    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-    RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
-    RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
-    RendererRuntimeRealmInfo, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScrollIntoViewResult,
-    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
-    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
-    RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetEvent,
-    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererResourceTextSearchOutcome,
+    RendererRuntimeCommandOutput, RendererRuntimeHeapUsage, RendererRuntimeInspectorIoCommandClaim,
+    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
+    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
+    RendererRuntimeInspectorProtocolMessageValueMut, RendererRuntimeObservableSourceItem,
+    RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererScreenshotClip,
+    RendererScreenshotFormat, RendererScreenshotPurpose, RendererScreenshotRegion,
+    RendererScrollIntoViewResult, RendererServiceWorkerConsoleMessage,
+    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
+    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
+    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
+    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
+    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RuntimeConsoleMessageSnapshot,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,
@@ -148,6 +147,9 @@ pub use moli_renderer_v8::{
 };
 pub use moli_renderer_v8::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
+pub use moli_renderer_v8::{
+    RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
 };
 pub use navigation_diagnostics::{NavigationRedirect, NavigationResponse};
 pub use protocol_support::{

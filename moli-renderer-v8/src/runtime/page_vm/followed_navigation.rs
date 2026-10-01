@@ -550,6 +550,7 @@ struct PreparedResponseBootstrapPayload {
     local_executor: JsLocalExecutor,
     runtime_hooks: PageVmRuntimeHooks,
     request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+    navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
 }
 
 /// Owns all continuation state after the source Document has committed away
@@ -597,6 +598,7 @@ impl PageVmCommittedNavigationBootstrap {
                     local_executor,
                     runtime_hooks,
                     request,
+                    navigation_bootstrap_entry,
                 } = *payload;
                 let mut response = PageVmNavigationResponse {
                     requested_url: request.requested_url.clone(),
@@ -607,7 +609,12 @@ impl PageVmCommittedNavigationBootstrap {
                     headers: request.response_headers.clone(),
                 };
                 let result = request
-                    .bootstrap(page_id, local_executor, runtime_hooks)
+                    .bootstrap_with_navigation_seed(
+                        page_id,
+                        local_executor,
+                        runtime_hooks,
+                        navigation_bootstrap_entry,
+                    )
                     .await?;
                 let (mut outcome, status, headers) =
                     streaming_navigation_result_to_turn_outcome(result).await?;
@@ -1032,16 +1039,34 @@ impl PageVm {
         reservation: crate::runtime::owner_local_store::RendererDocumentIsolateReservation,
     ) -> Result<PageVmCommittedNavigationBootstrap> {
         request.validate_bootstrap_configuration()?;
-        if moli_url::is_about_blank(&request.final_url)
-            && let Some(preserve_referrer) = request
-                .document_replacement
-                .as_ref()
-                .and_then(|replacement| replacement.reload_preserves_navigation_referrer)
+        let navigation_bootstrap_entry = match request
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.session_history_position)
         {
-            bootstrap.initial_document_environment = Some(
-                self.vm_mut()
-                    .capture_about_blank_reload_environment(preserve_referrer)?,
-            );
+            Some(position) => self
+                .vm_mut()
+                .capture_inherited_history_for_browser_commit(&request.final_url, position)?,
+            None => None,
+        };
+        if moli_url::is_about_blank(&request.final_url)
+            && let Some(replacement) = request.document_replacement.as_ref()
+        {
+            if let Some(environment) = replacement.initial_document_environment.as_ref() {
+                bootstrap.initial_document_environment = Some(
+                    environment.take(
+                        bootstrap
+                            .clone_renderer_document_isolate_handle_for_owner_retention()
+                            .identity_key(),
+                    )?,
+                );
+            } else if let Some(preserve_referrer) = replacement.reload_preserves_navigation_referrer
+            {
+                bootstrap.initial_document_environment = Some(
+                    self.vm_mut()
+                        .capture_about_blank_reload_environment(preserve_referrer)?,
+                );
+            }
         }
         ensure!(
             request.lifecycle_decider.is_none(),
@@ -1078,6 +1103,7 @@ impl PageVm {
                     local_executor,
                     runtime_hooks,
                     request,
+                    navigation_bootstrap_entry,
                 }),
             )),
             browser_context_runtime,

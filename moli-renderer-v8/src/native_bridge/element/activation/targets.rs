@@ -222,15 +222,47 @@ fn navigate_hyperlink_popup_target(
         );
         return true;
     };
-    creator.policy_container.document_referrer = if relations.suppress_referrer {
-        String::new()
+    creator.policy_container.referrer_policy =
+        crate::context_bootstrap::current_document_referrer_policy(scope, creator.opener)
+            .or(creator.policy_container.referrer_policy);
+    let initiator_origin = if creator.policy_container.sandbox.forces_opaque_origin {
+        moli_url::WebOrigin::Opaque
     } else {
-        creator.document_url.to_string()
+        unsafe { &*runtime_ptr }
+            .document_resource_loader_for_dispatch_scope(dispatch_scope)
+            .map(|loader| loader.fetch_context().request_origin())
+            .unwrap_or(moli_url::WebOrigin::Opaque)
+    };
+    let navigation_initiator = crate::runtime::RendererNavigationInitiator::new(
+        unsafe { &*runtime_ptr }
+            .document_referrer_source_url_for_dispatch_scope(dispatch_scope)
+            .unwrap_or_else(|| creator.document_url.clone()),
+        initiator_origin,
+        if relations.suppress_referrer {
+            Some("no-referrer".to_owned())
+        } else {
+            unsafe { &*runtime_ptr }
+                .dom_host()
+                .node(source_handle)
+                .and_then(crate::dom::native::Node::as_element)
+                .and_then(|element| element.attribute("referrerpolicy"))
+                .and_then(crate::referrer_policy::normalize_referrer_policy)
+                .or_else(|| creator.policy_container.referrer_policy.clone())
+        },
+    );
+    creator.policy_container.document_referrer = if relations.suppress_opener {
+        navigation_initiator
+            .document_referrer(&url::Url::parse(resolved_url).expect("resolved hyperlink URL"))
+    } else {
+        navigation_initiator.outgoing_referrer()
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let runtime = unsafe { &mut *runtime_ptr };
-    if let Some(opener) = opener
-        && runtime.has_browser_owned_auxiliary_page_factory()
+    if runtime.has_browser_owned_auxiliary_page_factory()
+        && (!relations.suppress_opener
+            || moli_url::is_about_blank(
+                &url::Url::parse(resolved_url).expect("resolved hyperlink URL"),
+            ))
     {
         let child_handle = match dispatch_scope {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
@@ -238,7 +270,8 @@ fn navigate_hyperlink_popup_target(
         };
         let opened = match runtime.open_renderer_owned_auxiliary_window(
             scope,
-            opener,
+            creator.opener,
+            !relations.suppress_opener,
             child_handle,
             target_name,
             resolved_url,
@@ -271,13 +304,15 @@ fn navigate_hyperlink_popup_target(
             RendererPendingPopupActivation::window(
                 root_document,
                 source,
-                true,
+                !relations.suppress_opener,
                 opened.window.as_ref().map(|window| window.id()),
                 resolved_url.to_owned(),
                 target_name.to_owned(),
                 disposition,
             )
             .with_browsing_context_name(opened.name)
+            .with_navigation_initiator(navigation_initiator)
+            .with_initial_document_environment(opened.initial_document_environment)
             .with_auxiliary_window(opened.window)
             .with_pending_auxiliary_page(opened.pending_page)
             .with_initial_auxiliary_state(opened.session_storage, opened.initial_storage_key),
@@ -311,6 +346,7 @@ fn navigate_hyperlink_popup_target(
                 target_name.to_owned(),
                 disposition,
             )
+            .with_navigation_initiator(navigation_initiator)
             .with_initial_auxiliary_state(None, None),
             Some(window_open_event),
         );
@@ -343,6 +379,7 @@ fn navigate_hyperlink_popup_target(
             disposition,
         )
         .with_document_response(opened_popup.document_response)
+        .with_navigation_initiator(navigation_initiator)
         .with_initial_auxiliary_state(session_storage_store, initial_empty_document_storage_key),
         window_open_event,
     );

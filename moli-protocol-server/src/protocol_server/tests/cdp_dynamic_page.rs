@@ -2,6 +2,9 @@ use super::*;
 
 mod auto_attach_startup;
 mod auxiliary_page_identity;
+mod blank_navigation_inheritance;
+mod noopener_blank_inheritance;
+mod popup_navigation_referrer;
 
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

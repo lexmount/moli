@@ -54,7 +54,7 @@ pub(crate) struct RendererDeferredContextHostReleaseQueue {
 }
 
 struct RendererDeferredContextHostRelease {
-    _host: Rc<RefCell<JsContextHost>>,
+    _host: Option<Rc<RefCell<JsContextHost>>>,
     retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
 }
 
@@ -82,10 +82,23 @@ impl RendererDeferredContextHostReleaseQueue {
         host: Rc<RefCell<JsContextHost>>,
         retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
     ) {
-        let release = RendererDeferredContextHostRelease {
-            _host: host,
+        self.defer_release(RendererDeferredContextHostRelease {
+            _host: Some(host),
             retained_v8_handle_state,
-        };
+        });
+    }
+
+    pub(crate) fn defer_v8_handle_state(
+        &self,
+        retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
+    ) {
+        self.defer_release(RendererDeferredContextHostRelease {
+            _host: None,
+            retained_v8_handle_state,
+        });
+    }
+
+    fn defer_release(&self, release: RendererDeferredContextHostRelease) {
         if self.inner.isolate_shutting_down.get() {
             drop(release);
             return;
@@ -510,6 +523,16 @@ impl RendererPageScriptEnvironment {
 
     pub(crate) fn isolate_identity_key(&self) -> usize {
         self.inner.renderer_document_isolate.identity_key()
+    }
+
+    pub(crate) fn capture_initial_document_environment(
+        &self,
+        environment: super::ScriptVmInitialDocumentEnvironment,
+    ) -> super::ScriptVmCapturedDocumentEnvironment {
+        super::ScriptVmCapturedDocumentEnvironment::new(
+            environment,
+            self.inner.renderer_document_isolate.clone(),
+        )
     }
 
     pub(crate) fn bootstrap_replacement_document_isolate(

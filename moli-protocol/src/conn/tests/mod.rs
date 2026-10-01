@@ -1724,6 +1724,8 @@ fn materialized_navigation_test_state(
     requested_url: &str,
 ) -> NavigationDispatchState {
     NavigationDispatchState {
+        navigation_initiator: None,
+        initial_document_environment: None,
         auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,

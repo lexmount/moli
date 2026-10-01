@@ -673,4 +673,18 @@ impl ScriptVm {
             Ok(())
         });
     }
+
+    pub(crate) fn capture_inherited_history_for_browser_commit(
+        &mut self,
+        url: &url::Url,
+        position: moli_session_history::SessionHistoryPosition,
+    ) -> Result<Option<crate::native_bridge::NavigationHistoryEntrySeed>> {
+        self.with_default_context_scope(|scope, _| {
+            Ok(
+                crate::context_bootstrap::capture_inherited_history_for_browser_commit(
+                    scope, url, position,
+                ),
+            )
+        })
+    }
 }

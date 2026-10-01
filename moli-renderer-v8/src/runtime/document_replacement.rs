@@ -69,6 +69,7 @@ pub(crate) struct RendererDocumentReplacement {
     pause: RendererInspectorPauseBridge,
     cancellation: moli_fetch::FetchCancelHandle,
     reload_preserves_navigation_referrer: Option<bool>,
+    initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
 }
 
 impl RendererDocumentReplacement {
@@ -80,6 +81,7 @@ impl RendererDocumentReplacement {
             pause,
             cancellation,
             reload_preserves_navigation_referrer: None,
+            initial_document_environment: None,
         }
     }
 
@@ -91,6 +93,7 @@ impl RendererDocumentReplacement {
         Ok(Arc::new(RendererDocumentReplacementScope {
             pause: self.pause,
             reload_preserves_navigation_referrer: self.reload_preserves_navigation_referrer,
+            initial_document_environment: self.initial_document_environment,
         }))
     }
 }
@@ -101,6 +104,7 @@ impl RendererDocumentReplacement {
 pub(crate) struct RendererDocumentReplacementScope {
     pause: RendererInspectorPauseBridge,
     pub(super) reload_preserves_navigation_referrer: Option<bool>,
+    pub(super) initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
 }
 
 impl Drop for RendererDocumentReplacementScope {
@@ -165,6 +169,14 @@ impl Drop for PendingPageReplacementReservation {
 }
 
 impl RendererPageReplacementTarget {
+    pub fn with_initial_document_environment(
+        mut self,
+        environment: Option<super::RendererCapturedDocumentEnvironment>,
+    ) -> Self {
+        self.replacement.initial_document_environment = environment;
+        self
+    }
+
     /// A reload retains an about:blank Document's origin and fallback base URL.
     /// Browser reload also reuses the previous navigation's referrer; script
     /// reload computes its referrer from the reloading Document instead.

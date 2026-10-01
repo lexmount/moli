@@ -51,7 +51,7 @@ pub(crate) struct RendererRelatedInitialEmptyPageInit {
     pub(crate) env: PageVmEnvConfig,
     pub(crate) inherited_origin: String,
     pub(crate) inherited_security_token: v8::Global<v8::Value>,
-    pub(crate) opener: v8::Global<v8::Object>,
+    pub(crate) opener: Option<v8::Global<v8::Object>>,
     pub(crate) window: RendererAuxiliaryWindow,
     pub(crate) name: RendererBrowsingContextName,
 }
@@ -63,6 +63,23 @@ pub(crate) struct RendererAuxiliaryPageAllocator {
 }
 
 impl RendererAuxiliaryPageAllocator {
+    pub(crate) fn capture_document_environment(
+        &self,
+        source_environment: &crate::script_vm::RendererPageScriptEnvironment,
+        environment: crate::script_vm::ScriptVmInitialDocumentEnvironment,
+        is_secure_context: bool,
+    ) -> Result<RendererCapturedDocumentEnvironment> {
+        ensure!(
+            source_environment.page_id() == self.source_page.as_u64(),
+            "document environment must use its exact initiator's allocator"
+        );
+        Ok(RendererCapturedDocumentEnvironment::capture(
+            &self.owner,
+            source_environment.capture_initial_document_environment(environment),
+            is_secure_context,
+        ))
+    }
+
     pub(in crate::runtime) fn new(
         owner: owner_local_store::RendererOwnerLocalContext,
         source_page: PageId,

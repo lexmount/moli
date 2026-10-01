@@ -99,9 +99,16 @@ pub(in crate::runtime) trait RendererRuntimeLease:
     fn into_runtime(self: Arc<Self>) -> JsRuntime;
     fn cancel_page_producers(&self);
     fn cancel_pending_auxiliary_page(&self, reservation: RendererPageReservationToken);
+    fn release_captured_document_environment(&self, id: u64);
 }
 
 impl RendererRuntimeLease for JsRuntimeInner {
+    fn release_captured_document_environment(&self, id: u64) {
+        let _ = self.renderer_owner.enqueue_command_with_reply(
+            RendererOwnerCommand::ReleaseCapturedDocumentEnvironment { id },
+        );
+    }
+
     fn into_runtime(self: Arc<Self>) -> JsRuntime {
         JsRuntime { inner: self }
     }

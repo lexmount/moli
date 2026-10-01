@@ -1,5 +1,80 @@
 use super::*;
 
+pub(crate) struct ScriptVmCapturedDocumentEnvironment {
+    environment: Option<ScriptVmInitialDocumentEnvironment>,
+    isolate: RendererDocumentIsolateHandle,
+}
+
+impl ScriptVmCapturedDocumentEnvironment {
+    pub(crate) fn origin(&self) -> &str {
+        &self
+            .environment
+            .as_ref()
+            .expect("captured environment has not been consumed")
+            .origin
+    }
+
+    pub(super) fn new(
+        environment: ScriptVmInitialDocumentEnvironment,
+        isolate: RendererDocumentIsolateHandle,
+    ) -> Self {
+        Self {
+            environment: Some(environment),
+            isolate,
+        }
+    }
+
+    pub(crate) fn take(
+        mut self,
+        isolate_identity: usize,
+    ) -> Result<ScriptVmInitialDocumentEnvironment> {
+        anyhow::ensure!(
+            self.isolate.identity_key() == isolate_identity,
+            "inherited V8 security token belongs to another isolate"
+        );
+        Ok(self
+            .environment
+            .take()
+            .expect("captured environment is consumed once"))
+    }
+}
+
+impl Drop for ScriptVmCapturedDocumentEnvironment {
+    fn drop(&mut self) {
+        if let Some(environment) = self.environment.take() {
+            // Reuse the existing entered-isolate release queue, including when
+            // a navigation is cancelled while this isolate is in a pause loop.
+            self.isolate
+                .deferred_context_host_release_queue()
+                .defer_v8_handle_state(vec![Box::new(environment)]);
+        }
+    }
+}
+
+impl ScriptVmInitialDocumentEnvironment {
+    pub(crate) fn inherited_in_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        opener: v8::Local<'_, v8::Object>,
+        origin: String,
+        storage_key: moli_storage_key::MoliStorageKey,
+        base_url: url::Url,
+        policy_container: crate::document_runtime::DocumentPolicyContainer,
+    ) -> Result<Self> {
+        let context = opener
+            .get_creation_context(scope)
+            .ok_or_else(|| anyhow!("navigation initiator has no live creation context"))?;
+        let security_token = (!policy_container.sandbox.forces_opaque_origin)
+            .then(|| v8::Global::new(scope, context.get_security_token(scope)));
+        Ok(Self {
+            security_token,
+            origin,
+            policy_container,
+            fallback_base_url: Some(base_url),
+            storage_key: Some(storage_key),
+        })
+    }
+}
+
 impl ScriptVm {
     pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
         self._context_host

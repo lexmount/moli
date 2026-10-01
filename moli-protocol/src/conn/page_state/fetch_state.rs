@@ -364,6 +364,8 @@ mod tests {
 
     fn navigation_state(url: &Url) -> NavigationDispatchState {
         NavigationDispatchState {
+            navigation_initiator: None,
+            initial_document_environment: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,

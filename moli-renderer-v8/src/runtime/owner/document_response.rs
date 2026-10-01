@@ -24,6 +24,17 @@ impl RendererCreateStreamingRawPageRequest {
         local_executor: JsLocalExecutor,
         runtime_hooks: PageVmRuntimeHooks,
     ) -> Result<StreamingNavigationPageCreationResult> {
+        self.bootstrap_with_navigation_seed(page_id, local_executor, runtime_hooks, None)
+            .await
+    }
+
+    pub(in crate::runtime) async fn bootstrap_with_navigation_seed(
+        self,
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        runtime_hooks: PageVmRuntimeHooks,
+        navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    ) -> Result<StreamingNavigationPageCreationResult> {
         let RendererCreateStreamingRawPageRequest {
             document_replacement: _document_replacement,
             root_frame_id,
@@ -76,7 +87,7 @@ impl RendererCreateStreamingRawPageRequest {
             crate::document_language::document_default_language_from_headers(&response_headers);
         let document_last_modified =
             crate::document_last_modified::document_last_modified_from_headers(&response_headers);
-        let env = PageVmEnvConfig {
+        let mut env = PageVmEnvConfig {
             web_storage,
             document_start_scripts,
             runtime_bindings,
@@ -106,10 +117,11 @@ impl RendererCreateStreamingRawPageRequest {
             root_frame_id,
             main_document_commit,
             top_level_storage_key: None,
-            navigation_bootstrap_entry: None,
+            navigation_bootstrap_entry,
             reserved_service_worker_client_id: reserved_service_worker_client
                 .map(RendererReservedServiceWorkerClient::release),
         };
+        env.apply_main_document_commit_referrer();
 
         let bootstrap_executor = local_executor.clone();
         PageVm::run_bootstrap_future_on_fresh_local_task(

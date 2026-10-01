@@ -1,5 +1,109 @@
 use super::*;
 
+fn capture_initial_environment_for_gc_test(
+    vm: &StandaloneScriptVmHarness,
+) -> crate::script_vm::ScriptVmCapturedDocumentEnvironment {
+    let isolate = vm.renderer_document_isolate.clone();
+    let url = vm.document_runtime.document_url().clone();
+    let environment = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &vm.page_default_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let opener = context.global(scope);
+        crate::script_vm::ScriptVmInitialDocumentEnvironment::inherited_in_scope(
+            scope,
+            opener,
+            moli_url::origin_ascii_serialization(&url),
+            moli_storage_key::MoliStorageKey::first_party_from_url(
+                &url,
+                moli_storage_key::url_needs_opaque_nonce(&url)
+                    .then(|| moli_storage_key::OpaqueOriginNonce::new(1)),
+            ),
+            url.clone(),
+            Default::default(),
+        )
+        .expect("initiator environment captures its actual V8 security token")
+    });
+    crate::script_vm::ScriptVmCapturedDocumentEnvironment::new(environment, isolate)
+}
+
+#[test]
+fn captured_tuple_environment_releases_source_document_before_consumption() {
+    let vm = new_parsed_test_vm(
+        "https://captured-tuple.test/source",
+        "<body>source document</body>",
+    );
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let captured = capture_initial_environment_for_gc_test(&vm);
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "a tuple-origin token must not keep the source DOM alive"
+    );
+    let identity = isolate.identity_key();
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        let environment = captured
+            .take(identity)
+            .expect("same-isolate token consumption");
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let token = v8::Local::new(scope, environment.security_token.as_ref().unwrap());
+        let token =
+            v8::Local::<v8::String>::try_from(token).expect("tuple-origin token is a string");
+        assert_eq!(
+            token.to_rust_string_lossy(scope),
+            "moli-window-origin-v1:https://captured-tuple.test",
+            "the accepted token remains usable after the source Document is collected"
+        );
+    });
+}
+
+fn assert_captured_context_token_releases_realm_on_cancellation(url: &str, relax_domain: bool) {
+    let mut vm = new_parsed_test_vm(url, "<body>source document</body>");
+    if relax_domain {
+        vm.eval("document.domain=location.hostname").unwrap();
+    }
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let captured = capture_initial_environment_for_gc_test(&vm);
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_some(),
+        "a context token retains its creation realm and native backing"
+    );
+    // Cancellation may run outside an entered isolate. The established release
+    // queue must drop the token on entry before the next GC can retire its realm.
+    drop(captured);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "cancelled navigation releases the last token and the source DOM"
+    );
+}
+
+#[test]
+fn captured_opaque_environment_keeps_realm_until_cancellation() {
+    assert_captured_context_token_releases_realm_on_cancellation("about:blank", false);
+}
+
+#[test]
+fn captured_document_domain_environment_keeps_realm_until_cancellation() {
+    assert_captured_context_token_releases_realm_on_cancellation(
+        "https://captured-domain.test/source",
+        true,
+    );
+}
+
 #[test]
 fn retained_document_realm_keeps_native_values_until_the_last_v8_reference() {
     let mut vm = new_parsed_test_vm(

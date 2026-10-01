@@ -1910,6 +1910,8 @@ pub(crate) struct ScriptVmInitialDocumentEnvironment {
     storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
 
+pub(crate) use document_environment::ScriptVmCapturedDocumentEnvironment;
+
 impl ScriptVmPageRealmBootstrap {
     fn new_from_dom_host(
         mut dom_host: DomHost,
