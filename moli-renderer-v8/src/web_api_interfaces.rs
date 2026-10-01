@@ -382,6 +382,14 @@ interfaces! {
     PushSubscription;
     PushSubscriptionOptions;
     QuotaExceededError: DOMException;
+    RTCCertificate;
+    RTCDTMFSender: EventTarget;
+    RTCDtlsTransport: EventTarget;
+    RTCIceTransport: EventTarget;
+    RTCRtpSender;
+    RTCRtpTransceiver;
+    RTCSctpTransport: EventTarget;
+    RTCStatsReport;
     RTCDataChannel: EventTarget;
     RTCError: DOMException;
     RTCErrorEvent: Event;
