@@ -1,4 +1,5 @@
 use super::*;
+use crate::event_type::EventTypeKey;
 
 impl PageScriptHost {
     pub(crate) fn is_abort_signal<'s>(
@@ -30,7 +31,7 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: EventCallbackId,
         capture: bool,
     ) {
@@ -73,7 +74,7 @@ impl PageScriptHost {
     pub(crate) fn remove_registered_event_listener_by_id(
         &mut self,
         target: crate::document_runtime::EventTargetHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: EventCallbackId,
         capture: bool,
     ) {

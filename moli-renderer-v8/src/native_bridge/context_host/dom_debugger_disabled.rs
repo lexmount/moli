@@ -1,6 +1,7 @@
 //! Ordinary DOM/event hooks when external DevTools instrumentation is absent.
 use super::PageScriptHost;
 use crate::document_runtime::{DevToolsDomPrepublishedRemoval, DomHandle, EventTargetHandle};
+use crate::event_type::EventTypeKey;
 use crate::script_vm::{RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause};
 #[cfg(feature = "devtools")]
 use moli_page_types::{
@@ -33,14 +34,14 @@ impl PageScriptHost {
     }
     pub(crate) fn schedule_dom_debugger_event_listener_pause_for_target(
         &self,
-        _event_name: &str,
+        _event_name: &(impl EventTypeKey + ?Sized),
         _target: EventTargetHandle,
     ) -> Option<RendererDomDebuggerScheduledPause> {
         None
     }
     pub(crate) fn schedule_dom_debugger_event_listener_pause_for_interface(
         &self,
-        _event_name: &str,
+        _event_name: &(impl EventTypeKey + ?Sized),
         _target_name: &str,
     ) -> Option<RendererDomDebuggerScheduledPause> {
         None

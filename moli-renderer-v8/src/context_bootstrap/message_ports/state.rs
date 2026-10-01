@@ -414,7 +414,7 @@ pub(crate) fn message_port_keeps_event_loop_alive<'s>(
     !message_port_is_closed(scope, port)
         && message_port_is_started(scope, port)
         && !message_port_bool_slot(scope, port, MESSAGE_PORT_INTERNAL_SLOT).unwrap_or(false)
-        && ["message", "messageerror"].iter().any(|event_type| {
+        && ["message", "messageerror"].into_iter().any(|event_type| {
             !simple_object_event_listeners_snapshot(scope, port, event_type).is_empty()
         })
 }

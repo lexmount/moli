@@ -8,7 +8,7 @@ use crate::context_bootstrap::events::{
 pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
     ancestors: &[v8::Local<'s, v8::Object>],
 ) -> SimpleEventDispatchResult {

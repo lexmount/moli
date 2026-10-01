@@ -3,6 +3,7 @@ use super::{
     clear_event_composed_path, event_initialized, event_internal_bool_flag, event_is_dispatching,
     new_dom_exception_value, set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
+use crate::event_type::EventType;
 use crate::util::{throw_type_error, v8str};
 use moli_webapi::events::state::{
     clear_event_dispatch_fields, set_event_dispatch_fields_for_targets,
@@ -11,7 +12,7 @@ use moli_webapi::events::state::{
 pub(crate) fn prepare_script_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<(v8::Local<'s, v8::Object>, String)> {
+) -> Option<(v8::Local<'s, v8::Object>, EventType)> {
     let event = v8::Local::<v8::Object>::try_from(value).ok();
     let Some((event, initialized)) =
         event.and_then(|event| event_initialized(scope, event).map(|flag| (event, flag)))
@@ -33,8 +34,8 @@ pub(crate) fn prepare_script_dispatch<'s>(
     set_event_trusted(scope, event, false);
     let event_type = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "type").into())?
-        .to_string(scope)?
-        .to_rust_string_lossy(scope);
+        .to_string(scope)?;
+    let event_type = EventType::from_v8(scope, event_type);
     Some((event, event_type))
 }
 

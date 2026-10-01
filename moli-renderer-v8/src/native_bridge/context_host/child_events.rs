@@ -1,4 +1,5 @@
-use super::{OwnerDispatchScope, PageScriptHost};
+use super::PageScriptHost;
+use crate::event_type::EventTypeKey;
 use crate::{
     context_bootstrap::{
         EventHandlerType, apply_event_handler_return_value, error_event_handler_arguments,
@@ -64,33 +65,14 @@ impl PageScriptHost {
     fn child_window_event_requires_runtime_dispatch(
         &self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> bool {
-        if self.child_window_proxy_records.has_live_window(handle)
+        self.child_window_proxy_records.has_live_window(handle)
             || self
                 .child_window_event_listeners
                 .get(&handle)
                 .and_then(|listeners| listeners.get(event_type))
                 .is_some_and(|listeners| !listeners.is_empty())
-        {
-            return true;
-        }
-        let body_attribute = match event_type {
-            "load" => "onload",
-            "storage" => "onstorage",
-            _ => return false,
-        };
-        self.child_browsing_context_document_handle(handle)
-            .into_iter()
-            .flat_map(|document| {
-                self.dom_host()
-                    .elements_by_tag_name(document, "body", false)
-            })
-            .any(|body| {
-                self.dom_host()
-                    .get_attribute(body, body_attribute)
-                    .is_some_and(|source| !source.trim().is_empty())
-            })
     }
 
     fn allocate_child_window_event_registration_id(&mut self) -> ChildWindowEventRegistrationId {
@@ -104,7 +86,7 @@ impl PageScriptHost {
     pub(crate) fn child_window_event_listener_callback_ids(
         &self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         capture: bool,
     ) -> Vec<EventCallbackId> {
         self.child_window_event_listeners
@@ -136,13 +118,15 @@ impl PageScriptHost {
                 entries
                     .iter()
                     .filter(|entry| entry.local_window_id == Some(target.owner().local_window_id))
-                    .map(|entry| crate::host::EventListenerInspectorSnapshot {
-                        registration_id: entry.registration_id.0,
-                        event_type: event_type.clone(),
-                        callback_id: entry.callback_id,
-                        capture: entry.capture,
-                        once: entry.once,
-                        passive: false,
+                    .filter_map(|entry| {
+                        Some(crate::host::EventListenerInspectorSnapshot {
+                            registration_id: entry.registration_id.0,
+                            event_type: event_type.as_str_lossy().to_owned(),
+                            callback_id: entry.callback_state.callback_id()?,
+                            capture: entry.capture,
+                            once: entry.once,
+                            passive: false,
+                        })
                     })
             })
             .collect()
@@ -151,7 +135,7 @@ impl PageScriptHost {
     pub(crate) fn insert_child_window_event_listener(
         &mut self,
         target: ChildWindowEventTarget,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: EventCallbackId,
         capture: bool,
         once: bool,
@@ -160,7 +144,7 @@ impl PageScriptHost {
         self.child_window_event_listeners
             .entry(target.child_handle())
             .or_default()
-            .entry(event_type.to_owned())
+            .entry(event_type.to_event_type())
             .or_default()
             .push(ChildWindowEventListenerEntry {
                 registration_id,
@@ -228,7 +212,7 @@ impl PageScriptHost {
         self.child_window_event_listeners
             .entry(handle)
             .or_default()
-            .entry(event_type.to_owned())
+            .entry(event_type.to_event_type())
             .or_default()
             .push(ChildWindowEventListenerEntry {
                 registration_id,
@@ -263,7 +247,7 @@ impl PageScriptHost {
     fn remove_child_window_event_handler_property(
         &mut self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<EventCallbackId> {
         let target_map = self.child_window_event_listeners.get_mut(&handle)?;
         let entries = target_map.get_mut(event_type)?;
@@ -341,7 +325,7 @@ impl PageScriptHost {
         child_handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         document: v8::Local<'s, v8::Object>,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         bubbles: bool,
         cancelable: bool,
     ) -> bool {
@@ -380,7 +364,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: ChildWindowEventTarget,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
         capture_only: bool,
         at_target: bool,
@@ -426,7 +410,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: ChildWindowEventTarget,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
         dispatch_slots: Vec<ChildWindowEventDispatchSlot>,
     ) -> DispatchStatus {
@@ -488,7 +472,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
     ) {
         self.dispatch_child_window_event_with_target_override(
@@ -500,7 +484,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
         legacy_target_override: bool,
     ) {
@@ -527,14 +511,6 @@ impl PageScriptHost {
             window
         };
         if begin_at_target_dispatch(scope, target, window, event) {
-            if event_type == "load" {
-                install_child_body_load_attribute_handler_if_needed(scope, self, handle);
-            }
-
-            if event_type == "storage" {
-                dispatch_child_body_storage_attribute(scope, window, event);
-            }
-
             let slots = self.child_window_event_dispatch_slots(handle, event_type, None, None);
             self.invoke_child_window_event_listeners(
                 scope,
@@ -552,7 +528,7 @@ impl PageScriptHost {
     fn child_window_event_dispatch_slots(
         &self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         registration_kind: Option<ChildWindowEventRegistrationKind>,
         capture: Option<bool>,
     ) -> Vec<ChildWindowEventDispatchSlot> {
@@ -580,7 +556,7 @@ impl PageScriptHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         slot: ChildWindowEventDispatchSlot,
     ) -> Option<ReadyChildWindowEventListenerInvocation> {
         let entry = self
@@ -613,14 +589,14 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         ready: ReadyChildWindowEventListenerInvocation,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         event: v8::Local<'s, v8::Object>,
     ) -> (bool, Option<v8::Global<v8::Value>>) {
         if !self.child_window_event_target_is_current(ready.target) {
             return (false, None);
         }
         if ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
-            && event_type == "beforeunload"
+            && event_type.is_type("beforeunload")
         {
             invoke_prepared_before_unload_event_handler(
                 scope,
@@ -657,7 +633,7 @@ impl PageScriptHost {
     fn remove_child_window_event_registration_by_id(
         &mut self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         registration_id: ChildWindowEventRegistrationId,
     ) -> Option<EventCallbackId> {
         let target_map = self.child_window_event_listeners.get_mut(&handle)?;
@@ -678,7 +654,7 @@ impl PageScriptHost {
     pub(crate) fn remove_child_window_event_listener_by_id(
         &mut self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
         callback_id: EventCallbackId,
         capture: bool,
     ) -> bool {
@@ -735,7 +711,7 @@ impl PageScriptHost {
     pub(crate) fn child_window_event_callback_identities_for_test(
         &self,
         handle: DomHandle,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Vec<(
         Option<crate::native_bridge::WindowExecutionContextIdentity>,
         Option<crate::native_bridge::WindowExecutionContextIdentity>,
@@ -758,11 +734,11 @@ fn child_window_event_type_from_handler_name(name: &str) -> Option<&str> {
 fn child_window_event_callback_arguments<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration_kind: ChildWindowEventRegistrationKind,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
-        && event_type == "error"
+        && event_type.is_type("error")
         && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
         arguments.to_vec()
@@ -773,7 +749,7 @@ fn child_window_event_callback_arguments<'s>(
 
 fn apply_child_window_event_handler_return<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
     event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
@@ -781,7 +757,7 @@ fn apply_child_window_event_handler_return<'s>(
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+    let handler_type = if event_type.is_type("error") && event_is_error_event(scope, event) {
         EventHandlerType::OnErrorEventHandler
     } else {
         EventHandlerType::EventHandler

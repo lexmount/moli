@@ -142,9 +142,9 @@ pub(in crate::context_bootstrap) fn read_media_query_matches<'s>(
 pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
-    event_type: &str,
+    event_type: &(impl EventTypeKey + ?Sized),
 ) {
-    if event_type != "change" {
+    if !event_type.is_type("change") {
         return;
     }
     let Some(context) = list.get_creation_context(scope) else {
