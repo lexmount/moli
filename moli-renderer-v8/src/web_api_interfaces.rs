@@ -20,6 +20,14 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    RTCCertificate;
+    RTCDTMFSender: EventTarget;
+    RTCDtlsTransport: EventTarget;
+    RTCIceTransport: EventTarget;
+    RTCRtpSender;
+    RTCRtpTransceiver;
+    RTCSctpTransport: EventTarget;
+    RTCStatsReport;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
