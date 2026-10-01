@@ -53,6 +53,8 @@ interfaces! {
     BroadcastChannel: EventTarget;
     ByteLengthQueuingStrategy;
     CDATASection: Text;
+    CSSAnimation: Animation;
+    CSSTransition: Animation;
     CSSConditionRule: CSSGroupingRule;
     CSSContainerRule: CSSConditionRule;
     CSSCounterStyleRule: CSSRule;
