@@ -211,7 +211,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match interface_name {
         "RTCPeerConnectionIceErrorEvent" => ice_error_event::install(scope, prototype),
-        "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" => {
+        "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" | "RTCErrorEvent" => {
             events::install_event_template_bindings(scope, template, interface_name)
         }
         "RTCIceCandidate" => {
