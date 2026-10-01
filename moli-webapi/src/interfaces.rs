@@ -93,6 +93,10 @@ interfaces! {
     RTCStatsReport;
     RTCTrackEvent: Event;
     EncodedVideoChunk;
+    LargestContentfulPaint: PerformanceEntry;
+    PerformanceEventTiming: PerformanceEntry;
+    PerformancePaintTiming: PerformanceEntry;
+    PerformanceServerTiming;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
@@ -492,10 +496,10 @@ interfaces! {
     PageTransitionEvent: Event;
     Path2D;
 
-    LargestContentfulPaint: PerformanceEntry;
-    PerformanceEventTiming: PerformanceEntry;
-    PerformancePaintTiming: PerformanceEntry;
-    PerformanceServerTiming;
+
+
+
+
     Performance: EventTarget;
     PerformanceEntry;
     PerformanceMark: PerformanceEntry;
