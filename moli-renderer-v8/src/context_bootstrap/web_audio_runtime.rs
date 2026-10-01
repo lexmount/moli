@@ -17,18 +17,21 @@ mod biquad;
 mod buffer;
 mod channel_nodes;
 mod convolver;
+mod format;
 
 pub(in crate::context_bootstrap) use convolver::constructor as convolver_constructor;
 mod graph;
 mod iir;
 pub(in crate::context_bootstrap) use iir::constructor as iir_constructor;
 mod node;
+mod offline_context;
 mod oscillator;
 mod param_nodes;
 mod periodic_wave;
 mod source;
 mod wave_shaper;
 
+pub(in crate::context_bootstrap) use offline_context::constructor as offline_audio_context_constructor_callback;
 pub(in crate::context_bootstrap) use oscillator::constructor as oscillator_constructor;
 pub(in crate::context_bootstrap) use periodic_wave::constructor as periodic_wave_constructor;
 pub(in crate::context_bootstrap) use wave_shaper::constructor as wave_shaper_constructor;
@@ -327,17 +330,6 @@ const SYNTHETIC_ANALYSER_FREQUENCY_BINS: &[f64] = &[
 ];
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "OfflineAudioContext")]
-struct OfflineAudioContextConstructorArgs {
-    #[webidl(required)]
-    channel_count: f64,
-    #[webidl(required)]
-    length: f64,
-    #[webidl(required)]
-    sample_rate: f32,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "AudioParam.setValueAtTime")]
 struct AudioParamSetValueAtTimeArgs {
     #[webidl(required)]
@@ -377,6 +369,8 @@ struct AudioWorkletNodeTemplateDeclaration {}
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(accessor_property, receiver = web_api_interfaces::BaseAudioContext::is_instance, getter = offline_context::render_quantum_size_getter)]
+    render_quantum_size: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 3, callback = buffer::create)]
     create_buffer: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = wave_shaper::create)]
@@ -1275,77 +1269,6 @@ fn dynamics_compressor_reduction_getter_callback<'s>(
     let value = web_audio_number_slot(scope, args.this(), DYNAMICS_COMPRESSOR_REDUCTION_SLOT)
         .unwrap_or(0.0);
     rv.set(v8::Number::new(scope, value).into());
-}
-
-pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'OfflineAudioContext': Please use the 'new' operator.",
-        );
-        return;
-    }
-
-    let Some(parsed) = webidl::parse_args::<OfflineAudioContextConstructorArgs>(scope, &args)
-    else {
-        return;
-    };
-
-    let channel_count = parsed.channel_count.trunc();
-    let length = parsed.length.trunc();
-    let sample_rate = f64::from(parsed.sample_rate);
-    if !channel_count.is_finite()
-        || !length.is_finite()
-        || !sample_rate.is_finite()
-        || channel_count <= 0.0
-        || length <= 0.0
-        || sample_rate <= 0.0
-    {
-        throw_type_error(
-            scope,
-            "Failed to construct 'OfflineAudioContext': invalid channel count, length, or sample rate.",
-        );
-        return;
-    }
-
-    let context = args.this();
-    let destination = audio_destination_node(scope, context);
-    let compressors = v8::Array::new(scope, 0);
-    let modules = new_web_audio_map_object(scope);
-    let module_list = v8::Array::new(scope, 0);
-    let processors = new_web_audio_map_object(scope);
-    set_private_value(scope, context, AUDIO_CONTEXT_MODULES_SLOT, modules.into());
-    set_private_value(
-        scope,
-        context,
-        AUDIO_CONTEXT_MODULE_LIST_SLOT,
-        module_list.into(),
-    );
-    set_private_value(
-        scope,
-        context,
-        AUDIO_CONTEXT_PROCESSORS_SLOT,
-        processors.into(),
-    );
-    OfflineAudioContextObjectDeclaration::new(
-        0.0,
-        length,
-        sample_rate,
-        length,
-        sample_rate,
-        channel_count,
-        compressors,
-        OFFLINE_AUDIO_LISTENERS_SLOT,
-        "suspended",
-        destination,
-    )
-    .initialize(scope, context)
-    .expect("OfflineAudioContext declaration should initialize object");
-    rv.set(context.into());
 }
 
 fn require_base_audio_context<'s>(
