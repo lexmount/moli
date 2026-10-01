@@ -485,7 +485,8 @@ mod tests {
         page_resource_completion::RendererPageResourceCompletionOwner,
         page_task_queue::{
             RendererPageBitmapTaskId, RendererPageBitmapTaskOwner,
-            RendererPageBroadcastChannelDeliveryOwner, RendererPageChildFrameTaskOwner,
+            RendererPageBroadcastChannelDeliveryOwner, RendererPageCanvasBlobSerializationOwner,
+            RendererPageCanvasBlobSerializationTaskId, RendererPageChildFrameTaskOwner,
             RendererPageChildFrameTaskTarget, RendererPageChildModuleDependencyFetchStartOwner,
             RendererPageChildModuleScriptTerminalOwner,
             RendererPageChildRealmMaterializationTarget,
@@ -590,6 +591,24 @@ mod tests {
                     )),
                     OwnerDispatchScope::Top,
                 ),
+            ),
+        }
+    }
+    fn canvas_blob_serialization_descriptor(
+        ready_at: Instant,
+        order: u64,
+    ) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::CanvasBlobSerialization {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageCanvasBlobSerializationOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowExecutionContextIdentity::new(
+                    WindowExecutionContextOwner::Frame(LocalWindowId(7)),
+                    OwnerDispatchScope::Top,
+                    RuntimeObservableContextToken::from_raw(11),
+                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+                ),
+                RendererPageCanvasBlobSerializationTaskId::new(order),
             ),
         }
     }
@@ -1042,6 +1061,9 @@ mod tests {
             }
             RendererPageTaskSourceKind::MiscPlatformApi => {
                 misc_platform_api_descriptor(runnable_since, order)
+            }
+            RendererPageTaskSourceKind::CanvasBlobSerialization => {
+                canvas_blob_serialization_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::NavigationAndTraversal => {
                 history_traversal_descriptor(runnable_since, order)

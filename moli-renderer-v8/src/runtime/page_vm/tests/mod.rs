@@ -2331,3 +2331,4 @@ mod extracted;
 
 mod blob_constructor;
 mod blob_text;
+mod canvas_blob_serialization;

@@ -186,6 +186,11 @@ mod canvas_context_kind_tests {
 }
 
 mod backing_store;
+mod blob_serialization;
+pub(crate) use blob_serialization::{
+    CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
+    canvas_to_blob_callback,
+};
 mod constructors;
 mod context2d;
 mod helpers;
