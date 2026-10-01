@@ -205,6 +205,9 @@ pub(super) fn style_entries_affecting_property(
 }
 
 pub(super) fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
+    if crate::detached_css_style::css_style_declaration_is_shell_property(name) {
+        return false;
+    }
     if moli_css_parse::css_value_is_eof_open_var_function(value) {
         return false;
     }
