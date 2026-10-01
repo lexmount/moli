@@ -789,7 +789,7 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 
     assert_eq!(
         diagnostics["isolateScope"]["documentIsolateModel"],
-        json!("page-vm")
+        json!("related-pages")
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentPageCount"],
@@ -1724,6 +1724,7 @@ fn materialized_navigation_test_state(
     requested_url: &str,
 ) -> NavigationDispatchState {
     NavigationDispatchState {
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id,

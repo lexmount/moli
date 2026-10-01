@@ -166,6 +166,8 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .into_iter()
         .map(string_charge)
         .sum(),
+        RendererOwnerAction::CloseAuxiliaryWindow(_) => 0,
+        RendererOwnerAction::NavigateAuxiliaryWindow { url, .. } => string_charge(url),
         RendererOwnerAction::Popup(event) => {
             string_charge(event.url()).saturating_add(string_charge(event.target_name()))
         }

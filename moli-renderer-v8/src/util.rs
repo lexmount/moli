@@ -80,6 +80,9 @@ struct DisconnectedPageContext;
 #[derive(Debug)]
 struct DetachedDocumentPageContext;
 
+/// Identifies a main default Window realm after its active registrations retire.
+pub(crate) struct MainDefaultWindowContext;
+
 /// Active native registries root their objects until teardown. A detached
 /// realm instead keeps those objects in its own V8-traced graph, so retaining
 /// a Document preserves wrapper identity without a Rust -> V8 -> Rust cycle.

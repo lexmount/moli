@@ -648,6 +648,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         "INT-1".to_owned(),
         None,
         NavigationDispatchState {
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),

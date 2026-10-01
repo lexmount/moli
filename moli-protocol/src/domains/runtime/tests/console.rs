@@ -662,13 +662,13 @@ async fn heap_profiler_moli_diagnostics_reports_connection_state_without_loaded_
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageV8HeapScope"],
-        json!("page-vm-document-isolate"),
+        json!("related-page-document-isolate"),
         "diagnostics should label Runtime.getHeapUsage heap scope: {response:?}"
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageV8HeapIsTargetLocal"],
-        json!(true),
-        "diagnostics should make PageVM-local heap stats explicit: {response:?}"
+        json!(false),
+        "diagnostics should make related-Page heap sharing explicit: {response:?}"
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageMoliCountersScope"],
@@ -677,12 +677,12 @@ async fn heap_profiler_moli_diagnostics_reports_connection_state_without_loaded_
     );
     assert_eq!(
         isolate_scope["runtimeCollectGarbageScope"],
-        json!("page-vm-document-isolate"),
+        json!("related-page-document-isolate"),
         "diagnostics should label collectGarbage scope: {response:?}"
     );
     assert_eq!(
         isolate_scope["v8ForegroundTaskWakeScope"],
-        json!("page-vm-document-isolate"),
+        json!("page-runtime"),
         "diagnostics should label V8 foreground task wake scope: {response:?}"
     );
     assert_eq!(

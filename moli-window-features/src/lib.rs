@@ -134,6 +134,11 @@ impl WindowOpenFeatures {
         self.noopener
     }
 
+    /// Returns whether the features request an independent popup window.
+    pub fn is_popup(&self) -> bool {
+        self.is_popup
+    }
+
     /// Returns the normalized enabled features used by the popup runtime.
     pub fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();

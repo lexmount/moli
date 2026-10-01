@@ -201,7 +201,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
             "targetInfo": {
                 "targetId": second_target_id,
                 "type": "page",
-                "title": "",
+                "title": "about:blank#second",
                 "url": "about:blank#second",
                 "attached": false,
                 "canAccessOpener": false,
@@ -220,7 +220,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
+async fn popup_target_diagnostics_count_related_pages_in_one_document_isolate() {
     let mut ctx = TestContext::new();
     ctx.conn.set_auto_attach_owner(
         None,
@@ -335,18 +335,18 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(2),
-        "opener and loaded popup target must remain independently schedulable: {diagnostics:?}"
+        json!(1),
+        "related opener and popup share their renderer owner: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
-        json!(2),
-        "loaded popup PageVM must own a distinct document isolate: {diagnostics:?}"
+        json!(1),
+        "related popup and opener must count as one document isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedLiveV8IsolateCount"],
-        json!(2),
-        "opener plus popup without workers should report two live page document isolates: {diagnostics:?}"
+        json!(1),
+        "opener plus popup without workers should report one live document isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["documentContextCount"],
@@ -396,7 +396,7 @@ async fn attach_to_target_keeps_background_target_background_when_active_target_
             "targetInfo": {
                 "targetId": second_target_id,
                 "type": "page",
-                "title": "",
+                "title": "about:blank#second",
                 "url": "about:blank#second",
                 "attached": true,
                 "canAccessOpener": false,

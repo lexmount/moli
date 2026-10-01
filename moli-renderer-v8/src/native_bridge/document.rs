@@ -941,6 +941,14 @@ fn document_referrer_getter_function<'s>(
     let referrer = runtime
         .child_browsing_context_referrer_for_document_handle(handle)
         .or_else(|| runtime.lightweight_popup_referrer_for_document_handle(handle))
+        .or_else(|| {
+            (handle == runtime.document_handle()).then(|| {
+                runtime
+                    .document_policy_container()
+                    .document_referrer
+                    .as_str()
+            })
+        })
         .unwrap_or("");
     set_document_string_return_value(scope, &mut rv, referrer);
 }

@@ -596,7 +596,9 @@ fn runtime_evaluate_await_promise_pending_is_terminated_once_by_navigation_repla
         assert_eq!(responses[0]["sessionId"], json!("SID-1"));
         assert_eq!(
             responses[0]["error"]["message"],
-            json!("Inspected target navigated or closed")
+            // Chromium's native Inspector response for a pending promise
+            // whose Document is destroyed during navigation.
+            json!("Execution context was destroyed.")
         );
         assert!(
             ctx.conn

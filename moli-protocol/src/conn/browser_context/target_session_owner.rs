@@ -145,6 +145,8 @@ impl TargetNavigationStorageHandles {
 
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
+    pub(crate) auxiliary_document_response:
+        Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(crate) browser_context_id: Option<String>,
@@ -181,7 +183,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
     session_history_position: Option<moli_session_history::SessionHistoryPosition>,
-    pub(crate) document_replacement: Option<moli_core::runtime::RendererDocumentReplacement>,
+    pub(crate) document_replacement: Option<crate::conn::CapturedPageReplacement>,
 }
 
 impl TargetNavigationLoadInputs {
@@ -277,6 +279,7 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target retains document activity");
 
         Self {
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             browser_context_id: Some(browser_context.id.clone()),
@@ -382,6 +385,7 @@ impl TargetNavigationLoadInputs {
         renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
     ) -> Self {
         Self {
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             browser_context_id: None,
@@ -481,6 +485,26 @@ fn renderer_runtime_inspector_session_id(session_key: &DevToolsSessionKey) -> Op
 }
 
 impl<'a> TargetSessionOwnerRef<'a> {
+    pub(super) fn navigation_browsing_context_group(
+        &self,
+        browser_initiated: bool,
+    ) -> crate::conn::state::NavigationBrowsingContextGroup {
+        let group = self
+            .browser_context
+            .renderer_runtime()
+            .browsing_context_name(&self.target_id)
+            .group();
+        let target = self.target();
+        target
+            .owner_state
+            .navigation_history_state
+            .browsing_context_group_for_navigation(
+                group,
+                target.loaded_page().map(Page::final_url),
+                browser_initiated,
+            )
+    }
+
     fn target(&self) -> &'a crate::conn::PageTargetHost {
         self.browser_context
             .page_target(&self.target_id)
@@ -1096,6 +1120,11 @@ impl<'a> TargetSessionOwnerMut<'a> {
         history_url: &Url,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
         let browser_context_id = self.browser_context.id.clone();
+        let group = self
+            .browser_context
+            .renderer_runtime()
+            .browsing_context_name(&self.target_id)
+            .group();
         Some(
             self.browser_context
                 .page_target_mut(&self.target_id)
@@ -1105,6 +1134,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     page,
                     renderer_attachment_commit,
                     history_url,
+                    group,
                 )
                 .await,
         )
@@ -1112,6 +1142,17 @@ impl<'a> TargetSessionOwnerMut<'a> {
 }
 
 impl CdpConnection {
+    pub(crate) fn navigation_browsing_context_group_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        browser_initiated: bool,
+    ) -> Option<crate::conn::state::NavigationBrowsingContextGroup> {
+        Some(
+            self.target_session_owner_ref_for_owner(owner)?
+                .navigation_browsing_context_group(browser_initiated),
+        )
+    }
+
     pub(crate) fn effective_page_bypass_csp_enabled_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -1227,6 +1268,34 @@ impl CdpConnection {
         self.target_session_owner_mut_for_owner(owner)?
             .commit_loaded_navigation_page_async(page, renderer_attachment_commit, history_url)
             .await
+    }
+
+    pub(crate) fn commit_existing_page_navigation_for_owner(
+        &mut self,
+        owner: &crate::conn::CommandOwnerScope,
+        expected: &crate::conn::StablePageNavigationCommitTarget,
+        transaction: crate::conn::CommittedRendererAgentAttachment,
+        history_url: &Url,
+    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
+        if self
+            .target_page_residence_identity_for_owner(owner)
+            .as_ref()
+            != Some(&expected.target_page)
+        {
+            return None;
+        }
+        let mut resolved = self.target_session_owner_mut_for_owner(owner)?;
+        let group = resolved
+            .browser_context
+            .renderer_runtime()
+            .browsing_context_name(&resolved.target_id)
+            .group();
+        Some(resolved.target_mut().commit_existing_page_navigation(
+            expected,
+            transaction,
+            history_url,
+            group,
+        ))
     }
 
     pub(crate) fn initial_document_page_owner_for_owner(
@@ -2383,6 +2452,53 @@ impl CdpConnection {
             .mark_next_navigation_history_replace_current()
     }
 
+    pub(crate) fn mark_next_auxiliary_navigation_history_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        kind: moli_core::page::RendererAuxiliaryNavigationKind,
+    ) -> Option<()> {
+        let mut target = self.target_session_owner_mut_for_owner(owner)?;
+        let state = &mut target.target_mut().owner_state;
+        if kind == moli_core::page::RendererAuxiliaryNavigationKind::Assign
+            && (state
+                .initial_empty_document_state()
+                .is_some_and(|document| document.is_on_initial_empty_document())
+                || state
+                    .navigation_history_state
+                    .has_initial_auxiliary_document_entry())
+        {
+            state
+                .navigation_history_state
+                .mark_replace_initial_empty_document("link");
+        } else {
+            state
+                .navigation_history_state
+                .mark_auxiliary_navigation(kind);
+        }
+        Some(())
+    }
+
+    pub(crate) fn mark_next_browser_navigation_from_initial_document_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) {
+        let Some(mut target) = self.target_session_owner_mut_for_owner(owner) else {
+            return;
+        };
+        let state = &mut target.target_mut().owner_state;
+        if state
+            .navigation_history_state
+            .has_initial_auxiliary_document_entry()
+        {
+            // Fragment and History API changes leave the initial Document in
+            // place. Its placeholder must still be replaced by the first real
+            // navigation, including one initiated through DevTools.
+            state
+                .navigation_history_state
+                .mark_replace_initial_empty_document("typed");
+        }
+    }
+
     pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -3326,6 +3442,7 @@ mod tests {
             secure_context_type: "Secure".to_owned(),
             timestamp: 0.0,
             session_history_position: None,
+            browsing_context_group: None,
         };
         {
             let mut owner = TargetSessionOwnerMut {

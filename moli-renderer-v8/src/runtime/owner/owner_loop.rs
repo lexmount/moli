@@ -279,6 +279,17 @@ impl RendererOwnerHandle {
                                 }
                             }
                         }
+                        RenderRuntimeDispatchOutcome::PageReplacementCommittedAndContinueNavigation { mut replacement, continuation } => {
+                            if continuation.requires_committed_document_response_release() {
+                                replacement.defer_committed_document_parser_until_response(self.state.page_wake_tx.clone());
+                            }
+                            if let Some(reply_tx) = pending_turn.reply_tx {
+                                let _ = reply_tx.send(Ok(RendererOwnerReply::PageReplacementCommitted(replacement)));
+                            }
+                            // An existing Page retains its close owner even if this
+                            // navigation's observer has gone away. Continue its parser.
+                            self.enqueue_page_creation_continuation(continuation, &mut pending_turns, &mut parked_turns);
+                        }
                         RenderRuntimeDispatchOutcome::BackgroundComplete(result)
                         | RenderRuntimeDispatchOutcome::PageTurnComplete { result, .. } => {
                             if let Some(reply_tx) = pending_turn.reply_tx {
@@ -600,6 +611,20 @@ impl RendererOwnerHandle {
                     remove_page_on_bound_owner_local_store(token);
                 }
             }
+            RenderRuntimeDispatchOutcome::PageReplacementCommittedAndContinueNavigation {
+                mut replacement,
+                continuation,
+            } => {
+                if continuation.requires_committed_document_response_release() {
+                    replacement.defer_committed_document_parser_until_response(
+                        self.state.page_wake_tx.clone(),
+                    );
+                }
+                let _ = reply_tx.send(Ok(RendererOwnerReply::PageReplacementCommitted(
+                    replacement,
+                )));
+                self.enqueue_page_creation_continuation(continuation, pending_turns, parked_turns);
+            }
             RenderRuntimeDispatchOutcome::BackgroundComplete(result)
             | RenderRuntimeDispatchOutcome::PageTurnComplete { result, .. } => {
                 let reply = match result {
@@ -698,6 +723,13 @@ impl RendererOwnerHandle {
                 continuation,
             } => {
                 drop(page);
+                self.cancel_pending_turn_on_owner_local_store(continuation.into_turn());
+            }
+            RenderRuntimeDispatchOutcome::PageReplacementCommittedAndContinueNavigation {
+                replacement,
+                continuation,
+            } => {
+                drop(replacement);
                 self.cancel_pending_turn_on_owner_local_store(continuation.into_turn());
             }
             RenderRuntimeDispatchOutcome::ContinueNextTurn(turn)
@@ -913,6 +945,7 @@ impl RendererOwnerHandle {
             }
             RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token,
+                vm_creation_id,
                 follow_count,
                 completion,
             } => {
@@ -921,6 +954,10 @@ impl RendererOwnerHandle {
                     Ok(entry) => entry,
                     Err(error) => return Err(error).into(),
                 };
+                if entry.page_vm().creation_id != vm_creation_id {
+                    self.restore_live_page_entry(token, entry);
+                    return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
+                }
                 let advance = advance_pending_phase_one_navigation_on_entry_via_local_task(
                     self.state.local_executor.clone(),
                     entry,
@@ -947,6 +984,7 @@ impl RendererOwnerHandle {
                         let turn = Box::new(
                             RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                                 token,
+                                vm_creation_id,
                                 follow_count,
                                 completion,
                             },

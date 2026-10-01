@@ -33,38 +33,20 @@ impl PopupTargetOpenerIdentity {
 #[derive(Clone, Debug)]
 pub(crate) struct PopupTargetCreation {
     browser_context_id: String,
-    popup_id: Option<u64>,
-    url: String,
-    target_name: String,
+    activation: moli_core::page::RendererPendingPopupActivation,
     opener: Option<PopupTargetOpenerIdentity>,
-    can_access_opener: bool,
-    disposition: moli_core::page::RendererPopupDisposition,
-    session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
-    initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
 
 impl PopupTargetCreation {
     pub(crate) fn new(
         browser_context_id: String,
-        popup_id: Option<u64>,
-        url: String,
-        target_name: String,
+        activation: moli_core::page::RendererPendingPopupActivation,
         opener: Option<PopupTargetOpenerIdentity>,
-        can_access_opener: bool,
-        disposition: moli_core::page::RendererPopupDisposition,
-        session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
-        initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) -> Self {
         Self {
             browser_context_id,
-            popup_id,
-            url,
-            target_name,
+            activation,
             opener,
-            can_access_opener,
-            disposition,
-            session_storage_store,
-            initial_empty_document_storage_key,
         }
     }
 }
@@ -76,15 +58,30 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
 ) -> Option<String> {
     let PopupTargetCreation {
         browser_context_id,
+        activation,
+        opener,
+    } = creation;
+    let moli_core::page::RendererPopupActivationParts {
+        source,
+        disposition,
+        navigation_requested,
         popup_id,
+        browsing_context_name,
+        auxiliary_window,
+        document_response,
+        pending_auxiliary_page,
         url,
         target_name,
-        opener,
-        can_access_opener,
-        disposition,
         session_storage_store,
         initial_empty_document_storage_key,
-    } = creation;
+    } = activation.into_parts();
+    let can_access_opener = matches!(
+        source,
+        moli_core::page::RendererPopupActivationSource::Window {
+            exposes_opener: true,
+            ..
+        }
+    );
     let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
         tracing::debug!(
             browser_context_id,
@@ -95,10 +92,48 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         return None;
     };
 
-    if let Some(existing_target_id) = browser_context
-        .target_id_for_window_name(&target_name)
-        .map(str::to_owned)
-    {
+    // The renderer has already chosen a browsing context. Its name may have
+    // changed before this accepted action is consumed, so only actions that
+    // lack a concrete identity may perform name resolution here.
+    let popup_id = auxiliary_window
+        .as_ref()
+        .map(|window| window.id())
+        .or(popup_id);
+    let existing_target_id = match (browsing_context_name.as_ref(), popup_id) {
+        (Some(name), _) => browser_context.target_id_for_browsing_context_name(name),
+        (None, Some(popup_id)) => browser_context.target_id_for_popup_id(popup_id),
+        (None, None) => browser_context.target_id_for_window_name(&target_name),
+    }
+    .map(str::to_owned);
+    if let Some(existing_target_id) = existing_target_id {
+        if !navigation_requested {
+            if disposition != moli_core::page::RendererPopupDisposition::Background
+                && let Some(activation) = PopupTargetActivationAction::capture(
+                    conn,
+                    &browser_context_id,
+                    &existing_target_id,
+                )
+            {
+                conn.publish_popup_target_activation_action(activation);
+            }
+            return Some(existing_target_id);
+        }
+        // Compare the current Document before publishing the requested URL.
+        // A same-origin caller navigating a named Window to its current URL
+        // replaces the entry; a cross-origin caller must not learn that URL
+        // through a change in history.length (Chromium crbug.com/1208614).
+        let replace_current = browser_context
+            .page_target(&existing_target_id)
+            .and_then(|target| target.loaded_page())
+            .zip(opener.as_ref().and_then(|opener| {
+                browser_context
+                    .page_target(&opener.target_id)
+                    .and_then(|target| target.loaded_page())
+            }))
+            .is_some_and(|(target, initiator)| {
+                target.final_url().as_str() == url
+                    && target.final_url().origin() == initiator.final_url().origin()
+            });
         let navigation =
             popup_target_has_loaded_page(conn, &browser_context_id, &existing_target_id)
                 .then(|| {
@@ -107,11 +142,11 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                         &browser_context_id,
                         &existing_target_id,
                         url.clone(),
-                        PopupTargetNavigationKind::NamedTargetReuse,
+                        PopupTargetNavigationKind::NamedTargetReuse { replace_current },
                     )
                 })
                 .flatten();
-        let activation = (disposition == moli_core::page::RendererPopupDisposition::Foreground)
+        let activation = (disposition != moli_core::page::RendererPopupDisposition::Background)
             .then(|| {
                 PopupTargetActivationAction::capture(conn, &browser_context_id, &existing_target_id)
             })
@@ -130,20 +165,21 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                 &existing_target_id,
             );
             if let Some(navigation) = navigation {
-                conn.publish_popup_target_navigation_owner_action(navigation);
+                conn.publish_popup_target_navigation_owner_action(
+                    navigation.with_document_response(document_response),
+                );
             }
             if let Some(activation) = activation {
                 conn.publish_popup_target_activation_action(activation);
             }
         }
-        return (target_url_updated
-            && remember_resolved_popup_target(
-                conn,
-                &browser_context_id,
-                popup_id,
-                &existing_target_id,
-            ))
-        .then_some(existing_target_id);
+        return target_url_updated.then_some(existing_target_id);
+    }
+
+    if browsing_context_name.is_some() && auxiliary_window.is_none() {
+        // An ordinary related Page was selected, then retired before projection.
+        // It must never be recreated as a new auxiliary target.
+        return None;
     }
 
     // The renderer has already accepted an auxiliary-context action. Even when
@@ -183,6 +219,23 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
 
     {
         let browser_context = conn.browser_context_by_id_mut(&browser_context_id)?;
+        if let Some(page) = pending_auxiliary_page.as_ref() {
+            assert_eq!(
+                Some(page.popup_id()),
+                popup_id,
+                "popup adoption must preserve its accepted identity"
+            );
+        }
+        let initial_empty = pending_auxiliary_page.is_some();
+        let window_id = if disposition == moli_core::page::RendererPopupDisposition::NewWindow {
+            browser_context.page_targets.allocate_window_id()
+        } else {
+            opener
+                .as_ref()
+                .and_then(|opener| browser_context.page_target(&opener.target_id))
+                .map(|target| target.window_id)
+                .unwrap_or_else(|| browser_context.page_targets.default_window_id())
+        };
         browser_context.stage_popup_background_target(
             target_id.clone(),
             auto_attached_background_session_id.clone(),
@@ -191,7 +244,18 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
             popup_creator,
             session_storage_store,
             initial_empty_document_storage_key,
+            pending_auxiliary_page,
+            window_id,
         );
+        let history = &mut browser_context
+            .page_target_mut(&target_id)
+            .expect("staged popup target")
+            .owner_state
+            .navigation_history_state;
+        history.mark_auxiliary_document_entry(initial_empty);
+        if requested_url != "about:blank" {
+            history.mark_replace_initial_empty_document("link");
+        }
         if let Some(opener) = opener {
             browser_context.remember_target_opener(
                 &target_id,
@@ -200,8 +264,22 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                 can_access_opener,
             );
         }
-        browser_context.remember_target_window_name(&target_name, &target_id);
+        if let Some(name) = browsing_context_name {
+            browser_context.bind_target_browsing_context_name(&target_id, name);
+        } else {
+            browser_context.remember_target_window_name(&target_name, &target_id);
+        }
+        if let Some(window) = auxiliary_window {
+            browser_context
+                .renderer_runtime()
+                .bind_auxiliary_window(&target_id, window);
+        }
         browser_context.remember_target_popup_id(popup_id, &target_id);
+        browser_context
+            .page_target_mut(&target_id)?
+            .owner_state
+            .pending_popup_document_response =
+            document_response.map(|response| (requested_url.clone(), response));
     }
 
     let tab_target_id = conn.register_top_level_page_target(&target_id);
@@ -294,7 +372,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
     {
         conn.publish_popup_target_navigation_owner_action(navigation);
     }
-    if disposition == moli_core::page::RendererPopupDisposition::Foreground
+    if disposition != moli_core::page::RendererPopupDisposition::Background
         && let Some(activation) =
             PopupTargetActivationAction::capture(conn, &browser_context_id, &target_id)
     {
@@ -303,21 +381,6 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
     Some(target_id)
 }
 
-fn remember_resolved_popup_target(
-    conn: &mut CdpConnection,
-    browser_context_id: &str,
-    popup_id: Option<u64>,
-    target_id: &str,
-) -> bool {
-    conn.browser_context_by_id_mut(browser_context_id)
-        .is_some_and(|browser_context| {
-            if browser_context.devtools_target_info(target_id).is_none() {
-                return false;
-            }
-            browser_context.remember_target_popup_id(popup_id, target_id);
-            true
-        })
-}
 async fn ensure_popup_initial_document_page_async(
     conn: &mut CdpConnection,
     target_id: &str,
@@ -514,7 +577,8 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
     conn: &mut CdpConnection,
     action: PopupTargetNavigationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, browser_context_id, target_id, url, kind) = action.into_parts();
+    let (owner_scope, browser_context_id, target_id, url, kind, mut document_response) =
+        action.into_parts();
     let target_is_current = conn
         .target_owner_identity_for_owner(&owner_scope)
         .is_some_and(|(current_browser_context_id, current_target_id)| {
@@ -556,13 +620,53 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
                 );
             }
         }
-        PopupTargetNavigationKind::NamedTargetReuse => {}
+        PopupTargetNavigationKind::NamedTargetReuse { .. }
+        | PopupTargetNavigationKind::WindowReference(_) => {}
     }
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
+    if matches!(
+        kind,
+        PopupTargetNavigationKind::InitialDocument
+            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
+    ) {
+        document_response = conn
+            .browser_context_by_id_mut(&browser_context_id)
+            .and_then(|context| context.page_target_mut(&target_id))
+            .and_then(|target| target.owner_state.pending_popup_document_response.take())
+            .filter(|(requested, _)| requested == &url)
+            .map(|(_, response)| response);
+    }
+    let auxiliary_navigation = match kind {
+        PopupTargetNavigationKind::WindowReference(kind) => Some(kind),
+        PopupTargetNavigationKind::NamedTargetReuse { replace_current } => {
+            Some(if replace_current {
+                moli_core::page::RendererAuxiliaryNavigationKind::Replace
+            } else {
+                moli_core::page::RendererAuxiliaryNavigationKind::Assign
+            })
+        }
+        _ => None,
+    };
+    let request_kind = if matches!(
+        kind,
+        PopupTargetNavigationKind::WindowReference(
+            moli_core::page::RendererAuxiliaryNavigationKind::Reload
+        )
+    ) {
+        moli_fetch::BrowserNavigationRequestKind::Reload
+    } else {
+        moli_fetch::BrowserNavigationRequestKind::Navigate
+    };
+    crate::domains::page::navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         &mut protocol_events,
-        &owner_scope,
+        owner_scope,
         &url,
+        "GET",
+        None,
+        &[],
+        request_kind,
+        auxiliary_navigation,
+        document_response,
     )
     .await;
     if matches!(

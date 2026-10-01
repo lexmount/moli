@@ -146,7 +146,7 @@ fn hyperlink_popup_creator<'s>(
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
 ) -> Option<HyperlinkPopupCreator<'s>> {
-    let runtime = unsafe { &*runtime_ptr };
+    let runtime = unsafe { &mut *runtime_ptr };
     let document = runtime.dom_host().owner_document_handle(source_handle)?;
     let base_url = runtime.document_base_url_for_handle(document);
     let document_url = runtime.document_url_for_handle(document);
@@ -155,6 +155,16 @@ fn hyperlink_popup_creator<'s>(
             opener: scope.get_current_context().global(scope),
             base_url,
             policy_container: runtime.document_policy_container().clone(),
+            document_url,
+        });
+    }
+    if let Some(handle) = runtime.child_browsing_context_handle_by_document_handle(scope, document)
+    {
+        let policy_container = runtime.child_browsing_context_policy_container_snapshot(handle)?;
+        return Some(HyperlinkPopupCreator {
+            opener: runtime.child_browsing_context_window_wrapper(scope, handle)?,
+            base_url,
+            policy_container,
             document_url,
         });
     }
@@ -219,6 +229,62 @@ fn navigate_hyperlink_popup_target(
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(opener) = opener
+        && runtime.has_browser_owned_auxiliary_page_factory()
+    {
+        let child_handle = match dispatch_scope {
+            crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
+            _ => None,
+        };
+        let opened = match runtime.open_renderer_owned_auxiliary_window(
+            scope,
+            opener,
+            child_handle,
+            target_name,
+            resolved_url,
+            creator.base_url,
+            creator.policy_container,
+            false,
+        ) {
+            Ok(opened) => opened,
+            Err(error) => {
+                tracing::warn!(?error, "failed to create hyperlink auxiliary Page");
+                return false;
+            }
+        };
+        let disposition = if opened.pending_page.is_some()
+            || runtime.protocol_user_gesture_activation()
+            || runtime.current_input_event().is_some()
+        {
+            disposition
+        } else {
+            RendererPopupDisposition::Background
+        };
+        let window_open_event = opened.pending_page.is_some().then(|| {
+            RendererPendingWindowOpenEvent::browser_window(
+                resolved_url,
+                target_name,
+                runtime.protocol_user_gesture_activation(),
+            )
+        });
+        runtime.record_pending_popup_activation(
+            RendererPendingPopupActivation::window(
+                root_document,
+                source,
+                true,
+                opened.window.as_ref().map(|window| window.id()),
+                resolved_url.to_owned(),
+                target_name.to_owned(),
+                disposition,
+            )
+            .with_browsing_context_name(opened.name)
+            .with_auxiliary_window(opened.window)
+            .with_pending_auxiliary_page(opened.pending_page)
+            .with_initial_auxiliary_state(opened.session_storage, opened.initial_storage_key),
+            window_open_event,
+        );
+        return true;
+    }
     let Some(opened_popup) = runtime.open_lightweight_popup_window(
         scope,
         runtime_ptr,
@@ -228,6 +294,7 @@ fn navigate_hyperlink_popup_target(
         resolved_url,
         creator.base_url,
         creator.policy_container,
+        false,
     ) else {
         let window_open_event = RendererPendingWindowOpenEvent::browser_window(
             resolved_url,
@@ -250,6 +317,14 @@ fn navigate_hyperlink_popup_target(
         return true;
     };
     let popup_id = opened_popup.popup_id;
+    let disposition = if opened_popup.created_new_browsing_context
+        || runtime.protocol_user_gesture_activation()
+        || runtime.current_input_event().is_some()
+    {
+        disposition
+    } else {
+        RendererPopupDisposition::Background
+    };
     let session_storage_store = runtime.lightweight_popup_session_storage_store(popup_id);
     let initial_empty_document_storage_key =
         runtime.lightweight_popup_initial_empty_document_storage_key(popup_id);
@@ -267,6 +342,7 @@ fn navigate_hyperlink_popup_target(
             target_name.to_owned(),
             disposition,
         )
+        .with_document_response(opened_popup.document_response)
         .with_initial_auxiliary_state(session_storage_store, initial_empty_document_storage_key),
         window_open_event,
     );
@@ -350,7 +426,9 @@ fn navigate_special_target_from_window<'s>(
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?,
         Some(SpecialBrowsingContextTarget::Blank) => return None,
     };
-    let navigated = if target_window.strict_equals(global.into()) {
+    let navigated = if resolved_url.is_empty() {
+        true
+    } else if target_window.strict_equals(global.into()) {
         queue_top_level_location_navigation(scope, runtime_ptr, resolved_url)
     } else {
         navigate_target_window_location(scope, target_window, resolved_url)

@@ -925,6 +925,18 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if child_context_handle_from_owner(scope, receiver).is_none()
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let host = unsafe { &*host_ptr };
+        let name = if host.browsing_context_is_closed() {
+            String::new()
+        } else {
+            host.browsing_context_name().get()
+        };
+        rv.set(v8::String::new(scope, &name).unwrap().into());
+        return;
+    }
     let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
@@ -941,10 +953,16 @@ fn window_name_runtime_setter<'s>(
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    if let Some(handle) = child_context_handle_from_owner(scope, receiver)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
+            host.set_child_browsing_context_name(handle, next.clone());
+        } else {
+            if host.browsing_context_is_closed() {
+                return;
+            }
+            host.browsing_context_name().set(next.clone());
+        }
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
 }

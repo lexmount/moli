@@ -107,6 +107,13 @@ fn mutate_history_object<'s>(
     let Some(owner) = require_fully_active_history_owner(scope, history) else {
         return;
     };
+    let initial_empty =
+        super::navigation_window::navigation_document_is_initial_empty(scope, owner);
+    let kind = if initial_empty {
+        HistoryMutationKind::Replace
+    } else {
+        kind
+    };
     let Some(snapshot) = serialize_history_state(scope, parsed.state) else {
         return;
     };
@@ -130,9 +137,17 @@ fn mutate_history_object<'s>(
     } else {
         &current_href
     };
+    let inherited_base = if initial_empty {
+        super::navigation_window::navigation_document_base_url(scope, owner, &current_href)
+    } else {
+        None
+    };
+    let resolve_base_href = inherited_base
+        .as_ref()
+        .map_or(resolve_base_href, |url| url.as_str());
     let url = match parsed.url {
-        Some(target) => resolve_history_state_url(resolve_base_href, &target),
-        None => Some(current_url.clone()),
+        Some(target) if !target.is_empty() => resolve_history_state_url(resolve_base_href, &target),
+        _ => Some(current_url.clone()),
     };
     let Some(url) = url else {
         throw_history_security_error(
@@ -141,7 +156,16 @@ fn mutate_history_object<'s>(
         );
         return;
     };
-    if !moli_url::same_origin(&url, &current_url) {
+    let can_rewrite = if initial_empty {
+        let mut current = current_url.clone();
+        let mut next = url.clone();
+        current.set_fragment(None);
+        next.set_fragment(None);
+        current == next
+    } else {
+        moli_url::same_origin(&url, &current_url)
+    };
+    if !can_rewrite {
         throw_history_security_error(
             scope,
             "Failed to execute 'pushState' or 'replaceState' on 'History': A history state object with URL of a different origin cannot be created in a document with origin.",

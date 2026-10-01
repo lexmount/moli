@@ -9,7 +9,6 @@ use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 /// active residence before the action completes.
 #[derive(Debug)]
 pub(crate) struct PopupTargetActivationAction {
-    owner_scope: CommandOwnerScope,
     browser_context_id: String,
     target_id: String,
 }
@@ -22,11 +21,6 @@ impl PopupTargetActivationAction {
     ) -> Option<Self> {
         let route = conn.target_session_route_for_target_id(target_id)?;
         (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
-            owner_scope: CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
-                browser_context_id: browser_context_id.to_owned(),
-                target_id: target_id.to_owned(),
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-            }),
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),
         })
@@ -41,6 +35,14 @@ impl PopupTargetActivationAction {
     }
 
     pub(crate) fn into_parts(self) -> (CommandOwnerScope, String, String) {
-        (self.owner_scope, self.browser_context_id, self.target_id)
+        (
+            CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                browser_context_id: self.browser_context_id.clone(),
+                target_id: self.target_id.clone(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            }),
+            self.browser_context_id,
+            self.target_id,
+        )
     }
 }

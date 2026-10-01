@@ -654,7 +654,7 @@ async fn get_target_info_for_inactive_target_keeps_previously_active_context() {
             "targetInfo": {
                 "targetId": "TID-B",
                 "type": "page",
-                "title": "",
+                "title": "about:blank",
                 "url": "about:blank",
                 "attached": false,
                 "canAccessOpener": false,

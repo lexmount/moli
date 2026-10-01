@@ -22,6 +22,7 @@ pub struct RendererPageState {
     pub script_execution: Arc<ScriptExecutionReport>,
     pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub service_worker_client_id: u64,
+    pub document_isolate_identity: usize,
     pub dedicated_worker_running_worker_isolate_count: usize,
     pub performance_metric_snapshot: RendererPerformanceMetricSnapshot,
 }
@@ -60,6 +61,7 @@ impl RendererPageState {
             script_execution: state_capture.report,
             idle_override: state_capture.idle_override,
             service_worker_client_id: state_capture.service_worker_client_id,
+            document_isolate_identity: state_capture.document_isolate_identity,
             dedicated_worker_running_worker_isolate_count: state_capture
                 .dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot: state_capture.performance_metric_snapshot,

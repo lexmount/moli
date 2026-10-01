@@ -1,18 +1,21 @@
 use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 
 use crate::{
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererPageToken},
+    v8_platform::{RendererIsolateForegroundTaskRouter, RendererIsolatePageMembership},
 };
 
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
 
 /// Stable Page owner of a V8 foreground task.
 ///
-/// Foreground work belongs to the Page-lifetime isolate rather than to one
-/// Document incarnation. `V8ForegroundTask` itself retains the exact isolate
-/// registration generation, so a task transferred before isolate retirement
-/// becomes a no-op instead of entering a reused isolate.
+/// Foreground work belongs to an isolate rather than one Document incarnation.
+/// This owner is the live Page selected to execute it. `V8ForegroundTask`
+/// retains the exact isolate registration generation, so work transferred
+/// before isolate retirement cannot enter a reused isolate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererPageV8ForegroundTaskOwner {
     page: RendererPageToken,
@@ -28,28 +31,50 @@ impl RendererPageV8ForegroundTaskOwner {
 #[derive(Debug)]
 pub(crate) struct RendererPageV8ForegroundTask {
     owner: RendererPageV8ForegroundTaskOwner,
-    task: moli_v8_platform::V8ForegroundTask,
+    task: Option<moli_v8_platform::V8ForegroundTask>,
+    router: RendererIsolateForegroundTaskRouter,
 }
 
 impl RendererPageV8ForegroundTask {
     fn new(
         owner: RendererPageV8ForegroundTaskOwner,
         task: moli_v8_platform::V8ForegroundTask,
+        router: RendererIsolateForegroundTaskRouter,
     ) -> Self {
-        Self { owner, task }
+        Self {
+            owner,
+            task: Some(task),
+            router,
+        }
     }
 
     pub(crate) const fn owner(&self) -> RendererPageV8ForegroundTaskOwner {
         self.owner
     }
 
-    pub(crate) fn into_task(self) -> moli_v8_platform::V8ForegroundTask {
+    pub(crate) fn into_task(mut self) -> moli_v8_platform::V8ForegroundTask {
         self.task
+            .take()
+            .expect("a foreground task is consumed once")
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RendererPageV8ForegroundTaskRouteClosed;
+impl Drop for RendererPageV8ForegroundTask {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            // The Page source retires its membership before dropping queued
+            // work. A concrete task accepted before close can still run once
+            // through a related Page, without losing its isolate generation.
+            self.router.dispatch(task);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct RendererPageV8ForegroundMembership {
+    retired: bool,
+    membership: Option<RendererIsolatePageMembership>,
+}
 
 /// Page-lifetime producer route installed into the V8 platform registration.
 #[derive(Clone, Debug)]
@@ -59,18 +84,71 @@ pub(crate) struct RendererPageV8ForegroundTaskSender {
         RendererPageTaskReadySignal,
     >,
     owner: RendererPageV8ForegroundTaskOwner,
+    membership: Weak<Mutex<RendererPageV8ForegroundMembership>>,
 }
 
 impl RendererPageV8ForegroundTaskSender {
     pub(crate) fn send(
         &self,
         task: moli_v8_platform::V8ForegroundTask,
-    ) -> Result<(), RendererPageV8ForegroundTaskRouteClosed> {
+        router: RendererIsolateForegroundTaskRouter,
+    ) -> Result<(), moli_v8_platform::V8ForegroundTask> {
         self.task_route
             .send_and_signal_if_newly_ready(ReadyPageTask::new(RendererPageV8ForegroundTask::new(
-                self.owner, task,
+                self.owner, task, router,
             )))
-            .map_err(|_| RendererPageV8ForegroundTaskRouteClosed)
+            // Recover the raw task before dropping its wrapper: dispatch owns
+            // the router lock and will choose the next live Page itself.
+            .map_err(|closed| closed.0.value.into_task())
+    }
+
+    pub(crate) fn page_token(&self) -> RendererPageToken {
+        self.owner.page
+    }
+
+    pub(crate) fn transfer(
+        &self,
+        mut ready: ReadyPageTask<RendererPageV8ForegroundTask>,
+    ) -> Result<(), ReadyPageTask<RendererPageV8ForegroundTask>> {
+        ready.value.owner = self.owner;
+        self.task_route
+            .send_and_signal_if_newly_ready(ready)
+            .map_err(|closed| closed.0)
+    }
+
+    pub(crate) fn bind_isolate_membership(
+        &self,
+        membership: RendererIsolatePageMembership,
+    ) -> anyhow::Result<()> {
+        let source = self
+            .membership
+            .upgrade()
+            .ok_or_else(|| anyhow::anyhow!("the Page foreground source is closed"))?;
+        let mut source = source.lock();
+        anyhow::ensure!(!source.retired, "the Page foreground source is retired");
+        anyhow::ensure!(
+            source
+                .membership
+                .as_ref()
+                .is_none_or(|membership| !membership.is_active()),
+            "the Page already belongs to an isolate"
+        );
+        source.membership = Some(membership);
+        Ok(())
+    }
+
+    pub(crate) fn isolate_membership(&self) -> anyhow::Result<RendererIsolatePageMembership> {
+        let source = self
+            .membership
+            .upgrade()
+            .ok_or_else(|| anyhow::anyhow!("the Page foreground source is closed"))?;
+        let source = source.lock();
+        anyhow::ensure!(!source.retired, "the Page foreground source is retired");
+        source
+            .membership
+            .clone()
+            .filter(RendererIsolatePageMembership::is_active)
+            .ok_or_else(|| anyhow::anyhow!("the Page has no admitted isolate"))
     }
 
     fn same_route_as(&self, source: &RendererPageV8ForegroundTaskSource) -> bool {
@@ -86,6 +164,7 @@ pub(crate) struct RendererPageV8ForegroundTaskSource {
         RendererPageTaskReadySignal,
     >,
     owner: RendererPageV8ForegroundTaskOwner,
+    membership: Arc<Mutex<RendererPageV8ForegroundMembership>>,
 }
 
 impl RendererPageV8ForegroundTaskSource {
@@ -97,6 +176,7 @@ impl RendererPageV8ForegroundTaskSource {
                 RendererOwnerWakeSource::V8ForegroundTask,
             )),
             owner,
+            membership: Arc::new(Mutex::new(RendererPageV8ForegroundMembership::default())),
         }
     }
 
@@ -104,6 +184,7 @@ impl RendererPageV8ForegroundTaskSource {
         RendererPageV8ForegroundTaskSender {
             task_route: self.source.route(),
             owner: self.owner,
+            membership: Arc::downgrade(&self.membership),
         }
     }
 
@@ -126,11 +207,26 @@ impl RendererPageV8ForegroundTaskSource {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.source.clear_local();
+        let membership = {
+            let mut source = self.membership.lock();
+            source.retired = true;
+            source.membership.take()
+        };
+        if let Some(membership) = membership {
+            membership.retire_with_queued_tasks(|| self.source.with_tasks_mut(std::mem::take));
+        } else {
+            self.source.clear_local();
+        }
     }
 
     pub(crate) fn route_matches(&self, sender: &RendererPageV8ForegroundTaskSender) -> bool {
         sender.same_route_as(self)
+    }
+}
+
+impl Drop for RendererPageV8ForegroundTaskSource {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 

@@ -87,35 +87,10 @@ pub(super) async fn emit_prepared(
             page_owner,
             activation,
         } = prepared;
-        let (
-            source,
-            disposition,
-            popup_id,
-            url,
-            target_name,
-            session_storage_store,
-            initial_empty_document_storage_key,
-        ) = activation.into_parts();
-        let can_access_opener = matches!(
-            &source,
-            RendererPopupActivationSource::Window {
-                exposes_opener: true,
-                ..
-            }
-        );
-        let opener = resolve_devtools_opener(conn, &page_owner, &source);
-        let creation = PopupTargetCreation::new(
-            page_owner.browser_context_id().to_owned(),
-            popup_id,
-            url,
-            target_name,
-            opener,
-            can_access_opener,
-            disposition,
-            session_storage_store,
-            initial_empty_document_storage_key,
-        );
+        let popup_id = activation.popup_id();
+        let opener = resolve_devtools_opener(conn, &page_owner, activation.source());
         let browser_context_id = page_owner.browser_context_id().to_owned();
+        let creation = PopupTargetCreation::new(browser_context_id.clone(), activation, opener);
         let target_id =
             crate::domains::target::create_popup_target_from_renderer_output_background_events_async(
                 conn, out, creation,

@@ -1,6 +1,49 @@
 use super::*;
 
 #[tokio::test]
+async fn webdriver_classic_script_document_open_returns_replacement_document_elements() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    let _ = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({ "url": classic_data_url("<p id='old'>old</p>") }),
+    )
+    .await;
+    let old_element = classic_find_css_element_id(app.clone(), session_id, "#old").await;
+    let result = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "if (arguments[0].textContent !== 'old') throw new Error('wrong input document'); document.open(); document.write(\"<p id='new'>new</p>\"); document.close(); return document.querySelector('#new');",
+            "args": [{ CLASSIC_ELEMENT_REFERENCE_KEY: old_element }]
+        }),
+    )
+    .await;
+    let new_element = result["value"][CLASSIC_ELEMENT_REFERENCE_KEY]
+        .as_str()
+        .unwrap_or_else(|| panic!("replacement element reference: {result:?}"));
+    let text = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{new_element}/text"),
+    )
+    .await;
+    assert_eq!(text, json!({ "value": "new" }));
+    let (status, stale) = classic_request_status_and_json(
+        app,
+        Method::GET,
+        &format!("/session/{session_id}/element/{old_element}/text"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(stale["value"]["error"], json!("stale element reference"));
+}
+
+#[tokio::test]
 async fn webdriver_classic_execute_script_basic_cases_ported_from_chromium_wpt() {
     // Ported from Chromium's WPT checkout:
     // third_party/blink/web_tests/external/wpt/webdriver/tests/classic/

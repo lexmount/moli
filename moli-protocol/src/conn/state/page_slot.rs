@@ -800,6 +800,44 @@ impl TargetPageSlot {
         true
     }
 
+    pub(crate) fn bind_existing_page_document_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        renderer_page: RendererPageResidenceIdentity,
+        page_attachment_id: TargetPageAttachmentId,
+    ) -> bool {
+        if self.page_attachment_id != Some(page_attachment_id)
+            || self
+                .loaded_page
+                .as_ref()
+                .map(RendererPageResidenceIdentity::from_page)
+                != Some(renderer_page)
+        {
+            return false;
+        }
+        let Some(request) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token) && !request.committed)
+        else {
+            return false;
+        };
+        request.page_attachment_id = page_attachment_id;
+        self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+            navigation: token.clone(),
+            renderer_page,
+            page_attachment_id,
+        });
+        true
+    }
+
+    pub(crate) fn finish_existing_page_document_commit(&mut self) {
+        self.finish_renderer_document_lifecycle_observers(
+            RendererDocumentLifecycleObservation::Superseded,
+        );
+        self.pending_renderer_page = None;
+    }
+
     pub(crate) fn routes_renderer_page(
         &self,
         renderer_page: RendererPageResidenceIdentity,

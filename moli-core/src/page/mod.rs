@@ -88,10 +88,12 @@ pub use moli_renderer_v8::{
     PendingWorkerRuntimeInspectorSessionResponse, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
-    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
-    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
+    RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
+    RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
+    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
+    RendererCaptureScreenshotRequest, RendererCommandTurnCompletion, RendererCommandTurnOutput,
+    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
+    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -111,12 +113,14 @@ pub use moli_renderer_v8::{
     RendererMainDocumentCommit, RendererPageCommandPostResponseContinuation,
     RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
     RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPendingDownloadActivation,
-    RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
-    RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
-    RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
-    RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
-    RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererPageDumpStripOptions, RendererPageReplacementError,
+    RendererPageReplacementFailureDisposition, RendererPendingAuxiliaryPage,
+    RendererPendingDownloadActivation, RendererPendingDownloadResponse,
+    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
+    RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
+    RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
+    RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
+    RendererPopupActivationParts, RendererPopupActivationSource, RendererPopupDisposition,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
@@ -217,6 +221,21 @@ impl fmt::Debug for Page {
 }
 
 impl Page {
+    pub(crate) fn adopt_renderer_document_replacement(
+        &mut self,
+        replacement: moli_renderer_v8::RendererPageReplacementCommit,
+    ) -> Result<(
+        RendererPageCreationDiagnostics,
+        RendererPageCreationArtifacts,
+    )> {
+        let (state, diagnostics, artifacts) =
+            self.handle.adopt_document_replacement(replacement)?;
+        self.idle_override = state.idle_override();
+        self.page_state.replace(state);
+        self.page_creation_artifacts = None;
+        Ok((diagnostics, artifacts))
+    }
+
     pub(crate) fn from_attached_handle(
         handle: RendererPageHandle,
         page_state: Arc<RendererPageState>,

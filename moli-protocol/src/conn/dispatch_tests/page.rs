@@ -339,6 +339,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         secure_context_type: "InsecureScheme".to_owned(),
         timestamp: 0.0,
         session_history_position: None,
+        browsing_context_group: None,
     };
     conn.commit_loaded_navigation_target_identity_for_owner(
         &owner,

@@ -1113,6 +1113,7 @@ impl RendererOwnerHandle {
                     .await
             }
             LivePageNavigationFollowOutcome::PendingPhaseOne { wake_token } => {
+                let vm_creation_id = entry.page_vm().creation_id;
                 self.restore_live_page_entry(token, entry);
                 let admission =
                     pending_phase_one_admission_after_restore_on_bound_owner_local_store(
@@ -1123,6 +1124,7 @@ impl RendererOwnerHandle {
                     turn: Box::new(
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
+                            vm_creation_id,
                             follow_count,
                             completion,
                         },

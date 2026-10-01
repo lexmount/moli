@@ -126,6 +126,10 @@ impl Page {
         self.handle.owner_local_host_id()
     }
 
+    pub fn document_isolate_identity_for_diagnostics(&self) -> usize {
+        self.page_state.state().document_isolate_identity
+    }
+
     pub fn service_worker_client_id(&self) -> u64 {
         self.page_state.state().service_worker_client_id
     }

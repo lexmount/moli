@@ -479,6 +479,13 @@ impl ScriptVm {
             )
         })?;
         let runtime_command_cause = pending.runtime_command_cause;
+        let history_mutation = if pending.entry_seed.as_ref().is_some_and(|seed| {
+            seed.session_history.commit == moli_page_types::SessionHistoryCommit::Replace
+        }) {
+            moli_page_types::NavigationHistoryMutation::Replace
+        } else {
+            moli_page_types::NavigationHistoryMutation::Push
+        };
         let action = crate::runtime::RendererOwnerAction::TopLevelLocationNavigation(
             crate::runtime::RendererDocumentSourcedTopLevelLocationNavigation::
                 new_with_request_and_runtime_command_cause(
@@ -489,7 +496,8 @@ impl ScriptVm {
                     pending.request_headers,
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
-                ),
+                )
+                .with_history_mutation(history_mutation),
         );
         anyhow::ensure!(
             self._context_host

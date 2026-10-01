@@ -1939,6 +1939,8 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         javascript_dialogs: Vec::new(),
         window_open_events: Vec::new(),
         popup_activations: Vec::new(),
+        auxiliary_window_closes: Vec::new(),
+        auxiliary_window_navigations: Vec::new(),
         document_title_changes: Vec::new(),
         document_lifecycle_events: Vec::new(),
         child_frame_activities: vec![super::PagePreparedChildFrameActivity::from_document(

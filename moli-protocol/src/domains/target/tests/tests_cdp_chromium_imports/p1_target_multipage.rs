@@ -1,5 +1,6 @@
 use super::super::tests_cdp_smoke_fixture::SmokeFixtureServer;
 use super::super::*;
+use super::support::evaluate_return_by_value;
 use crate::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
 use serde_json::{Value, json};
 
@@ -1118,6 +1119,284 @@ async fn rust_cdp_chromium_target_window_open_empty_url_creates_about_blank_popu
     assert_eq!(
         popup["params"]["targetInfo"]["openerId"],
         "TID-empty-opener"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_target_empty_url_reuse_preserves_the_committed_document() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-popup-empty-reuse",
+        "TID-empty-reuse-opener",
+        "<main>opener</main>",
+    )
+    .await;
+    let opener_session = attach_to_target(&mut ctx, 269_001, None, "TID-empty-reuse-opener").await;
+    let created = evaluate_return_by_value(
+        &mut ctx,
+        &opener_session,
+        269_002,
+        "window.p=open('about:blank#report','report');p.marker=73;p.document.body.textContent='keep this document';window.originalDocument=p.document;window.originalHistoryLength=p.history.length;true",
+    )
+    .await;
+    assert_eq!(created["result"]["result"]["value"], true);
+    ctx.take_all();
+    let reused = evaluate_return_by_value(
+        &mut ctx,
+        &opener_session,
+        269_003,
+        "open('', 'report') === p",
+    )
+    .await;
+    assert_eq!(reused["result"]["result"]["value"], true);
+    assert!(!ctx.sent.iter().any(|message| matches!(
+        message["method"].as_str(),
+        Some("Target.targetCreated" | "Target.targetInfoChanged" | "Page.frameNavigated")
+    )));
+    let preserved = evaluate_return_by_value(
+        &mut ctx,
+        &opener_session,
+        269_004,
+        "p.document===originalDocument && p.marker===73 && p.document.body.textContent==='keep this document' && p.location.href==='about:blank#report' && p.history.length===originalHistoryLength",
+    )
+    .await;
+    assert_eq!(preserved["result"]["result"]["value"], true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_target_named_related_root_reuses_its_exact_window() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-related-root",
+        "TID-related-root",
+        "<main>parent</main>",
+    )
+    .await;
+    let parent_session = attach_to_target(&mut ctx, 269_011, None, "TID-related-root").await;
+    evaluate_return_by_value(
+        &mut ctx,
+        &parent_session,
+        269_012,
+        "window.name='parent';window.child=open('about:blank','child');true",
+    )
+    .await;
+    let child_target = event(&ctx.sent, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_session = attach_to_target(&mut ctx, 269_013, None, &child_target).await;
+    ctx.take_all();
+    let reused = evaluate_return_by_value(
+        &mut ctx,
+        &child_session,
+        269_014,
+        "(() => {const selected=open('', 'parent');selected.name='renamed';return selected===opener;})()",
+    )
+    .await;
+    assert_eq!(reused["result"]["result"]["value"], true);
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Target.targetCreated")
+    );
+    let renamed = evaluate_return_by_value(&mut ctx, &parent_session, 269_015, "window.name").await;
+    assert_eq!(renamed["result"]["result"]["value"], "renamed");
+
+    evaluate_return_by_value(&mut ctx, &parent_session, 269_016, "window.name='shared'").await;
+    let current = evaluate_return_by_value(
+        &mut ctx,
+        &child_session,
+        269_017,
+        "window.name='shared';open('', 'shared')===window",
+    )
+    .await;
+    assert_eq!(current["result"]["result"]["value"], true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_target_named_reuse_updates_dom_opener_before_returning() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-dom-opener",
+        "TID-dom-opener-parent",
+        "<main>parent</main>",
+    )
+    .await;
+    let parent_session = attach_to_target(&mut ctx, 269_021, None, "TID-dom-opener-parent").await;
+    ctx.take_all();
+    evaluate_return_by_value(
+        &mut ctx,
+        &parent_session,
+        269_022,
+        "window.child=open('about:blank','child');window.sibling=open('about:blank','sibling');true",
+    )
+    .await;
+    let children = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == "Target.targetCreated"
+                && message["params"]["targetInfo"]["type"] == "page"
+        })
+        .map(|message| {
+            message["params"]["targetInfo"]["targetId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 2);
+    let sibling_session = attach_to_target(&mut ctx, 269_023, None, &children[1]).await;
+    ctx.take_all();
+    let reused = evaluate_return_by_value(
+        &mut ctx,
+        &sibling_session,
+        269_024,
+        "open('', 'child').opener===window",
+    )
+    .await;
+    assert_eq!(reused["result"]["result"]["value"], true);
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Target.targetCreated")
+    );
+    let parent_view = evaluate_return_by_value(
+        &mut ctx,
+        &parent_session,
+        269_025,
+        "child.opener===sibling && child.opener!==window",
+    )
+    .await;
+    assert_eq!(parent_view["result"]["result"]["value"], true);
+    let disowned = evaluate_return_by_value(
+        &mut ctx,
+        &parent_session,
+        269_027,
+        "child.opener=null;Object.getOwnPropertyDescriptor(child,'opener').value===null",
+    )
+    .await;
+    assert_eq!(disowned["result"]["result"]["value"], true);
+    let shadowed = evaluate_return_by_value(
+        &mut ctx,
+        &sibling_session,
+        269_028,
+        "open('', 'child').opener===null",
+    )
+    .await;
+    assert_eq!(shadowed["result"]["result"]["value"], true);
+    ctx.process_async(json!({
+        "id": 269_026,
+        "method": "Target.getTargetInfo",
+        "params": {"targetId": children[0]}
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 269_026)["result"]["targetInfo"]["openerId"],
+        "TID-dom-opener-parent"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_chromium_popup_window_assignment_uses_its_background_opener() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-popup-windows",
+        "TID-window-a",
+        "<main>opener</main>",
+    )
+    .await;
+    let source_session = attach_to_target(&mut ctx, 269_031, None, "TID-window-a").await;
+    ctx.process_async(json!({
+        "id": 269_032,
+        "method": "Target.createTarget",
+        "params": {"url": "about:blank", "newWindow": true}
+    }))
+    .await;
+    let foreground_target = take_response_by_id(&mut ctx, 269_032)["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ctx.take_all();
+
+    let mut popup_targets = Vec::new();
+    for (id, expression) in [
+        (269_033, "window.child=open('about:blank','child');true"),
+        (
+            269_034,
+            "open('about:blank','independent','popup,width=420,height=310')!==null",
+        ),
+    ] {
+        let result = evaluate_return_by_value(&mut ctx, &source_session, id, expression).await;
+        assert_eq!(result["result"]["result"]["value"], true);
+        let messages = ctx.take_all();
+        popup_targets.push(
+            event(&messages, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let mut windows = Vec::new();
+    for (index, target_id) in [
+        "TID-window-a",
+        &foreground_target,
+        &popup_targets[0],
+        &popup_targets[1],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 269_035 + index as u64;
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Browser.getWindowForTarget",
+            "params": {"targetId": target_id}
+        }))
+        .await;
+        windows.push(
+            take_response_by_id(&mut ctx, id)["result"]["windowId"]
+                .as_u64()
+                .unwrap(),
+        );
+    }
+    assert_ne!(windows[0], windows[1]);
+    assert_eq!(
+        windows[0], windows[2],
+        "ordinary popup belongs to its source window"
+    );
+    assert_ne!(
+        windows[3], windows[0],
+        "popup features request an independent window"
+    );
+    assert_ne!(windows[3], windows[1]);
+
+    ctx.process_async(json!({
+        "id": 269_039,
+        "method": "Target.activateTarget",
+        "params": {"targetId": foreground_target}
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 269_039);
+    let reused = evaluate_return_by_value(
+        &mut ctx,
+        &source_session,
+        269_040,
+        "open('', 'child')===child",
+    )
+    .await;
+    assert_eq!(reused["result"]["result"]["value"], true);
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_target_id(),
+        Some(foreground_target.as_str())
     );
 }
 

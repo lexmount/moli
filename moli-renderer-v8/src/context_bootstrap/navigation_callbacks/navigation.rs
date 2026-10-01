@@ -55,7 +55,9 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_opaque_origin(scope, owner)
+        || super::super::navigation_window::navigation_document_is_initial_empty(scope, owner)
+    {
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
@@ -1849,7 +1851,9 @@ pub(in crate::context_bootstrap) fn navigation_update_current_entry_callback<'s>
         );
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_opaque_origin(scope, owner)
+        || super::super::navigation_window::navigation_document_is_initial_empty(scope, owner)
+    {
         throw_dom_exception(
             scope,
             "InvalidStateError",

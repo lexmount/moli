@@ -271,3 +271,53 @@ impl ScriptVm {
             .set_fetch_subresource_interception(enabled, resource_type);
     }
 }
+
+impl ScriptVm {
+    pub(crate) fn capture_about_blank_reload_environment(
+        &mut self,
+        preserve_navigation_referrer: bool,
+    ) -> Result<ScriptVmInitialDocumentEnvironment> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            let origin = host
+                .current_main_document_resource_loader()
+                .expect("a live Document has a resource authority")
+                .fetch_context()
+                .origin()
+                .to_owned();
+            let fallback_base_url = if preserve_navigation_referrer {
+                host.dom_host()
+                    .node(host.document_handle())
+                    .and_then(|node| node.as_document())
+                    .map(|document| document.fallback_base_url().clone())
+            } else {
+                Some(host.document_base_url_for_handle(host.document_handle()))
+            };
+            let mut policy_container = host.document_policy_container().clone();
+            let source = if preserve_navigation_referrer {
+                url::Url::parse(&policy_container.document_referrer).ok()
+            } else {
+                Some(host.document_url().clone())
+            };
+            policy_container.document_referrer = source
+                .as_ref()
+                .and_then(|source| {
+                    moli_fetch::referrer_value(
+                        source,
+                        host.document_url(),
+                        None,
+                        policy_container.referrer_policy.as_deref(),
+                    )
+                })
+                .unwrap_or_default();
+            let token = scope.get_current_context().get_security_token(scope);
+            Ok(ScriptVmInitialDocumentEnvironment {
+                security_token: Some(v8::Global::new(scope, token)),
+                origin,
+                policy_container,
+                fallback_base_url,
+                storage_key: Some(host.top_web_storage_scope().storage_key().clone()),
+            })
+        })
+    }
+}

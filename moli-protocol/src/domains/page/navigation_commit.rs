@@ -1,8 +1,10 @@
 use url::Url;
 
 use crate::conn::{
-    CdpConnection, CommandDispatchContext, CommittedRendererAgentAttachment,
-    DocumentNavigationToken, LoadedNavigationRendererAttachmentCommit, NavigationDispatchState,
+    CdpConnection, CommandDispatchContext, CommittedNavigationPage,
+    CommittedRendererAgentAttachment, DocumentNavigationToken, LoadedNavigationPageCommit,
+    LoadedNavigationRendererAttachmentCommit, NavigationDispatchState,
+    StablePageNavigationCommitTarget,
 };
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
@@ -12,14 +14,9 @@ use crate::domains::network::{
     MaterializedDownloadDocumentProgress, MaterializedLoadedDocumentProgress,
 };
 use moli_core::page::{
-    Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+    RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
     RendererDocumentLifecycleMilestone, RendererPageCreationArtifacts, RendererRuntimeRealmInfo,
 };
-
-#[derive(Default)]
-struct LoadedPageCommitOutcome {
-    preload_channel_execution_context_ids: Vec<i64>,
-}
 
 pub(super) async fn commit_loaded_navigation_async(
     conn: &mut CdpConnection,
@@ -74,7 +71,7 @@ pub(super) async fn commit_loaded_navigation_async(
         navigation_activity =
             navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
     }
-    let Some(commit) = restore_and_commit_loaded_navigation_page_async(
+    let Some(()) = restore_and_commit_loaded_navigation_page_async(
         conn,
         out,
         token,
@@ -103,9 +100,6 @@ pub(super) async fn commit_loaded_navigation_async(
         );
     }
 
-    let LoadedPageCommitOutcome {
-        preload_channel_execution_context_ids: _,
-    } = commit;
     let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
         .bind_renderer_document_lifecycle_for_owner(
             &navigation_activity.state().owner,
@@ -233,14 +227,37 @@ async fn restore_and_commit_loaded_navigation_page_async(
     out: &mut CommandOutputBuffer,
     token: Option<&DocumentNavigationToken>,
     state: &NavigationDispatchState,
-    page: Page,
+    page: CommittedNavigationPage,
     final_url: &Url,
     target_url: &Url,
     main_document_commit: &moli_core::page::RendererMainDocumentCommit,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
     command_context: &mut CommandDispatchContext,
-) -> Option<LoadedPageCommitOutcome> {
+) -> Option<()> {
+    let page = match page {
+        CommittedNavigationPage::Created(page) => *page,
+        CommittedNavigationPage::Replaced(expected) => {
+            let Some(transaction) = committed_renderer_attachment else {
+                tracing::warn!("existing Page commit requires its renderer attachment transaction");
+                return None;
+            };
+            return commit_existing_navigation_protocol_state(
+                conn,
+                out,
+                token,
+                state,
+                expected,
+                final_url,
+                target_url,
+                main_document_commit,
+                initial_runtime_realms,
+                transaction,
+                command_context,
+            )
+            .await;
+        }
+    };
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = timing_enabled.then(std::time::Instant::now);
     if timing_enabled {
@@ -250,7 +267,6 @@ async fn restore_and_commit_loaded_navigation_page_async(
             stage = "restore_commit_start",
         );
     }
-    let mut outcome = LoadedPageCommitOutcome::default();
     let prepared_configuration_committed = committed_renderer_attachment.is_some();
     let mut page = page;
     let page_agent_token = page.renderer_devtools_agent_token();
@@ -286,7 +302,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         _ => None,
     };
     let Some(commit_state) = conn.prepare_loaded_navigation_commit_for_owner(&state.owner) else {
-        return Some(outcome);
+        return Some(());
     };
     let permission_overrides = conn
         .effective_permission_overrides_for_browser_context_id(&commit_state.browser_context_id);
@@ -310,18 +326,6 @@ async fn restore_and_commit_loaded_navigation_page_async(
             if let Some(predecessor) = runtime_output_predecessor {
                 command_context.set_renderer_output_predecessor(predecessor);
             }
-            let preload_channel_execution_context_ids = initial_runtime_realms
-                .iter()
-                .filter_map(runtime_realm_execution_context_id)
-                .collect::<Vec<_>>();
-            let preload_channel_execution_context_ids =
-                dedupe_preload_channel_execution_context_ids(preload_channel_execution_context_ids);
-            // `initial_runtime_realms` is current-state inventory. It is valid
-            // for resolving BiDi preload listener context IDs, but it is not a
-            // second source of live CDP lifecycle events. Context-created
-            // notifications travel exclusively through the concrete renderer
-            // output stream produced while applying Runtime configuration.
-            outcome.preload_channel_execution_context_ids = preload_channel_execution_context_ids;
         }
         Err(error) => {
             if state.navigate_id.is_some() {
@@ -463,6 +467,100 @@ async fn restore_and_commit_loaded_navigation_page_async(
         }
         None => return None,
     };
+    finish_navigation_page_commit(
+        conn,
+        out,
+        token,
+        state,
+        page_commit,
+        final_url,
+        target_url,
+        main_document_commit,
+        commit_state.runtime_frontend_enabled,
+        initial_runtime_realms,
+        command_context,
+        timing_started,
+        page_commit_started,
+    )
+    .await
+}
+
+async fn commit_existing_navigation_protocol_state(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: Option<&DocumentNavigationToken>,
+    state: &NavigationDispatchState,
+    expected: StablePageNavigationCommitTarget,
+    final_url: &Url,
+    target_url: &Url,
+    main_document_commit: &moli_core::page::RendererMainDocumentCommit,
+    initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
+    transaction: CommittedRendererAgentAttachment,
+    command_context: &mut CommandDispatchContext,
+) -> Option<()> {
+    if token != Some(transaction.navigation())
+        || conn.current_renderer_agent_attachment_id_for_owner(&state.owner)
+            != Some(transaction.current().id())
+    {
+        tracing::warn!("existing Page commit has a superseded renderer attachment");
+        return None;
+    }
+    let runtime_frontend_enabled = conn
+        .target_runtime_session_state_for_owner(&state.owner)
+        .is_some_and(|state| state.runtime_frontend_enabled);
+    let started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
+    let page_commit = match conn.commit_existing_page_navigation_for_owner(
+        &state.owner,
+        &expected,
+        transaction,
+        target_url,
+    )? {
+        Ok(commit) => commit,
+        Err(error) => {
+            if state.navigate_id.is_some() {
+                out.push_error_after_messages(
+                    -32000,
+                    format!("failed to commit existing Page protocol state: {error}"),
+                );
+            } else {
+                tracing::warn!(%error, "existing Page protocol commit failed after early navigation response");
+            }
+            return None;
+        }
+    };
+    finish_navigation_page_commit(
+        conn,
+        out,
+        token,
+        state,
+        page_commit,
+        final_url,
+        target_url,
+        main_document_commit,
+        runtime_frontend_enabled,
+        initial_runtime_realms,
+        command_context,
+        started,
+        started,
+    )
+    .await
+}
+
+async fn finish_navigation_page_commit(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: Option<&DocumentNavigationToken>,
+    state: &NavigationDispatchState,
+    page_commit: LoadedNavigationPageCommit,
+    final_url: &Url,
+    target_url: &Url,
+    main_document_commit: &moli_core::page::RendererMainDocumentCommit,
+    runtime_frontend_enabled: bool,
+    initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
+    command_context: &mut CommandDispatchContext,
+    timing_started: Option<std::time::Instant>,
+    page_commit_started: Option<std::time::Instant>,
+) -> Option<()> {
     if let Some(replaced_page_owner) = page_commit.replaced_page_owner.as_ref() {
         let worker_retirement_events =
             crate::domains::target::retire_dedicated_worker_targets_for_replaced_page_async(
@@ -482,7 +580,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         main_document_commit,
         target_url,
     );
-    if commit_state.runtime_frontend_enabled {
+    if runtime_frontend_enabled {
         let _ = conn
             .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&state.owner, true);
     }
@@ -504,9 +602,14 @@ async fn restore_and_commit_loaded_navigation_page_async(
     }
     let preload_channel_execution_context_ids =
         if conn.target_owner_has_bidi_channel_preload_script_for_owner(&state.owner) {
-            dedupe_preload_channel_execution_context_ids(std::mem::take(
-                &mut outcome.preload_channel_execution_context_ids,
-            ))
+            // This inventory resolves BiDi preload listeners. Live CDP
+            // context-created events come only from the renderer output stream.
+            dedupe_preload_channel_execution_context_ids(
+                initial_runtime_realms
+                    .iter()
+                    .filter_map(runtime_realm_execution_context_id)
+                    .collect(),
+            )
         } else {
             Vec::new()
         };
@@ -531,7 +634,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
             elapsed_ms = started.elapsed().as_millis(),
         );
     }
-    Some(outcome)
+    Some(())
 }
 
 fn runtime_realm_execution_context_id(realm: &RendererRuntimeRealmInfo) -> Option<i64> {

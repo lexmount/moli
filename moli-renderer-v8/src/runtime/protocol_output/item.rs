@@ -35,6 +35,13 @@ pub enum RendererOwnerAction {
     Download(RendererPendingDownloadActivation),
     JavaScriptDialog(RendererPendingJavaScriptDialog),
     Popup(RendererPendingPopupActivation),
+    CloseAuxiliaryWindow(crate::runtime::RendererAuxiliaryWindow),
+    NavigateAuxiliaryWindow {
+        window: crate::runtime::RendererAuxiliaryWindow,
+        url: String,
+        kind: crate::runtime::RendererAuxiliaryNavigationKind,
+        document_response: Option<super::super::RendererAuxiliaryDocumentResponse>,
+    },
     ChildFrameTree {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,

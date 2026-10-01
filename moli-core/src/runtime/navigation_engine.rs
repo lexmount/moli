@@ -22,9 +22,9 @@ use moli_fetch::{
 use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentReplacement,
-    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
-    RendererWebStorageHandles, SharedStorageBucketStore, WeakIndexedDbManager,
+    RendererBrowserContextRuntimeOwnerAccess, RendererReservedServiceWorkerClient,
+    RendererServiceWorkerMainResourceFetch, RendererWebStorageHandles, SharedStorageBucketStore,
+    WeakIndexedDbManager,
     network::{
         BrowserResourceRuntime, BrowserResourceRuntimeOwner, PageNetworkPolicy,
         navigation::{DocumentFetchContextSeed, NavigationResourceLoader},
@@ -185,6 +185,14 @@ pub struct BuiltDocumentPage {
     pub pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+/// Commit metadata for a Document installed in the caller's existing Page.
+/// The owning Page handle stays with that caller throughout the operation.
+pub struct CommittedDocumentPageReplacement {
+    pub page_creation_diagnostics: RendererPageCreationDiagnostics,
+    pub page_creation_artifacts: RendererPageCreationArtifacts,
+    pub pending_download: Option<RendererPendingDownloadActivation>,
+}
+
 /// A renderer document whose isolate and DevTools agent are reserved, but
 /// whose parser and execution contexts have not started.
 pub struct PreparedDocumentPage {
@@ -315,6 +323,34 @@ impl PreparedDocumentPage {
 
     pub async fn cancel(self) -> Result<()> {
         self.prepared.cancel().await
+    }
+
+    pub async fn commit_page_replacement(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        use moli_renderer_v8::RendererPageReplacementError;
+        if self.renderer_owner_local_host_id() != page.renderer_owner_local_host_id()
+            || self.renderer_page_id() != page.renderer_page_id()
+        {
+            return Err(RendererPageReplacementError::document_preserved(anyhow!(
+                "prepared Document belongs to a different live Page"
+            )));
+        }
+        let mut replacement = self.prepared.commit_page_replacement(permit.permit).await?;
+        let pending_download = replacement.take_pending_download();
+        let (page_creation_diagnostics, page_creation_artifacts) = page
+            .adopt_renderer_document_replacement(replacement)
+            .map_err(RendererPageReplacementError::document_unavailable)?;
+        Ok(CommittedDocumentPageReplacement {
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
     }
 }
 
@@ -515,6 +551,7 @@ impl NavigationEngine {
             config,
             browser_context_access,
             Some(browser_context_owner),
+            None,
         )
         .expect("standalone browser context owner must remain live during construction")
     }
@@ -544,6 +581,20 @@ impl NavigationEngine {
             config,
             browser_context_access,
             None,
+            None,
+        )
+    }
+
+    pub fn new_for_pending_auxiliary_page(
+        config: NavigationRuntimeConfig,
+        browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
+        page: &moli_renderer_v8::RendererPendingAuxiliaryPage,
+    ) -> Result<Self> {
+        Self::new_with_runtime_config_and_browser_context_access_inner(
+            config,
+            browser_context_access,
+            None,
+            Some(page.renderer_runtime()),
         )
     }
 
@@ -551,6 +602,7 @@ impl NavigationEngine {
         config: NavigationRuntimeConfig,
         browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
         standalone_browser_context_owner: Option<RendererBrowserContextRuntimeOwner>,
+        existing_runtime: Option<JsRuntime>,
     ) -> Result<Self> {
         let NavigationRuntimeConfig {
             fetch_config,
@@ -561,8 +613,20 @@ impl NavigationEngine {
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
             .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
-        let js_runtime =
-            JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
+        let js_runtime = match existing_runtime {
+            Some(runtime) => {
+                anyhow::ensure!(
+                    runtime
+                        .browser_context_runtime()
+                        .shares_state_with(&browser_context_access.runtime()),
+                    "auxiliary Page cannot be adopted into a different browser context"
+                );
+                runtime
+            }
+            None => {
+                JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?
+            }
+        };
         js_runtime
             .renderer_owner_handle()
             .configure_layout_policy(layout_policy)?;
@@ -1367,57 +1431,6 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_html_page_from_response_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-    ) -> Result<BuiltDocumentPage> {
-        self.build_html_page_from_response_with_storage_and_inspector_session_restores_async(
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            response_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn build_html_page_from_response_with_storage_and_inspector_session_restores_async(
         &mut self,
         storage: NavigationPageStorageHandles,
@@ -1558,59 +1571,6 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn start_build_html_page_from_response_with_storage(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-    ) -> Result<PendingBuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        self.start_build_html_page_from_response_with_storage_and_inspector_session_restores(
-            page_reservation,
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            response_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            None,
-            None,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn start_build_html_page_from_response_with_storage_and_inspector_session_restores(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
@@ -1674,84 +1634,9 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn build_streaming_raw_page_from_external_body_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-        reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<BuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        let prepared = self
-            .prepare_streaming_raw_page_from_external_body_async(
-                page_reservation,
-                None,
-                cookie_store,
-                web_storage,
-                indexed_db_manager,
-                storage_bucket_store,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                raw_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                false,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                stage,
-                reply_boundary,
-                root_frame_id,
-                resource_source,
-                reserved_service_worker_client,
-                main_document_commit,
-            )
-            .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     async fn prepare_streaming_raw_page_from_external_body_async(
         &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
+        page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1795,7 +1680,6 @@ impl NavigationEngine {
             .js_runtime
             .prepare_streaming_raw_document_from_external_body(
                 page_reservation,
-                replacement,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -1840,131 +1724,9 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_streaming_raw_page_from_external_body_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-    ) -> Result<BuiltDocumentPage> {
-        self.build_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            moli_renderer_v8::RendererReplyBoundary::Stage,
-            None,
-            CommittedDocumentResourceSource::Synthetic,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn build_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-        reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<BuiltDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.build_streaming_raw_page_from_external_body_async(
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            runtime_inspector_session_restore_snapshots,
-            extra_http_headers,
-            script_execution_disabled,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            reply_boundary,
-            root_frame_id,
-            resource_source,
-            reserved_service_worker_client,
-            main_document_commit,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
         &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
+        page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1997,7 +1759,6 @@ impl NavigationEngine {
             storage.into_parts();
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
-            replacement,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -2099,210 +1860,6 @@ impl NavigationEngine {
             page_creation_artifacts,
             pending_download,
         })
-    }
-
-    async fn prepare_document_page_from_response_options_best_effort_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        options: DocumentPageLoadOptions,
-        stage: PageVmInitStage,
-    ) -> Result<PreparedDocumentPage> {
-        let raw_body =
-            ExternalRawDocumentBodyStream::from_bytes(options.response_body.into_bytes());
-        self.prepare_streaming_raw_page_from_external_body_async(
-            page_reservation,
-            replacement,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            options.requested_url,
-            options.final_url,
-            options.navigation_initiator_url,
-            options.redirected,
-            options.redirect_count,
-            options.response_status,
-            options.response_headers,
-            raw_body,
-            options.document_start_scripts,
-            options.runtime_bindings,
-            options.runtime_inspector_session_restore_snapshots,
-            options.extra_http_headers,
-            options.script_execution_disabled,
-            options.bypass_content_security_policy,
-            options.emulated_media,
-            options.viewport_surface,
-            options.network_offline,
-            options.blocked_url_patterns,
-            options.fetch_subresource_interception_enabled,
-            options.fetch_subresource_interception_resource_type,
-            stage,
-            moli_renderer_v8::RendererReplyBoundary::Stage,
-            options.root_frame_id,
-            options.resource_source,
-            None,
-            options.main_document_commit,
-        )
-        .await
-    }
-
-    async fn build_document_page_from_response_options_best_effort_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        options: DocumentPageLoadOptions,
-    ) -> Result<BuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        let prepared = self
-            .prepare_document_page_from_response_options_best_effort_async(
-                page_reservation,
-                None,
-                cookie_store,
-                web_storage,
-                indexed_db_manager,
-                storage_bucket_store,
-                options,
-                PageVmInitStage::Load,
-            )
-            .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<PreparedDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.prepare_document_page_from_response_options_best_effort_async(
-            page_reservation,
-            replacement,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id,
-                main_document_commit,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-            PageVmInitStage::DomContentLoaded,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn build_document_page_from_response_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        resource_source: CommittedDocumentResourceSource,
-    ) -> Result<BuiltDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.build_document_page_from_response_options_best_effort_async(
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id: None,
-                main_document_commit: None,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots: Vec::new(),
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy: false,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-        )
-        .await
     }
 
     fn start_page_child_frame_lifecycle_work_best_effort(

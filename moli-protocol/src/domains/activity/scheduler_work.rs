@@ -322,6 +322,11 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => {
                 ProtocolNavigationDependency::ReplacesPendingLoad
             }
+            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action)
+                if action.replaces_pending_load() =>
+            {
+                ProtocolNavigationDependency::ReplacesPendingLoad
+            }
             ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => {
                 ProtocolNavigationDependency::Independent
             }

@@ -449,26 +449,48 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     let mut ctx = TestContext::new();
     tokio::task::LocalSet::new()
         .run_until(async {
-    let owner = load_same_context_loaded_background_runtime_owner_async(
-        &mut ctx,
-        "BID-9-NAMED-POPUP",
-        "TID-000000000NPA",
+    load_bc_with_titled_page_async(
+        &mut ctx, "BID-9-NAMED-POPUP", "TID-000000000NPA",
         "<title>active</title><main>active target</main>",
-        "data:text/html,<title>background</title><main>background target</main>",
-        1041949440,
-    )
-    .await;
+    ).await;
+    ctx.conn.browser_context.as_mut().unwrap().attach_active_session("SID-active");
+    ctx.process_async(json!({
+        "id": 1041949440, "method": "Target.setAutoAttach",
+        "params": {"autoAttach": true, "waitForDebuggerOnStart": false}
+    })).await;
+    ctx.take_all();
+    // Create a real related WindowProxy, then put it in the background. A
+    // protocol-only name binding on an unrelated Page cannot model this identity.
+    ctx.process_async(json!({
+        "id": 1041949441, "method": "Runtime.evaluate", "sessionId": "SID-active",
+        "params": {"expression": "window.open('about:blank', 'reportWindow') !== null"}
+    })).await;
+    let target_id = ctx.sent.iter()
+        .find(|event| event["method"] == "Target.targetCreated").unwrap()
+        ["params"]["targetInfo"]["targetId"].as_str().unwrap().to_owned();
+    let session_id = ctx.sent.iter()
+        .find(|event| event["method"] == "Target.attachedToTarget"
+            && event["params"]["targetInfo"]["targetId"] == target_id).unwrap()
+        ["params"]["sessionId"].as_str().unwrap().to_owned();
+    let owner = LoadedBackgroundRuntimeOwner { target_id, session_id };
+    ctx.take_all();
+    ctx.process_async(json!({
+        "id": 1041949442, "method": "Page.navigate", "sessionId": owner.session_id,
+        "params": {"url": "data:text/html,<title>background</title><main>background target</main>"}
+    })).await;
+    ctx.take_all();
+    ctx.process_async(json!({
+        "id": 1041949443, "method": "Target.activateTarget",
+        "params": {"targetId": "TID-000000000NPA"}
+    })).await;
+    ctx.take_all();
     ctx.enable_background_navigation_scheduler_for_test();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .remember_target_window_name("reportWindow", &owner.target_id);
 
     ctx.process_async(json!({
         "id": 1041949446,
         "method": "Runtime.evaluate",
         "params": {
+            "userGesture": true,
             "expression": "window.open('data:text/html,<title>named</title><main>named target</main>', 'reportWindow') !== null"
         }
     }))

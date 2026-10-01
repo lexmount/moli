@@ -1566,7 +1566,8 @@ impl TestContext {
                             .iter()
                             .position(|candidate| {
                                 candidate.is_ready()
-                                    && candidate.is_top_level_location_navigation_owner_action()
+                                    && candidate.navigation_dependency()
+                                        == crate::ProtocolNavigationDependency::ReplacesPendingLoad
                             })
                     else {
                         return;

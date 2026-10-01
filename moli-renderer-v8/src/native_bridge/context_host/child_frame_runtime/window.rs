@@ -25,6 +25,8 @@ use std::{
     rc::Rc,
 };
 
+mod main_page;
+
 #[derive(Clone, Copy)]
 struct ChildWindowProxyFacadeContextHandle(DomHandle);
 
@@ -2145,15 +2147,31 @@ fn child_window_cross_origin_handler_data<'s>(
     let holder_context = holder.get_creation_context(scope)?;
     let host_ptr = crate::util::context_host_ptr_from_context_slot(holder_context)?;
     let host = unsafe { &*host_ptr };
+    if holder_context
+        .get_slot::<crate::util::MainDefaultWindowContext>()
+        .is_some()
+        && host.browsing_context_is_closed()
+    {
+        let scope = &mut v8::ContextScope::new(scope, holder_context);
+        return Some((
+            main_page::access_surface(scope),
+            holder_context.global(scope),
+        ));
+    }
     if let Some(identity) = host.window_execution_context_identity_for_access_check(holder_context)
         && host.window_execution_context_identity_is_current(identity)
     {
-        let super::super::OwnerDispatchScope::Child(handle) = identity.dispatch_scope() else {
-            return None;
-        };
         if !host.window_execution_context_identity_is_default_world(identity) {
             return None;
         }
+        if identity.dispatch_scope() == super::super::OwnerDispatchScope::Top {
+            let scope = &mut v8::ContextScope::new(scope, holder_context);
+            let window = holder_context.global(scope);
+            return Some((main_page::access_surface(scope), window));
+        }
+        let super::super::OwnerDispatchScope::Child(handle) = identity.dispatch_scope() else {
+            return None;
+        };
         return host
             .child_window_proxy_records
             .cross_origin_handler_data(scope, handle);
@@ -2297,6 +2315,13 @@ fn child_window_cross_origin_indexed_getter<'s>(
         rv.set_undefined();
         return v8::Intercepted::kYes;
     };
+    if main_page::is_main_surface(scope, surface)
+        && !surface
+            .has_own_property(scope, v8_string(scope, &index.to_string()).unwrap().into())
+            .unwrap_or(false)
+    {
+        return v8::Intercepted::kNo;
+    }
     match surface.get_index(scope, index) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
@@ -2340,18 +2365,11 @@ fn child_window_cross_origin_indexed_enumerator<'s>(
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
     let count = child_window_cross_origin_access_surface(scope, args.holder())
-        .and_then(|surface| child_handle_from_object(scope, surface))
-        .and_then(|handle| {
-            context_host_ptr_from_global_bridge(scope).map(|host_ptr| {
-                unsafe { &mut *host_ptr }.child_browsing_context_child_frame_count(handle)
-            })
-        })
+        .and_then(|surface| surface.get(scope, v8str(scope, "length").into()))
+        .and_then(|length| length.uint32_value(scope))
         .unwrap_or(0);
-    let array = serialize_v8_iter_array(
-        scope,
-        (0..count.min(u32::MAX as usize)).map(|index| index as u32),
-    )
-    .unwrap_or_else(|| v8::Array::new(scope, 0));
+    let array =
+        serialize_v8_iter_array(scope, 0..count).unwrap_or_else(|| v8::Array::new(scope, 0));
     rv.set(array);
 }
 
@@ -2614,6 +2632,13 @@ fn cross_origin_location_navigate<'s>(
     receiver: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> bool {
+    if main_page::is_main_location(scope, receiver) {
+        return main_page::navigate(
+            scope,
+            value,
+            crate::context_bootstrap::LocationNavigationKind::Assign,
+        );
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return false;
     };
@@ -2671,6 +2696,21 @@ fn cross_origin_location_replace_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if main_page::is_main_location(scope, args.this()) {
+        let Some(parsed) = webidl::parse_args::<CrossOriginLocationReplaceArgs>(scope, &args)
+        else {
+            return;
+        };
+        let Some(value) = v8_string(scope, &parsed.url) else {
+            return;
+        };
+        main_page::navigate(
+            scope,
+            value.into(),
+            crate::context_bootstrap::LocationNavigationKind::Replace,
+        );
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };

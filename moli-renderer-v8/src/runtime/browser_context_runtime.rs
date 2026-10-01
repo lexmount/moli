@@ -19,10 +19,14 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use url::Url;
 
+mod auxiliary_window;
 mod dedicated_workers;
 mod service_worker_runtime;
 mod service_workers;
 mod shared_workers;
+mod window_name;
+pub use auxiliary_window::{RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow};
+pub use window_name::{RendererBrowsingContextGroup, RendererBrowsingContextName};
 
 static NEXT_RENDERER_STORAGE_PARTITION_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -199,6 +203,9 @@ struct RendererBrowserContextRuntimeInner {
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
+    window_names: Mutex<HashMap<String, RendererBrowsingContextName>>,
+    auxiliary_windows: Mutex<HashMap<String, RendererAuxiliaryWindow>>,
+    next_auxiliary_window_id: AtomicU64,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -211,6 +218,7 @@ struct RendererBrowserContextRuntimeInner {
     dedicated_worker_devtools_targets: Mutex<HashMap<u64, DedicatedWorkerDevToolsTarget>>,
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
     javascript_dialog_handler_enabled: AtomicBool,
+    browser_owns_auxiliary_document_responses: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
 }
 
@@ -575,6 +583,9 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
+                window_names: Mutex::new(HashMap::new()),
+                auxiliary_windows: Mutex::new(HashMap::new()),
+                next_auxiliary_window_id: AtomicU64::new(1),
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -587,9 +598,68 @@ impl RendererBrowserContextRuntime {
                 dedicated_worker_devtools_targets: Mutex::new(HashMap::new()),
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
+                browser_owns_auxiliary_document_responses: AtomicBool::new(false),
                 renderer_output_transport_tx,
             }),
         }
+    }
+
+    /// Allocate a stable auxiliary-context identity from this browser context.
+    pub fn new_auxiliary_window(&self) -> RendererAuxiliaryWindow {
+        RendererAuxiliaryWindow::new(
+            self.inner
+                .next_auxiliary_window_id
+                .fetch_add(1, Ordering::Relaxed),
+        )
+    }
+
+    pub fn bind_auxiliary_window(&self, root_frame_id: &str, window: RendererAuxiliaryWindow) {
+        let mut windows = self.inner.auxiliary_windows.lock();
+        assert!(
+            windows.iter().all(|(frame_id, existing)| {
+                frame_id == root_frame_id || existing.id() != window.id()
+            }),
+            "an auxiliary window must not bind to two live root frames"
+        );
+        windows.insert(root_frame_id.to_owned(), window);
+    }
+
+    pub fn auxiliary_window(&self, root_frame_id: &str) -> Option<RendererAuxiliaryWindow> {
+        self.inner
+            .auxiliary_windows
+            .lock()
+            .get(root_frame_id)
+            .cloned()
+    }
+
+    pub fn close_auxiliary_window(&self, root_frame_id: &str) {
+        if let Some(window) = self.inner.auxiliary_windows.lock().remove(root_frame_id) {
+            window.close();
+        }
+    }
+
+    pub fn browsing_context_name(&self, root_frame_id: &str) -> RendererBrowsingContextName {
+        self.inner
+            .window_names
+            .lock()
+            .entry(root_frame_id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    pub fn bind_browsing_context_name(
+        &self,
+        root_frame_id: &str,
+        name: RendererBrowsingContextName,
+    ) {
+        self.inner
+            .window_names
+            .lock()
+            .insert(root_frame_id.to_owned(), name);
+    }
+
+    pub fn forget_browsing_context_name(&self, root_frame_id: &str) {
+        self.inner.window_names.lock().remove(root_frame_id);
     }
 
     pub fn browser_resource_runtime(&self) -> crate::network::BrowserResourceRuntime {
@@ -621,6 +691,20 @@ impl RendererBrowserContextRuntime {
         if let Some(service_worker_runtime) = self.inner.service_worker_runtime.get() {
             service_worker_runtime.bind_target_output_transport(sender);
         }
+    }
+
+    /// Installs the browser's auxiliary navigation owner. Merely observing
+    /// renderer output does not transfer responsibility for loading popups.
+    pub fn delegate_auxiliary_document_responses_to_browser(&self) {
+        self.inner
+            .browser_owns_auxiliary_document_responses
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn browser_owns_auxiliary_document_responses(&self) -> bool {
+        self.inner
+            .browser_owns_auxiliary_document_responses
+            .load(Ordering::Acquire)
     }
 
     pub(crate) fn renderer_output_transport_sender(

@@ -10,7 +10,7 @@ use axum::extract::ws::WebSocket;
 use moli_cookie_jar::StoredCookie;
 use moli_core::{page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig};
 use moli_protocol::{
-    CdpInitialStoragePartition, DevToolsPageResidenceIdentity,
+    CdpInitialStoragePartition, DevToolsDocumentResidenceIdentity,
     automation::{
         AutomationCommand, AutomationContext, AutomationResult, DevToolsDomNodeReference,
         DevToolsError, DevToolsErrorKind, DevToolsFrameId, DevToolsGetFrameOwnerCommand,
@@ -30,7 +30,7 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cdp_scheduler::{
-    AutomationExecution, AutomationPageExecution, CdpScheduler, CdpSchedulerEventReceivers,
+    AutomationDocumentExecution, AutomationExecution, CdpScheduler, CdpSchedulerEventReceivers,
     ProtocolAdapterScheduler,
 };
 
@@ -104,7 +104,7 @@ struct ClassicShadowRootOwner {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ClassicPageBoundDomReference {
-    pub(super) page_residence: DevToolsPageResidenceIdentity,
+    pub(super) page_residence: DevToolsDocumentResidenceIdentity,
     pub(super) reference: DevToolsDomNodeReference,
 }
 
@@ -568,7 +568,7 @@ impl ClassicSessionRuntimeHandle {
     pub(super) async fn execute_with_page_residence(
         &self,
         command: AutomationCommand,
-    ) -> Result<(AutomationResult, DevToolsPageResidenceIdentity), DevToolsError> {
+    ) -> Result<(AutomationResult, DevToolsDocumentResidenceIdentity), DevToolsError> {
         let execution = self.execute_request(command, None, None, false, None).await;
         let result = execution.result?;
         let page_residence = execution.page_residence.ok_or_else(|| {
@@ -584,7 +584,7 @@ impl ClassicSessionRuntimeHandle {
         &self,
         command: AutomationCommand,
         timeout: Option<Duration>,
-    ) -> Result<(AutomationResult, DevToolsPageResidenceIdentity), DevToolsError> {
+    ) -> Result<(AutomationResult, DevToolsDocumentResidenceIdentity), DevToolsError> {
         let execution = self
             .execute_request(command, timeout, None, true, None)
             .await;
@@ -601,7 +601,7 @@ impl ClassicSessionRuntimeHandle {
     pub(super) async fn execute_on_page(
         &self,
         command: AutomationCommand,
-        expected_page: DevToolsPageResidenceIdentity,
+        expected_page: DevToolsDocumentResidenceIdentity,
     ) -> Result<AutomationResult, DevToolsError> {
         self.execute_request(command, None, None, false, Some(expected_page))
             .await
@@ -612,11 +612,19 @@ impl ClassicSessionRuntimeHandle {
         &self,
         command: AutomationCommand,
         timeout: Option<Duration>,
-        expected_page: DevToolsPageResidenceIdentity,
-    ) -> Result<AutomationResult, DevToolsError> {
-        self.execute_request(command, timeout, None, true, Some(expected_page))
-            .await
-            .result
+        expected_page: DevToolsDocumentResidenceIdentity,
+    ) -> Result<(AutomationResult, DevToolsDocumentResidenceIdentity), DevToolsError> {
+        let execution = self
+            .execute_request(command, timeout, None, true, Some(expected_page))
+            .await;
+        let result = execution.result?;
+        let document = execution.page_residence.ok_or_else(|| {
+            DevToolsError::new(
+                DevToolsErrorKind::NoSuchTarget,
+                "Classic script did not address a live Document",
+            )
+        })?;
+        Ok((result, document))
     }
 
     async fn execute_request(
@@ -625,7 +633,7 @@ impl ClassicSessionRuntimeHandle {
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
         terminate_execution_on_timeout: bool,
-        expected_page: Option<DevToolsPageResidenceIdentity>,
+        expected_page: Option<DevToolsDocumentResidenceIdentity>,
     ) -> ClassicSessionRuntimeCommandExecution {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
@@ -832,7 +840,7 @@ impl ClassicSessionRuntimeHandle {
 
 struct ClassicSessionRuntimeCommandExecution {
     result: Result<AutomationResult, DevToolsError>,
-    page_residence: Option<DevToolsPageResidenceIdentity>,
+    page_residence: Option<DevToolsDocumentResidenceIdentity>,
 }
 
 impl ClassicSessionRuntimeCommandExecution {
@@ -850,7 +858,7 @@ enum ClassicSessionRuntimeRequest {
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
         terminate_execution_on_timeout: bool,
-        expected_page: Option<DevToolsPageResidenceIdentity>,
+        expected_page: Option<DevToolsDocumentResidenceIdentity>,
         response_tx: oneshot::Sender<ClassicSessionRuntimeCommandExecution>,
     },
     WaitForDocumentLifecycle {
@@ -878,7 +886,7 @@ enum ClassicSessionRuntimeRequest {
         session_id: String,
         target_id: String,
         current_frame_id: Option<String>,
-        expected_page: DevToolsPageResidenceIdentity,
+        expected_page: DevToolsDocumentResidenceIdentity,
         element_reference: DevToolsDomNodeReference,
         response_tx: oneshot::Sender<Result<String, DevToolsError>>,
     },
@@ -944,13 +952,13 @@ async fn handle_classic_session_runtime_request(
             response_tx,
         } => {
             if expected_page.as_ref().is_some_and(|expected| {
-                scheduler.page_residence_identity_for_devtools_context(command.context())
+                scheduler.document_residence_identity_for_devtools_context(command.context())
                     != Some(expected.clone())
             }) {
                 let _ = response_tx.send(ClassicSessionRuntimeCommandExecution::error(
                     DevToolsError::new(
                         DevToolsErrorKind::NoSuchNode,
-                        "DOM reference belongs to a replaced Page",
+                        "DOM reference belongs to a replaced Document",
                     ),
                 ));
                 return ClassicSessionRuntimeRequestOutcome::Continue;
@@ -1187,7 +1195,7 @@ async fn execute_classic_automation_command_with_pending_navigation_retry(
     command: AutomationCommand,
     timeout: Option<Duration>,
     pending_navigation_timeout: Option<Duration>,
-    expected_page: Option<&DevToolsPageResidenceIdentity>,
+    expected_page: Option<&DevToolsDocumentResidenceIdentity>,
 ) -> ClassicDevToolsCommandExecution {
     let mut execution = execute_classic_automation_command_once(
         scheduler,
@@ -1282,13 +1290,13 @@ async fn execute_classic_automation_command_once(
     receivers: &mut CdpSchedulerEventReceivers,
     command: AutomationCommand,
     timeout: Option<Duration>,
-    expected_page: Option<&DevToolsPageResidenceIdentity>,
+    expected_page: Option<&DevToolsDocumentResidenceIdentity>,
 ) -> ClassicDevToolsCommandExecution {
-    let AutomationPageExecution {
+    let AutomationDocumentExecution {
         execution,
         page_residence,
     } = scheduler
-        .execute_automation_command_with_external_load_wait_and_page_residence(
+        .execute_automation_command_with_external_load_wait_and_document_residence(
             receivers,
             command,
             timeout,
@@ -1303,7 +1311,7 @@ async fn execute_classic_automation_command_once(
 
 struct ClassicDevToolsCommandExecution {
     execution: AutomationExecution,
-    page_residence: Option<DevToolsPageResidenceIdentity>,
+    page_residence: Option<DevToolsDocumentResidenceIdentity>,
 }
 
 fn classic_runtime_result_is_navigation_changing_document(
@@ -1588,7 +1596,7 @@ async fn resolve_classic_frame_id_for_element(
     session_id: &str,
     target_id: &str,
     current_frame_id: Option<&str>,
-    expected_page: &DevToolsPageResidenceIdentity,
+    expected_page: &DevToolsDocumentResidenceIdentity,
     element_reference: DevToolsDomNodeReference,
 ) -> Result<String, DevToolsError> {
     let frame_tree =
@@ -1634,7 +1642,7 @@ async fn classic_frame_owner_reference_on_page(
     session_id: &str,
     target_id: &str,
     frame_id: &str,
-    expected_page: &DevToolsPageResidenceIdentity,
+    expected_page: &DevToolsDocumentResidenceIdentity,
 ) -> Result<DevToolsGetFrameOwnerResult, DevToolsError> {
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
@@ -1740,7 +1748,7 @@ async fn classic_frame_tree_on_page(
     receivers: &mut CdpSchedulerEventReceivers,
     session_id: &str,
     target_id: &str,
-    expected_page: &DevToolsPageResidenceIdentity,
+    expected_page: &DevToolsDocumentResidenceIdentity,
 ) -> Result<serde_json::Value, DevToolsError> {
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
@@ -1771,16 +1779,16 @@ async fn classic_frame_tree_on_page(
 fn ensure_classic_command_page_is_current(
     scheduler: &mut CdpScheduler,
     context: &AutomationContext,
-    expected_page: &DevToolsPageResidenceIdentity,
+    expected_page: &DevToolsDocumentResidenceIdentity,
 ) -> Result<(), DevToolsError> {
-    if scheduler.page_residence_identity_for_devtools_context(context)
+    if scheduler.document_residence_identity_for_devtools_context(context)
         == Some(expected_page.clone())
     {
         Ok(())
     } else {
         Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchNode,
-            "DOM reference belongs to a replaced Page",
+            "DOM reference belongs to a replaced Document",
         ))
     }
 }

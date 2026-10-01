@@ -61,6 +61,22 @@ pub(in crate::context_bootstrap) fn window_alert_callback<'s>(
     let _ = open_dialog(scope, "alert", &parsed.message, "");
 }
 
+pub(crate) fn window_close_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if window_receiver_child_handle(scope, args.this()).is_some() {
+        return;
+    }
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(window) = host.auxiliary_window() {
+            host.request_auxiliary_window_close(window);
+        }
+    }
+}
+
 pub(crate) fn window_noop_callback(
     _scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
@@ -160,7 +176,11 @@ pub(crate) fn window_open_callback<'s>(
         }
     };
     if special_target == Some(SpecialBrowsingContextTarget::Current) {
-        navigate_window_open_self(scope, entered_window, url.as_str(), &mut rv);
+        if parsed.raw_url.is_empty() {
+            rv.set(entered_window.into());
+        } else {
+            navigate_window_open_self(scope, entered_window, url.as_str(), &mut rv);
+        }
         return;
     }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
@@ -189,7 +209,8 @@ pub(crate) fn window_open_callback<'s>(
         target @ (SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
     ) = special_target
     {
-        match navigate_existing_browsing_context_target(scope, host_ptr, target, &url) {
+        let navigation_url = if parsed.raw_url.is_empty() { "" } else { &url };
+        match navigate_existing_browsing_context_target(scope, host_ptr, target, navigation_url) {
             Some(window) => rv.set(window.into()),
             None => rv.set(v8::null(scope).into()),
         }
@@ -198,7 +219,8 @@ pub(crate) fn window_open_callback<'s>(
     if let Some(target_window) =
         existing_named_child_window_for_window_open(scope, host_ptr, &parsed.target_name)
         && !suppress_opener
-        && navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None)
+        && (parsed.raw_url.is_empty()
+            || navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None))
     {
         rv.set(target_window.into());
         return;
@@ -222,8 +244,7 @@ pub(crate) fn window_open_callback<'s>(
         return;
     };
     let opener = (!suppress_opener).then_some(entered_window);
-    let opener_child_handle =
-        opener.and_then(|opener| window_open_receiver_child_handle(scope, opener));
+    let opener_child_handle = opener.and_then(|opener| window_receiver_child_handle(scope, opener));
     let popup_disposition = match host
         .current_input_event()
         .map(crate::native_bridge::CurrentInputEvent::navigation_policy)
@@ -231,14 +252,62 @@ pub(crate) fn window_open_callback<'s>(
         Some(InputNavigationPolicy::NewBackgroundSurface) => {
             crate::RendererPopupDisposition::Background
         }
-        Some(
-            InputNavigationPolicy::Current
-            | InputNavigationPolicy::Download
-            | InputNavigationPolicy::NewWindow
-            | InputNavigationPolicy::NewForegroundSurface,
-        )
-        | None => crate::RendererPopupDisposition::Foreground,
+        Some(InputNavigationPolicy::NewWindow) => crate::RendererPopupDisposition::NewWindow,
+        _ if parsed_features.is_popup() => crate::RendererPopupDisposition::NewWindow,
+        _ => crate::RendererPopupDisposition::Foreground,
     };
+    if let Some(opener) = opener
+        && host.has_browser_owned_auxiliary_page_factory()
+    {
+        match host.open_renderer_owned_auxiliary_window(
+            scope,
+            opener,
+            opener_child_handle,
+            &parsed.target_name,
+            &url,
+            entered_base_url,
+            creator_policy_container,
+            true,
+        ) {
+            Ok(opened) => {
+                let disposition = if opened.pending_page.is_some()
+                    || host.protocol_user_gesture_activation()
+                    || host.current_input_event().is_some()
+                {
+                    popup_disposition
+                } else {
+                    crate::RendererPopupDisposition::Background
+                };
+                let window_event = opened.pending_page.is_some().then_some(window_open_event);
+                host.record_pending_popup_activation(
+                    RendererPendingPopupActivation::window(
+                        root_document,
+                        source,
+                        true,
+                        opened.window.as_ref().map(|window| window.id()),
+                        url,
+                        parsed.target_name,
+                        disposition,
+                    )
+                    .with_navigation_requested(!parsed.raw_url.is_empty())
+                    .with_browsing_context_name(opened.name)
+                    .with_auxiliary_window(opened.window)
+                    .with_pending_auxiliary_page(opened.pending_page)
+                    .with_initial_auxiliary_state(
+                        opened.session_storage,
+                        opened.initial_storage_key,
+                    ),
+                    window_event,
+                );
+                rv.set(opened.window_proxy.into());
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to create synchronous auxiliary Page");
+                rv.set_null();
+            }
+        }
+        return;
+    }
     if popup_target_can_use_lightweight_window(&parsed.target_name, &url)
         && let Some(opened_popup) = host.open_lightweight_popup_window(
             scope,
@@ -246,11 +315,20 @@ pub(crate) fn window_open_callback<'s>(
             opener,
             opener_child_handle,
             &parsed.target_name,
-            &url,
+            if parsed.raw_url.is_empty() { "" } else { &url },
             entered_base_url,
             creator_policy_container,
+            true,
         )
     {
+        let disposition = if opened_popup.created_new_browsing_context
+            || host.protocol_user_gesture_activation()
+            || host.current_input_event().is_some()
+        {
+            popup_disposition
+        } else {
+            crate::RendererPopupDisposition::Background
+        };
         let popup_id = opened_popup.popup_id;
         let session_storage_store = host.lightweight_popup_session_storage_store(popup_id);
         let initial_empty_document_storage_key =
@@ -266,8 +344,10 @@ pub(crate) fn window_open_callback<'s>(
                 Some(popup_id),
                 url,
                 parsed.target_name,
-                popup_disposition,
+                disposition,
             )
+            .with_navigation_requested(!parsed.raw_url.is_empty())
+            .with_document_response(opened_popup.document_response)
             .with_initial_auxiliary_state(
                 session_storage_store,
                 initial_empty_document_storage_key,
@@ -297,7 +377,7 @@ pub(crate) fn window_open_callback<'s>(
     rv.set(v8::null(scope).into());
 }
 
-fn window_open_receiver_child_handle<'s>(
+fn window_receiver_child_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {

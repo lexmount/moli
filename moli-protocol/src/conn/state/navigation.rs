@@ -8,12 +8,39 @@ pub struct PageNavigationHistoryEntry {
     pub title: String,
     pub transition_type: String,
     pub document_sequence_number: Option<u64>,
+    pub browsing_context_group: Option<moli_core::page::RendererBrowsingContextGroup>,
+}
+
+/// Selection frozen with a navigation; redirects only determine whether its
+/// final site still belongs to the previous browsing context group.
+#[derive(Clone, Debug)]
+pub(crate) struct NavigationBrowsingContextGroup {
+    current: moli_core::page::RendererBrowsingContextGroup,
+    cross_site_replacement: Option<(url::Url, moli_core::page::RendererBrowsingContextGroup)>,
+}
+
+impl NavigationBrowsingContextGroup {
+    pub(crate) fn resolve(
+        &self,
+        final_url: &url::Url,
+    ) -> moli_core::page::RendererBrowsingContextGroup {
+        if let Some((previous_url, replacement)) = &self.cross_site_replacement
+            && !moli_url::is_about_blank(final_url)
+            && !matches!(final_url.scheme(), "data" | "file")
+            && !moli_site::same_site_urls(previous_url, final_url, true)
+        {
+            return replacement.clone();
+        }
+        self.current.clone()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingNavigationHistoryUpdate {
-    ReplaceCurrent,
-    ReplaceInitialEmptyDocument,
+    Append(&'static str),
+    ReplaceCurrent(&'static str),
+    ReloadCurrent,
+    ReplaceInitialEmptyDocument(&'static str),
     TraverseToEntry(i32),
 }
 
@@ -24,6 +51,7 @@ pub struct TargetNavigationHistoryState {
     next_entry_id: i32,
     next_document_sequence_number: u64,
     pending_update: Option<PendingNavigationHistoryUpdate>,
+    initial_auxiliary_document_entry: bool,
 }
 
 impl Default for TargetNavigationHistoryState {
@@ -34,11 +62,51 @@ impl Default for TargetNavigationHistoryState {
             next_entry_id: 1,
             next_document_sequence_number: 1,
             pending_update: None,
+            initial_auxiliary_document_entry: false,
         }
     }
 }
 
 impl TargetNavigationHistoryState {
+    pub(crate) fn browsing_context_group_for_navigation(
+        &self,
+        current: moli_core::page::RendererBrowsingContextGroup,
+        current_url: Option<&url::Url>,
+        browser_initiated: bool,
+    ) -> NavigationBrowsingContextGroup {
+        if let Some(PendingNavigationHistoryUpdate::TraverseToEntry(id)) = self.pending_update
+            && let Some(group) = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .and_then(|entry| entry.browsing_context_group.clone())
+        {
+            return NavigationBrowsingContextGroup {
+                current: group,
+                cross_site_replacement: None,
+            };
+        }
+        let force_swap = browser_initiated
+            && matches!(
+                self.pending_update,
+                None | Some(PendingNavigationHistoryUpdate::Append(
+                    "typed" | "auto_bookmark" | "generated" | "keyword"
+                ))
+            );
+        let cross_site_replacement = current_url
+            .filter(|url| force_swap && !moli_url::is_about_blank(url))
+            .map(|url| {
+                (
+                    url.clone(),
+                    moli_core::page::RendererBrowsingContextGroup::default(),
+                )
+            });
+        NavigationBrowsingContextGroup {
+            current,
+            cross_site_replacement,
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
     }
@@ -50,8 +118,9 @@ impl TargetNavigationHistoryState {
     pub(crate) fn position_after_navigation(&self) -> moli_session_history::SessionHistoryPosition {
         let (index, length) = match self.pending_update {
             Some(
-                PendingNavigationHistoryUpdate::ReplaceCurrent
-                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
+                PendingNavigationHistoryUpdate::ReplaceCurrent(_)
+                | PendingNavigationHistoryUpdate::ReloadCurrent
+                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument(_),
             ) => (self.current_index.unwrap_or(0), self.entries.len().max(1)),
             Some(PendingNavigationHistoryUpdate::TraverseToEntry(entry_id)) => {
                 if let Some(index) = self.entries.iter().position(|entry| entry.id == entry_id) {
@@ -61,7 +130,7 @@ impl TargetNavigationHistoryState {
                     (index, index + 1)
                 }
             }
-            None => {
+            None | Some(PendingNavigationHistoryUpdate::Append(_)) => {
                 let index = self.current_index.map_or(0, |index| index + 1);
                 (index, index + 1)
             }
@@ -124,6 +193,8 @@ impl TargetNavigationHistoryState {
             loaded_entry.transition_type = self.entries[index].transition_type.clone();
             loaded_entry.user_typed_url = self.entries[index].user_typed_url.clone();
             loaded_entry.document_sequence_number = self.entries[index].document_sequence_number;
+            loaded_entry.browsing_context_group =
+                self.entries[index].browsing_context_group.clone();
             loaded_entry.id = entry_id;
             self.entries[index] = loaded_entry;
             self.current_index = Some(index);
@@ -133,11 +204,31 @@ impl TargetNavigationHistoryState {
     }
 
     pub(crate) fn mark_replace_current(&mut self) {
-        self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceCurrent);
+        self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceCurrent("reload"));
     }
 
-    pub(crate) fn mark_replace_initial_empty_document(&mut self) {
-        self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument);
+    pub(crate) fn mark_auxiliary_navigation(
+        &mut self,
+        kind: moli_core::page::RendererAuxiliaryNavigationKind,
+    ) {
+        use moli_core::page::RendererAuxiliaryNavigationKind;
+        self.pending_update = Some(match kind {
+            RendererAuxiliaryNavigationKind::Assign => {
+                PendingNavigationHistoryUpdate::Append("link")
+            }
+            RendererAuxiliaryNavigationKind::Replace => {
+                PendingNavigationHistoryUpdate::ReplaceCurrent("link")
+            }
+            RendererAuxiliaryNavigationKind::Reload => {
+                PendingNavigationHistoryUpdate::ReloadCurrent
+            }
+        });
+    }
+
+    pub(crate) fn mark_replace_initial_empty_document(&mut self, transition_type: &'static str) {
+        self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument(
+            transition_type,
+        ));
     }
 
     pub(crate) fn mark_traverse_to_entry(&mut self, entry_id: i32) {
@@ -146,6 +237,16 @@ impl TargetNavigationHistoryState {
 
     pub(crate) fn clear_pending_update(&mut self) {
         self.pending_update = None;
+    }
+
+    pub(crate) fn is_pending_reload(&self) -> bool {
+        matches!(
+            self.pending_update,
+            Some(
+                PendingNavigationHistoryUpdate::ReloadCurrent
+                    | PendingNavigationHistoryUpdate::ReplaceCurrent("reload")
+            )
+        )
     }
 
     pub(crate) fn entry_url(&self, entry_id: i32) -> Option<String> {
@@ -206,15 +307,42 @@ impl TargetNavigationHistoryState {
         true
     }
 
+    pub(crate) fn mark_auxiliary_document_entry(&mut self, initial_empty: bool) {
+        assert_eq!(
+            self.entries.len(),
+            1,
+            "an auxiliary initial Document has one placeholder"
+        );
+        let entry = &mut self.entries[0];
+        if initial_empty {
+            entry.user_typed_url.clear();
+        }
+        entry.transition_type = "link".to_owned();
+        self.initial_auxiliary_document_entry = initial_empty;
+    }
+
+    pub(crate) fn has_initial_auxiliary_document_entry(&self) -> bool {
+        // document.open() ends the initial Document loading state, but does
+        // not commit a session-history entry. Its placeholder is still
+        // replaced by the first cross-document navigation.
+        self.initial_auxiliary_document_entry
+    }
+
     pub(crate) fn seed_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
         self.assign_new_document_sequence_number(&mut entry);
         self.push_entry(entry);
     }
 
     pub(crate) fn record_loaded_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
+        self.initial_auxiliary_document_entry = false;
         match self.pending_update.take() {
-            Some(PendingNavigationHistoryUpdate::ReplaceCurrent) => {
-                entry.transition_type = "reload".to_owned();
+            Some(PendingNavigationHistoryUpdate::Append(transition_type)) => {
+                entry.transition_type = transition_type.to_owned();
+                self.assign_new_document_sequence_number(&mut entry);
+                self.push_entry(entry);
+            }
+            Some(PendingNavigationHistoryUpdate::ReplaceCurrent(transition_type)) => {
+                entry.transition_type = transition_type.to_owned();
                 if let Some(current_entry) =
                     self.current_index.and_then(|index| self.entries.get(index))
                 {
@@ -223,8 +351,18 @@ impl TargetNavigationHistoryState {
                 self.assign_new_document_sequence_number(&mut entry);
                 self.replace_current_entry(entry);
             }
-            Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument) => {
-                entry.transition_type = "auto_toplevel".to_owned();
+            Some(PendingNavigationHistoryUpdate::ReloadCurrent) => {
+                if let Some(current_entry) =
+                    self.current_index.and_then(|index| self.entries.get(index))
+                {
+                    entry.transition_type = current_entry.transition_type.clone();
+                    entry.user_typed_url = current_entry.user_typed_url.clone();
+                }
+                self.assign_new_document_sequence_number(&mut entry);
+                self.replace_current_entry(entry);
+            }
+            Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument(transition_type)) => {
+                entry.transition_type = transition_type.to_owned();
                 self.assign_new_document_sequence_number(&mut entry);
                 self.replace_current_entry(entry);
             }
@@ -257,6 +395,10 @@ impl TargetNavigationHistoryState {
                     title,
                     transition_type: "link".to_owned(),
                     document_sequence_number: None,
+                    browsing_context_group: self
+                        .current_index
+                        .and_then(|index| self.entries.get(index))
+                        .and_then(|entry| entry.browsing_context_group.clone()),
                 };
                 self.assign_current_document_sequence_number(&mut entry);
                 match history_update {
@@ -371,6 +513,50 @@ mod tests {
     }
 
     #[test]
+    fn browser_navigation_group_selection_respects_transition_and_final_destination() {
+        let group = moli_core::page::RendererBrowsingContextGroup::default();
+        let original = url::Url::parse("https://a.example.test/start").unwrap();
+        let mut history = TargetNavigationHistoryState::default();
+        let selection =
+            history.browsing_context_group_for_navigation(group.clone(), Some(&original), true);
+        for destination in [
+            "https://b.example.test/redirected",
+            "about:blank",
+            "data:text/html,local",
+            "file:///tmp/local.html",
+        ] {
+            assert_eq!(
+                selection.resolve(&url::Url::parse(destination).unwrap()),
+                group,
+                "{destination} must retain the group"
+            );
+        }
+        let cross_site = url::Url::parse("https://other.test/final").unwrap();
+        let replacement = selection.resolve(&cross_site);
+        assert_ne!(replacement, group);
+        assert_eq!(selection.resolve(&cross_site), replacement);
+
+        for transition in ["link", "auto_toplevel", "form_submit", "reload"] {
+            history.pending_update = Some(PendingNavigationHistoryUpdate::Append(transition));
+            assert_eq!(
+                history
+                    .browsing_context_group_for_navigation(group.clone(), Some(&original), true)
+                    .resolve(&cross_site),
+                group,
+                "{transition} must retain the group"
+            );
+        }
+        history.pending_update = Some(PendingNavigationHistoryUpdate::Append("typed"));
+        assert_eq!(
+            history
+                .browsing_context_group_for_navigation(group.clone(), Some(&original), false)
+                .resolve(&cross_site),
+            group,
+            "renderer navigation must retain the group"
+        );
+    }
+
+    #[test]
     fn title_refresh_updates_only_current_entry_metadata() {
         let mut history = TargetNavigationHistoryState::default();
         let first_id = history.allocate_entry_id();
@@ -381,6 +567,7 @@ mod tests {
             title: String::new(),
             transition_type: "typed".to_owned(),
             document_sequence_number: None,
+            browsing_context_group: None,
         });
         let before = history.snapshot().1[0].clone();
 

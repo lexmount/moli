@@ -278,6 +278,7 @@ fn navigation_fixture() -> (
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     let navigation = NavigationDispatchState {
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),

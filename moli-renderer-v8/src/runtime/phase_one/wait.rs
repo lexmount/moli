@@ -65,11 +65,16 @@ impl PhaseOneResidenceAdmission {
         page_turn_is_runnable: bool,
         streaming_input_ready: bool,
     ) -> Self {
-        if requirement == PhaseOneRestoreRequirement::ParserBlockingSourceLoad {
-            return Self::ParserBlockingSourceLoad;
-        }
+        // A source completion may arrive while the DocumentCommit reply holds
+        // the parser. Its edge wake is then consumed without running the Page.
+        // Re-admit the ready task before consulting the earlier suspension
+        // reason; otherwise a closed-input parser can wait forever for an
+        // already completed source to notify it again.
         if page_turn_is_runnable {
             return Self::ReadyPageTurn;
+        }
+        if requirement == PhaseOneRestoreRequirement::ParserBlockingSourceLoad {
+            return Self::ParserBlockingSourceLoad;
         }
         assert!(
             !streaming_input_ready,
@@ -85,13 +90,14 @@ mod tests {
 
     #[test]
     fn ready_page_turn_is_readmitted_after_its_producer_wake_was_spent() {
-        let admission = PhaseOneResidenceAdmission::after_stable_restore(
+        for requirement in [
             PhaseOneRestoreRequirement::PageWork,
-            true,
-            false,
-        );
-
-        assert_eq!(admission, PhaseOneResidenceAdmission::ReadyPageTurn);
+            PhaseOneRestoreRequirement::ParserBlockingSourceLoad,
+        ] {
+            let admission =
+                PhaseOneResidenceAdmission::after_stable_restore(requirement, true, false);
+            assert_eq!(admission, PhaseOneResidenceAdmission::ReadyPageTurn);
+        }
     }
 
     #[test]

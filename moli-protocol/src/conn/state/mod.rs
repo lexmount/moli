@@ -34,6 +34,7 @@ mod tests;
 
 pub(crate) use attachment_identity::{NavigationRequestId, TargetPageAttachmentId};
 pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
+pub use identity::DevToolsDocumentResidenceIdentity;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
 pub(crate) use identity::{
@@ -116,6 +117,7 @@ pub(crate) use browser_context::{
     BrowserContextStoragePartitionHandles, SiteDataClearOptions,
 };
 
+pub(crate) use navigation::NavigationBrowsingContextGroup;
 pub use navigation::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
 pub(crate) use emulation::{

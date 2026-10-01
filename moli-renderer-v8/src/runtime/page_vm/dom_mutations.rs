@@ -113,6 +113,7 @@ impl PageVm {
                     self.project_dom_mutation_facts_for_session(session_id.as_deref(), &facts);
                 (!events.is_empty()).then(|| {
                     RendererDomMutationEventBatch::new(
+                        self.devtools_agent_token(),
                         DevToolsSessionKey::from_wire_session_id(session_id.as_deref()),
                         events,
                     )

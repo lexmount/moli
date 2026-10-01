@@ -30,10 +30,44 @@ pub(crate) struct PromiseRejectDispatchSlot {
     reported_unhandled_rejections: Rc<RefCell<Vec<PendingPromiseRejection>>>,
 }
 
+#[derive(Clone)]
 struct PromiseRejectDispatchState {
     host: Rc<RefCell<JsContextHost>>,
     pending: Rc<RefCell<Vec<PendingPromiseRejection>>>,
     reported: Rc<RefCell<Vec<PendingPromiseRejection>>>,
+}
+
+#[derive(Default)]
+struct AgentPendingPromiseRejections(Vec<PromiseRejectDispatchState>);
+
+fn queue_agent_promise_rejection_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &PromiseRejectDispatchState,
+) {
+    if scope.get_slot::<AgentPendingPromiseRejections>().is_none() {
+        assert!(scope.set_slot(AgentPendingPromiseRejections::default()));
+    }
+    let pending = &mut scope
+        .get_slot_mut::<AgentPendingPromiseRejections>()
+        .unwrap()
+        .0;
+    if !pending
+        .iter()
+        .any(|previous| Rc::ptr_eq(&previous.pending, &state.pending))
+    {
+        pending.push(state.clone());
+    }
+}
+
+fn flush_agent_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> usize {
+    let pending = scope
+        .get_slot_mut::<AgentPendingPromiseRejections>()
+        .map(|pending| std::mem::take(&mut pending.0))
+        .unwrap_or_default();
+    pending
+        .into_iter()
+        .map(|state| flush_promise_rejection_state(scope, state))
+        .sum()
 }
 
 pub(super) fn promise_reject_dispatch_slot(
@@ -100,10 +134,10 @@ fn remember_reported_promise_rejection(
     reported.push(rejection);
 }
 
-pub(super) fn flush_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> usize {
-    let Some(state) = promise_reject_dispatch_state(scope) else {
-        return 0;
-    };
+fn flush_promise_rejection_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: PromiseRejectDispatchState,
+) -> usize {
     let pending = std::mem::take(&mut *state.pending.borrow_mut());
     let pending_len = pending.len();
     let host_ptr: *mut JsContextHost = (*state.host).as_ptr();
@@ -214,8 +248,13 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
         );
     }
     let flush_started = trace_enabled.then(Instant::now);
-    let pending_rejections = flush_pending_promise_rejections(scope);
+    let pending_rejections = flush_agent_pending_promise_rejections(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    if let Some(host) = context_host_ptr_from_global_bridge(scope)
+        && let Some(environment) = unsafe { &*host }.page_script_environment()
+    {
+        environment.finish_related_page_turn_completions();
+    }
     if let Some(started) = flush_started {
         tracing::info!(
             target: "moli_cdp_runtime",
@@ -278,6 +317,7 @@ pub(super) unsafe extern "C" fn promise_reject_callback(message: v8::PromiseReje
                 return;
             };
             let promise = message.get_promise();
+            queue_agent_promise_rejection_state(scope, &state);
             let mut pending = state.pending.borrow_mut();
             if pending
                 .iter()

@@ -15,6 +15,14 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
 
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let initial_runtime = send_cdp_command(
+        &mut socket,
+        40,
+        "Runtime.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
     let old_isolate_messages = send_cdp_command(
         &mut socket,
         4,
@@ -23,6 +31,15 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
         json!({}),
     )
     .await;
+    let old_context_id = initial_runtime
+        .iter()
+        .chain(&old_isolate_messages)
+        .find(|message| {
+            message["method"] == "Runtime.executionContextCreated"
+                && message["params"]["context"]["auxData"]["isDefault"] == true
+        })
+        .expect("initial default execution context")["params"]["context"]["uniqueId"]
+        .clone();
     let old_isolate_id = old_isolate_messages
         .iter()
         .find(|message| message["id"] == json!(4_u64))
@@ -99,9 +116,29 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
     let new_isolate_id = resumed["result"]["id"]
         .as_str()
         .expect("replacement Runtime.getIsolateId");
-    assert_ne!(
+    assert_eq!(
         new_isolate_id, old_isolate_id,
-        "queued command must bind to the replacement document's renderer attachment"
+        "Document replacement must retain the Page's isolate"
+    );
+    let cutover = before_resume
+        .iter()
+        .chain(&resumed_messages)
+        .collect::<Vec<_>>();
+    let new_context_index = cutover
+        .iter()
+        .position(|message| {
+            message["method"] == "Runtime.executionContextCreated"
+                && message["params"]["context"]["auxData"]["isDefault"] == true
+                && message["params"]["context"]["uniqueId"] != old_context_id
+        })
+        .expect("replacement default execution context");
+    let control_reply_index = cutover
+        .iter()
+        .position(|message| message["id"] == 6)
+        .unwrap();
+    assert!(
+        new_context_index < control_reply_index,
+        "queued control command must complete after the new Document's context is published: {cutover:#?}"
     );
 
     let _ = socket.close(None).await;

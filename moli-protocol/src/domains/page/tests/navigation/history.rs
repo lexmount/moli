@@ -1687,3 +1687,154 @@ async fn fragment_meta_refresh_is_one_same_document_navigation() {
 
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_document_navigation_keeps_page_residence_and_replaces_document_agent() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new()
+                .route("/first", axum::routing::get(|| async {
+                    axum::response::Html("<!doctype html><title>first</title><script>window.firstDocument = true</script>")
+                }))
+                .route("/feed", axum::routing::get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "application/atom+xml; charset=windows-1252")],
+                        b"<feed xmlns='http://www.w3.org/2005/Atom'><title>caf\xe9</title></feed>".to_vec(),
+                    )
+                })),
+        ).await.unwrap();
+    });
+    let mut ctx = TestContext::new();
+    let session = "SID-stable-document";
+    load_bc_with_session(
+        &mut ctx,
+        "BID-stable-document",
+        "TID-stable-document",
+        session,
+        "about:blank",
+    );
+    ensure_initial_document_for_session(&mut ctx, Some(session)).await;
+    for (id, method) in [
+        (90_200, "Page.enable"),
+        (90_201, "Runtime.enable"),
+        (90_202, "DOM.enable"),
+    ] {
+        ctx.process_async(json!({"id":id,"method":method,"sessionId":session}))
+            .await;
+        assert!(take_response_by_id(&mut ctx, id)["error"].is_null());
+    }
+    let owner = crate::conn::CommandOwnerScope::for_session(session);
+    let page = ctx
+        .conn
+        .renderer_page_residence_identity_for_owner(&owner)
+        .unwrap();
+    let residence = ctx
+        .conn
+        .target_page_residence_identity_for_owner(&owner)
+        .unwrap();
+    let mut agent = ctx
+        .conn
+        .current_renderer_agent_attachment_id_for_owner(&owner)
+        .unwrap();
+    let large_html = format!(
+        "<!doctype html><pre>{}</pre><script>window.lastScriptRan = true</script>",
+        "x".repeat(20 * 64 * 1024),
+    );
+    let urls = [
+        format!("http://{addr}/first"),
+        format!(
+            "data:text/html;base64,{}",
+            BASE64_STANDARD.encode(large_html)
+        ),
+        format!("http://{addr}/feed"),
+        "about:blank".to_owned(),
+    ];
+    let checks = [
+        ("[document.title, firstDocument]", json!(["first", true])),
+        (
+            "[typeof firstDocument, lastScriptRan, document.querySelector('pre').textContent.length]",
+            json!(["undefined", true, 1310720]),
+        ),
+        (
+            "(() => { const feed = document.getElementsByTagNameNS('http://www.w3.org/2005/Atom', 'feed')[0]; return [feed.namespaceURI, feed.textContent, document.characterSet]; })()",
+            json!(["http://www.w3.org/2005/Atom", "café", "windows-1252"]),
+        ),
+        (
+            "[document.URL, typeof lastScriptRan]",
+            json!(["about:blank", "undefined"]),
+        ),
+    ];
+    for (index, (url, (expression, expected))) in urls.into_iter().zip(checks).enumerate() {
+        ctx.sent.clear();
+        let id = 90_210 + index as u64 * 2;
+        ctx.process_async(
+            json!({"id":id,"method":"Page.navigate","sessionId":session,"params":{"url":url}}),
+        )
+        .await;
+        assert!(
+            take_response_by_id(&mut ctx, id)["error"].is_null(),
+            "navigation {index}"
+        );
+        wait_until_message(
+            &mut ctx,
+            Some(session),
+            "stable Page replacement load",
+            |message| message["method"] == "Page.loadEventFired",
+        )
+        .await;
+        assert_eq!(
+            ctx.conn.renderer_page_residence_identity_for_owner(&owner),
+            Some(page)
+        );
+        assert_eq!(
+            ctx.conn.target_page_residence_identity_for_owner(&owner),
+            Some(residence.clone())
+        );
+        let next_agent = ctx
+            .conn
+            .current_renderer_agent_attachment_id_for_owner(&owner)
+            .unwrap();
+        assert_ne!(
+            next_agent, agent,
+            "new Document needs a new Inspector attachment"
+        );
+        agent = next_agent;
+        ctx.process_async(json!({"id":id+1,"method":"Runtime.evaluate","sessionId":session,"params":{"expression":expression,"returnByValue":true}})).await;
+        let result = take_response_by_id(&mut ctx, id + 1);
+        assert!(result["error"].is_null(), "{result}");
+        assert_eq!(
+            result["result"]["result"]["value"], expected,
+            "navigation {index}: {result}"
+        );
+
+        let dom_id = 90_300 + index as u64 * 3;
+        ctx.process_async(json!({"id":dom_id,"method":"DOM.getDocument","sessionId":session,"params":{"depth":1}})).await;
+        let root = take_response_by_id(&mut ctx, dom_id)["result"]["root"].clone();
+        let element_id = root["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["nodeType"] == 1)
+            .unwrap()["nodeId"]
+            .clone();
+        ctx.sent.clear();
+        ctx.process_async(json!({"id":dom_id+1,"method":"Runtime.evaluate","sessionId":session,"params":{"expression":"document.documentElement.setAttribute('data-replacement', 'current')"}})).await;
+        assert!(take_response_by_id(&mut ctx, dom_id + 1)["error"].is_null());
+        wait_until_message(
+            &mut ctx,
+            Some(session),
+            "replacement Document DOM mutation",
+            |message| {
+                message["method"] == "DOM.attributeModified"
+                    && message["params"]["nodeId"] == element_id
+                    && message["params"]["name"] == "data-replacement"
+                    && message["params"]["value"] == "current"
+            },
+        )
+        .await;
+    }
+    server.abort();
+}

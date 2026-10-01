@@ -26,31 +26,42 @@ pub enum RendererPopupActivationSource {
 
 /// Browser-owner selection policy for an accepted auxiliary browsing context.
 ///
-/// This records only whether the target should become the active target. It
-/// deliberately does not distinguish tab and window chrome, which the
-/// renderer target model does not expose.
+/// NewWindow requests an independent browser window when a target is created.
+/// Reusing an existing context keeps its window and follows foreground policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererPopupDisposition {
     Foreground,
     Background,
+    NewWindow,
 }
 
-/// A renderer-accepted request to create or reuse an auxiliary browsing
-/// context.
+/// A renderer-accepted request to create an auxiliary browsing context or
+/// reuse a named related browsing context, including an ordinary root Page.
 ///
 /// Special targets (`_self`, `_parent`, `_top`) are not valid values here:
 /// they navigate an existing browsing context and use the corresponding
-/// navigation authority instead. Keeping this carrier auxiliary-only prevents
-/// protocol code from deciding the target from a later current session.
-#[derive(Debug, Clone)]
+/// navigation authority instead. The shared name cell identifies the chosen
+/// context independently of later changes to its name or the current session.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererPendingPopupActivation {
-    source: RendererPopupActivationSource,
-    disposition: RendererPopupDisposition,
-    popup_id: Option<u64>,
-    url: String,
-    target_name: String,
-    session_storage_store: Option<SharedWebStorageStore>,
-    initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    parts: RendererPopupActivationParts,
+}
+
+/// The complete accepted popup action, moved to the browser owner at once.
+#[derive(Debug, Clone)]
+pub struct RendererPopupActivationParts {
+    pub source: RendererPopupActivationSource,
+    pub disposition: RendererPopupDisposition,
+    pub navigation_requested: bool,
+    pub popup_id: Option<u64>,
+    pub browsing_context_name: Option<super::RendererBrowsingContextName>,
+    pub auxiliary_window: Option<super::RendererAuxiliaryWindow>,
+    pub document_response: Option<super::RendererAuxiliaryDocumentResponse>,
+    pub pending_auxiliary_page: Option<crate::runtime::RendererPendingAuxiliaryPage>,
+    pub url: String,
+    pub target_name: String,
+    pub session_storage_store: Option<SharedWebStorageStore>,
+    pub initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
 
 impl RendererPendingPopupActivation {
@@ -68,17 +79,24 @@ impl RendererPendingPopupActivation {
             "popup activation must not carry an existing-context special target"
         );
         Self {
-            source: RendererPopupActivationSource::Window {
-                root_document,
-                window,
-                exposes_opener,
+            parts: RendererPopupActivationParts {
+                source: RendererPopupActivationSource::Window {
+                    root_document,
+                    window,
+                    exposes_opener,
+                },
+                disposition,
+                navigation_requested: true,
+                popup_id,
+                browsing_context_name: None,
+                auxiliary_window: None,
+                document_response: None,
+                pending_auxiliary_page: None,
+                url,
+                target_name,
+                session_storage_store: None,
+                initial_empty_document_storage_key: None,
             },
-            disposition,
-            popup_id,
-            url,
-            target_name,
-            session_storage_store: None,
-            initial_empty_document_storage_key: None,
         }
     }
 
@@ -93,13 +111,20 @@ impl RendererPendingPopupActivation {
             "browser-context popup activation must not carry a special target"
         );
         Self {
-            source: RendererPopupActivationSource::BrowserContext,
-            disposition,
-            popup_id,
-            url,
-            target_name,
-            session_storage_store: None,
-            initial_empty_document_storage_key: None,
+            parts: RendererPopupActivationParts {
+                source: RendererPopupActivationSource::BrowserContext,
+                disposition,
+                navigation_requested: true,
+                popup_id,
+                browsing_context_name: None,
+                auxiliary_window: None,
+                document_response: None,
+                pending_auxiliary_page: None,
+                url,
+                target_name,
+                session_storage_store: None,
+                initial_empty_document_storage_key: None,
+            },
         }
     }
 
@@ -117,60 +142,95 @@ impl RendererPendingPopupActivation {
         session_storage_store: Option<SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) -> Self {
-        self.session_storage_store = session_storage_store;
-        self.initial_empty_document_storage_key = initial_empty_document_storage_key;
+        self.parts.session_storage_store = session_storage_store;
+        self.parts.initial_empty_document_storage_key = initial_empty_document_storage_key;
         self
     }
 
+    pub(crate) fn with_browsing_context_name(
+        mut self,
+        name: super::RendererBrowsingContextName,
+    ) -> Self {
+        self.parts.browsing_context_name = Some(name);
+        self
+    }
+
+    pub fn browsing_context_name(&self) -> Option<super::RendererBrowsingContextName> {
+        self.parts.browsing_context_name.clone()
+    }
+
+    pub(crate) fn with_auxiliary_window(
+        mut self,
+        window: Option<super::RendererAuxiliaryWindow>,
+    ) -> Self {
+        self.parts.auxiliary_window = window;
+        self
+    }
+
+    pub(crate) fn with_document_response(
+        mut self,
+        response: Option<super::RendererAuxiliaryDocumentResponse>,
+    ) -> Self {
+        self.parts.document_response = response;
+        self
+    }
+
+    pub(crate) fn with_pending_auxiliary_page(
+        mut self,
+        page: Option<crate::runtime::RendererPendingAuxiliaryPage>,
+    ) -> Self {
+        self.parts.pending_auxiliary_page = page;
+        self
+    }
+
+    pub fn pending_auxiliary_page(&self) -> Option<crate::runtime::RendererPendingAuxiliaryPage> {
+        self.parts.pending_auxiliary_page.clone()
+    }
+
     pub fn source(&self) -> &RendererPopupActivationSource {
-        &self.source
+        &self.parts.source
     }
 
     pub fn disposition(&self) -> RendererPopupDisposition {
-        self.disposition
+        self.parts.disposition
+    }
+
+    pub(crate) fn with_navigation_requested(mut self, requested: bool) -> Self {
+        self.parts.navigation_requested = requested;
+        self
+    }
+
+    pub fn navigation_requested(&self) -> bool {
+        self.parts.navigation_requested
     }
 
     pub fn popup_id(&self) -> Option<u64> {
-        self.popup_id
+        self.parts.popup_id
     }
 
     pub fn url(&self) -> &str {
-        &self.url
+        &self.parts.url
     }
 
     pub fn target_name(&self) -> &str {
-        &self.target_name
+        &self.parts.target_name
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn into_parts(
-        self,
-    ) -> (
-        RendererPopupActivationSource,
-        RendererPopupDisposition,
-        Option<u64>,
-        String,
-        String,
-        Option<SharedWebStorageStore>,
-        Option<moli_storage_key::MoliStorageKey>,
-    ) {
-        (
-            self.source,
-            self.disposition,
-            self.popup_id,
-            self.url,
-            self.target_name,
-            self.session_storage_store,
-            self.initial_empty_document_storage_key,
-        )
+    pub fn into_parts(self) -> RendererPopupActivationParts {
+        self.parts
     }
 }
 
-impl PartialEq for RendererPendingPopupActivation {
+impl PartialEq for RendererPopupActivationParts {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
+            && self.navigation_requested == other.navigation_requested
             && self.disposition == other.disposition
             && self.popup_id == other.popup_id
+            && self.browsing_context_name == other.browsing_context_name
+            && self.auxiliary_window == other.auxiliary_window
+            && self.document_response == other.document_response
+            && self.pending_auxiliary_page == other.pending_auxiliary_page
             && self.url == other.url
             && self.target_name == other.target_name
             && match (&self.session_storage_store, &other.session_storage_store) {
@@ -182,10 +242,26 @@ impl PartialEq for RendererPendingPopupActivation {
     }
 }
 
-impl Eq for RendererPendingPopupActivation {}
+impl Eq for RendererPopupActivationParts {}
 
 fn is_special_browsing_context_target(target_name: &str) -> bool {
     target_name.eq_ignore_ascii_case("_self")
         || target_name.eq_ignore_ascii_case("_parent")
         || target_name.eq_ignore_ascii_case("_top")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_action_equality_distinguishes_navigation_from_lookup() {
+        let action = RendererPendingPopupActivation::browser_context(
+            None,
+            "about:blank".to_owned(),
+            "report".to_owned(),
+            RendererPopupDisposition::Foreground,
+        );
+        assert_ne!(action.clone().with_navigation_requested(false), action);
+    }
 }

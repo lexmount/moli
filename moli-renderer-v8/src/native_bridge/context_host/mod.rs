@@ -880,6 +880,7 @@ pub(crate) struct JsContextHost {
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     document_activity: moli_page_types::DocumentActivity,
+    initial_empty_main_document: bool,
     wpt_extensions_enabled: bool,
     network_offline: bool,
     navigator_overrides: moli_page_types::NavigatorOverrides,
@@ -978,6 +979,9 @@ pub(crate) struct JsContextHost {
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
+    browsing_context_name: crate::runtime::RendererBrowsingContextName,
+    auxiliary_window: Option<crate::runtime::RendererAuxiliaryWindow>,
+    page_script_environment: Option<crate::script_vm::WeakRendererPageScriptEnvironment>,
     top_level_navigation_handoff_tx:
         crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
     service_worker_task_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
@@ -1027,14 +1031,12 @@ pub(crate) struct JsContextHost {
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
     #[cfg(test)]
     pending_popup_activations: Vec<RendererPendingPopupActivation>,
-    next_lightweight_popup_id: u64,
     next_lightweight_popup_local_window_id: u64,
     next_lightweight_popup_document_id: u64,
     next_lightweight_popup_document_load_id: u64,
     next_lightweight_popup_classic_script_load_id: u64,
     lightweight_popup_browsing_contexts:
         HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
-    lightweight_popup_window_names: HashMap<String, u64>,
     lightweight_popup_document_handles: HashMap<DomHandle, u64>,
     pending_lightweight_popup_document_loads:
         HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,

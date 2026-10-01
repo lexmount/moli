@@ -84,8 +84,7 @@ impl CurrentInputEvent {
     }
 }
 
-/// Chromium-shaped navigation intent before Moli folds window and tab chrome
-/// into its foreground/background surface model.
+/// Chromium navigation intent from a real platform input event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InputNavigationPolicy {
     Current,

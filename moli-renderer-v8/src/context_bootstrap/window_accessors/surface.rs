@@ -105,9 +105,57 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
-        rv.set_null();
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    rv.set_null();
+    if window_child_context_handle(scope, receiver).is_some() {
+        return;
     }
+    let Some(host) = receiver
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+    else {
+        return;
+    };
+    let Some(environment) = unsafe { &*host }.page_script_environment() else {
+        return;
+    };
+    let Some(opener) = environment.opener_in_scope(scope) else {
+        return;
+    };
+    let Some(opener_host) = opener
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+    else {
+        return;
+    };
+    if unsafe { &*opener_host }.browsing_context_is_closed() {
+        return;
+    }
+    rv.set(opener.into());
+}
+
+pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = args.get(0);
+    if value.is_null()
+        && window_child_context_handle(scope, receiver).is_none()
+        && let Some(host) = receiver
+            .get_creation_context(scope)
+            .and_then(context_host_ptr_from_context_slot)
+        && let Some(environment) = unsafe { &*host }.page_script_environment()
+    {
+        environment.set_opener(None);
+    }
+    let key = crate::util::v8str(scope, "opener");
+    let _ = receiver.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
 }
 
 pub(in crate::context_bootstrap) fn window_inner_width_getter<'s>(
@@ -313,5 +361,14 @@ pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
         rv.set_bool(closed);
         return;
     }
-    rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
+    if window_child_context_handle(scope, receiver).is_some() {
+        rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
+        return;
+    }
+    rv.set_bool(
+        receiver
+            .get_creation_context(scope)
+            .and_then(context_host_ptr_from_context_slot)
+            .is_none_or(|host| unsafe { &*host }.browsing_context_is_closed()),
+    );
 }

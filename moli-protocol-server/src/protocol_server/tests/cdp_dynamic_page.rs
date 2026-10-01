@@ -1,5 +1,7 @@
 use super::*;
 
+mod auxiliary_page_identity;
+
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -2347,6 +2349,851 @@ async fn background_page_metadata_tracks_titles_and_same_document_navigation() {
     fixture_server.abort();
 }
 
+async fn evaluate_window_name_probe(
+    page: &mut TestCdpSocket,
+    id: u64,
+    expression: &str,
+) -> serde_json::Value {
+    let messages = send_cdp_command(
+        page,
+        id,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": expression, "returnByValue": true}),
+    )
+    .await;
+    let response = response_by_id(&messages, id);
+    assert!(response["error"].is_null(), "{response}");
+    assert!(
+        response["result"]["exceptionDetails"].is_null(),
+        "{response}"
+    );
+    response["result"]["result"]["value"].clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn window_name_survives_ordinary_navigations_and_is_available_to_parser_scripts() {
+    // Chromium's cross-site Window.name clearing feature is disabled by
+    // default. Changing the name-lookup group does not erase the stored name.
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<script>window.initialName = window.name</script>")
+        })),
+        "window-name",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let target = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut page, 2, "window.name = 'keep-me'").await,
+        "keep-me"
+    );
+    for (index, (method, params, expected)) in [
+        (
+            "Page.navigate",
+            json!({"url": format!("http://{fixture_addr}/first")}),
+            "keep-me",
+        ),
+        ("Page.reload", json!({}), "keep-me"),
+        (
+            "Page.navigate",
+            json!({"url": format!("http://{fixture_addr}/second")}),
+            "keep-me",
+        ),
+        (
+            "Page.navigate",
+            json!({"url": format!("http://localhost:{}/unrelated", fixture_addr.port())}),
+            "keep-me",
+        ),
+        ("Page.reload", json!({}), "keep-me"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 10 + index as u64 * 2;
+        send_cdp_command_without_wait(&mut page, id, method, None, params).await;
+        let mut response = false;
+        let mut loaded = false;
+        recv_until_match(&mut page, |message| {
+            response |= message["id"] == id;
+            loaded |= message["method"] == "Page.loadEventFired";
+            response && loaded
+        })
+        .await;
+        assert_eq!(
+            evaluate_window_name_probe(&mut page, id + 1, "[window.name, window.initialName]")
+                .await,
+            json!([expected, expected])
+        );
+    }
+    let other = create_dynamic_target(&mut browser, 2).await;
+    let mut other_page = connect_dynamic_page(addr, &other).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut other_page, 1, "window.name").await,
+        ""
+    );
+    evaluate_window_name_probe(&mut page, 30, "window.name = 'unrelated-root'").await;
+    let target_count = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut other_page,
+            2,
+            "window.open('about:blank', 'unrelated-root') !== null"
+        )
+        .await,
+        true
+    );
+    wait_for_target_list(
+        addr,
+        "an unrelated named CDP root must not be reused",
+        |targets| targets.len() == target_count + 1,
+    )
+    .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_popup_rename_is_shared_with_opener_and_named_target_lookup() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            1,
+            "window.popup = window.open('about:blank', 'original'); popup.name"
+        )
+        .await,
+        "original"
+    );
+    let targets = wait_for_target_list(addr, "named popup published", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    let popup_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut popup = connect_dynamic_page(addr, popup_id).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 1, "window.name").await,
+        "original"
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 2, "window.name = 'renamed'").await,
+        "renamed"
+    );
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            2,
+            "[popup.name, window.open('about:blank', 'renamed') === popup]"
+        )
+        .await,
+        json!(["renamed", true])
+    );
+    let after_reuse = fetch_server_json(addr, "/json/list").await;
+    assert_eq!(after_reuse.as_array().unwrap().len(), targets.len());
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            "window.open('about:blank', 'original') !== popup"
+        )
+        .await,
+        true
+    );
+    wait_for_target_list(
+        addr,
+        "old name must no longer resolve to the renamed target",
+        |current| current.len() == targets.len() + 1,
+    )
+    .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_popup_identity_survives_same_turn_rename_and_name_collision() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    evaluate_window_name_probe(
+        &mut opener,
+        1,
+        "window.p = open('about:blank', 'report'); true",
+    )
+    .await;
+    let targets = wait_for_target_list(addr, "original popup created", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    let original_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(evaluate_window_name_probe(&mut opener, 2,
+        "(() => { const reused = open('about:blank', 'report'); reused.name = 'renamed'; return reused === p; })()"
+    ).await, true);
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
+    );
+    let mut original = connect_dynamic_page(addr, &original_id).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut original, 1, "name").await,
+        "renamed"
+    );
+
+    // Conversely, choosing a new context and then giving it an existing name
+    // must not let protocol redirect that creation into the older target.
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            "window.q = open('about:blank', 'new-window'); q.name = 'renamed'; q !== p"
+        )
+        .await,
+        true
+    );
+    let with_second =
+        wait_for_target_list(addr, "second identity remains independent", |targets| {
+            targets.len() == baseline_ids.len() + 2
+        })
+        .await;
+    let second_id = with_second
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]) && target["id"] != original_id)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    evaluate_window_name_probe(&mut opener, 4, "p.close(); true").await;
+    let after_close = wait_for_target_list(addr, "only the original identity closes", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    assert!(!after_close.iter().any(|target| target["id"] == original_id));
+    assert!(after_close.iter().any(|target| target["id"] == second_id));
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 5, "[p.closed, q.closed]").await,
+        json!([true, false])
+    );
+    evaluate_window_name_probe(&mut opener, 6, "q.close(); true").await;
+    wait_for_target_list(
+        addr,
+        "both identities close without leaving duplicate targets",
+        |targets| targets.len() == baseline_ids.len(),
+    )
+    .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    for (index, close_kind) in ["self", "reference", "protocol"].into_iter().enumerate() {
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut opener,
+                100 + index as u64,
+                "window.popup = window.open('about:blank', 'closable'); popup.closed"
+            )
+            .await,
+            false
+        );
+        let targets = wait_for_target_list(addr, "popup published", |current| {
+            current.len() == baseline_ids.len() + 1
+        })
+        .await;
+        let popup_id = targets
+            .iter()
+            .find(|target| !baseline_ids.contains(&target["id"]))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        match close_kind {
+            "self" => {
+                let mut popup = connect_dynamic_page(addr, &popup_id).await;
+                assert_eq!(
+                    evaluate_window_name_probe(
+                        &mut popup,
+                        1,
+                        "window.close(); 'response-before-detach'"
+                    )
+                    .await,
+                    "response-before-detach"
+                );
+            }
+            "reference" => {
+                assert_eq!(
+                    evaluate_window_name_probe(&mut opener, 200, "popup.close(); popup.closed")
+                        .await,
+                    true
+                );
+            }
+            _ => {
+                let messages = send_cdp_command(
+                    &mut browser,
+                    200,
+                    "Target.closeTarget",
+                    None,
+                    json!({"targetId": popup_id}),
+                )
+                .await;
+                assert_eq!(response_by_id(&messages, 200)["result"]["success"], true);
+            }
+        }
+        wait_for_target_list(addr, "closed popup removed from discovery", |current| {
+            !current.iter().any(|target| target["id"] == popup_id)
+        })
+        .await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut opener,
+                300 + index as u64,
+                "[popup.closed, popup.opener === window, document.hasFocus()]"
+            )
+            .await,
+            json!([true, false, true])
+        );
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popups_from_different_openers_keep_independent_close_identities() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let first = create_dynamic_target(&mut browser, 1).await;
+    let second = create_dynamic_target(&mut browser, 2).await;
+    let mut first_opener = connect_dynamic_page(addr, &first).await;
+    let mut second_opener = connect_dynamic_page(addr, &second).await;
+    let baseline = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    for (page, name) in [(&mut first_opener, "first"), (&mut second_opener, "second")] {
+        assert_eq!(
+            evaluate_window_name_probe(
+                page,
+                1,
+                &format!("window.popup = window.open('about:blank', '{name}'); popup.closed")
+            )
+            .await,
+            false
+        );
+    }
+    wait_for_target_list(addr, "both popups published", |current| {
+        current.len() == baseline + 2
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut second_opener, 2, "popup.close(); popup.closed").await,
+        true
+    );
+    wait_for_target_list(addr, "only second popup removed", |current| {
+        current.len() == baseline + 1
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut first_opener, 2, "popup.closed").await,
+        false
+    );
+    // Replacing the opener's Document must not recycle its former popup ID.
+    send_cdp_command(
+        &mut second_opener,
+        3,
+        "Page.navigate",
+        None,
+        json!({"url": "about:blank"}),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut second_opener,
+            4,
+            "window.popup = window.open('about:blank', 'third'); popup.closed"
+        )
+        .await,
+        false
+    );
+    wait_for_target_list(addr, "third popup published", |current| {
+        current.len() == baseline + 2
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut first_opener, 5, "popup.close(); popup.closed").await,
+        true
+    );
+    wait_for_target_list(addr, "only first popup removed", |current| {
+        current.len() == baseline + 1
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut second_opener, 5, "popup.closed").await,
+        false
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    evaluate_window_name_probe(&mut opener, 1, "window.child = window.open('about:blank', 'child'); window.sibling = window.open('about:blank', 'sibling'); true").await;
+    let targets = wait_for_target_list(addr, "both related popups published", |targets| {
+        targets.len() == baseline_ids.len() + 2
+    })
+    .await;
+    let mut child_page = None;
+    let mut sibling_page = None;
+    for target in targets
+        .iter()
+        .filter(|target| !baseline_ids.contains(&target["id"]))
+    {
+        let mut page = connect_dynamic_page(addr, target["id"].as_str().unwrap()).await;
+        match evaluate_window_name_probe(&mut page, 1, "window.name")
+            .await
+            .as_str()
+            .unwrap()
+        {
+            "child" => child_page = Some(page),
+            "sibling" => sibling_page = Some(page),
+            name => panic!("unexpected popup name {name}"),
+        }
+    }
+    let mut child = child_page.unwrap();
+    let mut sibling = sibling_page.unwrap();
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut sibling,
+            2,
+            "window.other = window.open('about:blank', 'child'); other.closed"
+        )
+        .await,
+        false
+    );
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 2, "close(); 'closed'").await,
+        "closed"
+    );
+    wait_for_target_list(addr, "shared child target closed", |current| {
+        current.len() == targets.len() - 1
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut sibling, 3, "other.closed").await,
+        true
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 2, "[child.closed, sibling.closed]").await,
+        json!([true, false])
+    );
+    abort_test_cdp_server(server).await;
+}
+
+async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
+    send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
+    let mut responded = false;
+    let mut loaded = false;
+    recv_until_match(page, |message| {
+        responded |= message["id"] == id;
+        loaded |= message["method"] == "Page.loadEventFired";
+        responded && loaded
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn page_location_navigation_preserves_replace_and_reload_history() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|uri: axum::http::Uri| async move {
+            axum::response::Html(format!("<h1>{}</h1>", uri.path()))
+        })),
+        "page-location-history",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let target = create_dynamic_target(&mut browser, 1).await;
+    let mut observer = connect_dynamic_page(addr, &target).await;
+    send_cdp_command(&mut observer, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut observer, 2, &format!("{base}/start")).await;
+    let mut script = connect_dynamic_page(addr, &target).await;
+    let history = send_cdp_command(
+        &mut observer,
+        3,
+        "Page.getNavigationHistory",
+        None,
+        json!({}),
+    )
+    .await;
+    let initial_length = response_by_id(&history, 3)["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .len();
+    let mut previous_history = serde_json::Value::Null;
+    for (index, (operation, path)) in [
+        ("location.assign('/assigned')", "/assigned"),
+        ("location.replace('/replaced')", "/replaced"),
+        ("location.reload()", "/replaced"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        evaluate_window_name_probe(
+            &mut script,
+            10 + index as u64,
+            &format!("window.navigationSentinel = true; {operation}; true"),
+        )
+        .await;
+        recv_until_match(&mut observer, |message| {
+            message["method"] == "Page.loadEventFired"
+        })
+        .await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut script,
+                20 + index as u64,
+                "[location.pathname, document.querySelector('h1').textContent, history.length, typeof navigationSentinel]",
+            )
+            .await,
+            json!([path, path, initial_length + 1, "undefined"]),
+            "{operation} must commit a new Document with the intended history mutation",
+        );
+        let id = 30 + index as u64;
+        let messages = send_cdp_command(
+            &mut observer,
+            id,
+            "Page.getNavigationHistory",
+            None,
+            json!({}),
+        )
+        .await;
+        let history = &response_by_id(&messages, id)["result"];
+        let entries = history["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), initial_length + 1, "{operation}");
+        assert_eq!(history["currentIndex"], json!(initial_length));
+        assert_eq!(entries[initial_length]["url"], format!("{base}{path}"));
+        assert_eq!(entries[initial_length]["transitionType"], "link");
+        if index > 0 {
+            assert_eq!(
+                entries[initial_length]["id"], previous_history["entries"][initial_length]["id"],
+                "replace and reload retain the current entry identity",
+            );
+        }
+        if index == 2 {
+            assert_eq!(history, &previous_history, "reload preserves history");
+        }
+        previous_history = history.clone();
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_reference_location_navigates_its_real_page_and_preserves_history_operations() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|uri: axum::http::Uri| async move {
+            axum::response::Html(format!(
+                "<title>{0}</title><h1>{0}</h1><script>window.loadToken = Math.random()</script>",
+                uri.path()
+            ))
+        })),
+        "popup-reference-navigation",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        "window.popup = open('about:blank', 'navigation'); true",
+    )
+    .await;
+    let targets = wait_for_target_list(addr, "popup created", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    let popup_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut popup = connect_dynamic_page(addr, &popup_id).await;
+    send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
+    evaluate_window_name_probe(
+        &mut opener,
+        4,
+        &format!(
+            "popup.location.href = {}; true",
+            json!(format!("{base}/start"))
+        ),
+    )
+    .await;
+    recv_until_match(&mut popup, |message| {
+        message["method"] == "Page.loadEventFired"
+    })
+    .await;
+    let history =
+        send_cdp_command(&mut popup, 3, "Page.getNavigationHistory", None, json!({})).await;
+    let initial_history_len = response_by_id(&history, 3)["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(initial_history_len, 1, "replace the initial empty document");
+    let unrelated_id = create_dynamic_target(&mut browser, 2).await;
+    let mut unrelated = connect_dynamic_page(addr, &unrelated_id).await;
+
+    for (index, (method, path)) in [("assign", "/assigned"), ("replace", "/replaced")]
+        .into_iter()
+        .enumerate()
+    {
+        let url = format!("{base}{path}");
+        let expression = format!("popup.location.{method}({}); 'accepted'", json!(url));
+        assert_eq!(
+            evaluate_window_name_probe(&mut opener, 10 + index as u64, &expression).await,
+            "accepted"
+        );
+        recv_until_match(&mut popup, |message| {
+            message["method"] == "Page.loadEventFired"
+        })
+        .await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut popup,
+                10 + index as u64,
+                "[location.href, document.querySelector('h1').textContent]"
+            )
+            .await,
+            json!([url, path])
+        );
+        let id = 20 + index as u64;
+        let history =
+            send_cdp_command(&mut popup, id, "Page.getNavigationHistory", None, json!({})).await;
+        let history = &response_by_id(&history, id)["result"];
+        assert_eq!(
+            history["entries"].as_array().unwrap().len(),
+            initial_history_len + 1
+        );
+        assert_eq!(
+            history["entries"][history["currentIndex"].as_u64().unwrap() as usize]["url"],
+            url
+        );
+        assert_eq!(
+            history["entries"][history["currentIndex"].as_u64().unwrap() as usize]["transitionType"],
+            "link"
+        );
+        wait_for_target_list(addr, "navigation published to discovery", |targets| {
+            targets
+                .iter()
+                .any(|target| target["id"] == popup_id && target["url"] == url)
+        })
+        .await;
+    }
+    assert_eq!(
+        evaluate_window_name_probe(&mut unrelated, 1, "[location.href, document.hasFocus()]").await,
+        json!(["about:blank", true])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 30, "location.pathname").await,
+        "/opener"
+    );
+
+    evaluate_window_name_probe(&mut opener, 31, "popup.location.hash = 'fragment'; true").await;
+    recv_until_match(&mut popup, |message| {
+        message["method"] == "Page.navigatedWithinDocument"
+    })
+    .await;
+    let fragment_history =
+        send_cdp_command(&mut popup, 50, "Page.getNavigationHistory", None, json!({})).await;
+    let fragment_history_len = response_by_id(&fragment_history, 50)["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .len();
+    evaluate_window_name_probe(
+        &mut opener,
+        51,
+        &format!(
+            "popup.location.replace({}); true",
+            json!(format!("{base}/replaced#replaced-fragment"))
+        ),
+    )
+    .await;
+    recv_until_match(&mut popup, |message| {
+        message["method"] == "Page.navigatedWithinDocument"
+    })
+    .await;
+    let history =
+        send_cdp_command(&mut popup, 51, "Page.getNavigationHistory", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&history, 51)["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        fragment_history_len
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 52, "history.length").await,
+        json!(fragment_history_len)
+    );
+    // A same-document replace must not leave a pending replacement that can
+    // accidentally consume the next cross-document push.
+    evaluate_window_name_probe(
+        &mut opener,
+        52,
+        &format!(
+            "popup.location.assign({}); true",
+            json!(format!("{base}/after-fragment#reload"))
+        ),
+    )
+    .await;
+    recv_until_match(&mut popup, |message| {
+        message["method"] == "Page.loadEventFired"
+    })
+    .await;
+    let history =
+        send_cdp_command(&mut popup, 53, "Page.getNavigationHistory", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&history, 53)["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        fragment_history_len + 1
+    );
+    let before_reload = evaluate_window_name_probe(&mut popup, 30, "window.loadToken").await;
+    let history =
+        send_cdp_command(&mut popup, 31, "Page.getNavigationHistory", None, json!({})).await;
+    let before_reload_len = response_by_id(&history, 31)["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .len();
+    let before_reload_history = response_by_id(&history, 31)["result"].clone();
+    evaluate_window_name_probe(&mut opener, 32, "popup.location.reload(); 'accepted'").await;
+    recv_until_match(&mut popup, |message| {
+        message["method"] == "Page.loadEventFired"
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 32, "location.href").await,
+        format!("{base}/after-fragment#reload")
+    );
+    assert_ne!(
+        evaluate_window_name_probe(&mut popup, 33, "window.loadToken").await,
+        before_reload
+    );
+    let history =
+        send_cdp_command(&mut popup, 34, "Page.getNavigationHistory", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&history, 34)["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        before_reload_len
+    );
+    assert_eq!(
+        response_by_id(&history, 34)["result"],
+        before_reload_history
+    );
+    abort_test_cdp_server(server).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn page_agent_host_and_tab_host_survive_document_navigation() {
     let (addr, server) = spawn_test_protocol_server().await;
@@ -4589,36 +5436,915 @@ async fn cdp_ordering_navigator_configuration_waits_for_isolate_owner() {
         .await;
 }
 
-async fn evaluate_window_name_probe(
-    page: &mut TestCdpSocket,
-    id: u64,
-    expression: &str,
-) -> serde_json::Value {
-    let messages = send_cdp_command(
-        page,
-        id,
-        "Runtime.evaluate",
-        None,
-        json!({"expression": expression, "returnByValue": true}),
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_popup_reuse_preserves_history_for_current_url_and_commits_new_documents() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|uri: axum::http::Uri| async move {
+            axum::response::Html(format!("<title>{0}</title><h1>{0}</h1>", uri.path()))
+        })),
+        "named-popup-history",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        "window.popup = open('about:blank', 'report'); true",
     )
     .await;
-    let response = response_by_id(&messages, id);
-    assert!(response["error"].is_null(), "{response}");
-    assert!(
-        response["result"]["exceptionDetails"].is_null(),
-        "{response}"
+    let targets = wait_for_target_list(addr, "initial popup", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    let popup_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut popup = connect_dynamic_page(addr, popup_id).await;
+    send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
+    let mut first_entry_id = None;
+    for (index, (path, expected_length)) in [("/first", 1), ("/first", 1), ("/second", 2)]
+        .into_iter()
+        .enumerate()
+    {
+        let command_id = 30 + index as u64 * 3;
+        evaluate_window_name_probe(&mut popup, command_id, "window.dirty = true").await;
+        evaluate_window_name_probe(
+            &mut opener,
+            command_id,
+            &format!(
+                "window.open({}, 'report'); true",
+                json!(format!("{base}{path}"))
+            ),
+        )
+        .await;
+        recv_until_match(&mut popup, |message| {
+            message["method"] == "Page.loadEventFired"
+        })
+        .await;
+        let messages = send_cdp_command(
+            &mut popup,
+            command_id + 1,
+            "Page.getNavigationHistory",
+            None,
+            json!({}),
+        )
+        .await;
+        let history = &response_by_id(&messages, command_id + 1)["result"];
+        let entries = history["entries"].as_array().unwrap();
+        assert_eq!(
+            entries.len(),
+            expected_length,
+            "operation {index}: {history}"
+        );
+        assert_eq!(history["currentIndex"], expected_length - 1);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry["transitionType"] == "link")
+        );
+        if index == 0 {
+            first_entry_id = Some(entries[0]["id"].clone());
+        } else {
+            assert_eq!(Some(entries[0]["id"].clone()), first_entry_id);
+        }
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut popup,
+                command_id + 2,
+                "[history.length, typeof dirty, document.querySelector('h1').textContent]"
+            )
+            .await,
+            json!([expected_length, "undefined", path])
+        );
+    }
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
     );
-    response["result"]["result"]["value"].clone()
+    abort_test_cdp_server(server).await;
 }
 
-async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
-    send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unrelated_same_origin_pages_do_not_reuse_each_others_named_popups() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<title>related pages</title>")
+        })),
+        "named-popup-related-pages",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let first_id = create_dynamic_target(&mut browser, 1).await;
+    let second_id = create_dynamic_target(&mut browser, 2).await;
+    let mut first = connect_dynamic_page(addr, &first_id).await;
+    let mut second = connect_dynamic_page(addr, &second_id).await;
+    send_cdp_command(&mut first, 1, "Page.enable", None, json!({})).await;
+    send_cdp_command(&mut second, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut first, 2, &format!("{base}/first")).await;
+    navigate_dynamic_page_and_wait_for_load(&mut second, 2, &format!("{base}/second")).await;
+    let baseline = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    for (index, opener) in [&mut first, &mut second].into_iter().enumerate() {
+        evaluate_window_name_probe(
+            opener,
+            3,
+            &format!(
+                "window.popup = open({}, 'report'); true",
+                json!(format!("{base}/popup-{index}"))
+            ),
+        )
+        .await;
+        wait_for_target_list(
+            addr,
+            "each unrelated opener creates its own popup",
+            |targets| targets.len() == baseline + index + 1,
+        )
+        .await;
+    }
+    evaluate_window_name_probe(
+        &mut second,
+        4,
+        &format!(
+            "window.reused = open({}, 'report'); reused === popup",
+            json!(format!("{base}/popup-1"))
+        ),
+    )
+    .await;
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        baseline + 2
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut second, 5, "reused === popup").await,
+        true
+    );
+    evaluate_window_name_probe(&mut first, 4, "popup.close(); true").await;
+    let remaining = wait_for_target_list(
+        addr,
+        "closing one group leaves the other popup live",
+        |targets| targets.len() == baseline + 1,
+    )
+    .await;
+    assert!(
+        remaining
+            .iter()
+            .any(|target| target["url"] == format!("{base}/popup-1"))
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut second, 6, "popup.closed").await,
+        false
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut first, 5, "popup.closed").await,
+        true
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_cross_site_navigation_changes_named_group_and_history_restores_it() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<title>navigation groups</title>")
+        })),
+        "named-popup-navigation-groups",
+    );
+    let base = format!("http://{fixture_addr}");
+    let cross_site = format!("http://localhost:{}", fixture_addr.port());
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let baseline_ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect();
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        &format!(
+            "open({}, 'report'); true",
+            json!(format!("{base}/first-child"))
+        ),
+    )
+    .await;
+    let targets = wait_for_target_list(addr, "first named child", |targets| {
+        targets.len() == baseline_ids.len() + 1
+    })
+    .await;
+    let first_child_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .clone();
+
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 4, &format!("{base}/same-site")).await;
+    let mut child = connect_dynamic_page(addr, first_child_id.as_str().unwrap()).await;
+    send_cdp_command(&mut child, 1, "Page.enable", None, json!({})).await;
+    // A child can navigate across sites without losing its parent's named reference.
+    evaluate_window_name_probe(
+        &mut child,
+        2,
+        &format!(
+            "location.href = {}; true",
+            json!(format!("{cross_site}/script-navigation"))
+        ),
+    )
+    .await;
+    recv_until_match(&mut child, |message| {
+        message["method"] == "Page.loadEventFired"
+    })
+    .await;
+    send_cdp_command(&mut child, 3, "Page.reload", None, json!({})).await;
+    recv_until_match(&mut child, |message| {
+        message["method"] == "Page.loadEventFired"
+    })
+    .await;
+    evaluate_window_name_probe(
+        &mut opener,
+        6,
+        &format!(
+            "open({}, 'report'); true",
+            json!(format!("{base}/reused-after-script"))
+        ),
+    )
+    .await;
+    wait_for_target_list(
+        addr,
+        "script navigation retains original child",
+        |targets| {
+            targets.len() == baseline_ids.len() + 1
+                && targets.iter().any(|target| {
+                    target["id"] == first_child_id
+                        && target["url"] == format!("{base}/reused-after-script")
+                })
+        },
+    )
+    .await;
+    let history =
+        send_cdp_command(&mut opener, 7, "Page.getNavigationHistory", None, json!({})).await;
+    let history = &response_by_id(&history, 7)["result"];
+    let original_entry_id =
+        history["entries"][history["currentIndex"].as_u64().unwrap() as usize]["id"].clone();
+
+    // An address-bar-style cross-site navigation selects a different group.
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        8,
+        &format!("{cross_site}/browser-navigation"),
+    )
+    .await;
+    evaluate_window_name_probe(
+        &mut opener,
+        9,
+        &format!(
+            "open({}, 'report'); true",
+            json!(format!("{cross_site}/second-child"))
+        ),
+    )
+    .await;
+    let targets = wait_for_target_list(addr, "new group creates its own named child", |targets| {
+        targets.len() == baseline_ids.len() + 2
+    })
+    .await;
+    let second_child_id = targets
+        .iter()
+        .find(|target| !baseline_ids.contains(&target["id"]) && target["id"] != first_child_id)
+        .unwrap()["id"]
+        .clone();
+    let history = send_cdp_command(
+        &mut opener,
+        10,
+        "Page.getNavigationHistory",
+        None,
+        json!({}),
+    )
+    .await;
+    let history = &response_by_id(&history, 10)["result"];
+    let replacement_entry_id =
+        history["entries"][history["currentIndex"].as_u64().unwrap() as usize]["id"].clone();
+
+    for (index, (entry_id, child_id, url)) in [
+        (
+            original_entry_id,
+            first_child_id,
+            format!("{base}/back-child"),
+        ),
+        (
+            replacement_entry_id,
+            second_child_id,
+            format!("{cross_site}/forward-child"),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 20 + index as u64 * 2;
+        send_cdp_command(
+            &mut opener,
+            id,
+            "Page.navigateToHistoryEntry",
+            None,
+            json!({"entryId": entry_id}),
+        )
+        .await;
+        recv_until_match(&mut opener, |message| {
+            message["method"] == "Page.loadEventFired"
+        })
+        .await;
+        evaluate_window_name_probe(
+            &mut opener,
+            id + 1,
+            &format!("open({}, 'report'); true", json!(url)),
+        )
+        .await;
+        wait_for_target_list(
+            addr,
+            "history restores the corresponding named group",
+            |targets| {
+                targets.len() == baseline_ids.len() + 2
+                    && targets
+                        .iter()
+                        .any(|target| target["id"] == child_id && target["url"] == url)
+            },
+        )
+        .await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_navigation_replaces_pending_load_while_runtime_read_waits() {
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let response_gate = gate.clone();
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(move |uri: axum::http::Uri| {
+            let response_gate = response_gate.clone();
+            async move {
+                if uri.path() == "/slow" {
+                    response_gate.notified().await;
+                }
+                axum::response::Html(format!("<title>{0}</title><h1>{0}</h1>", uri.path()))
+            }
+        })),
+        "popup-replace-pending-load",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/parent")).await;
+    evaluate_window_name_probe(&mut opener, 3, "window.p = open('/ready', 'pending'); true").await;
+    let targets = wait_for_target_list(addr, "pending popup target", |targets| {
+        targets
+            .iter()
+            .any(|target| target["url"] == json!(format!("{base}/ready")))
+    })
+    .await;
+    let popup_id = targets
+        .iter()
+        .find(|target| target["url"] == json!(format!("{base}/ready")))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut popup = connect_dynamic_page(addr, popup_id).await;
+    send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut popup, 2, &format!("{base}/ready-loaded")).await;
+    send_cdp_command(&mut popup, 3, "Network.enable", None, json!({})).await;
+
+    for (index, replacement) in [
+        "open('/replacement-named', 'pending'); true",
+        "p.location.replace('/replacement-reference'); true",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 10 + index as u64 * 10;
+        let slow_url = format!("{base}/slow?case={index}");
+        evaluate_window_name_probe(
+            &mut opener,
+            id,
+            &format!("p.location.href = {}; true", json!(slow_url)),
+        )
+        .await;
+        recv_until_match(&mut popup, |event| {
+            event["method"] == "Network.requestWillBeSent"
+                && event["params"]["request"]["url"] == slow_url
+        })
+        .await;
+        // A client reading the loading target must not prevent the opener's
+        // replacement from reaching the owner that can cancel the old load.
+        send_cdp_command_without_wait(
+            &mut popup,
+            id,
+            "Runtime.evaluate",
+            None,
+            json!({
+                "expression":"document.URL", "returnByValue":true,
+            }),
+        )
+        .await;
+        evaluate_window_name_probe(&mut opener, id + 1, replacement).await;
+        let expected_path = if index == 0 {
+            "/replacement-named"
+        } else {
+            "/replacement-reference"
+        };
+        let expected_url = format!("{base}{expected_path}");
+        let mut saw_reply = false;
+        let mut saw_commit = false;
+        timeout(
+            Duration::from_secs(5),
+            recv_until_match(&mut popup, |event| {
+                saw_reply |= event["id"] == id;
+                saw_commit |= event["method"] == "Page.frameNavigated"
+                    && event["params"]["frame"]["url"] == expected_url;
+                saw_reply && saw_commit
+            }),
+        )
+        .await
+        .expect("a popup replacement must commit before the old response is released");
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut popup,
+                id + 1,
+                "document.querySelector('h1')?.textContent"
+            )
+            .await,
+            json!(expected_path)
+        );
+        gate.notify_waiters();
+    }
+    abort_test_cdp_server(server).await;
+}
+
+async fn wait_for_popup_response_text(
+    opener: &mut TestCdpSocket,
+    popup: &mut TestCdpSocket,
+    expected: &str,
+) {
+    let mut last = (serde_json::Value::Null, serde_json::Value::Null);
+    timeout(Duration::from_secs(10), async {
+        let mut id = 1000;
+        loop {
+            let child = evaluate_window_name_probe(
+                popup,
+                id,
+                "document.querySelector('h1')?.textContent || ''",
+            )
+            .await;
+            let reference = evaluate_window_name_probe(
+                opener,
+                id,
+                "p.document.querySelector('h1')?.textContent || ''",
+            )
+            .await;
+            if child == json!(expected) && reference == json!(expected) {
+                break;
+            }
+            last = (child, reference);
+            id += 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("expected shared response {expected:?}; actual Page/reference: {last:?}")
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_document_navigation_uses_one_network_response() {
+    use axum::response::IntoResponse as _;
+    let counts = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+        String,
+        usize,
+    >::new()));
+    let seen = counts.clone();
+    let slow_response = std::sync::Arc::new(tokio::sync::Notify::new());
+    let response_gate = slow_response.clone();
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(move |uri: axum::http::Uri| {
+            let seen = seen.clone();
+            let response_gate = response_gate.clone();
+            async move {
+                let count = {
+                    let mut seen = seen.lock();
+                    let count = seen.entry(uri.path().to_owned()).or_default();
+                    *count += 1;
+                    *count
+                };
+                if uri.path() == "/raced" && count == 1 {
+                    response_gate.notified().await;
+                }
+                if uri.path() == "/redirect" {
+                    return (
+                        axum::http::StatusCode::FOUND,
+                        [("location", "/redirected")],
+                        "",
+                    )
+                        .into_response();
+                }
+                if uri.path() == "/attachment" {
+                    return (
+                        [("content-disposition", "attachment; filename=popup.txt")],
+                        "download body",
+                    )
+                        .into_response();
+                }
+                (
+                    [("cache-control", "no-store")],
+                    axum::response::Html(format!(
+                        "<title>response</title><h1>{}:{count}</h1>",
+                        uri.path()
+                    )),
+                )
+                    .into_response()
+            }
+        })),
+        "popup-single-response",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/parent")).await;
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        "window.p = open('/first', 'response'); true",
+    )
+    .await;
+    let targets = wait_for_target_list(addr, "popup response target", |targets| {
+        targets
+            .iter()
+            .any(|target| target["url"] == json!(format!("{base}/first")))
+    })
+    .await;
+    let popup_id = targets
+        .iter()
+        .find(|target| target["url"] == json!(format!("{base}/first")))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut popup = connect_dynamic_page(addr, popup_id).await;
+    wait_for_popup_response_text(&mut opener, &mut popup, "/first:1").await;
+    for (index, (expression, expected)) in [
+        ("open('/first', 'response') === p", "/first:2"),
+        ("p.location.assign('/second'); true", "/second:1"),
+        ("p.location.reload(); true", "/second:2"),
+        ("p.location.assign('/redirect'); true", "/redirected:1"),
+        ("p.location.replace('/third'); true", "/third:1"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            evaluate_window_name_probe(&mut opener, index as u64 + 10, expression).await,
+            true
+        );
+        wait_for_popup_response_text(&mut opener, &mut popup, expected).await;
+        assert_eq!(
+            evaluate_window_name_probe(&mut opener, index as u64 + 100, "p.location.href").await,
+            evaluate_window_name_probe(&mut popup, index as u64 + 100, "location.href").await,
+        );
+    }
+    evaluate_window_name_probe(&mut opener, 20, "p.location.assign('/attachment'); true").await;
+    timeout(Duration::from_secs(5), async {
+        let mut id = 2000;
+        loop {
+            let path = evaluate_window_name_probe(&mut opener, id, "p.location.pathname").await;
+            if counts.lock().get("/attachment") == Some(&1) && path == "/third" {
+                break;
+            }
+            id += 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a download must preserve the popup's previous document and URL");
+    wait_for_popup_response_text(&mut opener, &mut popup, "/third:1").await;
+    // Distinct navigations to the same URL must not share a response ticket.
+    // The replacement must complete while the earlier response is held back.
+    evaluate_window_name_probe(&mut opener, 30, "open('/raced', 'response'); true").await;
+    timeout(Duration::from_secs(5), async {
+        while counts.lock().get("/raced") != Some(&1) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first raced request should reach the server");
+    evaluate_window_name_probe(&mut opener, 31, "open('/raced', 'response'); true").await;
+    timeout(Duration::from_secs(5), async {
+        while counts.lock().get("/raced") != Some(&2) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "replacement request did not reach server: {:?}",
+            counts.lock()
+        )
+    });
+    wait_for_popup_response_text(&mut opener, &mut popup, "/raced:2").await;
+    slow_response.notify_one();
+    assert_eq!(counts.lock().get("/raced"), Some(&2));
+    let observed = counts.lock().clone();
+    assert_eq!(observed.get("/first"), Some(&2));
+    assert_eq!(observed.get("/second"), Some(&2));
+    assert_eq!(observed.get("/third"), Some(&1));
+    assert_eq!(observed.get("/redirect"), Some(&1));
+    assert_eq!(observed.get("/redirected"), Some(&1));
+    assert_eq!(observed.get("/attachment"), Some(&1));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_reference_waits_for_debugger_and_consumes_fetch_fulfillment() {
+    use base64::Engine as _;
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = requests.clone();
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/parent",
+                get(|| async { axum::response::Html("<title>parent</title>") }),
+            )
+            .route(
+                "/intercepted",
+                get(move || {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { axum::response::Html("<h1>unexpected network response</h1>") }
+                }),
+            ),
+        "popup-intercepted-response",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    send_cdp_command(
+        &mut browser,
+        2,
+        "Target.setAutoAttach",
+        None,
+        json!({
+            "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+            "filter": [{"type":"page"}],
+        }),
+    )
+    .await;
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        "window.p = open('/intercepted', 'response'); true",
+    )
+    .await;
+    let attached = recv_until_match(&mut browser, |event| {
+        event["method"] == "Target.attachedToTarget"
+            && event["params"]["targetInfo"]["url"]
+                == json!(format!("http://{fixture_addr}/intercepted"))
+    })
+    .await;
+    let popup = attached
+        .iter()
+        .find(|event| {
+            event["method"] == "Target.attachedToTarget"
+                && event["params"]["targetInfo"]["url"]
+                    == json!(format!("http://{fixture_addr}/intercepted"))
+        })
+        .unwrap();
+    let session_id = popup["params"]["sessionId"].as_str().unwrap().to_owned();
+    let popup_id = popup["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let enabled = send_cdp_command(
+        &mut browser,
+        3,
+        "Fetch.enable",
+        Some(&session_id),
+        json!({
+            "patterns": [{"urlPattern":"*", "resourceType":"Document", "requestStage":"Request"}],
+        }),
+    )
+    .await;
+    assert!(response_by_id(&enabled, 3).get("error").is_none());
+    send_cdp_command_without_wait(
+        &mut browser,
+        4,
+        "Runtime.runIfWaitingForDebugger",
+        Some(&session_id),
+        json!({}),
+    )
+    .await;
+    let mut resumed = false;
+    let mut paused = None;
+    recv_until_match(&mut browser, |event| {
+        resumed |= event["id"] == 4;
+        if event["method"] == "Fetch.requestPaused" && event["sessionId"] == session_id {
+            paused = event["params"]["requestId"].as_str().map(str::to_owned);
+        }
+        resumed && paused.is_some()
+    })
+    .await;
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let fulfilled = send_cdp_command(&mut browser, 5, "Fetch.fulfillRequest", Some(&session_id), json!({
+        "requestId": paused.unwrap(), "responseCode": 200,
+        "responseHeaders": [{"name":"Content-Type","value":"text/html; charset=windows-1252"}],
+        "body": base64::engine::general_purpose::STANDARD.encode(b"<title>fulfilled</title><h1>caf\xe9</h1>"),
+    })).await;
+    assert!(response_by_id(&fulfilled, 5).get("error").is_none());
+    let mut popup = connect_dynamic_page(addr, &popup_id).await;
+    wait_for_popup_response_text(&mut opener, &mut popup, "café").await;
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the opener's reference must not issue an un-intercepted duplicate request"
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blank_popup_display_title_does_not_change_document_title() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let before = fetch_server_json(addr, "/json/list").await;
+    evaluate_window_name_probe(&mut opener, 1, "window.p = open('about:blank'); true").await;
+    let targets = wait_for_target_list(addr, "blank popup target", |targets| {
+        targets.iter().any(|target| {
+            !before
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|old| old["id"] == target["id"])
+        })
+    })
+    .await;
+    let target = targets
+        .iter()
+        .find(|target| {
+            !before
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|old| old["id"] == target["id"])
+        })
+        .unwrap();
+    let popup_id = target["id"].as_str().unwrap().to_owned();
+    let mut popup = connect_dynamic_page(addr, &popup_id).await;
+    send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
+    for (index, (expression, document_title, display_title)) in [
+        ("true", "", "about:blank"),
+        ("document.title='Named';true", "Named", "Named"),
+        ("document.title='';true", "", "about:blank"),
+        ("location.hash='fragment';true", "", "about:blank"),
+        (
+            "document.title='Named again';true",
+            "Named again",
+            "Named again",
+        ),
+        ("document.title='';true", "", "about:blank#fragment"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 10 + index as u64 * 3;
+        evaluate_window_name_probe(&mut popup, id, expression).await;
+        assert_eq!(
+            evaluate_window_name_probe(&mut popup, id + 1, "document.title").await,
+            document_title
+        );
+        let info = send_cdp_command(
+            &mut browser,
+            id,
+            "Target.getTargetInfo",
+            None,
+            json!({"targetId":popup_id}),
+        )
+        .await;
+        assert_eq!(
+            response_by_id(&info, id)["result"]["targetInfo"]["title"],
+            display_title
+        );
+        wait_for_target_list(addr, "matching HTTP display title", |targets| {
+            targets
+                .iter()
+                .any(|target| target["id"] == popup_id && target["title"] == display_title)
+        })
+        .await;
+    }
+    evaluate_window_name_probe(&mut popup, 49, "location.hash='new-document';true").await;
+    send_cdp_command_without_wait(&mut popup, 50, "Page.reload", None, json!({})).await;
     let mut responded = false;
     let mut loaded = false;
-    recv_until_match(page, |message| {
-        responded |= message["id"] == id;
+    recv_until_match(&mut popup, |message| {
+        responded |= message["id"] == 50;
         loaded |= message["method"] == "Page.loadEventFired";
         responded && loaded
     })
     .await;
+    let info = send_cdp_command(
+        &mut browser,
+        50,
+        "Target.getTargetInfo",
+        None,
+        json!({"targetId":popup_id}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&info, 50)["result"]["targetInfo"]["title"],
+        "about:blank#fragment"
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 51, "document.title").await,
+        ""
+    );
+    navigate_dynamic_page_and_wait_for_load(&mut popup, 52, "about:blank?next").await;
+    let info = send_cdp_command(
+        &mut browser,
+        53,
+        "Target.getTargetInfo",
+        None,
+        json!({"targetId":popup_id}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&info, 53)["result"]["targetInfo"]["title"],
+        "about:blank?next"
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut popup, 54, "[document.title,document.body.textContent]")
+            .await,
+        json!(["", ""])
+    );
+    abort_test_cdp_server(server).await;
 }

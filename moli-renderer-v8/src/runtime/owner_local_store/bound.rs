@@ -930,3 +930,82 @@ impl Drop for RenderRuntimeOwnerLocalStoreBinding {
         });
     }
 }
+
+pub(in crate::runtime) async fn finalize_prepared_page_replacement_on_entry_via_local_task(
+    local_executor: JsLocalExecutor,
+    token: RendererPageToken,
+    entry: LivePageEntry,
+) -> (
+    LivePageEntry,
+    Result<(
+        RendererPageReplacementCommit,
+        Option<super::RendererOutputPublication>,
+    )>,
+) {
+    run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
+        Box::pin(async move {
+            let page_state = RendererOwnerLocalStore::commit_current_vm_page_state_on_entry(entry)?;
+            let initial_runtime_realms = entry.page_vm_mut().vm_mut().runtime_realm_inventory();
+            let devtools_agent_token = entry.page_vm().devtools_agent_token();
+            let javascript_dialog_broker = entry.page_vm().javascript_dialog_broker();
+            let devtools_target = entry.page_vm().devtools_target();
+            let creation_artifacts = entry.page_vm_mut().take_page_creation_artifacts();
+            // Resolve the current owner turn before capturing the fence. The
+            // previous published cursor cannot order this Document's context
+            // creation, preload output, or synchronous load before the reply.
+            let renderer_output = entry.page_vm_mut().settle_renderer_output_publication();
+            let renderer_output_predecessor = entry
+                .page_vm()
+                .renderer_output_tail_cursor()
+                .map(|cursor| entry.page_vm().declare_renderer_output_fence(cursor));
+            Ok((
+                RendererPageReplacementCommit {
+                    token,
+                    slot: entry.slot.clone(),
+                    vm_creation_id: entry.page_vm().creation_id,
+                    devtools_agent_token,
+                    javascript_dialog_broker,
+                    devtools_target,
+                    page_state,
+                    creation_diagnostics: RendererPageCreationDiagnostics {
+                        initial_runtime_realms,
+                        renderer_output_predecessor,
+                    },
+                    creation_artifacts,
+                    pending_download: None,
+                    committed_document_post_response_continuation: None,
+                },
+                renderer_output,
+            ))
+        })
+    })
+    .await
+}
+
+pub(in crate::runtime) fn stage_related_initial_empty_page_on_bound_owner_local_store(
+    owner: &RendererOwnerLocalContext,
+    scope: &mut v8::PinScope<'_, '_>,
+    pending: &RendererPendingAuxiliaryPage,
+    environment: &RendererPageScriptEnvironment,
+    bindings: &crate::native_bridge::bindings::NativeBridgeBindings,
+    init: RendererRelatedInitialEmptyPageInit,
+) -> Result<RendererPageScriptEnvironment> {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        session.store.stage_related_initial_empty_page(
+            owner,
+            scope,
+            pending,
+            environment,
+            bindings,
+            init,
+        )
+    })
+}
+
+pub(in crate::runtime) fn take_staged_auxiliary_page_on_bound_owner_local_store(
+    reservation: RendererPageReservationToken,
+) -> Option<PageVm> {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        session.store.take_staged_auxiliary_page(reservation)
+    })
+}

@@ -470,7 +470,10 @@ impl TargetInitialEmptyDocumentState {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetOwnerState {
     pub(crate) initial_empty_document: Option<TargetInitialEmptyDocumentState>,
+    pub(crate) pending_popup_document_response:
+        Option<(String, moli_core::page::RendererAuxiliaryDocumentResponse)>,
     pub(crate) committed_document_title: Option<String>,
+    pub(crate) cached_empty_document_display_title: std::sync::OnceLock<String>,
     pub(crate) next_document_start_script_id: u32,
     pub(crate) document_start_scripts: Vec<(String, DocumentStartScript)>,
     pub(crate) navigation_history_state: TargetNavigationHistoryState,
@@ -490,8 +493,25 @@ impl TargetOwnerState {
         self.committed_document_title.as_deref()
     }
 
+    pub(crate) fn document_display_title(&self, title: String, url: &str) -> String {
+        if !title.is_empty()
+            || !url::Url::parse(url).is_ok_and(|url| moli_url::is_about_blank(&url))
+        {
+            return title;
+        }
+        // Chromium's NavigationEntry caches its URL fallback separately from
+        // document.title. Same-document URL changes preserve that label until
+        // a title change or a new document invalidates it.
+        self.cached_empty_document_display_title
+            .get_or_init(|| url.to_owned())
+            .clone()
+    }
+
     pub(crate) fn commit_document_title(&mut self, title: String) -> bool {
         let changed = self.committed_document_title.as_deref().unwrap_or_default() != title;
+        if changed {
+            self.cached_empty_document_display_title.take();
+        }
         self.committed_document_title = Some(title.clone());
         self.navigation_history_state
             .refresh_current_entry_title(title);
@@ -560,6 +580,7 @@ impl TargetOwnerState {
                 title: String::new(),
                 transition_type: "auto_toplevel".to_owned(),
                 document_sequence_number: None,
+                browsing_context_group: None,
             };
             self.navigation_history_state.seed_entry(entry);
         }
@@ -578,6 +599,7 @@ impl TargetOwnerState {
     }
 
     pub(crate) fn mark_initial_empty_document_pending_cross_document_navigation(&mut self) {
+        self.pending_popup_document_response = None;
         if let Some(state) = self.initial_empty_document.as_mut() {
             state.mark_pending_cross_document_navigation();
         }
@@ -686,6 +708,7 @@ impl TargetOwnerState {
             title,
             transition_type: "typed".to_owned(),
             document_sequence_number: None,
+            browsing_context_group: None,
         }
     }
 
@@ -720,7 +743,7 @@ impl TargetOwnerState {
 
     pub(crate) fn mark_next_navigation_history_replace_initial_empty_document(&mut self) {
         self.navigation_history_state
-            .mark_replace_initial_empty_document();
+            .mark_replace_initial_empty_document("auto_toplevel");
     }
 
     pub(crate) fn mark_next_navigation_history_traverse_to_entry(&mut self, entry_id: i32) {
@@ -757,11 +780,24 @@ impl TargetOwnerState {
         self.navigation_history_state.can_prune_all_but_current()
     }
 
+    #[cfg(test)]
     pub(crate) fn record_loaded_page_navigation_history(
         &mut self,
         page_snapshot: (String, String),
     ) {
-        let entry = self.navigation_history_entry_for_page_snapshot(page_snapshot);
+        self.record_loaded_page_navigation_history_with_group(page_snapshot, None);
+    }
+
+    pub(crate) fn record_loaded_page_navigation_history_with_group(
+        &mut self,
+        page_snapshot: (String, String),
+        group: Option<moli_core::page::RendererBrowsingContextGroup>,
+    ) {
+        let mut entry = self.navigation_history_entry_for_page_snapshot(page_snapshot);
+        entry.browsing_context_group = group;
+        if !self.navigation_history_state.is_pending_reload() {
+            self.cached_empty_document_display_title.take();
+        }
         self.navigation_history_state.record_loaded_entry(entry);
     }
 

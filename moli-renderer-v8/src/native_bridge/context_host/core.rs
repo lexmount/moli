@@ -13,6 +13,80 @@ fn slotchange_microtask_callback(
 }
 
 impl JsContextHost {
+    pub(crate) fn mark_main_document_initial_empty(&mut self) {
+        assert!(moli_url::is_about_blank(self.document_url()));
+        self.initial_empty_main_document = true;
+    }
+
+    pub(crate) fn main_document_is_initial_empty(&self) -> bool {
+        self.initial_empty_main_document
+    }
+
+    pub(crate) fn bind_page_script_environment(
+        &mut self,
+        environment: &crate::script_vm::RendererPageScriptEnvironment,
+    ) {
+        environment
+            .bind_window_identity(self.browsing_context_name.clone(), self.auxiliary_window());
+        self.page_script_environment = Some(environment.downgrade());
+    }
+
+    pub(crate) fn page_script_environment(
+        &self,
+    ) -> Option<crate::script_vm::RendererPageScriptEnvironment> {
+        if self.context_host_lifecycle.get() != crate::util::ContextHostLifecycle::Active {
+            return None;
+        }
+        self.page_script_environment.as_ref()?.upgrade()
+    }
+
+    pub(crate) fn bind_auxiliary_window(
+        &mut self,
+        window: Option<crate::runtime::RendererAuxiliaryWindow>,
+    ) {
+        self.auxiliary_window = window;
+    }
+
+    pub(crate) fn auxiliary_window(&self) -> Option<crate::runtime::RendererAuxiliaryWindow> {
+        self.auxiliary_window.clone()
+    }
+
+    pub(crate) fn browsing_context_is_closed(&self) -> bool {
+        self.auxiliary_window
+            .as_ref()
+            .is_some_and(|window| window.is_closed())
+            || self
+                .page_script_environment
+                .as_ref()
+                .is_some_and(|environment| {
+                    environment
+                        .upgrade()
+                        .is_none_or(|environment| environment.browsing_context_is_closed())
+                })
+    }
+
+    pub(crate) fn request_auxiliary_window_close(
+        &mut self,
+        window: crate::runtime::RendererAuxiliaryWindow,
+    ) {
+        if window.close() {
+            self.append_live_turn_items(vec![crate::runtime::RendererOutputItem::OwnerAction(
+                crate::runtime::RendererOwnerAction::CloseAuxiliaryWindow(window),
+            )]);
+        }
+    }
+
+    pub(crate) fn browsing_context_name(&self) -> &crate::runtime::RendererBrowsingContextName {
+        &self.browsing_context_name
+    }
+
+    pub(crate) fn bind_browsing_context_name(
+        &mut self,
+        name: crate::runtime::RendererBrowsingContextName,
+    ) {
+        self.browsing_context_name = name;
+    }
+
     pub(crate) fn capture_node_creation_stack_trace(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -82,6 +156,7 @@ impl JsContextHost {
         context: v8::Local<'_, v8::Context>,
     ) {
         self.page_default_context = Some(v8::Weak::new(scope, context));
+        context.set_slot(std::rc::Rc::new(crate::util::MainDefaultWindowContext));
     }
 
     pub(crate) fn page_default_context<'s>(
@@ -274,6 +349,7 @@ impl JsContextHost {
             emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
             viewport_surface: None,
             document_activity: moli_page_types::DocumentActivity::default(),
+            initial_empty_main_document: false,
             wpt_extensions_enabled: false,
             network_offline: false,
             navigator_overrides: Default::default(),
@@ -373,6 +449,9 @@ impl JsContextHost {
             next_child_window_event_registration_id: 0,
             event_callbacks: Default::default(),
             browser_context_runtime,
+            browsing_context_name: Default::default(),
+            auxiliary_window: None,
+            page_script_environment: None,
             top_level_navigation_handoff_tx,
             service_worker_task_tx,
             message_port_registry,
@@ -412,13 +491,11 @@ impl JsContextHost {
             pending_download_activations: Vec::new(),
             #[cfg(test)]
             pending_popup_activations: Vec::new(),
-            next_lightweight_popup_id: 1,
             next_lightweight_popup_local_window_id: 1,
             next_lightweight_popup_document_id: 1,
             next_lightweight_popup_document_load_id: 0,
             next_lightweight_popup_classic_script_load_id: 0,
             lightweight_popup_browsing_contexts: HashMap::new(),
-            lightweight_popup_window_names: HashMap::new(),
             lightweight_popup_document_handles: HashMap::new(),
             pending_lightweight_popup_document_loads: HashMap::new(),
             pending_lightweight_popup_classic_script_loads: HashMap::new(),

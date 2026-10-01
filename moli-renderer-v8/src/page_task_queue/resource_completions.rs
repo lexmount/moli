@@ -52,7 +52,10 @@ pub(crate) enum RendererOwnerWake {
     /// The browser-side commit response has crossed its release boundary.
     /// Parser work parked at DocumentCommit may now resume without racing
     /// ahead of target installation, old-Page retirement, or the response.
-    CommittedDocumentParserUnblocked { token: RendererPageToken },
+    CommittedDocumentParserUnblocked {
+        token: RendererPageToken,
+        vm_creation_id: u64,
+    },
     /// A concrete late Inspector response that became ready inside a Page
     /// owner turn. It is committed only after that turn has published all
     /// protocol-visible output, and never schedules or executes Page work.
@@ -88,8 +91,14 @@ impl RendererOwnerWake {
         Self::PostResponseDocumentLifecycle { token, document }
     }
 
-    pub(crate) fn committed_document_parser_unblocked(token: RendererPageToken) -> Self {
-        Self::CommittedDocumentParserUnblocked { token }
+    pub(crate) fn committed_document_parser_unblocked(
+        token: RendererPageToken,
+        vm_creation_id: u64,
+    ) -> Self {
+        Self::CommittedDocumentParserUnblocked {
+            token,
+            vm_creation_id,
+        }
     }
 
     pub(crate) fn runtime_inspector_response_publication(
@@ -121,7 +130,7 @@ impl RendererOwnerWake {
         match self {
             Self::Page { token, .. }
             | Self::PostResponseDocumentLifecycle { token, .. }
-            | Self::CommittedDocumentParserUnblocked { token }
+            | Self::CommittedDocumentParserUnblocked { token, .. }
             | Self::RuntimeInspectorResponsePublication { token, .. }
             | Self::TopLevelNavigationHandoff { token, .. }
             | Self::ReplacementDocumentViewSettled { token, .. } => token.page_id(),

@@ -729,6 +729,10 @@ pub(super) fn dispatch_navigation_currententrychange<'s>(
     from: Option<v8::Local<'s, v8::Object>>,
     navigation_type: Option<&str>,
 ) {
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(event_ctor) = global
         .get(
@@ -794,6 +798,10 @@ pub(super) fn dispatch_navigation_success<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) {
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(event_ctor) = global
         .get(scope, v8str(scope, "Event").into())
@@ -902,6 +910,10 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     form_data: Option<v8::Local<'s, v8::Value>>,
     source_element: Option<v8::Local<'s, v8::Object>>,
 ) -> NavigationDispatchOutcome<'s> {
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return NavigationDispatchOutcome::proceed();
+    }
     let global = scope.get_current_context().global(scope);
     let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
         .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());

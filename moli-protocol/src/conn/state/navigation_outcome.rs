@@ -79,6 +79,7 @@ pub(crate) struct RendererMainDocumentCommitSeed {
     timestamp: f64,
     inherited_security_origin: String,
     inherited_secure_context_type: String,
+    browsing_context_group: Option<super::navigation::NavigationBrowsingContextGroup>,
 }
 
 impl RendererMainDocumentCommitSeed {
@@ -87,6 +88,7 @@ impl RendererMainDocumentCommitSeed {
             frame_id: navigation.frame_id.clone(),
             loader_id: navigation.loader_id.clone(),
             timestamp: navigation.timestamp,
+            browsing_context_group: None,
             inherited_security_origin: navigation.source_document_security.security_origin.clone(),
             inherited_secure_context_type: navigation
                 .source_document_security
@@ -111,7 +113,16 @@ impl RendererMainDocumentCommitSeed {
             timestamp,
             inherited_security_origin: source_document_security.security_origin,
             inherited_secure_context_type: source_document_security.secure_context_type,
+            browsing_context_group: None,
         }
+    }
+
+    pub(crate) fn with_browsing_context_group(
+        mut self,
+        group: Option<super::navigation::NavigationBrowsingContextGroup>,
+    ) -> Self {
+        self.browsing_context_group = group;
+        self
     }
 
     pub(crate) fn resolve(
@@ -146,6 +157,10 @@ impl RendererMainDocumentCommitSeed {
             secure_context_type,
             timestamp: self.timestamp,
             session_history_position: None,
+            browsing_context_group: self
+                .browsing_context_group
+                .as_ref()
+                .map(|group| group.resolve(final_url)),
         }
     }
 }
@@ -179,8 +194,8 @@ impl CompletedDownloadBodyArtifact {
 }
 
 #[derive(Debug)]
-pub struct LoadedNavigation {
-    pub page: Page,
+pub struct LoadedNavigation<PageValue = Page> {
+    pub page: PageValue,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub requested_url: Url,
@@ -295,6 +310,8 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) auxiliary_document_response:
+        Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,
@@ -337,6 +354,7 @@ pub enum NavigationRequestLoadPolicy {
     DocumentInitiated,
     BrowserInitiated,
     Reload,
+    DocumentInitiatedReload,
 }
 
 #[derive(Debug, Serialize)]
