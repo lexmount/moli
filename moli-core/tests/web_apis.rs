@@ -4905,8 +4905,11 @@ async fn servo_fontfaceset_load_replaces_ready_and_rejects_css_wide_keywords() -
     config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
     let browser = Browser::new(config)?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-load-ready"))
+        .await?;
+
+    page.evaluate_runtime_expression_with_await_async("fontFixtureDone", true)
         .await?;
 
     assert!(
