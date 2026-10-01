@@ -13,6 +13,29 @@ fn detached_document_shallow_clones_are_empty_and_accept_a_new_root() {
 }
 
 #[test]
+fn domparser_xml_error_documents_preserve_metadata_and_replace_partial_trees() {
+    let mut vm = new_parsed_test_vm(
+        "https://domparser-xml-errors.test/source.html",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let fixture = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/domparser-xml-errors.js"
+    ));
+    let result = vm
+        .eval(&format!(
+            r#"{fixture}
+(() => {{
+  const result = domParserXmlErrorsProbe();
+  return JSON.stringify({{count: result.checks.length, failures: result.checks.filter(check => !check.pass)}});
+}})()
+"#
+        ))
+        .expect("DOMParser XML error document probe should evaluate");
+    assert_eq!(result, r#"{"count":1160,"failures":[]}"#);
+}
+
+#[test]
 fn detached_domparser_parses_noscript_with_scripting_disabled() {
     let mut vm = new_storage_test_vm("https://detached-domparser-noscript.test/");
 

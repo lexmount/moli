@@ -737,7 +737,7 @@ fn domparser_xml_preserves_content_type_and_document_interface_for_success_and_e
 
     assert_eq!(
         result,
-        r#"[["text/xml","text/xml","html",true,false,true,false],["application/xml","application/xml","html",true,false,true,false],["application/xhtml+xml","application/xhtml+xml","html",true,false,true,false],["image/svg+xml","image/svg+xml","html",true,false,true,false]]"#
+        r#"[["text/xml","text/xml","parsererror",true,false,true,false],["application/xml","application/xml","parsererror",true,false,true,false],["application/xhtml+xml","application/xhtml+xml","parsererror",true,false,true,false],["image/svg+xml","image/svg+xml","parsererror",true,false,true,false]]"#
     );
 }
 
