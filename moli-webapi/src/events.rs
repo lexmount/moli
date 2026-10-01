@@ -60,6 +60,14 @@ pub fn construct_native_event<'s>(
     init: EventInit,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let event_type = moli_v8_util::v8_string(scope, event_type)?;
+    construct_native_event_with_type(scope, event_type, init)
+}
+
+pub fn construct_native_event_with_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: v8::Local<'s, v8::String>,
+    init: EventInit,
+) -> Option<v8::Local<'s, v8::Object>> {
     let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "Event")?;
     initialize_event_from_init(scope, wrapper, event_type, init)?;
     Some(wrapper)
