@@ -1,6 +1,7 @@
 //! The shared EventTarget argument boundary, before target-specific mutation.
 
 use crate::abort_signal_route::{ResolvedAbortSignal, event_listener_signal_from_options_value};
+use crate::event_type::EventType;
 use crate::webidl;
 
 pub(crate) fn parse_listener_args<'s, T: webidl::WebIdlArguments<'s>>(
@@ -26,8 +27,8 @@ pub(crate) fn parse_listener_args<'s, T: webidl::WebIdlArguments<'s>>(
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "EventTarget.addEventListener")]
 pub(crate) struct AddEventListenerArgs<'s> {
-    #[webidl(required, name = "type")]
-    pub(crate) event_type: String,
+    #[webidl(required, name = "type", converter = "raw")]
+    pub(crate) event_type: EventType,
     #[webidl(required, converter = "callback_interface", nullable)]
     pub(crate) listener: Option<webidl::WebIdlCallbackInterface>,
     #[webidl(with = add_event_listener_options)]
@@ -37,8 +38,8 @@ pub(crate) struct AddEventListenerArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "EventTarget.removeEventListener")]
 pub(crate) struct RemoveEventListenerArgs {
-    #[webidl(required, name = "type")]
-    pub(crate) event_type: String,
+    #[webidl(required, name = "type", converter = "raw")]
+    pub(crate) event_type: EventType,
     #[webidl(required, converter = "callback_interface", nullable)]
     pub(crate) listener: Option<webidl::WebIdlCallbackInterface>,
     #[webidl(with = webidl::event_listener_options)]

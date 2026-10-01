@@ -1,3 +1,4 @@
+use crate::event_type::EventTypeKey;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use moli_page_types::{
@@ -311,7 +312,7 @@ impl JsContextHost {
 
     pub(crate) fn schedule_dom_debugger_event_listener_pause_for_target(
         &self,
-        event_name: &str,
+        event_name: &(impl EventTypeKey + ?Sized),
         target: EventTargetHandle,
     ) -> Option<RendererDomDebuggerScheduledPause> {
         if self
@@ -336,9 +337,10 @@ impl JsContextHost {
 
     pub(crate) fn schedule_dom_debugger_event_listener_pause_for_interface(
         &self,
-        event_name: &str,
+        event_name: &(impl EventTypeKey + ?Sized),
         target_name: &str,
     ) -> Option<RendererDomDebuggerScheduledPause> {
+        let event_name = event_name.as_str()?;
         self.dom_debugger_state
             .schedule_event_listener_pause(event_name, target_name)
     }

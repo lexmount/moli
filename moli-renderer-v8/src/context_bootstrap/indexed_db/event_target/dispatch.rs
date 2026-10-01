@@ -55,7 +55,7 @@ pub(super) fn dispatch_idb_event_object_with_result<'s>(
 ) -> IdbEventDispatchResult {
     let Some(event_type) = crate::context_bootstrap::event_attribute(scope, event, "type")
         .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+        .map(|value| crate::event_type::EventType::from_v8(scope, value))
     else {
         return IdbEventDispatchResult {
             uncanceled: true,
