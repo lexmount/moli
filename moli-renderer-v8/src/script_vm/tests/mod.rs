@@ -2285,6 +2285,7 @@ mod blob_response_headers;
 mod body_completion;
 mod body_completion_http;
 mod body_mime;
+mod body_window_handler_receivers;
 mod browser_api;
 mod cache_dictionary_inheritance;
 mod cache_interfaces;
