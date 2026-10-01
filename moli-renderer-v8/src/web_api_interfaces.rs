@@ -99,6 +99,8 @@ interfaces! {
     PerformanceServerTiming;
     ReportBody;
     ReportingObserver;
+    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
+    SpeechSynthesisEvent: Event;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
