@@ -57,6 +57,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     DynamicImportOwnerAction,
     FileReading,
     MiscPlatformApi,
+    CanvasBlobSerialization,
     HistoryTraversal,
     IndexedDbTask,
     InternalLoading,
@@ -292,6 +293,12 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::MiscPlatformApi { .. }
                 )
             }
+            Self::CanvasBlobSerialization => {
+                matches!(
+                    descriptor,
+                    RendererPageReadyDescriptor::CanvasBlobSerialization { .. }
+                )
+            }
             Self::BitmapTask => {
                 matches!(descriptor, RendererPageReadyDescriptor::BitmapTask { .. })
             }
@@ -404,6 +411,10 @@ impl PageSelectedTaskTestSelector {
             )
             | (Self::FileReading, RendererPageSchedulerTask::FileReading(_))
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
+            | (
+                Self::CanvasBlobSerialization,
+                RendererPageSchedulerTask::CanvasBlobSerialization(_),
+            )
             | (Self::IndexedDbTask, RendererPageSchedulerTask::IndexedDbTask(_))
             | (Self::InternalLoading, RendererPageSchedulerTask::InternalLoading(_))
             | (
