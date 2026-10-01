@@ -33,7 +33,7 @@ use super::{
     idb_object_store_put_callback as idb_object_store_put_callback_in_current_context,
     idb_transaction_abort_callback, idb_transaction_commit_callback,
     idb_transaction_object_store_callback, indexed_db_runtime_factory,
-    install_dom_string_list_template_bindings, v8str,
+    install_dom_string_list_template_bindings,
 };
 use anyhow::{Result, anyhow};
 
