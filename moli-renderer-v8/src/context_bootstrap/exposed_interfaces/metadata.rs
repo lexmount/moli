@@ -51,6 +51,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "SourceBufferList",
     "VideoColorSpace",
     "VideoFrame",
+    "RTCEncodedAudioFrame",
+    "RTCEncodedVideoFrame",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -286,6 +288,8 @@ const WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES: &[&str] = &[
     "SourceBufferList",
     "VideoColorSpace",
     "VideoFrame",
+    "RTCEncodedAudioFrame",
+    "RTCEncodedVideoFrame",
 ];
 
 pub(in crate::context_bootstrap) const INDEXED_DB_INTERFACE_NAMES: &[&str] = &[
