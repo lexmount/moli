@@ -114,7 +114,6 @@ for (const tag of ['iframe', 'embed', 'object']) {
     );
 }
 
-
 use super::*;
 
 #[test]

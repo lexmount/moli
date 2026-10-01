@@ -1,4 +1,4 @@
-use super::events::{event_is_dispatching, initialize_event_object};
+use super::events::reinitialize_event_object;
 use super::*;
 use crate::util::{context_host_ptr_from_window_object, throw_type_error};
 use crate::webidl;
@@ -9,9 +9,10 @@ use moli_webapi_declare::WebApiObject;
 struct InitEventArgs {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -23,9 +24,10 @@ struct InitEventArgs {
 struct InitCustomEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initCustomEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -39,9 +41,10 @@ struct InitCustomEventArgs<'s> {
 struct InitStorageEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initStorageEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -63,9 +66,10 @@ struct InitStorageEventArgs<'s> {
 struct InitUiEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initUIEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -81,9 +85,10 @@ struct InitUiEventArgs<'s> {
 struct InitMouseEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initMouseEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -119,9 +124,10 @@ struct InitMouseEventArgs<'s> {
 struct InitKeyboardEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initKeyboardEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -145,9 +151,10 @@ struct InitKeyboardEventArgs<'s> {
 struct InitTextEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initTextEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -163,9 +170,10 @@ struct InitTextEventArgs<'s> {
 struct InitCompositionEventArgs<'s> {
     #[webidl(
         required,
+        converter = "raw",
         missing_message = "Failed to execute 'initCompositionEvent': 1 argument required."
     )]
-    event_type: String,
+    event_type: webidl::DomString16,
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
@@ -277,16 +285,13 @@ pub(super) fn event_init_event_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitEventArgs>(scope, &args) else {
         return;
     };
-    initialize_event_object(
+    reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
     );
@@ -298,20 +303,19 @@ pub(super) fn ui_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitUiEventArgs>(scope, &args) else {
         return;
     };
     let view = legacy_event_view_or_global(scope, parsed.view);
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     LegacyUiEventInitDeclaration::new(view, parsed.detail)
         .initialize(scope, event)
         .expect("legacy UIEvent init declaration should initialize");
@@ -323,22 +327,21 @@ pub(super) fn text_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitTextEventArgs>(scope, &args) else {
         return;
     };
     let Some(view) = legacy_text_event_view_or_null(scope, parsed.view) else {
         return;
     };
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     let data = v8_string(scope, &parsed.data).expect("text event data");
     LegacyTextEventInitDeclaration::new(view, 0.0, data)
         .initialize(scope, event)
@@ -351,9 +354,6 @@ pub(super) fn mouse_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitMouseEventArgs>(scope, &args) else {
         return;
     };
@@ -362,13 +362,15 @@ pub(super) fn mouse_event_init_callback<'s>(
         .related_target
         .filter(|value| !value.is_null_or_undefined())
         .unwrap_or_else(|| v8::null(scope).into());
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     LegacyMouseEventBaseInitDeclaration::new(
         view,
         parsed.detail,
@@ -399,20 +401,19 @@ pub(super) fn keyboard_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitKeyboardEventArgs>(scope, &args) else {
         return;
     };
     let view = legacy_event_view_or_global(scope, parsed.view);
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     let key = v8_string(scope, &parsed.key).unwrap_or_else(|| v8str(scope, ""));
     let code = v8str(scope, "");
     super::events::initialize_legacy_event_modifiers(scope, event, false, false, false, false);
@@ -427,20 +428,19 @@ pub(super) fn composition_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitCompositionEventArgs>(scope, &args) else {
         return;
     };
     let view = legacy_event_view_or_global(scope, parsed.view);
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     let data = v8_string(scope, &parsed.data).expect("composition event data");
     LegacyTextEventInitDeclaration::new(view, 0.0, data)
         .initialize(scope, event)
@@ -453,19 +453,18 @@ pub(super) fn custom_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitCustomEventArgs>(scope, &args) else {
         return;
     };
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     let detail = parsed.detail.unwrap_or_else(|| v8::null(scope).into());
     LegacyCustomEventInitDeclaration::new(detail)
         .initialize(scope, event)
@@ -478,19 +477,18 @@ pub(super) fn storage_event_init_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = super::events::event_backing(scope, args.this());
-    if event_is_dispatching(scope, event) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<InitStorageEventArgs>(scope, &args) else {
         return;
     };
-    initialize_event_object(
+    if !reinitialize_event_object(
         scope,
         event,
-        &parsed.event_type,
+        &parsed.event_type.0,
         parsed.bubbles,
         parsed.cancelable,
-    );
+    ) {
+        return;
+    }
     super::events::define_storage_event_properties(
         scope,
         event,
