@@ -78,6 +78,20 @@ interfaces! {
     MediaStreamAudioSourceNode: AudioNode;
     PannerNode: AudioNode;
     ScriptProcessorNode: AudioNode;
+    RTCCertificate;
+    RTCDTMFSender: EventTarget;
+    RTCDTMFToneChangeEvent: Event;
+    RTCDtlsTransport: EventTarget;
+    RTCError: DOMException;
+    RTCErrorEvent: Event;
+    RTCIceTransport: EventTarget;
+    RTCPeerConnectionIceErrorEvent: Event;
+    RTCRtpScriptTransform;
+    RTCRtpSender;
+    RTCRtpTransceiver;
+    RTCSctpTransport: EventTarget;
+    RTCStatsReport;
+    RTCTrackEvent: Event;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
@@ -508,26 +522,26 @@ interfaces! {
     PushSubscription;
     PushSubscriptionOptions;
     QuotaExceededError: DOMException;
-    RTCCertificate;
+
     RTCDataChannel: EventTarget;
-    RTCDTMFSender: EventTarget;
-    RTCDtlsTransport: EventTarget;
-    RTCError: DOMException;
-    RTCErrorEvent: Event;
+
+
+
+
     RTCIceCandidate;
-    RTCIceTransport: EventTarget;
+
     RTCEncodedAudioFrame;
     RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
-    RTCPeerConnectionIceErrorEvent: Event;
+
     RTCRtpReceiver;
-    RTCRtpSender;
-    RTCRtpTransceiver;
-    RTCSctpTransport: EventTarget;
+
+
+
     RTCSessionDescription;
-    RTCStatsReport;
+
     RadioNodeList: NodeList;
     Range: AbstractRange;
     ReadableByteStreamController;
