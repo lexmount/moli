@@ -66,6 +66,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         disposition,
         navigation_requested,
         navigation_initiator,
+        same_origin_with_target,
         popup_id,
         browsing_context_name,
         auxiliary_window,
@@ -127,15 +128,17 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         // through a change in history.length (Chromium crbug.com/1208614).
         let replace_current = browser_context
             .page_target(&existing_target_id)
-            .and_then(|target| target.loaded_page())
-            .zip(opener.as_ref().and_then(|opener| {
-                browser_context
-                    .page_target(&opener.target_id)
-                    .and_then(|target| target.loaded_page())
-            }))
+            .zip(navigation_initiator.as_ref())
             .is_some_and(|(target, initiator)| {
-                target.final_url().as_str() == url
-                    && target.final_url().origin() == initiator.final_url().origin()
+                target
+                    .loaded_page()
+                    .is_some_and(|page| page.final_url().as_str() == url)
+                    && same_origin_with_target.unwrap_or_else(|| {
+                        moli_url::WebOrigin::from_serialized(
+                            target.target_identity().security_origin(),
+                        )
+                        .same_origin(&initiator.origin())
+                    })
             });
         let navigation =
             popup_target_has_loaded_page(conn, &browser_context_id, &existing_target_id)

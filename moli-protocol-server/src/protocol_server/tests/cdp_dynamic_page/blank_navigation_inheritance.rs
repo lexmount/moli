@@ -281,3 +281,119 @@ async fn assert_fixed_sandbox_suppresses_modal(page: &mut TestCdpSocket, id: u64
         false
     );
 }
+
+async fn assert_repeated_named_blank_history(
+    opaque_sandbox: bool,
+    inherited_opaque: bool,
+    relaxed_domain: bool,
+) {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(move || async move {
+            (
+                [(
+                    "content-security-policy",
+                    if opaque_sandbox {
+                        "sandbox allow-scripts allow-popups"
+                    } else {
+                        ""
+                    },
+                )],
+                axum::response::Html("<p>initiator</p>"),
+            )
+        })),
+        "repeated-named-blank-history",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    let source_url = if inherited_opaque {
+        "data:text/html,<p>opaque initiator</p>".to_owned()
+    } else {
+        format!("{base}/parent")
+    };
+    navigate_dynamic_page_and_wait_for_load(&mut parent, 2, &source_url).await;
+    if relaxed_domain {
+        evaluate_window_name_probe(&mut parent, 3, "document.domain='127.0.0.1';true").await;
+    }
+    let (_, mut child) = auxiliary_page_identity::open_auxiliary(addr, &mut parent, "").await;
+    for navigation in 1..=3 {
+        evaluate_window_name_probe(&mut child, 10 + navigation, "window.marker=73;true").await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut parent,
+                10 + navigation,
+                "open('about:blank','actual-page')===p"
+            )
+            .await,
+            true
+        );
+        recv_until_match(&mut child, |event| event["method"] == "Page.loadEventFired").await;
+        let entries = if opaque_sandbox { navigation } else { 1 };
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut child,
+                20 + navigation,
+                "[location.href,origin,history.length,typeof marker]"
+            )
+            .await,
+            json!([
+                "about:blank",
+                if opaque_sandbox || inherited_opaque {
+                    "null"
+                } else {
+                    &base
+                },
+                entries,
+                "undefined"
+            ])
+        );
+        let history = send_cdp_command(
+            &mut child,
+            30 + navigation,
+            "Page.getNavigationHistory",
+            None,
+            json!({}),
+        )
+        .await;
+        let result = &response_by_id(&history, 30 + navigation)["result"];
+        assert_eq!(result["currentIndex"], entries - 1);
+        assert_eq!(
+            result["entries"].as_array().unwrap().len(),
+            entries as usize
+        );
+        assert!(
+            result["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["url"] == "about:blank")
+        );
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_named_blank_navigation_replaces_history_using_inherited_document_origin() {
+    assert_repeated_named_blank_history(false, false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_named_blank_navigation_does_not_equate_sandboxed_null_origins() {
+    assert_repeated_named_blank_history(true, false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_named_blank_navigation_preserves_inherited_opaque_origin_identity() {
+    assert_repeated_named_blank_history(false, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_named_blank_navigation_uses_document_origin_after_document_domain_mutation() {
+    assert_repeated_named_blank_history(false, false, true).await;
+}

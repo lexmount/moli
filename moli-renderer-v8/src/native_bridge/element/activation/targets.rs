@@ -275,6 +275,7 @@ fn navigate_hyperlink_popup_target(
             child_handle,
             target_name,
             resolved_url,
+            &navigation_initiator.origin(),
             creator.base_url,
             creator.policy_container,
             false,
@@ -313,6 +314,7 @@ fn navigate_hyperlink_popup_target(
             .with_browsing_context_name(opened.name)
             .with_navigation_initiator(navigation_initiator)
             .with_initial_document_environment(opened.initial_document_environment)
+            .with_same_origin_target(opened.same_origin_with_target)
             .with_auxiliary_window(opened.window)
             .with_pending_auxiliary_page(opened.pending_page)
             .with_initial_auxiliary_state(opened.session_storage, opened.initial_storage_key),

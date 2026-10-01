@@ -303,6 +303,7 @@ pub(crate) fn window_open_callback<'s>(
             creator_child_handle,
             &parsed.target_name,
             if parsed.raw_url.is_empty() { "" } else { &url },
+            &navigation_initiator.origin(),
             entered_base_url,
             creator_policy_container,
             true,
@@ -329,6 +330,7 @@ pub(crate) fn window_open_callback<'s>(
                     )
                     .with_navigation_requested(!parsed.raw_url.is_empty())
                     .with_navigation_initiator(navigation_initiator)
+                    .with_same_origin_target(opened.same_origin_with_target)
                     .with_initial_document_environment(opened.initial_document_environment)
                     .with_browsing_context_name(opened.name)
                     .with_auxiliary_window(opened.window)

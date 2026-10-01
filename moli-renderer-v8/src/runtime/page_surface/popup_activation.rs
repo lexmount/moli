@@ -122,6 +122,9 @@ pub struct RendererPopupActivationParts {
     pub disposition: RendererPopupDisposition,
     pub navigation_requested: bool,
     pub navigation_initiator: Option<RendererNavigationInitiator>,
+    /// Origin equality with the selected Document at navigation acceptance.
+    /// Unlike serialized origins, this preserves inherited opaque identity.
+    pub same_origin_with_target: Option<bool>,
     pub popup_id: Option<u64>,
     pub browsing_context_name: Option<super::RendererBrowsingContextName>,
     pub auxiliary_window: Option<super::RendererAuxiliaryWindow>,
@@ -135,6 +138,11 @@ pub struct RendererPopupActivationParts {
 }
 
 impl RendererPendingPopupActivation {
+    pub(crate) fn with_same_origin_target(mut self, same_origin: Option<bool>) -> Self {
+        self.parts.same_origin_with_target = same_origin;
+        self
+    }
+
     pub(crate) fn with_navigation_initiator(
         mut self,
         initiator: RendererNavigationInitiator,
@@ -178,6 +186,7 @@ impl RendererPendingPopupActivation {
                 disposition,
                 navigation_requested: true,
                 navigation_initiator: None,
+                same_origin_with_target: None,
                 popup_id,
                 browsing_context_name: None,
                 auxiliary_window: None,
@@ -208,6 +217,7 @@ impl RendererPendingPopupActivation {
                 disposition,
                 navigation_requested: true,
                 navigation_initiator: None,
+                same_origin_with_target: None,
                 popup_id,
                 browsing_context_name: None,
                 auxiliary_window: None,
@@ -320,6 +330,7 @@ impl PartialEq for RendererPopupActivationParts {
         self.source == other.source
             && self.navigation_requested == other.navigation_requested
             && self.navigation_initiator == other.navigation_initiator
+            && self.same_origin_with_target == other.same_origin_with_target
             && self.disposition == other.disposition
             && self.popup_id == other.popup_id
             && self.browsing_context_name == other.browsing_context_name

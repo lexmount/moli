@@ -5,6 +5,7 @@ pub(crate) struct OpenedRendererWindow<'s> {
     pub(crate) window: Option<crate::runtime::RendererAuxiliaryWindow>,
     pub(crate) name: crate::runtime::RendererBrowsingContextName,
     pub(crate) pending_page: Option<crate::runtime::RendererPendingAuxiliaryPage>,
+    pub(crate) same_origin_with_target: Option<bool>,
     pub(crate) session_storage: Option<SharedWebStorageStore>,
     pub(crate) initial_storage_key: Option<MoliStorageKey>,
     pub(crate) initial_document_environment:
@@ -29,6 +30,7 @@ impl JsContextHost {
         creator_child_handle: Option<DomHandle>,
         target_name: &str,
         href: &str,
+        initiator_origin: &moli_url::WebOrigin,
         creator_base_url: Url,
         mut policy: DocumentPolicyContainer,
         update_existing_opener: bool,
@@ -48,6 +50,26 @@ impl JsContextHost {
                 .window_identity()
                 .expect("named related lookup retains its browsing context identity");
             let window_proxy = existing.window_proxy_in_scope(scope)?;
+            // Tuple origins come from the Documents, independently of URL or
+            // document.domain. Tokens disambiguate inherited opaque origins.
+            let same_origin_with_target = creator
+                .get_creation_context(scope)
+                .zip(window_proxy.get_creation_context(scope))
+                .and_then(|(source, target)| {
+                    let host = crate::util::context_host_ptr_from_context_slot(target)?;
+                    let target_origin = moli_url::WebOrigin::from_serialized(
+                        &unsafe { &*host }.main_document_security_origin(),
+                    );
+                    Some(
+                        if initiator_origin.is_opaque() && target_origin.is_opaque() {
+                            source
+                                .get_security_token(scope)
+                                .strict_equals(target.get_security_token(scope))
+                        } else {
+                            initiator_origin.same_origin(&target_origin)
+                        },
+                    )
+                });
             let initial_document_environment = if !href.is_empty()
                 && moli_url::is_about_blank(&Url::parse(href)?)
             {
@@ -105,6 +127,7 @@ impl JsContextHost {
                 window,
                 name,
                 pending_page: None,
+                same_origin_with_target,
                 session_storage: None,
                 initial_storage_key: None,
                 initial_document_environment,
@@ -235,6 +258,7 @@ impl JsContextHost {
             window: Some(window),
             name,
             pending_page: Some(pending),
+            same_origin_with_target: None,
             session_storage: Some(session_storage),
             initial_storage_key: Some(storage_scope.storage_key().clone()),
             initial_document_environment: None,
