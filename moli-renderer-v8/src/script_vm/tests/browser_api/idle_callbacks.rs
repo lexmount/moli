@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test]
+async fn idle_deadline_remaining_time_uses_dom_clock_resolution() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm("https://idle-deadline-resolution.test/");
+
+    vm.eval(
+        r#"
+globalThis.__idleDeadlineResolution = null;
+requestIdleCallback(deadline => {
+  deadline.__moliIdleDeadlineTimeOrigin = Number.POSITIVE_INFINITY;
+  const remaining = Array.from({ length: 16 }, () => deadline.timeRemaining());
+  globalThis.__idleDeadlineResolution = {
+    positive: remaining.some(value => value > 0),
+    bounded: remaining.every(value => value >= 0 && value <= 50),
+    sameResolutionAsPerformance: remaining.every(value =>
+      Math.abs(value * 10 - Math.round(value * 10)) < 1e-7),
+    nonincreasing: remaining.every((value, index) =>
+      index === 0 || value <= remaining[index - 1])
+  };
+});
+"#,
+    )
+    .expect("idle deadline resolution probe should schedule");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("idle deadline resolution probe should drain");
+    assert_eq!(
+        vm.eval("JSON.stringify(__idleDeadlineResolution)")
+            .expect("idle deadline resolution facts should evaluate"),
+        r#"{"positive":true,"bounded":true,"sameResolutionAsPerformance":true,"nonincreasing":true}"#
+    );
+}
+
+#[tokio::test]
 async fn idle_callback_timeout_is_a_deadline_not_a_dispatch_delay() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-callback-timeout.test/");
