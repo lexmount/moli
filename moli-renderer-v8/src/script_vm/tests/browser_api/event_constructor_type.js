@@ -11,7 +11,7 @@
     'MouseEvent', 'DragEvent', 'KeyboardEvent', 'WheelEvent', 'PointerEvent', 'TouchEvent',
     'MessageEvent', 'ErrorEvent', 'CloseEvent', 'SubmitEvent', 'InputEvent', 'PopStateEvent',
     'PageTransitionEvent', 'StorageEvent', 'SecurityPolicyViolationEvent', 'ClipboardEvent',
-    'PromiseRejectionEvent', 'FormDataEvent'];
+    'HashChangeEvent', 'PromiseRejectionEvent', 'FormDataEvent'];
   const init = w => ({bubbles: true, cancelable: true, composed: true,
     promise: w.Promise.resolve(), formData: new w.FormData()});
   for (const name of names) {
