@@ -1107,6 +1107,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn complex_script_layout_preserves_dictionary_word_boundaries() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(WebFontRegistration::new(
+                "segmentation-face",
+                WebFontFace::new("Moli Segmentation"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+        let parley = services.parley_mut();
+        let cases: &[(&str, &[usize])] = &[
+            ("こんにちは世界", &[0, 15]),
+            ("龟山岛龟山岛", &[0, 9]),
+            ("ภาษาไทยภาษาไทย", &[0, 12, 21, 33]),
+            ("hello world", &[0, 5, 6]),
+        ];
+
+        for &(text, expected) in cases {
+            let mut style = web_font_style("Moli Segmentation", 400.0);
+            // Suppress CJK line-break opportunities so they cannot masquerade
+            // as dictionary word boundaries when segmentation data is missing.
+            style.word_break = parley::WordBreak::KeepAll;
+            parley.resolve_font_families(&mut style, None);
+            let mut builder =
+                parley
+                    .layout_context
+                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
+            let style_index = builder.push_style(style);
+            builder.push_style_run(style_index, ..);
+            let mut layout = builder.build(text);
+            layout.break_all_lines(None);
+
+            let mut boundaries = Vec::new();
+            for line in layout.lines() {
+                for run in line.runs() {
+                    boundaries.extend(
+                        run.clusters()
+                            .filter(|cluster| cluster.is_word_boundary())
+                            .map(|cluster| cluster.text_range().start),
+                    );
+                }
+            }
+            assert_eq!(boundaries, expected, "word boundaries for {text}");
+        }
+    }
+
     fn shape_one_character(
         parley: &mut ParleyDocumentServices,
         mut style: TextStyle<'static, 'static, TextBrush>,
