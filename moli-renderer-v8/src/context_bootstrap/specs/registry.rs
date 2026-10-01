@@ -413,6 +413,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::WorkerLocation,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::WebTransportBidirectionalStream::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportDatagramDuplexStream::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::WebSocket::DESCRIPTOR,
         kind: ConstructorKind::WebSocket,
     },
