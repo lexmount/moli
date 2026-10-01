@@ -198,6 +198,7 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "MediaKeys",
     "MediaDeviceInfo",
     "InputDeviceInfo",
+    "CredentialsContainer",
     "Worklet",
     "AudioWorklet",
     "ServiceWorker",
