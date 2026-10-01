@@ -3593,7 +3593,7 @@ async fn create_target_with_wait_for_debugger_auto_attach_marks_attached_event()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_target_waiting_for_debugger_does_not_replay_replaced_initial_document_load() {
+async fn create_target_waiting_metadata_does_not_hold_the_initial_blank_document() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({
         "id": 9012,
@@ -3655,8 +3655,18 @@ async fn create_target_waiting_for_debugger_does_not_replay_replaced_initial_doc
         ctx.sent
     );
     assert!(
-        ctx.conn
+        !ctx.conn
             .runtime_session_owner_initial_empty_document_has_replacement_url(Some(&session_id))
+    );
+    ctx.process_async(json!({
+        "id":9016,"sessionId":session_id,"method":"Runtime.evaluate",
+        "params":{"expression":"[location.href,document.title]","returnByValue":true}
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 9016);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!([target_url, "replacement-ready"])
     );
 }
 

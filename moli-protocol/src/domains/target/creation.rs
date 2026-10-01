@@ -82,6 +82,11 @@ pub(super) fn emit_target_creation_protocol_events(
             out.push_target_background_event(event);
         }
     }
+    let page_session_ids = events
+        .attached_sessions
+        .iter()
+        .map(|session| session.session_id().to_owned())
+        .collect::<Vec<_>>();
     let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
         events.page_target_id,
         target_info,
@@ -89,6 +94,12 @@ pub(super) fn emit_target_creation_protocol_events(
     ));
     for event in event_plan {
         out.push_target_background_event(event);
+    }
+    // Direct browser creation does not install the renderer startup pause
+    // used by window.open(). Chromium still reports the requested waiting
+    // flag in attachedToTarget. Tab-level browser throttles are independent.
+    for session_id in page_session_ids {
+        conn.release_waiting_for_debugger_session(Some(&session_id));
     }
     Ok(())
 }

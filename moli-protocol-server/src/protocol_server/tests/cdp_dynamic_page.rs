@@ -1,5 +1,6 @@
 use super::*;
 
+mod auto_attach_startup;
 mod auxiliary_page_identity;
 
 type TestCdpSocket =
