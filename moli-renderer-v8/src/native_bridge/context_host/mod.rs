@@ -118,6 +118,7 @@ mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
 mod font_loading;
+mod canvas_blob_serialization_tasks;
 mod internal_node_refs;
 mod intersection_observer_tasks;
 mod layout;
@@ -1028,6 +1029,8 @@ pub(crate) struct PageScriptHost {
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     intersection_observer_tasks:
         Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
+    canvas_blob_serialization_tasks:
+        canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
     promise_rejection_tasks: promise_rejection_tasks::PromiseRejectionTaskState,

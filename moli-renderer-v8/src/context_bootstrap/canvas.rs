@@ -82,7 +82,11 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 }
 
 mod backing_store;
-mod color;
+mod blob_serialization;
+pub(crate) use blob_serialization::{
+    CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
+    canvas_to_blob_callback,
+};
 mod constructors;
 mod context2d;
 mod helpers;

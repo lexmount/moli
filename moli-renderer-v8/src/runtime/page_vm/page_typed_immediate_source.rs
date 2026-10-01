@@ -202,6 +202,7 @@ impl PageVm {
             | RendererPageReadyDescriptor::MiscPlatformApi { .. }
             | RendererPageReadyDescriptor::IntersectionObserver { .. }
             | RendererPageReadyDescriptor::FontLoading { .. }
+            | RendererPageReadyDescriptor::CanvasBlobSerialization { .. }
             | RendererPageReadyDescriptor::DedicatedWorkerClientEvent { .. }
             | RendererPageReadyDescriptor::SharedWorkerClientEvent { .. }
             | RendererPageReadyDescriptor::ServiceWorkerInternal { .. }

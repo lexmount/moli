@@ -148,6 +148,9 @@ struct HtmlCanvasElementTemplateMethodsDeclaration {
     #[webapi(method = "toDataURL", length = 0, callback = element::canvas_to_data_url_callback)]
     to_data_url: (),
 
+    #[webapi(method = "toBlob", length = 1, callback = super::super::canvas::canvas_to_blob_callback)]
+    to_blob: (),
+
     #[webapi(
         method = "transferControlToOffscreen",
         length = 0,

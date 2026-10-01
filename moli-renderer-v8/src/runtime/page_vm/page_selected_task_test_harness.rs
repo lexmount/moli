@@ -59,6 +59,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     MiscPlatformApi,
     IntersectionObserver,
     FontLoading,
+    CanvasBlobSerialization,
     HistoryTraversal,
     IndexedDbTask,
     InternalLoading,
@@ -303,6 +304,12 @@ impl PageSelectedTaskTestSelector {
             Self::FontLoading => {
                 matches!(descriptor, RendererPageReadyDescriptor::FontLoading { .. })
             }
+            Self::CanvasBlobSerialization => {
+                matches!(
+                    descriptor,
+                    RendererPageReadyDescriptor::CanvasBlobSerialization { .. }
+                )
+            }
             Self::BitmapTask => {
                 matches!(descriptor, RendererPageReadyDescriptor::BitmapTask { .. })
             }
@@ -417,6 +424,10 @@ impl PageSelectedTaskTestSelector {
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
             | (Self::IntersectionObserver, RendererPageSchedulerTask::IntersectionObserver(_))
             | (Self::FontLoading, RendererPageSchedulerTask::FontLoading(_))
+            | (
+                Self::CanvasBlobSerialization,
+                RendererPageSchedulerTask::CanvasBlobSerialization(_),
+            )
             | (Self::IndexedDbTask, RendererPageSchedulerTask::IndexedDbTask(_))
             | (Self::InternalLoading, RendererPageSchedulerTask::InternalLoading(_))
             | (

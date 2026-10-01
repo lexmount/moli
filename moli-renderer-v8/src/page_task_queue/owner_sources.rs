@@ -21,6 +21,11 @@ use super::{
         RendererPageBitmapTask, RendererPageBitmapTaskOwner, RendererPageBitmapTaskRoute,
         RendererPageBitmapTaskSender, RendererPageBitmapTaskSource,
     },
+    canvas_blob_serialization::{
+        RendererPageCanvasBlobSerializationOwner, RendererPageCanvasBlobSerializationRoute,
+        RendererPageCanvasBlobSerializationSender, RendererPageCanvasBlobSerializationSource,
+        RendererPageCanvasBlobSerializationTask,
+    },
     child_frame_task::{
         RendererPageChildFrameTask, RendererPageChildFrameTaskOwner,
         RendererPageChildFrameTaskRoute, RendererPageChildFrameTaskSender,
@@ -185,6 +190,7 @@ pub(crate) struct RendererPageOwnedTaskSources {
     misc_platform_api: RendererPageMiscPlatformApiSource,
     intersection_observer: RendererPageIntersectionObserverSource,
     font_loading: RendererPageFontLoadingSource,
+    canvas_blob_serialization: RendererPageCanvasBlobSerializationSource,
     navigation_and_traversal: RendererPageNavigationAndTraversalSource,
     rendering_update: RendererPageRenderingUpdateSource,
     media_element_event: RendererPageMediaElementEventSource,
@@ -224,6 +230,7 @@ pub(crate) struct RendererPageTaskProducerRoutes {
     misc_platform_api: RendererPageMiscPlatformApiRoute,
     intersection_observer: RendererPageIntersectionObserverRoute,
     font_loading: RendererPageFontLoadingRoute,
+    canvas_blob_serialization: RendererPageCanvasBlobSerializationRoute,
     navigation_and_traversal: RendererPageNavigationAndTraversalRoute,
     rendering_update: RendererPageRenderingUpdateRoute,
     media_element_event: RendererPageMediaElementEventRoute,
@@ -290,6 +297,10 @@ pub(crate) enum RendererPageReadyDescriptor {
     FontLoading {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageFontLoadingOwner,
+    },
+    CanvasBlobSerialization {
+        ready: RendererPageTaskReadyMetadata,
+        owner: RendererPageCanvasBlobSerializationOwner,
     },
     NavigationAndTraversal {
         ready: RendererPageTaskReadyMetadata,
@@ -407,6 +418,7 @@ impl RendererPageReadyDescriptor {
             | Self::MiscPlatformApi { ready, .. }
             | Self::IntersectionObserver { ready, .. }
             | Self::FontLoading { ready, .. }
+            | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
             | Self::MediaElementEvent { ready, .. }
@@ -446,6 +458,9 @@ impl RendererPageReadyDescriptor {
             Self::MiscPlatformApi { .. } => RendererPageTaskSourceKind::MiscPlatformApi,
             Self::IntersectionObserver { .. } => RendererPageTaskSourceKind::IntersectionObserver,
             Self::FontLoading { .. } => RendererPageTaskSourceKind::FontLoading,
+            Self::CanvasBlobSerialization { .. } => {
+                RendererPageTaskSourceKind::CanvasBlobSerialization
+            }
             Self::NavigationAndTraversal { .. } => {
                 RendererPageTaskSourceKind::NavigationAndTraversal
             }
@@ -502,6 +517,7 @@ impl RendererPageReadyDescriptor {
             | Self::MiscPlatformApi { ready, .. }
             | Self::IntersectionObserver { ready, .. }
             | Self::FontLoading { ready, .. }
+            | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
             | Self::MediaElementEvent { ready, .. }
@@ -551,6 +567,7 @@ pub(crate) enum RendererPageTaskSourceKind {
     MiscPlatformApi,
     IntersectionObserver,
     FontLoading,
+    CanvasBlobSerialization,
     NavigationAndTraversal,
     RenderingUpdate,
     MediaElementEvent,
@@ -578,7 +595,7 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
@@ -587,6 +604,7 @@ impl RendererPageTaskSourceKind {
         Self::MiscPlatformApi,
         Self::IntersectionObserver,
         Self::FontLoading,
+        Self::CanvasBlobSerialization,
         Self::NavigationAndTraversal,
         Self::RenderingUpdate,
         Self::MediaElementEvent,
@@ -630,6 +648,7 @@ pub(crate) enum RendererPageSchedulerTask {
     MiscPlatformApi(RendererPageMiscPlatformApiTask),
     IntersectionObserver(RendererPageIntersectionObserverTask),
     FontLoading(RendererPageFontLoadingTask),
+    CanvasBlobSerialization(RendererPageCanvasBlobSerializationTask),
     NavigationAndTraversal(RendererPageNavigationAndTraversalTask),
     RenderingUpdate(RendererPageRenderingUpdateTask),
     MediaElementEvent(RendererPageMediaElementEventTask),
@@ -698,6 +717,10 @@ impl RendererPageOwnedTaskSources {
             owner_wake.clone(),
             RendererOwnerWakeSource::FontLoadingTask,
         );
+        let canvas_blob_serialization = RendererPageCanvasBlobSerializationSource::new(
+            owner_wake.clone(),
+            RendererOwnerWakeSource::CanvasBlobSerializationTask,
+        );
         let navigation_and_traversal =
             RendererPageNavigationAndTraversalSource::new(owner_wake.clone());
         let rendering_update = RendererPageRenderingUpdateSource::new(
@@ -746,6 +769,7 @@ impl RendererPageOwnedTaskSources {
             misc_platform_api: misc_platform_api.route(),
             intersection_observer: intersection_observer.route(),
             font_loading: font_loading.route(),
+            canvas_blob_serialization: canvas_blob_serialization.route(),
             navigation_and_traversal: navigation_and_traversal.route(),
             rendering_update: rendering_update.route(),
             media_element_event: media_element_event.route(),
@@ -780,6 +804,7 @@ impl RendererPageOwnedTaskSources {
                 misc_platform_api,
                 intersection_observer,
                 font_loading,
+                canvas_blob_serialization,
                 navigation_and_traversal,
                 rendering_update,
                 media_element_event,
@@ -824,6 +849,9 @@ impl RendererPageOwnedTaskSources {
                 .intersection_observer
                 .route_matches(&routes.intersection_observer)
             && self.font_loading.route_matches(&routes.font_loading)
+            && self
+                .canvas_blob_serialization
+                .route_matches(&routes.canvas_blob_serialization)
             && self
                 .navigation_and_traversal
                 .route_matches(&routes.navigation_and_traversal)
@@ -924,6 +952,7 @@ impl RendererPageOwnedTaskSources {
             misc_platform_api: self.misc_platform_api.route(),
             intersection_observer: self.intersection_observer.route(),
             font_loading: self.font_loading.route(),
+            canvas_blob_serialization: self.canvas_blob_serialization.route(),
             navigation_and_traversal: self.navigation_and_traversal.route(),
             rendering_update: self.rendering_update.route(),
             media_element_event: self.media_element_event.route(),
@@ -1008,6 +1037,17 @@ impl RendererPageOwnedTaskSources {
                     .expect("ready FontLoading task must retain its exact owner"),
             }
         });
+        let canvas_blob_serialization =
+            self.canvas_blob_serialization
+                .next_ready_metadata()
+                .map(
+                    |ready| RendererPageReadyDescriptor::CanvasBlobSerialization {
+                        ready,
+                        owner: self.canvas_blob_serialization.next_ready_owner().expect(
+                            "ready canvas blob serialization task must retain its exact owner",
+                        ),
+                    },
+                );
         let navigation_and_traversal =
             self.navigation_and_traversal
                 .next_ready_metadata()
@@ -1268,6 +1308,7 @@ impl RendererPageOwnedTaskSources {
             misc_platform_api,
             intersection_observer,
             font_loading,
+            canvas_blob_serialization,
             navigation_and_traversal,
             rendering_update,
             media_element_event,
@@ -1373,6 +1414,17 @@ impl RendererPageOwnedTaskSources {
                     "selected FontLoading head changed before dequeue"
                 );
                 RendererPageSchedulerTask::FontLoading(task)
+            }
+            RendererPageReadyDescriptor::CanvasBlobSerialization { ready, .. } => {
+                let (actual, task) = self
+                    .canvas_blob_serialization
+                    .pop_front()
+                    .expect("selected canvas blob serialization task must remain queued");
+                assert_eq!(
+                    actual, ready,
+                    "selected canvas blob serialization head changed before dequeue"
+                );
+                RendererPageSchedulerTask::CanvasBlobSerialization(task)
             }
             RendererPageReadyDescriptor::NavigationAndTraversal { ready, .. } => {
                 let (actual, task) = self
@@ -1679,6 +1731,7 @@ impl RendererPageOwnedTaskSources {
             || self.misc_platform_api.has_ready_task()
             || self.intersection_observer.has_ready_task()
             || self.font_loading.has_ready_task()
+            || self.canvas_blob_serialization.has_ready_task()
             || self.navigation_and_traversal.has_ready_task()
             || self.rendering_update.has_ready_task()
             || self.media_element_event.has_ready_task()
@@ -1726,6 +1779,7 @@ impl RendererPageOwnedTaskSources {
         self.misc_platform_api.clear();
         self.intersection_observer.clear();
         self.font_loading.clear();
+        self.canvas_blob_serialization.clear();
         self.navigation_and_traversal.clear();
         self.rendering_update.clear();
         self.media_element_event.clear();
@@ -1804,6 +1858,12 @@ impl RendererPageTaskProducerRoutes {
         root_document: RendererDocumentToken,
     ) -> RendererPageFontLoadingSender {
         self.font_loading.sender(root_document)
+    }
+    pub(crate) fn canvas_blob_serialization_sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageCanvasBlobSerializationSender {
+        self.canvas_blob_serialization.sender(root_document)
     }
 
     pub(crate) fn navigation_and_traversal_sender(
