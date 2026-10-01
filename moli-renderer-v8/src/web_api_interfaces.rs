@@ -47,6 +47,8 @@ interfaces! {
     PaymentResponse: EventTarget;
     VideoDecoder: EventTarget;
     VideoEncoder: EventTarget;
+    CSSAnimation: Animation;
+    CSSTransition: Animation;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
