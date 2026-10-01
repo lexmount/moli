@@ -59,19 +59,12 @@ struct CreateArgs {
 }
 
 fn validate(scope: &mut v8::PinScope<'_, '_>, options: &Options) -> bool {
-    if !(1..=32).contains(&options.number_of_channels)
-        || options.length == 0
-        || !(8000.0..=192000.0).contains(&options.sample_rate)
-    {
-        throw_dom_exception(
-            scope,
-            "NotSupportedError",
-            9,
-            "Unsupported audio buffer channel count, length or sample rate.",
-        );
-        return false;
-    }
-    true
+    format::validate(
+        scope,
+        options.number_of_channels,
+        options.length,
+        options.sample_rate,
+    )
 }
 
 fn initialize<'s>(
