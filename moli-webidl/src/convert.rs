@@ -1,9 +1,9 @@
 use crate::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, DomString, DomString16,
     Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
-    UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary,
-    WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
+    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong,
+    UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum,
+    WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
     symbol_property_result, throw_error, throw_type_error,
 };
 
@@ -18,28 +18,6 @@ impl<'s> WebIdlConverter<'s> for DomString {
     ) -> Result<Self, WebIdlError> {
         DomString16::convert(scope, value, context, options)
             .map(|value| Self(String::from_utf16_lossy(&value.0)))
-    }
-}
-
-impl<'s> WebIdlConverter<'s> for DomString16 {
-    type Options = StringOptions;
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: Context,
-        options: &Self::Options,
-    ) -> Result<Self, WebIdlError> {
-        if value.is_null() && options.treat_null_as_empty_string {
-            return Ok(Self(Vec::new()));
-        }
-        if value.is_symbol() {
-            return Err(WebIdlError::new(
-                context,
-                WebIdlErrorKind::CannotConvert("DOMString"),
-            ));
-        }
-        string_value_utf16(scope, value, context, "DOMString").map(Self)
     }
 }
 
