@@ -41,6 +41,10 @@ interfaces! {
     MediaKeyStatusMap;
     MediaKeySystemAccess;
     MediaKeys;
+    PaymentMethodChangeEvent: PaymentRequestUpdateEvent;
+    PaymentRequest: EventTarget;
+    PaymentRequestUpdateEvent: Event;
+    PaymentResponse: EventTarget;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
