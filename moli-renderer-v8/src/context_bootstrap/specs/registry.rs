@@ -266,7 +266,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnectionIceErrorEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::RtcPeerConnectionIceErrorEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCRtpScriptTransform::DESCRIPTOR,

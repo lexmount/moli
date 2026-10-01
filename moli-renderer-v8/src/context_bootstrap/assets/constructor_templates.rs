@@ -85,6 +85,7 @@ use super::super::{
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
         rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
+        rtc_peer_connection_ice_error_event_constructor,
         rtc_peer_connection_ice_event_constructor_callback,
         rtc_session_description_constructor_callback,
     },
@@ -722,6 +723,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(rtc_data_channel_event_constructor_callback)
                 .length(2)
                 .build(scope)
+        }
+        ConstructorKind::RtcPeerConnectionIceErrorEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCPeerConnectionIceErrorEvent,
+                rtc_peer_connection_ice_error_event_constructor
+            ))
+            .length(2)
+            .build(scope)
         }
         ConstructorKind::Navigator
         | ConstructorKind::WorkerNavigator
