@@ -6,9 +6,9 @@
     try { await run(); rows.push({name, pass: true}); }
     catch (error) { rows.push({name, pass: false, message: String(error)}); }
   };
-  
-  
-    for (const [label, w] of [['main', window], ['child', document.getElementById('child').contentWindow]]) {
+  const popup = open();
+  try {
+    for (const [label, w] of [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]]) {
       const C = w.OfflineAudioContext;
       const options = {length: 16, sampleRate: 48000};
       await check(label + '/interface and new.target', () => {
@@ -152,7 +152,7 @@
         assert(buffer instanceof w.AudioBuffer && buffer.getChannelData(0).every(value => value === 0), 'empty graph silence in context realm');
       });
     }
-  
+  } finally { popup.close(); }
   globalThis.__nodeReplacementResults = {total: rows.length, passed: rows.filter(row => row.pass).length, failures: rows.filter(row => !row.pass), rows};
   return rows.every(row => row.pass);
 })()
