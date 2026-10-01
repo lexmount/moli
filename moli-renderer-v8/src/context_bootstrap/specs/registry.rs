@@ -101,6 +101,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PaymentMethodChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PaymentRequest::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PaymentRequestUpdateEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PaymentResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
