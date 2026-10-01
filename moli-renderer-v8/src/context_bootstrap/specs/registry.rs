@@ -241,6 +241,70 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RTCCertificate::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDTMFSender::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDTMFToneChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDtlsTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedAudioFrame::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedVideoFrame::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCError::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCIceTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCPeerConnectionIceErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpScriptTransform::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpSender::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpTransceiver::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCSctpTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCStatsReport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCTrackEvent::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 2 },
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
