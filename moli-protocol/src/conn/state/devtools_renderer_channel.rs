@@ -356,16 +356,22 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::MismatchedAgent);
         }
         if self.output_is_suspended() {
-            let releases_current_prefix = batches
-                .iter()
-                .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);
+            let releases_current_prefix = self
+                .latest_navigation
+                .as_ref()
+                .is_none_or(|latest| !latest.attachment_committed)
+                || batches
+                    .iter()
+                    .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);
             self.buffer_output(attachment_id, batches);
             if releases_current_prefix {
-                // Main ingress remains suspended, but Chromium's existing
-                // renderer session pipe can still return IO responses until
-                // endpoint replacement. Release the whole current-attachment
-                // prefix so the response cannot overtake notifications that
-                // preceded it in the same renderer journal.
+                // Starting a navigation does not retire the current document.
+                // Its Inspector pipe must still deliver asynchronous output
+                // while the response is pending, including a load that ends
+                // without a replacement document. Candidate output stays
+                // suspended across cutover; an IO response can release its
+                // exact current-attachment prefix without overtaking earlier
+                // notifications in the same renderer journal.
                 return Ok(self.take_buffered_current_output(current));
             }
             return Ok(Vec::new());
@@ -827,12 +833,11 @@ mod tests {
             .attach_candidate(&request, new_agent)
             .expect("candidate");
 
-        assert!(
-            channel
-                .route_current_output(old_attachment.id(), vec![batch(old_agent, "old")])
-                .expect("route old output")
-                .is_empty()
-        );
+        let old_output = channel
+            .route_current_output(old_attachment.id(), vec![batch(old_agent, "old")])
+            .expect("route old output before cutover");
+        assert_eq!(old_output.len(), 1);
+        assert_eq!(batch_marker(&old_output[0]), Some("old"));
         assert!(
             channel
                 .route_candidate_output(&candidate, vec![batch(new_agent, "new")])
@@ -842,6 +847,17 @@ mod tests {
         channel
             .commit_candidate(candidate)
             .expect("candidate commit");
+        assert_eq!(
+            channel.route_current_output(old_attachment.id(), vec![batch(old_agent, "stale")]),
+            Err(DevToolsRendererChannelError::StaleAttachment)
+        );
+        let new_attachment = channel.current().expect("new attachment");
+        assert!(
+            channel
+                .route_current_output(new_attachment.id(), vec![batch(new_agent, "committed")])
+                .expect("route new output during cutover")
+                .is_empty()
+        );
         assert!(
             channel
                 .navigation_finished(&request)
@@ -851,12 +867,13 @@ mod tests {
         assert_eq!(channel.current().unwrap().agent_token(), new_agent);
 
         let released = channel.take_released_output();
-        assert_eq!(released.len(), 1);
+        assert_eq!(released.len(), 2);
         assert_eq!(batch_marker(&released[0]), Some("new"));
+        assert_eq!(batch_marker(&released[1]), Some("committed"));
     }
 
     #[test]
-    fn failed_navigation_releases_buffered_current_output() {
+    fn failed_navigation_does_not_delay_or_repeat_current_output() {
         let agent = RendererDevToolsAgentToken::allocate();
         let request = navigation(1);
         let mut channel = DevToolsRendererChannel::default();
@@ -865,12 +882,11 @@ mod tests {
         channel
             .navigation_started(request.clone())
             .expect("navigation start");
-        assert!(
-            channel
-                .route_current_output(attachment.id(), vec![batch(agent, "retained")])
-                .expect("route output")
-                .is_empty()
-        );
+        let released = channel
+            .route_current_output(attachment.id(), vec![batch(agent, "retained")])
+            .expect("route output while the response is pending");
+        assert_eq!(released.len(), 1);
+        assert_eq!(batch_marker(&released[0]), Some("retained"));
 
         assert!(
             channel
@@ -878,21 +894,27 @@ mod tests {
                 .expect("navigation finish")
         );
         assert_eq!(channel.current(), Some(attachment));
-        let released = channel.take_released_output();
-        assert_eq!(released.len(), 1);
-        assert_eq!(batch_marker(&released[0]), Some("retained"));
+        assert!(channel.take_released_output().is_empty());
     }
 
     #[test]
-    fn current_session_response_releases_its_buffered_prefix_during_navigation() {
+    fn committed_session_response_releases_its_buffered_prefix_during_navigation() {
         let agent = RendererDevToolsAgentToken::allocate();
         let request = navigation(1);
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("current attach");
-        let attachment = channel.current().expect("current attachment");
+        channel
+            .attach_current(RendererDevToolsAgentToken::allocate())
+            .expect("initial attach");
         channel
             .navigation_started(request.clone())
             .expect("navigation start");
+        let candidate = channel
+            .attach_candidate(&request, agent)
+            .expect("candidate");
+        channel
+            .commit_candidate(candidate)
+            .expect("candidate commit");
+        let attachment = channel.current().expect("committed attachment");
 
         assert!(
             channel
@@ -908,6 +930,61 @@ mod tests {
         assert_eq!(batch_marker(&released[0]), Some("before-response"));
         assert!(released[1].has_renderer_protocol_response());
         assert!(channel.output_is_suspended());
+        assert!(channel.take_released_output().is_empty());
+    }
+
+    #[test]
+    fn overlapping_navigation_keeps_current_notifications_live() {
+        let agent = RendererDevToolsAgentToken::allocate();
+        let first = navigation(1);
+        let second = navigation(2);
+        let mut channel = DevToolsRendererChannel::default();
+        channel.attach_current(agent).expect("initial attach");
+        let attachment = channel.current().unwrap();
+        channel.navigation_started(first.clone()).unwrap();
+        channel.navigation_started(second.clone()).unwrap();
+        assert_eq!(channel.navigation_finished(&first), Ok(false));
+        assert!(channel.output_is_suspended());
+
+        let output = channel
+            .route_current_output(attachment.id(), vec![batch(agent, "still-current")])
+            .unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(batch_marker(&output[0]), Some("still-current"));
+        channel.navigation_finished(&second).unwrap();
+        assert!(channel.take_released_output().is_empty());
+    }
+
+    #[test]
+    fn rolled_back_candidate_does_not_suppress_or_mix_current_notifications() {
+        let old_agent = RendererDevToolsAgentToken::allocate();
+        let new_agent = RendererDevToolsAgentToken::allocate();
+        let request = navigation(1);
+        let mut channel = DevToolsRendererChannel::default();
+        channel.attach_current(old_agent).unwrap();
+        let old_attachment = channel.current().unwrap();
+        channel.navigation_started(request.clone()).unwrap();
+        let candidate = channel.attach_candidate(&request, new_agent).unwrap();
+        let transaction = channel.commit_candidate_transaction(candidate).unwrap();
+        let new_attachment = channel.current().unwrap();
+        assert!(
+            channel
+                .route_current_output(new_attachment.id(), vec![batch(new_agent, "abandoned")])
+                .unwrap()
+                .is_empty()
+        );
+        channel.rollback_committed_candidate(transaction).unwrap();
+
+        let output = channel
+            .route_current_output(old_attachment.id(), vec![batch(old_agent, "restored")])
+            .unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(batch_marker(&output[0]), Some("restored"));
+        assert_eq!(
+            channel.route_current_output(new_attachment.id(), vec![batch(new_agent, "stale")]),
+            Err(DevToolsRendererChannelError::StaleAttachment)
+        );
+        channel.navigation_finished(&request).unwrap();
         assert!(channel.take_released_output().is_empty());
     }
 
