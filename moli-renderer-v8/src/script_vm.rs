@@ -770,6 +770,7 @@ mod inspector;
 mod promise_rejection_task;
 mod script_preparation_error;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
+mod canvas_blob_serialization;
 mod isolated_worlds;
 mod main_document_lifecycle;
 mod main_document_lifecycle_body;

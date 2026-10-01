@@ -298,6 +298,8 @@ impl JsContextHost {
                 super::directory_reader_callbacks::DirectoryReaderCallbackState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
+            canvas_blob_serialization_tasks:
+                super::canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState::default(),
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             script_preparation_errors:
@@ -821,6 +823,17 @@ impl JsContextHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+    pub(crate) fn page_canvas_blob_serialization_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageCanvasBlobSerializationSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before canvas blob serialization callback admission",
+            )
+            .canvas_blob_serialization()
             .clone()
     }
 
