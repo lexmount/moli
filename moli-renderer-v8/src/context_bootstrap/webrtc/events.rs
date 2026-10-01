@@ -13,10 +13,12 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const ICE_EVENT_CANDIDATE_SLOT: &str = "__moliRtcIceEventCandidate";
 const ICE_EVENT_URL_SLOT: &str = "__moliRtcIceEventUrl";
 const DATA_CHANNEL_EVENT_CHANNEL_SLOT: &str = "__moliRtcDataChannelEventChannel";
+const ERROR_EVENT_ERROR_SLOT: &str = "__moliRtcErrorEventError";
 const EVENT_MEMBER_SLOTS: &[&str] = &[
     ICE_EVENT_CANDIDATE_SLOT,
     ICE_EVENT_URL_SLOT,
     DATA_CHANNEL_EVENT_CHANNEL_SLOT,
+    ERROR_EVENT_ERROR_SLOT,
 ];
 
 #[derive(WebApiObject)]
@@ -39,6 +41,15 @@ struct DataChannelEventObjectDeclaration<'scope> {
     channel: v8::Local<'scope, v8::Value>,
 }
 
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::RTCErrorEvent)]
+struct ErrorEventObjectDeclaration<'scope> {
+    #[webapi(data_property, enumerable)]
+    composed: bool,
+    #[webapi(slot = ERROR_EVENT_ERROR_SLOT)]
+    error: v8::Local<'scope, v8::Value>,
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::RTCPeerConnectionIceEvent, receiver, enumerable)]
 struct IceEventPrototypeDeclaration {
@@ -55,6 +66,13 @@ struct DataChannelEventPrototypeDeclaration {
     channel: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::RTCErrorEvent, receiver, enumerable)]
+struct ErrorEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = event_member_getter, data = callback_data_index_value(scope, 3))]
+    error: (),
+}
+
 pub(super) fn install_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -68,6 +86,9 @@ pub(super) fn install_event_template_bindings<'s>(
         "RTCDataChannelEvent" => {
             DataChannelEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "RTCErrorEvent" => {
+            ErrorEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => unreachable!("unsupported WebRTC event interface"),
     }
 }
@@ -77,7 +98,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_event_constructor_ca
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    construct_event(scope, args, rv, false);
+    construct_event(scope, args, rv, EventKind::IceCandidate);
 }
 
 pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<'s>(
@@ -85,19 +106,39 @@ pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    construct_event(scope, args, rv, true);
+    construct_event(scope, args, rv, EventKind::DataChannel);
+}
+
+pub(in crate::context_bootstrap) fn rtc_error_event_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    construct_event(scope, args, rv, EventKind::Error);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventKind {
+    IceCandidate,
+    DataChannel,
+    Error,
 }
 
 fn construct_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    is_data_channel_event: bool,
+    kind: EventKind,
 ) {
-    let (name, required_arguments, member) = if is_data_channel_event {
-        ("RTCDataChannelEvent", 2, "channel")
-    } else {
-        ("RTCPeerConnectionIceEvent", 1, "candidate")
+    let (name, required_arguments, member, member_interface) = match kind {
+        EventKind::IceCandidate => (
+            "RTCPeerConnectionIceEvent",
+            1,
+            "candidate",
+            "RTCIceCandidate",
+        ),
+        EventKind::DataChannel => ("RTCDataChannelEvent", 2, "channel", "RTCDataChannel"),
+        EventKind::Error => ("RTCErrorEvent", 2, "error", "RTCError"),
     };
     if !args.is_construct_call() || args.length() < required_arguments {
         throw_type_error(
@@ -137,36 +178,30 @@ fn construct_event<'s>(
     } else {
         v8::undefined(scope).into()
     };
-    let value = if !is_data_channel_event && value.is_null_or_undefined() {
+    let value = if kind == EventKind::IceCandidate && value.is_null_or_undefined() {
         v8::null(scope).into()
     } else {
-        let branded = v8::Local::<v8::Object>::try_from(value)
-            .ok()
-            .is_some_and(|object| {
-                if is_data_channel_event {
-                    rtc_data_channel_receiver_branded(scope, object)
-                } else {
-                    ice_candidate_receiver_branded(scope, object)
-                }
-            });
+        let branded =
+            v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .is_some_and(|object| match kind {
+                    EventKind::IceCandidate => ice_candidate_receiver_branded(scope, object),
+                    EventKind::DataChannel => rtc_data_channel_receiver_branded(scope, object),
+                    EventKind::Error => web_api_interfaces::RTCError::is_instance(scope, object),
+                });
         if !branded {
             throw_type_error(
                 scope,
-                &format!(
-                    "{name}.{member} must be a genuine {} object.",
-                    if is_data_channel_event {
-                        "RTCDataChannel"
-                    } else {
-                        "RTCIceCandidate"
-                    }
-                ),
+                &format!("{name}.{member} must be a genuine {member_interface} object."),
             );
             return;
         }
         value
     };
     let mut url = v8::null(scope).into();
-    if !is_data_channel_event && let Some(init) = init {
+    if kind == EventKind::IceCandidate
+        && let Some(init) = init
+    {
         let Some(raw) = init.get(scope, v8str(scope, "url").into()) else {
             return;
         };
@@ -191,10 +226,16 @@ fn construct_event<'s>(
     }
     let event = args.this();
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
-    let initialized = if is_data_channel_event {
-        DataChannelEventObjectDeclaration::new(composed, value).initialize(scope, event)
-    } else {
-        IceEventObjectDeclaration::new(composed, value, url).initialize(scope, event)
+    let initialized = match kind {
+        EventKind::IceCandidate => {
+            IceEventObjectDeclaration::new(composed, value, url).initialize(scope, event)
+        }
+        EventKind::DataChannel => {
+            DataChannelEventObjectDeclaration::new(composed, value).initialize(scope, event)
+        }
+        EventKind::Error => {
+            ErrorEventObjectDeclaration::new(composed, value).initialize(scope, event)
+        }
     };
     if initialized.is_err() {
         return;

@@ -37,8 +37,8 @@ pub(crate) use dom_exception::{
     initialize_websocket_error, install_dom_exception_template_bindings, new_dom_error_value,
     new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
     new_websocket_error_value, quota_exceeded_error_clone_fields,
-    quota_exceeded_error_constructor_callback, throw_dom_exception_value,
-    websocket_error_close_info,
+    quota_exceeded_error_constructor_callback, rtc_error_constructor_callback,
+    throw_dom_exception_value, websocket_error_close_info,
 };
 pub(crate) use dom_implementation::ensure_dom_implementation_singleton;
 pub(super) use dom_implementation::install_dom_implementation_template_bindings;

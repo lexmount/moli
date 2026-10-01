@@ -59,6 +59,7 @@ mod popup_document_stream;
 mod popup_hyperlinks;
 mod popup_live_document_stream;
 mod promise_rejection;
+mod rtc_error;
 mod security_policy;
 mod service_worker_drain;
 mod session_description;
