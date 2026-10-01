@@ -1,5 +1,3 @@
-mod event_constructor_type;
-
 use super::*;
 
 mod abort_signal_events;
@@ -27,6 +25,7 @@ mod document_domain_lifetime;
 mod document_domain_setter;
 mod document_open_navigation_abort;
 mod document_open_origin;
+mod event_constructor_type;
 mod event_handlers;
 mod event_listener_options;
 mod events_selection_storage;
