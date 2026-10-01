@@ -46,6 +46,54 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (b_id, _b) = open_auxiliary(addr, &mut opener, "p.name='b';window.b=p").await;
+    let (c_id, mut c) = open_auxiliary(
+        addr,
+        &mut opener,
+        "p.name='c';window.c=p;p.document.body.textContent='keep c'",
+    )
+    .await;
+
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            2,
+            "(() => {try {c.close.call({});return false} catch(e) {return e.name==='TypeError'}})()"
+        )
+        .await,
+        true
+    );
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            "c.close.call(window);c.close.call(b);[b.closed,c.closed]"
+        )
+        .await,
+        json!([true, false])
+    );
+    wait_for_target_list(addr, "only the close receiver is removed", |targets| {
+        !targets.iter().any(|t| t["id"] == b_id)
+            && targets.iter().any(|t| t["id"] == c_id)
+            && targets.iter().any(|t| t["id"] == opener_id)
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut c, 2, "document.body.textContent").await,
+        "keep c"
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_page_keeps_synchronous_state_and_both_window_proxies_across_navigation() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {

@@ -3,7 +3,7 @@ use super::super::{
     navigation_cancellation::inform_about_canceled_navigation_for_window,
 };
 use crate::{
-    context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
+    context_bootstrap::{CHILD_BROWSING_CONTEXT_HANDLE_SLOT, is_window_receiver},
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
         InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
@@ -17,7 +17,10 @@ use crate::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
         RendererPendingWindowOpenEvent,
     },
-    util::{context_host_ptr_from_global_bridge, get_private_value},
+    util::{
+        context_host_ptr_from_context_slot, context_host_ptr_from_global_bridge, get_private_value,
+        throw_type_error,
+    },
     webidl,
 };
 use moli_window_features::WindowOpenFeatures;
@@ -66,10 +69,20 @@ pub(crate) fn window_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window.close called on incompatible receiver.");
+        return;
+    }
     if window_receiver_child_handle(scope, args.this()).is_some() {
         return;
     }
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+    let current_context = scope.get_current_context();
+    let receiver_context = args.this().get_creation_context(scope).or_else(|| {
+        args.this()
+            .strict_equals(current_context.global(scope).into())
+            .then_some(current_context)
+    });
+    if let Some(host_ptr) = receiver_context.and_then(context_host_ptr_from_context_slot) {
         let host = unsafe { &mut *host_ptr };
         if let Some(window) = host.auxiliary_window() {
             host.request_auxiliary_window_close(window);
