@@ -264,7 +264,6 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
-use event_handlers::install_body_or_frameset_window_event_handler_accessors;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
@@ -276,6 +275,9 @@ pub(crate) use event_handlers::{
     legacy_lenient_this_event_handler,
     compile_window_event_attribute_handler,
     ParserAddedBodyWindowHandlers,
+};
+use event_handlers::{
+    HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
@@ -1661,12 +1663,16 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLOListElement" => install!(HtmlOListElementPrototypeDeclaration),
         "HTMLUListElement" => install!(HtmlUListElementPrototypeDeclaration),
         "HTMLBodyElement" => {
-            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
-            install!(HtmlBodyElementLegacyPrototypeDeclaration);
+            install!(
+                HtmlBodyWindowEventHandlersDeclaration,
+                HtmlBodyElementLegacyPrototypeDeclaration,
+            );
         }
         "HTMLFrameSetElement" => {
-            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
-            install!(HtmlFrameSetElementLegacyPrototypeDeclaration);
+            install!(
+                HtmlFrameSetWindowEventHandlersDeclaration,
+                HtmlFrameSetElementLegacyPrototypeDeclaration,
+            );
         }
         "HTMLHRElement" => install!(HtmlHrElementLegacyPrototypeDeclaration),
         "HTMLFontElement" => install!(HtmlFontElementLegacyPrototypeDeclaration),
