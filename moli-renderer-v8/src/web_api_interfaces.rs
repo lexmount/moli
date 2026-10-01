@@ -97,6 +97,8 @@ interfaces! {
     PerformanceEventTiming: PerformanceEntry;
     PerformancePaintTiming: PerformanceEntry;
     PerformanceServerTiming;
+    ReportBody;
+    ReportingObserver;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
