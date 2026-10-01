@@ -26,6 +26,8 @@ interfaces! {
     PublicKeyCredential: Credential;
     Credential;
     CredentialsContainer;
+    Lock;
+    LockManager;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
