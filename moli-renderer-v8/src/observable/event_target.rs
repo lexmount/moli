@@ -1,3 +1,4 @@
+use crate::event_type::EventType;
 use crate::{
     abort_signal_route::ResolvedAbortSignal,
     event_listener_args::{AddEventListenerArgs, AddEventListenerOptions},
@@ -20,8 +21,8 @@ struct ObservableEventListenerOptions {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "EventTarget.when")]
 struct WhenArgs {
-    #[webidl(required, name = "type")]
-    event_type: String,
+    #[webidl(required, name = "type", converter = "raw")]
+    event_type: EventType,
     #[webidl(with = options_arg)]
     options: ObservableEventListenerOptions,
 }
@@ -43,7 +44,7 @@ fn options_arg<'s>(
 /// Observable must not keep an otherwise unreachable standalone target alive.
 pub(super) struct EventSource {
     target: v8::Weak<v8::Object>,
-    event_type: String,
+    event_type: EventType,
     options: webidl::EventListenerOptions,
     // A WindowProxy can survive navigation; retain only the exact identity,
     // never a strong context or a lookup that follows the replacement Window.
@@ -52,7 +53,7 @@ pub(super) struct EventSource {
 
 pub(super) struct PreparedEventSource<'s> {
     target: v8::Local<'s, v8::Object>,
-    event_type: String,
+    event_type: EventType,
     options: webidl::EventListenerOptions,
     window_identity: Option<WindowExecutionContextIdentity>,
 }
