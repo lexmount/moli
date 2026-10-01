@@ -48,16 +48,17 @@ interfaces! {
     VideoEncoder: EventTarget;
     CSSAnimation: Animation;
     CSSTransition: Animation;
+    CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     ImageBitmapRenderingContext;
     MediaEncryptedEvent: Event;
     MediaMetadata;
     MediaRecorder: EventTarget;
-    ChapterInformation;
+    MediaSession;
     MediaSourceHandle;
     MediaStream: EventTarget;
     MediaStreamTrack: EventTarget;
-    CanvasCaptureMediaStreamTrack: MediaStreamTrack;
-    MediaSession;
+
+
     TimeRanges;
     VideoPlaybackQuality;
     MediaStreamTrackEvent: Event;
@@ -67,49 +68,10 @@ interfaces! {
     RemotePlayback: EventTarget;
     SourceBuffer: EventTarget;
     SourceBufferList: EventTarget;
+
     VideoColorSpace;
     VideoFrame;
-    AudioListener;
-    AudioParamMap;
-    MediaStreamAudioDestinationNode: AudioNode;
-    MediaStreamAudioSourceNode: AudioNode;
-    PannerNode: AudioNode;
-    ScriptProcessorNode: AudioNode;
-    RTCCertificate;
-    RTCDTMFSender: EventTarget;
-    RTCDTMFToneChangeEvent: Event;
-    RTCDtlsTransport: EventTarget;
-    RTCEncodedAudioFrame;
-    RTCEncodedVideoFrame;
-    RTCError: DOMException;
-    RTCErrorEvent: Event;
-    RTCIceTransport: EventTarget;
-    RTCPeerConnectionIceErrorEvent: Event;
-    RTCRtpScriptTransform;
-    RTCRtpScriptTransformer: EventTarget;
-    RTCTransformEvent: Event;
-    KeyFrameRequestEvent: Event;
-    RTCRtpSender;
-    RTCRtpTransceiver;
-    RTCSctpTransport: EventTarget;
-    RTCStatsReport;
-    RTCTrackEvent: Event;
-    EncodedVideoChunk;
-    LargestContentfulPaint: PerformanceEntry;
-    PerformanceEventTiming: PerformanceEntry;
-    PerformancePaintTiming: PerformanceEntry;
-    PerformanceServerTiming;
-    Report;
-    ReportBody;
-    ReportingObserver;
-    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
-    SpeechSynthesisEvent: Event;
-    WebTransport;
-    WebTransportSendGroup;
-    WebTransportDatagramsWritable: WritableStream;
-    WebTransportBidirectionalStream;
-    WebTransportDatagramDuplexStream;
-    WebTransportError: DOMException;
+
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
@@ -125,8 +87,8 @@ interfaces! {
     AudioBufferSourceNode: AudioScheduledSourceNode;
     AudioContext: BaseAudioContext;
     AudioDestinationNode: AudioNode;
-
-
+    AudioListener;
+    AudioParamMap;
     AudioNode: EventTarget;
     AudioScheduledSourceNode: AudioNode;
     AudioParam;
@@ -280,7 +242,7 @@ interfaces! {
     DynamicsCompressorNode: AudioNode;
     Element: Node;
     ElementInternals;
-
+    EncodedVideoChunk;
     ErrorEvent: Event;
     Event;
     EventCounts;
@@ -509,10 +471,10 @@ interfaces! {
     PageTransitionEvent: Event;
     Path2D;
 
-
-
-
-
+    LargestContentfulPaint: PerformanceEntry;
+    PerformanceEventTiming: PerformanceEntry;
+    PerformancePaintTiming: PerformanceEntry;
+    PerformanceServerTiming;
     Performance: EventTarget;
     PerformanceEntry;
     PerformanceMark: PerformanceEntry;
@@ -540,26 +502,26 @@ interfaces! {
     PushSubscription;
     PushSubscriptionOptions;
     QuotaExceededError: DOMException;
-
+    RTCCertificate;
     RTCDataChannel: EventTarget;
-
-
-
-
+    RTCDTMFSender: EventTarget;
+    RTCDtlsTransport: EventTarget;
+    RTCError: DOMException;
+    RTCErrorEvent: Event;
     RTCIceCandidate;
-
-
-
+    RTCIceTransport: EventTarget;
+    RTCEncodedAudioFrame;
+    RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
-
+    RTCPeerConnectionIceErrorEvent: Event;
     RTCRtpReceiver;
-
-
-
+    RTCRtpSender;
+    RTCRtpTransceiver;
+    RTCSctpTransport: EventTarget;
     RTCSessionDescription;
-
+    RTCStatsReport;
     RadioNodeList: NodeList;
     Range: AbstractRange;
     ReadableByteStreamController;
@@ -569,7 +531,7 @@ interfaces! {
     ReadableStreamBYOBRequest;
     ReadableStreamDefaultController;
     ReadableStreamDefaultReader;
-
+    ReportBody;
     Request;
 
     ResizeObserver;
@@ -690,8 +652,8 @@ interfaces! {
     SharedWorker: EventTarget;
     SharedWorkerGlobalScope: WorkerGlobalScope;
     SpeechSynthesis: EventTarget;
-
-
+    SpeechSynthesisEvent: Event;
+    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
     SpeechSynthesisUtterance: EventTarget;
     SpeechSynthesisVoice;
     StaticRange: AbstractRange;
@@ -774,9 +736,9 @@ interfaces! {
     WebGLTransformFeedback: WebGLObject;
     WebGLVertexArrayObject: WebGLObject;
     WebGLUniformLocation;
-
-
-
+    WebTransportError: DOMException;
+    WebTransportBidirectionalStream;
+    WebTransportDatagramDuplexStream;
     WebSocket: EventTarget;
     WebSocketError: DOMException;
     WebSocketStream;
