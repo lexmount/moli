@@ -2218,6 +2218,7 @@ mod blob_range;
 mod blob_response_headers;
 mod body_completion;
 mod body_mime;
+mod body_window_handler_receivers;
 mod browser_api;
 mod cache_interfaces;
 mod canvas_arguments;

@@ -146,35 +146,6 @@ pub(crate) const WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onwheel",
 ];
 
-pub(crate) const BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
-    "onblur",
-    "onerror",
-    "onfocus",
-    "onload",
-    "onresize",
-    "onscroll",
-    "onafterprint",
-    "onbeforeprint",
-    "onbeforeunload",
-    "ongamepadconnected",
-    "ongamepaddisconnected",
-    "onhashchange",
-    "onlanguagechange",
-    "onmessage",
-    "onmessageerror",
-    "onoffline",
-    "ononline",
-    "onpagehide",
-    "onpagereveal",
-    "onpageshow",
-    "onpageswap",
-    "onpopstate",
-    "onrejectionhandled",
-    "onstorage",
-    "onunhandledrejection",
-    "onunload",
-];
-
 pub(super) use accessors::{
     window_console_getter, window_event_getter, window_event_setter,
     window_onerror_getter_function, window_onerror_setter_function,
