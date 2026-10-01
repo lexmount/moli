@@ -2162,6 +2162,7 @@ mod svg_computed_path_precision;
 mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;
+mod audio_value_owner_interface_exposure_interfaces;
 mod hyperlink_null_url_protocol;
 mod import_meta;
 mod indexed_db;
