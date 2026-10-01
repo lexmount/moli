@@ -172,6 +172,7 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "WebTransportDatagramDuplexStream",
     "MediaDeviceInfo",
     "InputDeviceInfo",
+    "CredentialsContainer",
     "Worklet",
     "AudioWorklet",
     "ServiceWorker",
