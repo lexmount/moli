@@ -53,6 +53,7 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "VideoFrame",
     "RTCEncodedAudioFrame",
     "RTCEncodedVideoFrame",
+    "EncodedVideoChunk",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -290,6 +291,7 @@ const WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES: &[&str] = &[
     "VideoFrame",
     "RTCEncodedAudioFrame",
     "RTCEncodedVideoFrame",
+    "EncodedVideoChunk",
 ];
 
 pub(in crate::context_bootstrap) const INDEXED_DB_INTERFACE_NAMES: &[&str] = &[
