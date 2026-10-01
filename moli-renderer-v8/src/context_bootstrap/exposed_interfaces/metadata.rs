@@ -37,6 +37,12 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "MIDIPort",
     "VideoDecoder",
     "VideoEncoder",
+    "ImageBitmapRenderingContext",
+    "MediaSourceHandle",
+    "SourceBuffer",
+    "SourceBufferList",
+    "VideoColorSpace",
+    "VideoFrame",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -242,7 +248,15 @@ const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
     "XMLHttpRequest",
 ];
 const DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &["FileReaderSync"];
-const WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES: &[&str] = &["VideoDecoder", "VideoEncoder"];
+const WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES: &[&str] = &[
+    "VideoDecoder",
+    "VideoEncoder",
+    "MediaSourceHandle",
+    "SourceBuffer",
+    "SourceBufferList",
+    "VideoColorSpace",
+    "VideoFrame",
+];
 
 pub(in crate::context_bootstrap) const INDEXED_DB_INTERFACE_NAMES: &[&str] = &[
     "DOMStringList",
