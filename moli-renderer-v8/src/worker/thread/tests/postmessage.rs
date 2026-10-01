@@ -3028,3 +3028,44 @@ async fn worker_does_not_expose_window_media_device_interfaces() {
         r#"{"MediaDeviceInfo":false,"InputDeviceInfo":false}"#
     );
 }
+
+#[tokio::test]
+async fn worker_rectangle_clones_use_native_prototypes_and_message_channel_delivery() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (async () => {
+            const check = (ok, label) => { if (!ok) throw Error(label); };
+            for (const name of ['DOMRect', 'DOMRectReadOnly']) {
+                const C = self[name];
+                const prototype = C.prototype;
+                const rect = new C(-0, NaN, Infinity, -Infinity);
+                Object.defineProperty(rect, 'x', {get() { throw Error('must read native state'); }});
+                self[name] = () => { throw Error('must not call public constructor'); };
+                try {
+                    const clone = structuredClone({rect, again: rect});
+                    check(clone.rect === clone.again, name + ' graph alias');
+                    check(Object.getPrototypeOf(clone.rect) === prototype, name + ' intrinsic prototype');
+                    check(Object.is(clone.rect.x, -0) && Number.isNaN(clone.rect.y) &&
+                        clone.rect.width === Infinity && clone.rect.height === -Infinity, name + ' values');
+                    const channel = new MessageChannel();
+                    const received = new Promise(resolve => { channel.port2.onmessage = event => resolve(event.data); });
+                    channel.port1.postMessage({rect, again: rect});
+                    const message = await received;
+                    check(message.rect === message.again && message.rect !== rect, name + ' message graph');
+                    check(Object.getPrototypeOf(message.rect) === prototype, name + ' message receiver prototype');
+                    check(Object.is(message.rect.x, -0) && Number.isNaN(message.rect.y) &&
+                        message.rect.width === Infinity && message.rect.height === -Infinity, name + ' message values');
+                    channel.port1.close();
+                    channel.port2.close();
+                } finally { self[name] = C; }
+            }
+            postMessage('passed');
+            close();
+        })().catch(error => { postMessage(String(error)); close(); });
+        "#
+        .into(),
+        "https://worker-rectangle.test/clone.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""passed""#);
+}
