@@ -114,7 +114,6 @@ for (const tag of ['iframe', 'embed', 'object']) {
     );
 }
 
-
 use super::*;
 
 fn new_vm_with_pending_response_for_teardown_test()
