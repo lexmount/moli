@@ -28,6 +28,14 @@ interfaces! {
     CredentialsContainer;
     Lock;
     LockManager;
+    MIDIAccess: EventTarget;
+    MIDIConnectionEvent: Event;
+    MIDIInput: MIDIPort;
+    MIDIInputMap;
+    MIDIMessageEvent: Event;
+    MIDIOutput: MIDIPort;
+    MIDIOutputMap;
+    MIDIPort: EventTarget;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
