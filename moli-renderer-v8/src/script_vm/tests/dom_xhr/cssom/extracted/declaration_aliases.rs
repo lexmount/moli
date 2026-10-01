@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn css_property_shells_keep_supports_and_declarations_consistent() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-property-shells.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_property_shells.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_style_declaration_exposes_compat_webkit_aliases() {
     let mut vm = new_storage_test_vm("https://css-style-webkit-aliases.test/");
 
