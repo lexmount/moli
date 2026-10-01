@@ -11,13 +11,14 @@ use crate::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
         FileSystemHandleClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
         TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_file_object,
-        build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
-        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
-        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
-        detach_transferred_message_port, dom_exception_clone_fields,
-        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
+        attach_file_system_file_snapshot_clone_payload, build_dom_rect_clone_object,
+        build_file_object, build_file_system_handle_from_clone_payload,
+        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
+        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
+        detach_message_port_owner_for_transfer, detach_transferred_message_port,
+        dom_exception_clone_fields, dom_rect_clone_data, ensure_message_port_wrapper_for_id,
+        file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
         initialize_writable_stream_clone_shell, message_port_id_from_object,
@@ -44,6 +45,9 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
+const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
+const GEOMETRY_KIND_DOM_RECT: u32 = 3;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
@@ -368,6 +372,20 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("DOMRect" | "DOMRectReadOnly") => {
+                if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
+                    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+                    serializer.write_uint32(if mutable {
+                        GEOMETRY_KIND_DOM_RECT
+                    } else {
+                        GEOMETRY_KIND_DOM_RECT_READONLY
+                    });
+                    for value in values {
+                        serializer.write_double(value);
+                    }
+                    return Some(true);
+                }
+            }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
                     write_image_data_payload(serializer, payload);
@@ -582,6 +600,25 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     return None;
                 }
                 ensure_message_port_wrapper_for_id(scope, port_id)
+            }
+            HOST_OBJECT_TAG_GEOMETRY => {
+                let kind = read_u32(deserializer)?;
+                let mutable = match kind {
+                    GEOMETRY_KIND_DOM_RECT_READONLY => false,
+                    GEOMETRY_KIND_DOM_RECT => true,
+                    _ => {
+                        throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
+                        return None;
+                    }
+                };
+                let mut values = [0.0; 4];
+                for value in &mut values {
+                    if !deserializer.read_double(value) {
+                        throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
+                        return None;
+                    }
+                }
+                Some(build_dom_rect_clone_object(scope, mutable, values))
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
