@@ -482,6 +482,11 @@ pub trait LayoutSource {
     fn root_is_document_element(&self) -> bool {
         false
     }
+    /// The source Document's rendering mode, sampled for this layout pass.
+    /// Synthetic sources use standards mode unless they explicitly opt in.
+    fn quirks_mode(&self) -> style::context::QuirksMode {
+        style::context::QuirksMode::NoQuirks
+    }
     /// Whether the embedding context disables user scrolling of this viewport,
     /// including its scrollbar UI and gutters, independently of CSS overflow.
     /// Sampled for this layout pass; descendant scroll containers and

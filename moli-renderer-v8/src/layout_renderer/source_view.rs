@@ -65,6 +65,15 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }) == Some(self.root)
     }
 
+    fn quirks_mode(&self) -> style::context::QuirksMode {
+        self.document
+            .and_then(|document| self.host().node(document))
+            .and_then(Node::as_document)
+            .map_or(style::context::QuirksMode::NoQuirks, |document| {
+                document.quirks_mode()
+            })
+    }
+
     fn disables_viewport_user_scrolling(&self) -> bool {
         if !self.root_is_document_element() {
             return false;

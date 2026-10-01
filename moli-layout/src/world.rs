@@ -617,6 +617,7 @@ where
     /// The root is the document element only for a complete document source.
     /// Subtree and synthetic sources still use the same internal root slot.
     pub(crate) root_is_document_element: bool,
+    pub(crate) quirks_mode: style::context::QuirksMode,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
@@ -640,6 +641,7 @@ where
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
+            quirks_mode: style::context::QuirksMode::NoQuirks,
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),

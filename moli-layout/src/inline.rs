@@ -89,6 +89,8 @@ pub(crate) struct InlineTextUnit {
     pub(crate) ancestors: Vec<LayoutBoxId>,
     pub(crate) sources: Vec<SourceOrigin>,
     pub(crate) control: bool,
+    /// A normalized CSS space that can still collapse at a line boundary.
+    pub(crate) collapsible_whitespace: bool,
     pub(crate) break_spaces_opportunity: bool,
 }
 
@@ -116,6 +118,15 @@ pub(crate) struct InlineObject {
     /// The object's own computed `vertical-align`. Structural ancestor shifts
     /// are applied by the per-line inline box-state tree.
     pub(crate) vertical_align: InlineVerticalAlign,
+}
+
+/// Used inline-edge dimensions for one numeric layout probe. Margins can
+/// create a line, but only border/padding retain an empty inline's line height
+/// in quirks mode.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InlineEdgeContribution {
+    pub(crate) creates_line: bool,
+    pub(crate) has_border_or_padding: bool,
 }
 
 /// Pass-owned metadata for one non-atomic inline box flattened into Parley.
@@ -163,6 +174,9 @@ pub(crate) struct InlineFormattingContext {
     /// baselines. Fallback glyph fonts must not replace its line height or
     /// x-height.
     pub(crate) parent_strut: Option<InlineStrutMetrics>,
+    /// Quirks and limited-quirks omit the block's strut and empty, undecorated
+    /// inline struts from line height. Keep font metrics for alignment/paint.
+    pub(crate) uses_quirks_line_height: bool,
     pub(crate) root_includes_used_font_metrics: bool,
     /// Direct structural parent of each shaped style. Including this identity
     /// in style deduplication prevents glyph runs from crossing a box-state
@@ -762,6 +776,65 @@ pub(crate) fn break_inline_lines(
     }
 }
 
+/// Reads Parley's line items together with their CSS content contribution.
+/// Parley retains line-edge spaces for positioning and selection. Collapse
+/// their contribution here before resolving vertical metrics, while keeping
+/// every item in the same order for painting and fragment geometry.
+fn line_items_with_content<'a>(
+    context: &'a InlineFormattingContext,
+    line: &parley::Line<'a, TextBrush>,
+) -> impl Iterator<Item = (PositionedLayoutItem<'a, TextBrush>, bool)> + 'a {
+    let has_content = |item: &PositionedLayoutItem<'_, TextBrush>| match item {
+        PositionedLayoutItem::GlyphRun(glyph_run) => {
+            glyph_run.style().brush.paint && glyph_run.glyphs().next().is_some()
+        }
+        PositionedLayoutItem::InlineBox(positioned) => context
+            .object(positioned.id)
+            .is_some_and(|object| object.role == InlineObjectRole::Atomic),
+    };
+    let only_collapsible_spaces = |item: &PositionedLayoutItem<'_, TextBrush>| match item {
+        PositionedLayoutItem::GlyphRun(glyph_run) => {
+            glyph_run_is_collapsible_whitespace(context, glyph_run)
+        }
+        PositionedLayoutItem::InlineBox(_) => false,
+    };
+    let mut content_range = 0..0;
+    if context.uses_quirks_line_height {
+        for (index, item) in line.items().enumerate() {
+            if has_content(&item) && !only_collapsible_spaces(&item) {
+                if content_range.is_empty() {
+                    content_range.start = index;
+                }
+                content_range.end = index + 1;
+            }
+        }
+    }
+    line.items().enumerate().map(move |(index, item)| {
+        let contributes = has_content(&item)
+            && (!context.uses_quirks_line_height
+                || content_range.contains(&index)
+                || !only_collapsible_spaces(&item));
+        (item, contributes)
+    })
+}
+
+fn glyph_run_is_collapsible_whitespace(
+    context: &InlineFormattingContext,
+    glyph_run: &parley::GlyphRun<'_, TextBrush>,
+) -> bool {
+    let mut found = false;
+    let only_spaces = glyph_run
+        .run()
+        .clusters()
+        .filter(|cluster| std::ptr::eq(cluster.first_style(), glyph_run.style()))
+        .all(|cluster| {
+            found = true;
+            let units = overlapping_output_ranges(&context.text_units, &cluster.text_range());
+            !units.is_empty() && units.iter().all(|unit| unit.collapsible_whitespace)
+        });
+    found && only_spaces
+}
+
 /// Builds the pass-local vertical placement sidecar that Parley 0.10 does not
 /// provide for CSS `vertical-align`. The sidecar leaves Parley's shaped data
 /// immutable and applies the same offsets to glyph projection, atomic boxes,
@@ -770,7 +843,7 @@ pub(crate) fn measure_inline_lines(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
-    structural_edge_contributions: &[bool],
+    structural_edge_contributions: &[InlineEdgeContribution],
     float_line_clearances: &[f32],
 ) -> InlineLineMetrics {
     resolve_inline_lines(
@@ -787,7 +860,7 @@ pub(crate) fn build_inline_line_placements(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
-    structural_edge_contributions: &[bool],
+    structural_edge_contributions: &[InlineEdgeContribution],
     float_line_clearances: &[f32],
 ) -> (Vec<InlineLinePlacement>, InlineLineMetrics) {
     let mut placements = Vec::with_capacity(layout.lines().len());
@@ -806,7 +879,7 @@ fn resolve_inline_lines(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
-    structural_edge_contributions: &[bool],
+    structural_edge_contributions: &[InlineEdgeContribution],
     float_line_clearances: &[f32],
     mut placements: Option<&mut Vec<InlineLinePlacement>>,
 ) -> InlineLineMetrics {
@@ -818,9 +891,8 @@ fn resolve_inline_lines(
         let metrics = line.metrics();
         let raw_top = unadjusted_line_top;
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
-        let mut geometries = line
-            .items()
-            .map(|item| match item {
+        let mut geometries = line_items_with_content(context, &line)
+            .map(|(item, contributes_to_line)| match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
                     let run = glyph_run.run();
                     let run_metrics = run.metrics();
@@ -840,14 +912,14 @@ fn resolve_inline_lines(
                         bounds,
                         initial_top: glyph_run.baseline() + bounds.top,
                         structural_parent,
-                        edge_box: None,
+                        object_index: None,
                         vertical_align: InlineVerticalAlign::default(),
                         // Parley may expose an empty root-style run next to
                         // float/out-of-flow placeholders. It carries the font
                         // style but no glyph geometry and is not in-flow line
                         // content by itself.
-                        contributes_to_line: paint && style_index.is_some(),
-                        creates_line: paint && style_index.is_some(),
+                        contributes_to_line,
+                        creates_line: contributes_to_line,
                         glyph_key: if paint {
                             style_index.map(|index| (run.index(), index))
                         } else {
@@ -882,13 +954,7 @@ fn resolve_inline_lines(
                         structural_parent: object
                             .and_then(|object| object.ancestors.last().copied())
                             .unwrap_or(context.root_style),
-                        edge_box: object.and_then(|object| {
-                            matches!(
-                                object.role,
-                                InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
-                            )
-                            .then_some(object.box_id)
-                        }),
+                        object_index,
                         vertical_align: if is_atomic {
                             object
                                 .map(|object| object.vertical_align)
@@ -896,13 +962,12 @@ fn resolve_inline_lines(
                         } else {
                             InlineVerticalAlign::default()
                         },
-                        contributes_to_line: is_atomic,
+                        contributes_to_line,
                         creates_line: object.is_some_and(|object| match object.role {
                             InlineObjectRole::Atomic => true,
                             InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
                                 .and_then(|index| structural_edge_contributions.get(index))
-                                .copied()
-                                .unwrap_or(false),
+                                .is_some_and(|edge| edge.creates_line),
                             InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
                         }),
                         glyph_key: None,
@@ -912,15 +977,30 @@ fn resolve_inline_lines(
                 }
             })
             .collect::<Vec<_>>();
-        let phantom = css_line_is_phantom(
-            line.break_reason(),
-            geometries.iter().any(|geometry| geometry.creates_line),
+        // Parley keeps forced breaks as clusters without positioned glyphs.
+        // In quirks mode their metrics are a fallback for their own empty box,
+        // resolved after that box's content rather than for the whole line.
+        let line_break =
+            if context.uses_quirks_line_height && line.break_reason() == BreakReason::Explicit {
+                line_break_metrics(context, layout, &line)
+            } else {
+                None
+            };
+        let mut states = build_line_inline_box_states(
+            context,
+            layout,
+            line.text_range(),
+            &geometries,
+            line_break.map(|(box_id, _)| box_id),
         );
-        let mut states = build_line_inline_box_states(context, line.text_range(), &geometries);
         let mut state_indices = BTreeMap::new();
         for (index, state) in states.iter().enumerate() {
             state_indices.insert(state.box_id.index(), index);
         }
+        let phantom = css_line_is_phantom(
+            line.break_reason(),
+            geometries.iter().any(|geometry| geometry.creates_line),
+        );
         for state in &mut states {
             state.parent = state_indices.get(&state.parent_box.index()).copied();
             state.anchor = state
@@ -928,36 +1008,37 @@ fn resolve_inline_lines(
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
         for geometry in &mut geometries {
-            geometry.anchor = geometry.edge_box.map_or_else(
-                || {
-                    state_indices
-                        .get(&geometry.structural_parent.index())
-                        .copied()
-                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
-                },
-                |box_id| {
-                    state_indices
-                        .get(&box_id.index())
-                        .copied()
-                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
-                },
-            );
+            let box_id = geometry
+                .edge(context)
+                .map_or(geometry.structural_parent, |object| object.box_id);
+            geometry.anchor = state_indices
+                .get(&box_id.index())
+                .copied()
+                .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
+        let line_break = line_break.map(|(box_id, bounds)| {
+            let anchor = state_indices
+                .get(&box_id.index())
+                .copied()
+                .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
+            (anchor, bounds)
+        });
 
         let fallback_root_bounds = InlineVerticalBounds {
             top: -metrics.ascent - metrics.leading * 0.5,
             bottom: metrics.descent + metrics.leading * 0.5,
         };
-        let mut root_bounds = (!phantom).then(|| {
+        let mut root_bounds = (!phantom && !context.uses_quirks_line_height).then(|| {
             context
                 .parent_strut
                 .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
         });
         for state in &mut states {
-            state.metrics = (!phantom)
-                .then_some(state.strut)
-                .flatten()
-                .map(InlineVerticalBounds::from_strut);
+            state.metrics =
+                (!phantom && !context.uses_quirks_line_height && state.has_strut_content)
+                    .then_some(state.strut)
+                    .flatten()
+                    .map(InlineVerticalBounds::from_strut);
         }
 
         // One pending list per structural target plus one for the root line
@@ -967,6 +1048,23 @@ fn resolve_inline_lines(
         let mut pending = vec![Vec::<PendingLineAlignment>::new(); states.len() + 1];
 
         for (item_index, geometry) in geometries.iter_mut().enumerate() {
+            // Text supplies its own strut through glyph_line_bounds below.
+            // An empty inline only contributes if this fragment has used
+            // inline-axis border/padding; margin alone is insufficient.
+            if geometry
+                .object_index
+                .and_then(|index| structural_edge_contributions.get(index))
+                .is_some_and(|edge| edge.has_border_or_padding)
+                && let LineVerticalAnchor::State(index) = geometry.anchor
+                && let Some(strut) = states[index].strut
+            {
+                include_in_parent(
+                    InlineVerticalBounds::from_strut(strut),
+                    Some(index),
+                    &mut states,
+                    &mut root_bounds,
+                );
+            }
             if !geometry.contributes_to_line {
                 continue;
             }
@@ -1013,7 +1111,11 @@ fn resolve_inline_lines(
                 &mut states,
                 &mut geometries,
             );
-            states[state_index].metrics = target_metrics;
+            states[state_index].metrics = target_metrics.or_else(|| {
+                line_break
+                    .filter(|(anchor, _)| *anchor == LineVerticalAnchor::State(state_index))
+                    .map(|(_, bounds)| bounds)
+            });
 
             let Some(state_bounds) = states[state_index].metrics else {
                 continue;
@@ -1054,9 +1156,16 @@ fn resolve_inline_lines(
             &mut states,
             &mut geometries,
         );
+        root_bounds = root_bounds.or_else(|| {
+            line_break
+                .filter(|(anchor, _)| *anchor == LineVerticalAnchor::Root)
+                .map(|(_, bounds)| bounds)
+        });
 
         let bounds = if phantom {
             InlineVerticalBounds::ZERO
+        } else if context.uses_quirks_line_height {
+            root_bounds.unwrap_or(InlineVerticalBounds::ZERO)
         } else {
             root_bounds.unwrap_or(fallback_root_bounds)
         };
@@ -1083,9 +1192,8 @@ fn resolve_inline_lines(
         // and baselines. The following state walk and vectors exist solely to
         // place final glyphs, atomic objects, and structural fragments.
         if let Some(placements) = placements.as_mut() {
-            let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
-            ascending_states.sort_by_key(|index| states[*index].depth);
-            for state_index in ascending_states {
+            // Place alignment anchors before the states that reference them.
+            for state_index in state_order.iter().rev().copied() {
                 states[state_index].global_offset = states[state_index].relative_offset
                     + anchor_global_offset(states[state_index].anchor, &states);
             }
@@ -1116,10 +1224,24 @@ fn resolve_inline_lines(
                 .filter_map(|state| {
                     let strut = state.strut?;
                     let baseline = root_baseline + state.global_offset;
+                    // An empty closing fragment has no font box only when
+                    // its whole quirks line has no resolved vertical metrics.
+                    // Content with zero height still retains the font box.
+                    let (top, height) = if context.uses_quirks_line_height
+                        && !state.has_strut_content
+                        && root_bounds.is_none()
+                    {
+                        (baseline, 0.0)
+                    } else {
+                        (
+                            baseline - strut.text_ascent,
+                            (strut.text_ascent + strut.text_descent).max(0.0),
+                        )
+                    };
                     Some(InlineBoxBlockPlacement {
                         box_id: state.box_id,
-                        top: baseline - strut.text_ascent,
-                        height: (strut.text_ascent + strut.text_descent).max(0.0),
+                        top,
+                        height,
                     })
                 })
                 .collect();
@@ -1163,8 +1285,9 @@ struct InlineItemVerticalGeometry {
     /// baseline back into an item delta.
     initial_top: f32,
     structural_parent: LayoutBoxId,
-    /// Structural edges track their own box baseline rather than their parent.
-    edge_box: Option<LayoutBoxId>,
+    /// Source object identity; its role and used edge contributions stay in
+    /// their input records rather than being copied into vertical geometry.
+    object_index: Option<usize>,
     vertical_align: InlineVerticalAlign,
     /// Whether this item supplies block-axis geometry to the line.
     contributes_to_line: bool,
@@ -1177,6 +1300,43 @@ struct InlineItemVerticalGeometry {
     relative_offset: f32,
 }
 
+impl InlineItemVerticalGeometry {
+    /// Structural edges align to their own box rather than to their parent.
+    fn edge<'a>(&self, context: &'a InlineFormattingContext) -> Option<&'a InlineObject> {
+        let object = context.objects.get(self.object_index?)?;
+        matches!(
+            object.role,
+            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+        )
+        .then_some(object)
+    }
+}
+
+fn line_break_metrics(
+    context: &InlineFormattingContext,
+    layout: &Layout<TextBrush>,
+    line: &parley::Line<'_, TextBrush>,
+) -> Option<(LayoutBoxId, InlineVerticalBounds)> {
+    line.runs().find_map(|run| {
+        let cluster = run
+            .clusters()
+            .find(|cluster| cluster.is_hard_line_break())?;
+        let style_index = layout
+            .styles()
+            .iter()
+            .position(|style| std::ptr::eq(style, cluster.first_style()))?;
+        let structural_parent = context.style_parent(style_index);
+        let primary_strut =
+            context.font_metrics[style_index].map(|metrics| inline_strut_metrics(metrics, true));
+        let bounds = glyph_line_bounds(
+            primary_strut,
+            run.metrics(),
+            context.box_includes_used_font_metrics(structural_parent),
+        );
+        Some((structural_parent, bounds))
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LineInlineBoxState {
     box_id: LayoutBoxId,
@@ -1185,13 +1345,16 @@ struct LineInlineBoxState {
     depth: usize,
     vertical_align: InlineVerticalAlign,
     strut: Option<InlineStrutMetrics>,
+    /// Content and start edges, plus closing edges in standards mode,
+    /// retain this box's strut and the struts of its structural ancestors.
+    has_strut_content: bool,
     metrics: Option<InlineVerticalBounds>,
     anchor: LineVerticalAnchor,
     relative_offset: f32,
     global_offset: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LineVerticalAnchor {
     Root,
     State(usize),
@@ -1270,20 +1433,59 @@ fn glyph_line_bounds(
 
 fn build_line_inline_box_states(
     context: &InlineFormattingContext,
+    layout: &Layout<TextBrush>,
     line_range: Range<usize>,
     geometries: &[InlineItemVerticalGeometry],
+    line_break_box: Option<LayoutBoxId>,
 ) -> Vec<LineInlineBoxState> {
     let mut present = std::collections::BTreeSet::new();
+    let mut strut_boxes = std::collections::BTreeSet::new();
     for unit in overlapping_output_ranges(&context.text_units, &line_range) {
         for ancestor in &unit.ancestors {
             mark_structural_path(context, *ancestor, &mut present);
+            if !unit.control {
+                mark_structural_path(context, *ancestor, &mut strut_boxes);
+            }
         }
     }
     for geometry in geometries {
         mark_structural_path(context, geometry.structural_parent, &mut present);
-        if let Some(box_id) = geometry.edge_box {
-            mark_structural_path(context, box_id, &mut present);
+        if geometry.contributes_to_line {
+            mark_structural_path(context, geometry.structural_parent, &mut strut_boxes);
         }
+        if let Some(object) = geometry.edge(context) {
+            mark_structural_path(context, object.box_id, &mut present);
+            // A zero-size closing edge still retains its standards strut.
+            // Parley can carry a close after a collapsed trailing space onto
+            // the next line; that close belongs to the preceding fragment.
+            let follows_wrapped_space = || {
+                geometry
+                    .object_index
+                    .and_then(|index| layout.inline_boxes().get(index))
+                    .filter(|edge| edge.index <= line_range.start)
+                    .is_some_and(|edge| {
+                        context
+                            .text_units
+                            .partition_point(|unit| unit.output_range.end <= edge.index)
+                            .checked_sub(1)
+                            .and_then(|index| context.text_units.get(index))
+                            .is_some_and(|unit| {
+                                unit.output_range.end == edge.index
+                                    && unit.collapsible_whitespace
+                                    && unit.ancestors.contains(&object.box_id)
+                            })
+                    })
+            };
+            if object.role == InlineObjectRole::StartEdge
+                || (!context.uses_quirks_line_height
+                    && (geometry.creates_line || !follows_wrapped_space()))
+            {
+                mark_structural_path(context, object.box_id, &mut strut_boxes);
+            }
+        }
+    }
+    if let Some(box_id) = line_break_box {
+        mark_structural_path(context, box_id, &mut present);
     }
 
     context
@@ -1297,6 +1499,7 @@ fn build_line_inline_box_states(
             depth: structural_box_depth(context, state.box_id),
             vertical_align: state.vertical_align,
             strut: state.strut,
+            has_strut_content: strut_boxes.contains(&state.box_id.index()),
             metrics: None,
             anchor: LineVerticalAnchor::Root,
             relative_offset: 0.0,
@@ -1314,7 +1517,9 @@ fn mark_structural_path(
         let Some(state) = context.structural_box(box_id) else {
             break;
         };
-        present.insert(box_id.index());
+        if !present.insert(box_id.index()) {
+            break;
+        }
         box_id = state.parent;
     }
 }
@@ -1787,6 +1992,7 @@ impl InlineBuildInput {
             objects,
             font_metrics,
             parent_strut,
+            uses_quirks_line_height: world.quirks_mode != style::context::QuirksMode::NoQuirks,
             root_includes_used_font_metrics: world.boxes[self.root_style.index()]
                 .style
                 .includes_used_font_metrics(),
@@ -2248,6 +2454,7 @@ impl InlineNormalizer {
                 ancestors: pending.ancestors,
                 sources: pending.sources,
                 control: false,
+                collapsible_whitespace: true,
                 break_spaces_opportunity: false,
             },
         );
@@ -2321,8 +2528,23 @@ impl InlineNormalizer {
             self.flush_pending();
             self.line_has_content = true;
         }
+        // Put consecutive closing edges before Parley's newline cluster.
+        // Stop moving edges when a bidi control or another object intervenes.
+        let byte_index = if role == InlineObjectRole::EndEdge {
+            self.units
+                .last()
+                .filter(|unit| &self.text[unit.output_range.clone()] == "\n")
+                .filter(|unit| {
+                    self.objects
+                        .last()
+                        .is_none_or(|(index, _, _)| *index < unit.output_range.end)
+                })
+                .map_or(self.text.len(), |unit| unit.output_range.start)
+        } else {
+            self.text.len()
+        };
         self.objects.push((
-            self.text.len(),
+            byte_index,
             InlineObject {
                 box_id,
                 role,
@@ -2349,6 +2571,7 @@ impl InlineNormalizer {
             ancestors: ancestors.to_vec(),
             sources,
             control,
+            collapsible_whitespace: false,
             break_spaces_opportunity: false,
         });
     }
@@ -2550,6 +2773,91 @@ mod tests {
     }
 
     #[test]
+    fn closing_inline_edges_remain_on_the_forced_break_line() {
+        for (bidi, reopen_inline, outer_line) in [
+            (InlineUnicodeBidi::Normal, false, 0),
+            (InlineUnicodeBidi::Embed, false, 1),
+            (InlineUnicodeBidi::Normal, true, 1),
+        ] {
+            let root = LayoutBoxId::from_index(0);
+            let outer = LayoutBoxId::from_index(1);
+            let inner = LayoutBoxId::from_index(2);
+            let atom = LayoutBoxId::from_index(3);
+            let reopened = LayoutBoxId::from_index(4);
+            let align = InlineVerticalAlign::default();
+            let mut normalizer = InlineNormalizer::new(root);
+            normalizer.open_inline(
+                outer,
+                InlineUnicodeBidi::Normal,
+                InlineDirection::Ltr,
+                &[],
+                align,
+            );
+            normalizer.open_inline(inner, bidi, InlineDirection::Ltr, &[outer], align);
+            normalizer.push_object(
+                atom,
+                InlineObjectRole::Atomic,
+                InlineBoxKind::InFlow,
+                &[outer, inner],
+                align,
+            );
+            normalizer.hard_break(inner, &[outer, inner]);
+            normalizer.close_inline(inner, bidi, &[outer], align);
+            if reopen_inline {
+                normalizer.open_inline(
+                    reopened,
+                    InlineUnicodeBidi::Normal,
+                    InlineDirection::Ltr,
+                    &[outer],
+                    align,
+                );
+                normalizer.close_inline(reopened, InlineUnicodeBidi::Normal, &[outer], align);
+            }
+            normalizer.close_inline(outer, InlineUnicodeBidi::Normal, &[], align);
+            normalizer.hard_break(root, &[]);
+            let input = normalizer.finish();
+
+            let mut font_context = parley::FontContext::new();
+            let mut layout_context = parley::LayoutContext::<TextBrush>::new();
+            let mut builder =
+                layout_context.style_run_builder(&mut font_context, &input.text, 1.0, true);
+            let style = builder.push_style(TextStyle::default());
+            builder.push_style_run(style, ..);
+            for (id, (index, _, kind)) in input.objects.iter().enumerate() {
+                builder.push_inline_box(InlineBox {
+                    id: id as u64,
+                    kind: *kind,
+                    index: *index,
+                    width: 1.0,
+                    height: 20.0,
+                });
+            }
+            let mut layout = builder.build(&input.text);
+            layout.break_all_lines(None);
+
+            for (box_id, expected_line) in [(inner, 0), (outer, outer_line)] {
+                let object_id = input
+                    .objects
+                    .iter()
+                    .position(|(_, object, _)| {
+                        object.box_id == box_id && object.role == InlineObjectRole::EndEdge
+                    })
+                    .unwrap() as u64;
+                let actual_line = layout.lines().position(|line| {
+                    line.items().any(|item| {
+                        matches!(item, PositionedLayoutItem::InlineBox(item) if item.id == object_id)
+                    })
+                });
+                assert_eq!(
+                    actual_line,
+                    Some(expected_line),
+                    "{bidi:?}, reopen={reopen_inline}, box={box_id:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn parley_shaped_layout_can_be_rebroken_across_probe_widths() {
         let text = "alpha beta gamma delta epsilon";
         let mut font_context = parley::FontContext::new();
@@ -2695,6 +3003,7 @@ mod tests {
             objects: Vec::new(),
             font_metrics: vec![None],
             parent_strut: None,
+            uses_quirks_line_height: false,
             root_includes_used_font_metrics: false,
             style_parents: vec![root],
             structural_boxes: Vec::new(),

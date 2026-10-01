@@ -18,9 +18,10 @@ use crate::{
     LAYOUT_SUBPIXELS_PER_CSS_PIXEL, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld, PaintRect, PaintViewport,
     inline::{
-        InlineContentWidthsMemo, InlineFormattingContext, InlineFragments, InlineLinePlacement,
-        InlineObjectRole, break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        measure_inline_lines, relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
+        InlineLinePlacement, InlineObjectRole, break_inline_lines, build_inline_fragments,
+        build_inline_line_placements, measure_inline_lines, relative_atomic_inset_offset,
+        reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -2361,7 +2362,8 @@ where
             inline_percentage_basis(available_space.width, inputs.sizing_purpose);
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
-        let mut structural_edge_contributions = vec![false; context.objects.len()];
+        let mut structural_edge_contributions =
+            vec![InlineEdgeContribution::default(); context.objects.len()];
         let mut floats = Vec::new();
 
         for (inline_box, object) in layout.inline_boxes_mut().iter_mut().zip(&context.objects) {
@@ -2416,6 +2418,16 @@ where
                     let logical_start = object.role == InlineObjectRole::StartEdge;
                     let physical_left =
                         logical_start == (child_style.direction() == InlineDirection::Ltr);
+                    let inline_padding_border = if child_style.uses_horizontal_writing_mode() {
+                        (padding.left + border.left, padding.right + border.right)
+                    } else {
+                        (padding.top + border.top, padding.bottom + border.bottom)
+                    };
+                    let has_border_or_padding = if physical_left {
+                        inline_padding_border.0 != 0.0
+                    } else {
+                        inline_padding_border.1 != 0.0
+                    };
                     let (margin, padding, border) = if physical_left {
                         (margins.left, padding.left, border.left)
                     } else {
@@ -2425,8 +2437,10 @@ where
                     inline_box.height = 0.0;
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");
-                    structural_edge_contributions[object_index] =
-                        margin != 0.0 || padding != 0.0 || border != 0.0;
+                    structural_edge_contributions[object_index] = InlineEdgeContribution {
+                        creates_line: margin != 0.0 || padding != 0.0 || border != 0.0,
+                        has_border_or_padding,
+                    };
                 }
             }
         }
@@ -3282,6 +3296,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         objects: Vec::new(),
         font_metrics: Vec::new(),
         parent_strut: None,
+        uses_quirks_line_height: false,
         root_includes_used_font_metrics: false,
         style_parents: Vec::new(),
         structural_boxes: Vec::new(),

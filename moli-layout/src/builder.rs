@@ -162,6 +162,7 @@ where
             root.source = None;
         }
         let mut world = LayoutWorld::new(root, self.source.root_is_document_element());
+        world.quirks_mode = self.source.quirks_mode();
         let root_box = world.root();
         if root_generates_principal_box {
             world.map_source(source_root, root_box);
