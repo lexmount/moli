@@ -395,6 +395,7 @@ fn css_rule_list_item_in_current_context<'s>(
             scope,
             &entry.snapshot,
             entry.child_snapshots,
+            entry.declaration_source,
             parent_style_sheet,
             parent_rule,
             &selector_context,

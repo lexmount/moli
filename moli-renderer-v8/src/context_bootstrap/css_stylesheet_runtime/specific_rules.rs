@@ -318,8 +318,7 @@ pub(crate) fn build_css_keyframe_rule_object<'s>(
     parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
-    let style_text = parsed.style_text.clone();
-    let rule = CssKeyframeRuleDeclaration {
+    CssKeyframeRuleDeclaration {
         css_text: parsed.css_text,
         key_text: parsed.selector_text,
         style_text: parsed.style_text,
@@ -327,14 +326,7 @@ pub(crate) fn build_css_keyframe_rule_object<'s>(
         parent_style_sheet,
     }
     .bind(scope)
-    .expect("CSSKeyframeRule declaration should bind");
-    seed_css_rule_stylo_declaration_block_from_style_text(
-        scope,
-        rule,
-        &style_text,
-        CssRulePdbDeclarationKind::KeyframeRule,
-    );
-    rule
+    .expect("CSSKeyframeRule declaration should bind")
 }
 
 pub(crate) fn build_css_font_feature_values_rule_object_from_stylo_view<'s>(
@@ -520,40 +512,6 @@ pub(crate) fn build_css_style_rule_object<'s>(
     parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
-    let style_text = parsed.style_text.clone();
-    let rule = bind_css_style_rule_object(scope, parsed, parent_style_sheet, parent_rule);
-    seed_css_rule_stylo_declaration_block_from_style_text(
-        scope,
-        rule,
-        &style_text,
-        CssRulePdbDeclarationKind::StyleRule,
-    );
-    rule
-}
-
-pub(crate) fn build_css_style_rule_object_from_stylo_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: CssStyleRuleTextParts,
-    declaration_text: &str,
-    parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
-    parent_rule: Option<v8::Local<'s, v8::Object>>,
-) -> v8::Local<'s, v8::Object> {
-    let rule = bind_css_style_rule_object(scope, parsed, parent_style_sheet, parent_rule);
-    seed_css_rule_stylo_declaration_block_from_declaration_text(
-        scope,
-        rule,
-        declaration_text,
-        CssRulePdbDeclarationKind::StyleRule,
-    );
-    rule
-}
-
-fn bind_css_style_rule_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: CssStyleRuleTextParts,
-    parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
-    parent_rule: Option<v8::Local<'s, v8::Object>>,
-) -> v8::Local<'s, v8::Object> {
     CssStyleRuleDeclaration {
         css_text: parsed.css_text,
         selector_text: parsed.selector_text,
@@ -571,21 +529,14 @@ pub(crate) fn build_css_nested_declarations_rule_object<'s>(
     parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
     parent_rule: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    let rule = CssNestedDeclarationsRuleDeclaration {
+    CssNestedDeclarationsRuleDeclaration {
         css_text: style_text.to_owned(),
         style_text: style_text.to_owned(),
         parent_rule,
         parent_style_sheet,
     }
     .bind(scope)
-    .expect("CSSNestedDeclarations declaration should bind");
-    seed_css_rule_stylo_declaration_block_from_style_text(
-        scope,
-        rule,
-        style_text,
-        CssRulePdbDeclarationKind::NestedDeclarations,
-    );
-    rule
+    .expect("CSSNestedDeclarations declaration should bind")
 }
 
 pub(crate) fn css_style_rule_current_has_nested_rules<'s>(
@@ -877,14 +828,6 @@ pub(crate) fn sync_css_style_rule_from_style_object<'s>(
     rule: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
 ) {
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
-    if apply_live_stylesheet_rule_declaration_block_mutation(
-        scope,
-        rule,
-        CssRulePdbDeclarationKind::StyleRule,
-    ) {
-        return;
-    }
     let style_text = lightweight_css_style_object_css_text(scope, style);
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
@@ -907,14 +850,6 @@ pub(crate) fn sync_css_nested_declarations_from_style_object<'s>(
     rule: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
 ) {
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
-    if apply_live_stylesheet_rule_declaration_block_mutation(
-        scope,
-        rule,
-        CssRulePdbDeclarationKind::NestedDeclarations,
-    ) {
-        return;
-    }
     let style_text = lightweight_css_style_object_css_text(scope, style);
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
@@ -1139,14 +1074,6 @@ pub(crate) fn sync_css_keyframe_rule_from_style_object<'s>(
     rule: v8::Local<'s, v8::Object>,
     style: v8::Local<'s, v8::Object>,
 ) {
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
-    if apply_live_stylesheet_rule_declaration_block_mutation(
-        scope,
-        rule,
-        CssRulePdbDeclarationKind::KeyframeRule,
-    ) {
-        return;
-    }
     let style_text = lightweight_css_style_object_css_text(scope, style);
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
@@ -1169,7 +1096,9 @@ pub(crate) fn css_style_rule_style_changed_callback<'s>(
     let Ok(rule) = v8::Local::<v8::Object>::try_from(args.data()) else {
         return;
     };
-    sync_css_style_rule_from_style_object(scope, rule, args.this());
+    if !apply_live_stylesheet_cssom_declaration_mutation(scope, rule, &args) {
+        sync_css_style_rule_from_style_object(scope, rule, args.this());
+    }
 }
 
 pub(crate) fn css_nested_declarations_style_changed_callback<'s>(
@@ -1180,7 +1109,9 @@ pub(crate) fn css_nested_declarations_style_changed_callback<'s>(
     let Ok(rule) = v8::Local::<v8::Object>::try_from(args.data()) else {
         return;
     };
-    sync_css_nested_declarations_from_style_object(scope, rule, args.this());
+    if !apply_live_stylesheet_cssom_declaration_mutation(scope, rule, &args) {
+        sync_css_nested_declarations_from_style_object(scope, rule, args.this());
+    }
 }
 
 pub(crate) fn css_keyframe_rule_style_changed_callback<'s>(
@@ -1191,7 +1122,9 @@ pub(crate) fn css_keyframe_rule_style_changed_callback<'s>(
     let Ok(rule) = v8::Local::<v8::Object>::try_from(args.data()) else {
         return;
     };
-    sync_css_keyframe_rule_from_style_object(scope, rule, args.this());
+    if !apply_live_stylesheet_cssom_declaration_mutation(scope, rule, &args) {
+        sync_css_keyframe_rule_from_style_object(scope, rule, args.this());
+    }
 }
 
 pub(crate) fn sync_css_keyframe_rule_state_from_parsed_css_text<'s>(
@@ -1199,6 +1132,7 @@ pub(crate) fn sync_css_keyframe_rule_state_from_parsed_css_text<'s>(
     rule: v8::Local<'s, v8::Object>,
     parsed: &CssStyleRuleTextParts,
 ) {
+    clear_css_rule_detached_snapshot(scope, rule);
     set_private_string(
         scope,
         rule,
@@ -1210,12 +1144,6 @@ pub(crate) fn sync_css_keyframe_rule_state_from_parsed_css_text<'s>(
         rule,
         CSS_KEYFRAME_RULE_STYLE_TEXT_SLOT,
         &parsed.style_text,
-    );
-    seed_css_rule_stylo_declaration_block_from_style_text(
-        scope,
-        rule,
-        &parsed.style_text,
-        CssRulePdbDeclarationKind::KeyframeRule,
     );
     if let Some(style) = get_private_value(scope, rule, CSS_KEYFRAME_RULE_STYLE_OBJECT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -1231,6 +1159,7 @@ pub(crate) fn sync_css_style_rule_state_from_parsed_css_text<'s>(
     rule: v8::Local<'s, v8::Object>,
     parsed: &CssStyleRuleTextParts,
 ) {
+    clear_css_rule_detached_snapshot(scope, rule);
     set_private_string(
         scope,
         rule,
@@ -1242,12 +1171,6 @@ pub(crate) fn sync_css_style_rule_state_from_parsed_css_text<'s>(
         rule,
         CSS_STYLE_RULE_STYLE_TEXT_SLOT,
         &parsed.style_text,
-    );
-    seed_css_rule_stylo_declaration_block_from_style_text(
-        scope,
-        rule,
-        &parsed.style_text,
-        CssRulePdbDeclarationKind::StyleRule,
     );
     if let Some(style) = get_private_value(scope, rule, CSS_STYLE_RULE_STYLE_OBJECT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -2267,9 +2190,7 @@ fn css_keyframe_rule_style_object_in_current_context<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let style = build_lightweight_css_keyframe_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_KEYFRAME_RULE_STYLE_TEXT_SLOT);
-    attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
+    initialize_css_rule_style_object(scope, rule, style, &style_text);
     if let Some(callback) = v8::Function::builder(css_keyframe_rule_style_changed_callback)
         .data(rule.into())
         .build(scope)
@@ -2365,9 +2286,7 @@ pub(crate) fn css_style_rule_style_object<'s>(
     }
     let style = build_lightweight_css_rule_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_STYLE_RULE_STYLE_TEXT_SLOT);
-    attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
+    initialize_css_rule_style_object(scope, rule, style, &style_text);
     if let Some(callback) = v8::Function::builder(css_style_rule_style_changed_callback)
         .data(rule.into())
         .build(scope)
@@ -2521,9 +2440,7 @@ pub(crate) fn css_nested_declarations_style_object<'s>(
     }
     let style = build_lightweight_css_rule_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_NESTED_DECLARATIONS_STYLE_TEXT_SLOT);
-    attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
-    sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
+    initialize_css_rule_style_object(scope, rule, style, &style_text);
     if let Some(callback) = v8::Function::builder(css_nested_declarations_style_changed_callback)
         .data(rule.into())
         .build(scope)

@@ -22,6 +22,32 @@ fn record_detached_rule_mutation() {
     DETACHED_RULE_MUTATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 }
 
+fn apply_detached_rule_list_snapshot_change<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parent_rule: v8::Local<'s, v8::Object>,
+    rules: v8::Local<'s, v8::Object>,
+    parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
+    snapshots: &[CssRuleSnapshot],
+    change: DetachedCssRuleListChange,
+) {
+    let snapshots = encode_css_rule_list_snapshot_change(scope, rules, snapshots, change);
+    match change {
+        DetachedCssRuleListChange::Insert(index) => {
+            insert_css_rule_list_unmaterialized_rule(scope, rules, index);
+        }
+        DetachedCssRuleListChange::Delete(index) => {
+            delete_css_rule_list_rule(scope, rules, index);
+        }
+    }
+    bind_css_rule_list_to_detached_snapshot_array(
+        scope,
+        rules,
+        parent_style_sheet,
+        Some(parent_rule),
+        snapshots,
+    );
+}
+
 pub(crate) fn apply_detached_nested_rule_insert_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parent_rule: v8::Local<'s, v8::Object>,
@@ -44,13 +70,13 @@ pub(crate) fn apply_detached_nested_rule_insert_mutation<'s>(
         containing_rule_type_bits,
         stylo_parse_relative_rule_type(style_rule_context),
     )?;
-    insert_css_rule_list_unmaterialized_rule(scope, rules, index);
-    bind_css_rule_list_to_detached_snapshots(
+    apply_detached_rule_list_snapshot_change(
         scope,
+        parent_rule,
         rules,
         parent_style_sheet,
-        Some(parent_rule),
         &mutation.rules,
+        DetachedCssRuleListChange::Insert(index),
     );
     Ok(())
 }
@@ -75,13 +101,13 @@ pub(crate) fn apply_detached_nested_rule_delete_mutation<'s>(
         containing_rule_type_bits,
         stylo_parse_relative_rule_type(style_rule_context),
     )?;
-    delete_css_rule_list_rule(scope, rules, index);
-    bind_css_rule_list_to_detached_snapshots(
+    apply_detached_rule_list_snapshot_change(
         scope,
+        parent_rule,
         rules,
         parent_style_sheet,
-        Some(parent_rule),
         &mutation.rules,
+        DetachedCssRuleListChange::Delete(index),
     );
     Ok(())
 }
@@ -98,13 +124,13 @@ pub(crate) fn apply_detached_keyframe_rule_insert_mutation<'s>(
     let existing_rule_texts = css_rule_list_css_texts(scope, rules);
     let mutation =
         insert_detached_keyframe_rule_with_stylo(&existing_rule_texts, rule_text, index as usize)?;
-    insert_css_rule_list_unmaterialized_rule(scope, rules, index);
-    bind_css_rule_list_to_detached_snapshots(
+    apply_detached_rule_list_snapshot_change(
         scope,
+        parent_rule,
         rules,
         parent_style_sheet,
-        Some(parent_rule),
         &mutation.rules,
+        DetachedCssRuleListChange::Insert(index),
     );
     Ok(())
 }
@@ -119,13 +145,13 @@ pub(crate) fn apply_detached_keyframe_rule_delete_mutation<'s>(
     record_detached_rule_mutation();
     let existing_rule_texts = css_rule_list_css_texts(scope, rules);
     let mutation = delete_detached_keyframe_rule_with_stylo(&existing_rule_texts, index as usize)?;
-    delete_css_rule_list_rule(scope, rules, index);
-    bind_css_rule_list_to_detached_snapshots(
+    apply_detached_rule_list_snapshot_change(
         scope,
+        parent_rule,
         rules,
         parent_style_sheet,
-        Some(parent_rule),
         &mutation.rules,
+        DetachedCssRuleListChange::Delete(index),
     );
     Ok(())
 }

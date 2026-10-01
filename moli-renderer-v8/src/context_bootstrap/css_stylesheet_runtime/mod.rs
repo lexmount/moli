@@ -50,9 +50,8 @@ use crate::detached_css_style::{
     lightweight_css_style_uses_only_stylo_declaration_block,
     remove_lightweight_css_style_stylo_declaration_block,
     set_lightweight_css_style_change_callback, set_lightweight_css_style_css_text,
-    set_lightweight_css_style_css_text_without_notify,
+    set_lightweight_css_style_css_text_without_notify, set_lightweight_css_style_declaration_block,
     set_lightweight_css_style_stylo_declaration_block_id,
-    store_lightweight_css_style_stylo_declaration_block,
 };
 use crate::webidl;
 use crate::{

@@ -880,10 +880,11 @@ pub(crate) fn css_rule_css_text_setter_callback<'s>(
                 );
             sync_css_keyframe_rule_state_from_parsed_css_text(scope, this, &parsed);
             if use_live_stylesheet_declaration_mutation
-                && apply_live_stylesheet_rule_declaration_block_mutation(
+                && apply_live_stylesheet_rule_declaration_text_mutation(
                     scope,
                     this,
                     CssRulePdbDeclarationKind::KeyframeRule,
+                    &parsed.style_text,
                 )
             {
                 rv.set_undefined();
@@ -918,10 +919,11 @@ pub(crate) fn css_rule_css_text_setter_callback<'s>(
             );
         sync_css_style_rule_state_from_parsed_css_text(scope, this, &parsed);
         if use_live_stylesheet_declaration_mutation
-            && apply_live_stylesheet_rule_declaration_block_mutation(
+            && apply_live_stylesheet_rule_declaration_text_mutation(
                 scope,
                 this,
                 CssRulePdbDeclarationKind::StyleRule,
+                &parsed.style_text,
             )
         {
             rv.set_undefined();
