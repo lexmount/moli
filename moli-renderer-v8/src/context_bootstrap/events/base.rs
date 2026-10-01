@@ -329,27 +329,48 @@ pub(crate) fn initialize_event_object_with_type<'s>(
     cancelable: bool,
 ) {
     let event = event_backing(scope, event);
-    InitializedEventHeaderDeclaration::new(event_type)
-        .initialize(scope, event)
-        .expect("initialized event header declaration should initialize");
-    initialize_event_after_header(scope, event, bubbles, cancelable);
-}
-
-fn initialize_event_after_header<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    bubbles: bool,
-    cancelable: bool,
-) {
-    InitializedEventStateDeclaration::new(bubbles, cancelable)
-        .initialize(scope, event)
-        .expect("initialized event state declaration should initialize");
+    initialize_event_attributes(scope, event, event_type, bubbles, cancelable);
     if !event_has_own_property(scope, event, "isTrusted") {
         define_event_is_trusted_accessor(scope, event);
     }
     initialized_event_tail_declaration(scope)
         .initialize(scope, event)
         .expect("initialized event tail declaration should initialize");
+}
+
+pub(crate) fn reinitialize_event_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: &[u16],
+    bubbles: bool,
+    cancelable: bool,
+) -> bool {
+    let event = event_backing(scope, event);
+    // WebIDL arguments have already been converted before this method step.
+    if event_is_dispatching(scope, event) {
+        return false;
+    }
+    let Some(event_type) = v8_string_from_utf16_units(scope, event_type) else {
+        return false;
+    };
+    // Creation-only state (including composed and timeStamp) is retained.
+    initialize_event_attributes(scope, event, event_type, bubbles, cancelable);
+    true
+}
+
+fn initialize_event_attributes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: v8::Local<'s, v8::String>,
+    bubbles: bool,
+    cancelable: bool,
+) {
+    InitializedEventHeaderDeclaration::new(event_type)
+        .initialize(scope, event)
+        .expect("initialized event header declaration should initialize");
+    InitializedEventStateDeclaration::new(bubbles, cancelable)
+        .initialize(scope, event)
+        .expect("initialized event state declaration should initialize");
 }
 
 pub(super) fn define_event_is_trusted_accessor<'s>(

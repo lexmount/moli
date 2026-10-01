@@ -167,7 +167,7 @@ struct FormDataEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
 struct UiEventTemplateMethodsDeclaration {
-    #[webapi(method = "initUIEvent", length = 0, callback = ui_event_init_callback)]
+    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
     init_ui_event: (),
 
     #[webapi(
@@ -226,7 +226,7 @@ struct StorageEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
 struct KeyboardEventTemplateMethodsDeclaration {
-    #[webapi(method = "initKeyboardEvent", length = 7, callback = keyboard_event_init_callback)]
+    #[webapi(method = "initKeyboardEvent", length = 1, callback = keyboard_event_init_callback)]
     init_keyboard_event: (),
 
     #[webapi(
@@ -252,7 +252,7 @@ struct MouseEventTemplateMethodsDeclaration {
     #[webapi(accessor_property = "offsetY", getter = window_host::mouse_event_offset_y_getter)]
     offset_y: (),
 
-    #[webapi(method = "initMouseEvent", length = 15, callback = mouse_event_init_callback)]
+    #[webapi(method = "initMouseEvent", length = 1, callback = mouse_event_init_callback)]
     init_mouse_event: (),
 }
 

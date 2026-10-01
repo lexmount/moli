@@ -829,7 +829,7 @@ fn event_subclass_constructors_expose_legacy_keyboard_codes_and_validate_view() 
 
     assert_eq!(
         result,
-        r#"{"defaults":[0,0,0],"nonDefaults":[7,8,9],"viewIsWindow":true,"wrongViewName":"TypeError","lengths":[7,15]}"#
+        r#"{"defaults":[0,0,0],"nonDefaults":[7,8,9],"viewIsWindow":true,"wrongViewName":"TypeError","lengths":[1,1]}"#
     );
 }
 
