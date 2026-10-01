@@ -1812,7 +1812,7 @@ pub(super) fn finish_runtime_mutation_effects(
                 owner = ?binding.owner(),
                 element = ?binding.element(),
                 load_delay_token = ?binding.load_delay_token(),
-                settled,
+                ?settled,
                 "settled invalidated connected-style lease at mutation commit"
             );
         }

@@ -1042,7 +1042,7 @@ impl JsContextHost {
                     owner = ?binding.owner(),
                     element = ?binding.element(),
                     load_delay_token = ?binding.load_delay_token(),
-                    settled,
+                    ?settled,
                     "settled invalidated connected-style lease at CSSOM commit"
                 );
             }

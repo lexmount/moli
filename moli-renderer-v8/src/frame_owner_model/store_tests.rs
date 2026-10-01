@@ -698,9 +698,13 @@ fn main_style_load_event_binding_delays_complete_until_event_settlement() {
         "the exact style event token must block complete"
     );
 
-    assert!(store.settle_main_style_load_event(binding));
-    assert!(
-        !store.settle_main_style_load_event(binding),
+    assert_eq!(
+        store.settle_main_style_load_event(binding),
+        MainDocumentStyleLoadEventSettlement::Released
+    );
+    assert_eq!(
+        store.settle_main_style_load_event(binding),
+        MainDocumentStyleLoadEventSettlement::NotOwned,
         "one style event binding must settle exactly once"
     );
     assert_eq!(
@@ -743,6 +747,57 @@ fn main_modulepreload_owner_never_allocates_a_load_event_delay() {
 }
 
 #[test]
+fn stopped_style_lease_settlement_is_exact_and_does_not_reopen_lifecycle() {
+    let mut store = FrameOwnerStore::default();
+    store.ensure_main_frame(
+        handle(1),
+        url("https://example.test/"),
+        url("https://example.test/"),
+        "https://example.test".to_owned(),
+        policy_container(),
+        policy_context(),
+        None,
+    );
+    let snapshot = store.current_main_owner_snapshot().expect("main owner");
+    let owner = FrameDocumentTaskOwner::new(
+        snapshot.scheduler_lane_id,
+        snapshot.local_window_id,
+        snapshot.document_id,
+    );
+    let binding = store
+        .accept_current_main_style_load_event(owner, handle(8))
+        .expect("style lease");
+    assert!(binding.load_delay_token().is_some());
+    assert_eq!(store.stop_current_main_document_loading(owner), Some(true));
+    assert_eq!(store.stop_current_main_document_loading(owner), Some(false));
+    assert!(store.main_style_load_event_is_current(binding));
+    assert_eq!(
+        store.settle_main_style_load_event(binding),
+        MainDocumentStyleLoadEventSettlement::CancelledAfterStop
+    );
+    assert_eq!(
+        store.settle_main_style_load_event(binding),
+        MainDocumentStyleLoadEventSettlement::NotOwned
+    );
+    assert_eq!(
+        store.current_main_document_complete_transition_is_ready(owner),
+        Some(false)
+    );
+    let after_stop = store
+        .accept_current_main_style_load_event(owner, handle(9))
+        .expect("post-stop style event remains usable");
+    assert!(after_stop.load_delay_token().is_none());
+    assert_eq!(
+        store.settle_main_style_load_event(after_stop),
+        MainDocumentStyleLoadEventSettlement::Released
+    );
+    assert_eq!(
+        store.current_main_document_complete_transition_is_ready(owner),
+        Some(false)
+    );
+}
+
+#[test]
 fn main_style_load_event_binding_cannot_settle_replacement_document() {
     let mut store = FrameOwnerStore::default();
     store.ensure_main_frame(
@@ -774,8 +829,9 @@ fn main_style_load_event_binding_cannot_settle_replacement_document() {
         .expect("main replacement");
 
     assert!(!store.main_style_load_event_is_current(stale));
-    assert!(
-        !store.settle_main_style_load_event(stale),
+    assert_eq!(
+        store.settle_main_style_load_event(stale),
+        MainDocumentStyleLoadEventSettlement::NotOwned,
         "stale style completion must not mutate replacement lifecycle"
     );
     assert_eq!(

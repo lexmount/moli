@@ -573,6 +573,10 @@ impl TargetRuntimeSlot {
         self.page_slot.has_inflight_background_navigation()
     }
 
+    pub(crate) fn cancel_inflight_document_navigation(&mut self) {
+        self.page_slot.cancel_inflight_document_navigation();
+    }
+
     pub(crate) fn accepts_document_body_completion_event(
         &self,
         token: &DocumentNavigationToken,
