@@ -92,6 +92,10 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "MediaKeySession",
+    "MediaKeyStatusMap",
+    "MediaKeySystemAccess",
+    "MediaKeys",
     "MediaDeviceInfo",
     "InputDeviceInfo",
     "DeviceMotionEvent",

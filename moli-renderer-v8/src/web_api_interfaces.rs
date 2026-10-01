@@ -20,6 +20,10 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    MediaKeySession: EventTarget;
+    MediaKeyStatusMap;
+    MediaKeySystemAccess;
+    MediaKeys;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
