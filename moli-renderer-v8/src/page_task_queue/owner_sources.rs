@@ -21,6 +21,11 @@ use super::{
         RendererPageBitmapTask, RendererPageBitmapTaskOwner, RendererPageBitmapTaskRoute,
         RendererPageBitmapTaskSender, RendererPageBitmapTaskSource,
     },
+    canvas_blob_serialization::{
+        RendererPageCanvasBlobSerializationOwner, RendererPageCanvasBlobSerializationRoute,
+        RendererPageCanvasBlobSerializationSender, RendererPageCanvasBlobSerializationSource,
+        RendererPageCanvasBlobSerializationTask,
+    },
     child_frame_task::{
         RendererPageChildFrameTask, RendererPageChildFrameTaskOwner,
         RendererPageChildFrameTaskRoute, RendererPageChildFrameTaskSender,
@@ -174,6 +179,7 @@ pub(crate) struct RendererPageOwnedTaskSources {
     user_interaction: RendererPageUserInteractionSource,
     file_reading: RendererPageFileReadingSource,
     misc_platform_api: RendererPageMiscPlatformApiSource,
+    canvas_blob_serialization: RendererPageCanvasBlobSerializationSource,
     navigation_and_traversal: RendererPageNavigationAndTraversalSource,
     rendering_update: RendererPageRenderingUpdateSource,
     media_element_event: RendererPageMediaElementEventSource,
@@ -211,6 +217,7 @@ pub(crate) struct RendererPageTaskProducerRoutes {
     user_interaction: RendererPageUserInteractionRoute,
     file_reading: RendererPageFileReadingRoute,
     misc_platform_api: RendererPageMiscPlatformApiRoute,
+    canvas_blob_serialization: RendererPageCanvasBlobSerializationRoute,
     navigation_and_traversal: RendererPageNavigationAndTraversalRoute,
     rendering_update: RendererPageRenderingUpdateRoute,
     media_element_event: RendererPageMediaElementEventRoute,
@@ -270,6 +277,10 @@ pub(crate) enum RendererPageReadyDescriptor {
     MiscPlatformApi {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageMiscPlatformApiOwner,
+    },
+    CanvasBlobSerialization {
+        ready: RendererPageTaskReadyMetadata,
+        owner: RendererPageCanvasBlobSerializationOwner,
     },
     NavigationAndTraversal {
         ready: RendererPageTaskReadyMetadata,
@@ -385,6 +396,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
             | Self::MediaElementEvent { ready, .. }
@@ -420,6 +432,9 @@ impl RendererPageReadyDescriptor {
             Self::UserInteraction { .. } => RendererPageTaskSourceKind::UserInteraction,
             Self::FileReading { .. } => RendererPageTaskSourceKind::FileReading,
             Self::MiscPlatformApi { .. } => RendererPageTaskSourceKind::MiscPlatformApi,
+            Self::CanvasBlobSerialization { .. } => {
+                RendererPageTaskSourceKind::CanvasBlobSerialization
+            }
             Self::NavigationAndTraversal { .. } => {
                 RendererPageTaskSourceKind::NavigationAndTraversal
             }
@@ -473,6 +488,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
             | Self::MediaElementEvent { ready, .. }
@@ -518,6 +534,7 @@ pub(crate) enum RendererPageTaskSourceKind {
     UserInteraction,
     FileReading,
     MiscPlatformApi,
+    CanvasBlobSerialization,
     NavigationAndTraversal,
     RenderingUpdate,
     MediaElementEvent,
@@ -545,13 +562,14 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 30] = [
+    pub(crate) const ALL: [Self; 31] = [
         Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
         Self::UserInteraction,
         Self::FileReading,
         Self::MiscPlatformApi,
+        Self::CanvasBlobSerialization,
         Self::NavigationAndTraversal,
         Self::RenderingUpdate,
         Self::MediaElementEvent,
@@ -592,6 +610,7 @@ pub(crate) enum RendererPageSchedulerTask {
     UserInteraction(RendererPageUserInteractionTask),
     FileReading(RendererPageFileReadingTask),
     MiscPlatformApi(RendererPageMiscPlatformApiTask),
+    CanvasBlobSerialization(RendererPageCanvasBlobSerializationTask),
     NavigationAndTraversal(RendererPageNavigationAndTraversalTask),
     RenderingUpdate(RendererPageRenderingUpdateTask),
     MediaElementEvent(RendererPageMediaElementEventTask),
@@ -652,6 +671,10 @@ impl RendererPageOwnedTaskSources {
             owner_wake.clone(),
             RendererOwnerWakeSource::MiscPlatformApiTask,
         );
+        let canvas_blob_serialization = RendererPageCanvasBlobSerializationSource::new(
+            owner_wake.clone(),
+            RendererOwnerWakeSource::CanvasBlobSerializationTask,
+        );
         let navigation_and_traversal =
             RendererPageNavigationAndTraversalSource::new(owner_wake.clone());
         let rendering_update = RendererPageRenderingUpdateSource::new(
@@ -698,6 +721,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: user_interaction.route(),
             file_reading: file_reading.route(),
             misc_platform_api: misc_platform_api.route(),
+            canvas_blob_serialization: canvas_blob_serialization.route(),
             navigation_and_traversal: navigation_and_traversal.route(),
             rendering_update: rendering_update.route(),
             media_element_event: media_element_event.route(),
@@ -730,6 +754,7 @@ impl RendererPageOwnedTaskSources {
                 user_interaction,
                 file_reading,
                 misc_platform_api,
+                canvas_blob_serialization,
                 navigation_and_traversal,
                 rendering_update,
                 media_element_event,
@@ -770,6 +795,9 @@ impl RendererPageOwnedTaskSources {
             && self
                 .misc_platform_api
                 .route_matches(&routes.misc_platform_api)
+            && self
+                .canvas_blob_serialization
+                .route_matches(&routes.canvas_blob_serialization)
             && self
                 .navigation_and_traversal
                 .route_matches(&routes.navigation_and_traversal)
@@ -853,6 +881,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: self.user_interaction.route(),
             file_reading: self.file_reading.route(),
             misc_platform_api: self.misc_platform_api.route(),
+            canvas_blob_serialization: self.canvas_blob_serialization.route(),
             navigation_and_traversal: self.navigation_and_traversal.route(),
             rendering_update: self.rendering_update.route(),
             media_element_event: self.media_element_event.route(),
@@ -918,6 +947,17 @@ impl RendererPageOwnedTaskSources {
                     .expect("ready miscellaneous-platform task must retain its exact owner"),
             }
         });
+        let canvas_blob_serialization =
+            self.canvas_blob_serialization
+                .next_ready_metadata()
+                .map(
+                    |ready| RendererPageReadyDescriptor::CanvasBlobSerialization {
+                        ready,
+                        owner: self.canvas_blob_serialization.next_ready_owner().expect(
+                            "ready canvas blob serialization task must retain its exact owner",
+                        ),
+                    },
+                );
         let navigation_and_traversal =
             self.navigation_and_traversal
                 .next_ready_metadata()
@@ -1176,6 +1216,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction,
             file_reading,
             misc_platform_api,
+            canvas_blob_serialization,
             navigation_and_traversal,
             rendering_update,
             media_element_event,
@@ -1258,6 +1299,17 @@ impl RendererPageOwnedTaskSources {
                     "selected miscellaneous-platform head changed before dequeue"
                 );
                 RendererPageSchedulerTask::MiscPlatformApi(task)
+            }
+            RendererPageReadyDescriptor::CanvasBlobSerialization { ready, .. } => {
+                let (actual, task) = self
+                    .canvas_blob_serialization
+                    .pop_front()
+                    .expect("selected canvas blob serialization task must remain queued");
+                assert_eq!(
+                    actual, ready,
+                    "selected canvas blob serialization head changed before dequeue"
+                );
+                RendererPageSchedulerTask::CanvasBlobSerialization(task)
             }
             RendererPageReadyDescriptor::NavigationAndTraversal { ready, .. } => {
                 let (actual, task) = self
@@ -1562,6 +1614,7 @@ impl RendererPageOwnedTaskSources {
             || self.user_interaction.has_ready_task()
             || self.file_reading.has_ready_task()
             || self.misc_platform_api.has_ready_task()
+            || self.canvas_blob_serialization.has_ready_task()
             || self.navigation_and_traversal.has_ready_task()
             || self.rendering_update.has_ready_task()
             || self.media_element_event.has_ready_task()
@@ -1607,6 +1660,7 @@ impl RendererPageOwnedTaskSources {
         self.user_interaction.clear();
         self.file_reading.clear();
         self.misc_platform_api.clear();
+        self.canvas_blob_serialization.clear();
         self.navigation_and_traversal.clear();
         self.rendering_update.clear();
         self.media_element_event.clear();
@@ -1673,6 +1727,12 @@ impl RendererPageTaskProducerRoutes {
         root_document: RendererDocumentToken,
     ) -> RendererPageMiscPlatformApiSender {
         self.misc_platform_api.sender(root_document)
+    }
+    pub(crate) fn canvas_blob_serialization_sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageCanvasBlobSerializationSender {
+        self.canvas_blob_serialization.sender(root_document)
     }
 
     pub(crate) fn navigation_and_traversal_sender(
