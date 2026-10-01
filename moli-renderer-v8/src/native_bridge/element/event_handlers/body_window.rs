@@ -1,13 +1,80 @@
+use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::web_api_object_target;
+
 use crate::{
-    context_bootstrap::BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::{DomHandle, EventTargetHandle},
     native_bridge::{JsContextHost, OwnerDispatchScope},
     util::{v8_string, v8str},
+    web_api_interfaces,
 };
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::element_attribute;
 use super::shared::compile_event_attribute_handler_for_owner_with_context;
+
+// Keep the parser's reflected handler names and both interface bindings in
+// one declaration. Each accessor validates its own native interface before
+// the shared callback resolves the receiver's Window.
+macro_rules! declare_body_window_event_handlers {
+    ($($name:ident),+ $(,)?) => {
+        const BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+            $(stringify!($name)),+
+        ];
+
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable, receiver)]
+        pub(in crate::native_bridge::element) struct HtmlBodyWindowEventHandlersDeclaration {
+            $(#[webapi(
+                accessor_property,
+                getter = body_window_event_handler_getter_function,
+                setter = body_window_event_handler_setter_function,
+                data = v8str(scope, stringify!($name))
+            )]
+            $name: (),)+
+        }
+
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = web_api_interfaces::HTMLFrameSetElement, enumerable, receiver)]
+        pub(in crate::native_bridge::element) struct HtmlFrameSetWindowEventHandlersDeclaration {
+            $(#[webapi(
+                accessor_property,
+                getter = body_window_event_handler_getter_function,
+                setter = body_window_event_handler_setter_function,
+                data = v8str(scope, stringify!($name))
+            )]
+            $name: (),)+
+        }
+    };
+}
+
+declare_body_window_event_handlers!(
+    onblur,
+    onerror,
+    onfocus,
+    onload,
+    onresize,
+    onscroll,
+    onafterprint,
+    onbeforeprint,
+    onbeforeunload,
+    ongamepadconnected,
+    ongamepaddisconnected,
+    onhashchange,
+    onlanguagechange,
+    onmessage,
+    onmessageerror,
+    onoffline,
+    ononline,
+    onpagehide,
+    onpagereveal,
+    onpageshow,
+    onpageswap,
+    onpopstate,
+    onrejectionhandled,
+    onstorage,
+    onunhandledrejection,
+    onunload,
+);
 
 fn body_or_frameset_window_event_handler_properties() -> impl Iterator<Item = &'static str> {
     BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES
@@ -18,35 +85,6 @@ fn body_or_frameset_window_event_handler_properties() -> impl Iterator<Item = &'
 pub(crate) fn body_or_frameset_reflects_window_event_type(event_type: &str) -> bool {
     body_or_frameset_window_event_handler_properties()
         .any(|name| name.strip_prefix("on") == Some(event_type))
-}
-
-pub(crate) fn install_body_or_frameset_window_event_handler_accessors<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    prototype: v8::Local<'s, v8::ObjectTemplate>,
-) {
-    for name in body_or_frameset_window_event_handler_properties() {
-        let data = v8str(scope, name).into();
-        let getter = v8::FunctionTemplate::builder(body_window_event_handler_getter_function)
-            .data(data)
-            .length(0)
-            .build(scope);
-        let setter = v8::FunctionTemplate::builder(body_window_event_handler_setter_function)
-            .data(data)
-            .length(1)
-            .build(scope);
-        if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
-            getter.set_class_name(function_name);
-        }
-        if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
-            setter.set_class_name(function_name);
-        }
-        prototype.set_accessor_property(
-            v8str(scope, name).into(),
-            Some(getter),
-            Some(setter),
-            v8::PropertyAttribute::NONE,
-        );
-    }
 }
 
 fn body_window_event_handler_getter_function<'s>(
@@ -62,8 +100,8 @@ fn body_window_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle)) = web_api_object_target(scope, args.this())
+        .and_then(|object| node_runtime_and_handle_from_object_or_detached(scope, object).ok())
     else {
         rv.set_null();
         return;
@@ -97,8 +135,8 @@ fn body_window_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle)) = web_api_object_target(scope, args.this())
+        .and_then(|object| node_runtime_and_handle_from_object_or_detached(scope, object).ok())
     else {
         rv.set_undefined();
         return;

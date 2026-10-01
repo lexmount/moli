@@ -2,11 +2,13 @@ mod body_window;
 mod generic;
 mod shared;
 
+pub(super) use body_window::{
+    HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
+};
 pub(crate) use body_window::{
     ParserAddedBodyWindowHandlers, body_or_frameset_reflects_window_event_type,
     compile_body_window_event_attribute, compile_window_event_attribute_handler,
     initialize_parser_inserted_body_window_event_handlers,
-    install_body_or_frameset_window_event_handler_accessors,
     resolve_window_event_handler_content_attribute,
 };
 pub(super) use generic::{
