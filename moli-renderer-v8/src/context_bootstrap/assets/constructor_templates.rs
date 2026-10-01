@@ -1230,7 +1230,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 web_api_interfaces::OfflineAudioContext,
                 offline_audio_context_constructor_callback
             ))
-            .length(3)
+            .length(1)
             .build(scope)
         }
         ConstructorKind::AudioBuffer => {
