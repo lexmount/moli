@@ -27,6 +27,11 @@ impl DomStringValue {
         &self.text
     }
 
+    /// Returns the scalar string only when doing so preserves every UTF-16 unit.
+    pub fn as_str(&self) -> Option<&str> {
+        self.unpaired_units.is_empty().then_some(&self.text)
+    }
+
     pub fn utf16_units(&self) -> Cow<'_, [u16]> {
         if self.unpaired_units.is_empty() {
             Cow::Owned(self.text.encode_utf16().collect())

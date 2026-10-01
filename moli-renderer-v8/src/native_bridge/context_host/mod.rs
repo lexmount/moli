@@ -1024,8 +1024,10 @@ pub(crate) struct JsContextHost {
     completed_child_document_networks:
         Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot>,
     active_child_subresource_request_scopes: Vec<DomHandle>,
-    child_window_event_listeners:
-        HashMap<DomHandle, IndexMap<String, Vec<ChildWindowEventListenerEntry>>>,
+    child_window_event_listeners: HashMap<
+        DomHandle,
+        IndexMap<crate::event_type::EventType, Vec<ChildWindowEventListenerEntry>>,
+    >,
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
     active_window_error_report_owners: HashSet<WindowExecutionContextOwner>,
