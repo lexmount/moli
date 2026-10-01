@@ -101,6 +101,7 @@ fn command_dispatch_completes_console_log_and_inspector_owner_commands() {
 #[test]
 fn command_dispatch_completes_browser_sync_commands() {
     let mut conn = CdpConnection::new();
+    conn.publish_default_browser_target();
     for (id, method) in [
         (20, "Browser.getVersion"),
         (21, "Browser.getWindowForTarget"),

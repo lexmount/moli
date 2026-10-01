@@ -165,6 +165,10 @@ pub(super) async fn execute_devtools_activate_target_command_async(
         Vec::new()
     };
 
+    conn.select_browser_focus_for_target(&target_id);
+    if let Err(error) = conn.apply_browser_document_activity_async().await {
+        tracing::warn!(%error, "failed to update document activity after activation");
+    }
     restore_previously_active_browser_context(
         conn,
         previously_active_browser_context_id.as_deref(),

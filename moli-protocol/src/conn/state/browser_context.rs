@@ -41,6 +41,8 @@ pub struct BrowserContext {
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
+    /// Browser focus is independent of which context is selected for routing.
+    pub(crate) window_is_focused: bool,
     /// Policy retained while the context has no page target yet. The first
     /// target inherits it; once targets exist, each target owns its surface.
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
@@ -501,6 +503,7 @@ impl BrowserContext {
             id,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
+            window_is_focused: true,
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
@@ -1628,10 +1631,6 @@ impl BrowserContext {
         }
         let selected = self.page_targets.select(&target_id);
         debug_assert!(selected, "registered page target must be selectable");
-    }
-
-    pub(crate) fn rekey_active_target(&mut self, target_id: impl Into<String>) -> bool {
-        self.page_targets.rekey_active(target_id.into())
     }
 
     pub(crate) fn active_session_id(&self) -> Option<&str> {

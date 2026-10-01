@@ -55,6 +55,23 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> RuntimeCommandTaskStep {
+    if let Some(crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. }) =
+        conn.session_route(cmd.session_id)
+    {
+        // A Tab has a browser-side debugger barrier, but no V8 context. Resume
+        // only this attachment; never dispatch the command to an active Page.
+        let page_target_id = conn
+            .primary_page_target_id_for_tab_target_id(&tab_target_id)
+            .map(str::to_owned);
+        if conn.release_waiting_for_debugger_session(cmd.session_id)
+            && let Some(page_target_id) = page_target_id
+        {
+            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+                conn, &page_target_id,
+            );
+        }
+        return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+    }
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
         .is_ok_and(|slot| slot.has_loaded_page())

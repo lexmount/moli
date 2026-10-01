@@ -3019,6 +3019,32 @@ async fn tab_session_auto_attach_catchall_attaches_child_page() {
         ctx.conn.session_route(Some(page_session_id)),
         Some(crate::conn::CdpSessionRoute::PageTarget { .. })
     ));
+    assert!(
+        ctx.conn
+            .target_has_waiting_for_debugger_session(&tab_target_id)
+    );
+    for id in [19_034, 19_035] {
+        ctx.process_async(json!({
+            "id": id, "sessionId": tab_session_id,
+            "method": "Runtime.runIfWaitingForDebugger"
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(&tab_session_id));
+    }
+    assert!(
+        !ctx.conn
+            .target_has_waiting_for_debugger_session(&tab_target_id)
+    );
+    ctx.process_async(json!({
+        "id": 19_036, "sessionId": tab_session_id, "method": "Runtime.enable"
+    }))
+    .await;
+    let unsupported = take_response_by_id(&mut ctx, 19_036);
+    assert_eq!(
+        unsupported["error"]["code"],
+        json!(-32601),
+        "the browser-side resume handler must not expose a Page Runtime on the Tab"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

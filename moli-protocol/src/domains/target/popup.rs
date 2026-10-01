@@ -644,6 +644,10 @@ async fn activate_popup_target_async(
         .as_ref()
         .is_some_and(|browser_context| browser_context.is_active_target(target_id))
     {
+        conn.select_browser_focus_for_target(target_id);
+        conn.apply_browser_document_activity_async()
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(Vec::new())
     } else {
         match conn

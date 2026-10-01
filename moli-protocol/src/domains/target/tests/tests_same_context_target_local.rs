@@ -1,6 +1,50 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn closing_active_target_selects_adjacent_tab_in_creation_order() {
+    // Chromium TabStripModel::DetermineNewSelectedIndex prefers the next tab
+    // to the right, or the left neighbor when closing the last unrelated tab.
+    for (closing_index, selected_index) in [(0, 1), (1, 2), (2, 1)] {
+        let mut ctx = TestContext::new();
+        load_bc_with_target(&mut ctx, "BID-close-order", "TID-first");
+        let mut targets = vec!["TID-first".to_owned()];
+        for id in [10, 11] {
+            ctx.process_async(json!({
+                "id": id,
+                "method": "Target.createTarget",
+                "params": {
+                    "browserContextId": "BID-close-order",
+                    "url": format!("about:blank#{id}")
+                }
+            }))
+            .await;
+            targets.push(take_created_target_id(&mut ctx, id));
+            ctx.take_all();
+        }
+        ctx.process_async(json!({
+            "id": 12,
+            "method": "Target.activateTarget",
+            "params": {"targetId": targets[closing_index]}
+        }))
+        .await;
+        ctx.take_all();
+        ctx.process_async(json!({
+            "id": 13,
+            "method": "Target.closeTarget",
+            "params": {"targetId": targets[closing_index]}
+        }))
+        .await;
+        assert_eq!(take_response_by_id(&mut ctx, 13)["result"]["success"], true);
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(
+            context.active_target_id(),
+            Some(targets[selected_index].as_str())
+        );
+        assert!(context.page_target(&targets[closing_index]).is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn activate_target_activates_auto_attached_background_session_into_page_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
