@@ -3,7 +3,7 @@
   const child = document.getElementById('child').contentWindow;
   const realms = [window, child].map(global => ({
     global, document: global.document, Ui: global.UIEvent, Event: global.Event,
-    Mouse: global.MouseEvent, click: global.HTMLElement.prototype.click
+    Pointer: global.PointerEvent, Mouse: global.MouseEvent, click: global.HTMLElement.prototype.click
   }));
   const windowless = realms.map(realm => realm.document.implementation.createHTMLDocument(''));
   const rows = [], restores = [], actions = [];
@@ -24,6 +24,21 @@
       };
       if (type !== 'input' && type !== 'change') {
         NativeObject.defineProperty(checks, 'view', {value: event.view === view, enumerable: true});
+      }
+      if (type === 'click' && !label.startsWith('author')) {
+        checks.pointer = event instanceof realm.Pointer && !(event instanceof opposite.Pointer);
+        checks.pointerPrototype = NativeObject.getPrototypeOf(event) === realm.Pointer.prototype;
+        checks.pointerId = event.pointerId === -1;
+        checks.pointerType = event.pointerType === '';
+        checks.pointerDefaults = event.width === 1 && event.height === 1 &&
+          event.pressure === 0 && event.tangentialPressure === 0 &&
+          event.tiltX === 0 && event.tiltY === 0 && event.twist === 0 && !event.isPrimary;
+        checks.coordinates = ['screenX','screenY','clientX','clientY','pageX','pageY','offsetX','offsetY']
+          .every(name => event[name] === 0);
+        checks.clickCount = event.detail === 0;
+        checks.sequences = (typeof event.getCoalescedEvents === 'function'
+          ? event.getCoalescedEvents().length === 0 : !realm.global.isSecureContext) &&
+          typeof event.getPredictedEvents === 'function' && event.getPredictedEvents().length === 0;
       }
       rows.push({label, type, checks});
       if (after) after(event);

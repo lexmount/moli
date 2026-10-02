@@ -307,7 +307,9 @@ pub(crate) use self::css_stylesheet_runtime::{
 pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
-    EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
+    EVENT_DISPATCHING_SLOT,
+    EVENT_PASSIVE_SLOT,
+    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT,
     EventHandlerType,
     apply_before_unload_event_handler_return_value,
@@ -318,6 +320,7 @@ pub(crate) use self::events::{
     event_private_value, initialize_event_object, initialize_event_wrapper,
     mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
+    EVENT_MOUSE_POSITIONLESS_SLOT,
     submit_event_submitter_value,
     set_event_source_value,
     error_event_handler_arguments,

@@ -4630,7 +4630,7 @@ fn keyboard_activation_click_preserves_modifiers() {
 
     assert_eq!(
         result,
-        "true|box:1:true:true:false:false|button:1:true:true:false:false"
+        "true|box:0:true:true:false:false|button:0:true:true:false:false"
     );
 }
 
