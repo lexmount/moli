@@ -16,6 +16,7 @@ use super::{
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
+    window_accessors::window_document_getter,
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
@@ -1254,36 +1255,6 @@ const WINDOW_SURFACE_REPLACEABLE_NAMES: &[&str] = &[
     "screenY",
 ];
 
-fn legacy_unforgeable_document_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    let Some(host_ptr) = context_host_ptr_from_window_object(scope, receiver)
-        .or_else(|| context_host_ptr_from_global_bridge(scope))
-    else {
-        rv.set_null();
-        return;
-    };
-    if let Some(child_handle) = child_context_handle_from_owner(scope, receiver) {
-        match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, child_handle)
-        {
-            Some(document) => rv.set(document.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    let handle = unsafe { &*host_ptr }.document_handle();
-    match unsafe { &mut *host_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, handle)
-    {
-        Some(document) => rv.set(document.into()),
-        None => rv.set_null(),
-    }
-}
-
 fn child_context_handle_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -1561,7 +1532,7 @@ fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_document_getter)
+    let getter = v8::Function::builder(window_document_getter)
         .build(scope)
         .ok_or_else(|| anyhow!("failed to build document getter"))?;
     getter.set_name(v8str(scope, "get document"));

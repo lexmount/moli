@@ -65,7 +65,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     sync_child_document_window_slots(scope, document, global, true);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
-    bind_document_settings(host, scope, &snapshot)?;
+    bind_document_settings(host, scope, &snapshot, document)?;
 
     Ok(ChildWindowRealmProjection {
         parent,
@@ -127,15 +127,16 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
     sync_child_document_window_slots(scope, document, global, true);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
-    bind_document_settings(host, scope, &snapshot)
+    bind_document_settings(host, scope, &snapshot, document)
 }
 
-fn bind_document_settings(
+fn bind_document_settings<'s>(
     host: &JsContextHost,
-    scope: &mut v8::PinScope<'_, '_>,
+    scope: &mut v8::PinScope<'s, '_>,
     snapshot: &super::model::ChildWindowRealmSnapshot,
+    document: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    WindowEnvironmentSettings::bind_current_child_document(scope, host, snapshot.handle)
+    WindowEnvironmentSettings::bind_current_child_document(scope, host, snapshot.handle, document)
         .ok_or_else(|| anyhow::anyhow!("missing current child settings Document"))
 }
 

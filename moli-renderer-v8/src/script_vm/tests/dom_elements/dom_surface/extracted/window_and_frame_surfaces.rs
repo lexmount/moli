@@ -1,6 +1,120 @@
 use super::*;
 
 #[test]
+fn window_document_retains_original_document_after_iframe_removal_and_reinsertion() {
+    for cleanup_before_reinsertion in [false, true] {
+        let mut vm = new_storage_test_vm("https://retained-window-document.test/");
+        vm.exec(
+            r#"
+globalThis.documentFrame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(documentFrame);
+globalThis.originalWindow = documentFrame.contentWindow;
+globalThis.originalDocument = originalWindow.document;
+globalThis.parentDocumentGetter = Object.getOwnPropertyDescriptor(window, 'document').get;
+globalThis.childDocumentGetter = Object.getOwnPropertyDescriptor(originalWindow, 'document').get;
+originalDocument.body.textContent = 'ORIGINAL';
+documentFrame.remove();
+"#,
+            None,
+        )
+        .expect("iframe Window and Document should be retained before removal");
+
+        let assert_original_document = |vm: &mut ScriptVm, stage: &str| {
+            assert_eq!(
+                vm.eval(
+                    r#"JSON.stringify([
+originalWindow.document === originalDocument,
+parentDocumentGetter.call(originalWindow) === originalDocument,
+childDocumentGetter.call(originalWindow) === originalDocument,
+childDocumentGetter.call(window) === document
+])"#,
+                )
+                .expect("retained and borrowed Document getters should evaluate"),
+                "[true,true,true,true]",
+                "{stage}, cleanup before reinsertion: {cleanup_before_reinsertion}"
+            );
+        };
+        assert_original_document(&mut vm, "after removal");
+        if cleanup_before_reinsertion {
+            assert!(vm.live_child_default_runtime_realm_inventory().is_empty());
+            assert_original_document(&mut vm, "after cleanup");
+        }
+
+        vm.exec(
+            r#"
+(document.body || document.documentElement || document).appendChild(documentFrame);
+globalThis.replacementWindow = documentFrame.contentWindow;
+globalThis.replacementDocument = documentFrame.contentDocument;
+replacementDocument.body.textContent = 'REPLACEMENT';
+"#,
+            None,
+        )
+        .expect("the same iframe element should acquire a new Window and Document");
+        vm.live_child_default_runtime_realm_inventory();
+        assert_original_document(&mut vm, "after reinsertion");
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  const replacementGetter = Object.getOwnPropertyDescriptor(replacementWindow, 'document').get;
+  originalWindow.document.body.textContent = 'WRITTEN VIA OLD WINDOW';
+  return JSON.stringify([
+    originalWindow !== replacementWindow,
+    originalDocument !== replacementDocument,
+    replacementWindow.document === replacementDocument,
+    childDocumentGetter.call(replacementWindow) === replacementDocument,
+    replacementGetter.call(originalWindow) === originalDocument,
+    originalDocument.body.textContent,
+    replacementDocument.body.textContent
+  ]);
+})()
+"#,
+            )
+            .expect("writing through the retained Window should affect only its own Document"),
+            r#"[true,true,true,true,true,"WRITTEN VIA OLD WINDOW","REPLACEMENT"]"#,
+            "cleanup before reinsertion: {cleanup_before_reinsertion}"
+        );
+    }
+}
+
+#[test]
+fn window_document_getter_follows_the_receiver_window_proxy_across_navigation() {
+    let mut vm = new_storage_test_vm("https://navigated-window-document.test/");
+    vm.exec(
+        r#"
+globalThis.documentFrame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(documentFrame);
+globalThis.retainedWindow = documentFrame.contentWindow;
+globalThis.originalDocument = retainedWindow.document;
+globalThis.parentDocumentGetter = Object.getOwnPropertyDescriptor(window, 'document').get;
+globalThis.childDocumentGetter = Object.getOwnPropertyDescriptor(retainedWindow, 'document').get;
+"#,
+        None,
+    )
+    .expect("the initial WindowProxy and document getters should be retained");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.exec("documentFrame.srcdoc = '<body>DESTINATION</body>';", None)
+        .expect("same-origin cross-document navigation should start");
+    vm.drain_pending_child_frame_work_for_test();
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+retainedWindow === documentFrame.contentWindow,
+originalDocument !== documentFrame.contentDocument,
+retainedWindow.document === documentFrame.contentDocument,
+parentDocumentGetter.call(retainedWindow) === documentFrame.contentDocument,
+childDocumentGetter.call(retainedWindow) === documentFrame.contentDocument,
+childDocumentGetter.call(window) === document,
+retainedWindow.document.body.textContent
+])"#,
+        )
+        .expect("retained WindowProxy and borrowed getters should read the destination Document"),
+        r#"[true,true,true,true,true,true,"DESTINATION"]"#
+    );
+}
+
+#[test]
 fn detached_native_xml_text_content_queues_child_list_record() {
     let mut vm = new_storage_test_vm("https://detached-xml-text-content-mutation.test/");
 

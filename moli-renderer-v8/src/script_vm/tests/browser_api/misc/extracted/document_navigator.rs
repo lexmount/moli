@@ -603,8 +603,9 @@ fn request_relative_urls_follow_live_srcdoc_iframe_base_urls() {
 fn assert_retained_request_uses_child_document(vm: &mut ScriptVm, fallback_base: &str) {
     vm.exec(
         r#"
-globalThis.retainedChildDocument = requestBaseFrame.contentDocument;
-globalThis.RetainedChildRequest = requestBaseFrame.contentWindow.Request;
+globalThis.retainedChildWindow = requestBaseFrame.contentWindow;
+globalThis.retainedChildDocument = retainedChildWindow.document;
+globalThis.RetainedChildRequest = retainedChildWindow.Request;
 retainedChildDocument.head.innerHTML = '<base href="https://fixture.test/child/">';
 "#,
         None,
@@ -623,6 +624,7 @@ const controller = new AbortController();
 controller.abort('retained-reason');
 const request = new RetainedChildRequest('item', {{signal: controller.signal}});
 return JSON.stringify({{
+  documentIdentity: retainedChildWindow.document === retainedChildDocument,
   urls: ['item', '../item?q#f', '?q', '#f'].map(input => new RetainedChildRequest(input).url),
   referrer: new RetainedChildRequest('item', {{referrer: 'referrer'}}).referrer,
   allowedReferrer: new RetainedChildRequest('item', {{referrer: {allowed_referrer}}}).referrer,
@@ -648,6 +650,7 @@ return JSON.stringify({{
         assert_eq!(
             actual,
             serde_json::json!({
+                "documentIdentity": true,
                 "urls": expected_urls,
                 "referrer": expected_referrer,
                 "allowedReferrer": allowed_referrer.as_str(),
@@ -695,6 +698,25 @@ return JSON.stringify({{
         "https://replacement.test/new/item"
     );
     assert_base(vm, fallback_base);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const replacement = requestBaseFrame.contentDocument;
+  replacement.body.textContent = 'REPLACEMENT';
+  retainedChildWindow.document.body.textContent = 'WRITTEN VIA OLD WINDOW';
+  return JSON.stringify([
+    retainedChildWindow !== requestBaseFrame.contentWindow,
+    retainedChildDocument !== replacement,
+    retainedChildDocument.body.textContent,
+    replacement.body.textContent
+  ]);
+})()
+"#,
+        )
+        .expect("retained Window writes should remain confined to its original Document"),
+        r#"[true,true,"WRITTEN VIA OLD WINDOW","REPLACEMENT"]"#
+    );
 }
 
 #[test]

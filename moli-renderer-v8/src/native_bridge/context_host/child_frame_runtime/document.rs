@@ -112,7 +112,9 @@ impl JsContextHost {
             self.clear_child_browsing_context_live_foreign_pairings(scope, document_handle);
             install_child_document_stream_methods(scope, document, handle);
             if let Some(window) = window {
-                let _ = WindowEnvironmentSettings::bind_current_child_document(scope, self, handle);
+                let _ = WindowEnvironmentSettings::bind_current_child_document(
+                    scope, self, handle, document,
+                );
                 sync_child_document_window_slots(
                     scope,
                     document,
