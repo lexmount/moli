@@ -4,6 +4,7 @@ use moli_webapi::events::subclasses::{
     construct_native_drag_event, construct_native_pointer_event, construct_native_wheel_event,
 };
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_mouse_event_with_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -47,6 +48,7 @@ pub(crate) fn construct_mouse_event_with_detail_and_modifiers<'s>(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -167,6 +169,7 @@ pub(crate) fn construct_pointer_event<'s>(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_pointer_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -244,6 +247,7 @@ pub(crate) fn construct_wheel_event<'s>(
     construct_native_wheel_event(scope, event_type, mouse, delta_x, delta_y)
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_drop_input_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -258,6 +262,7 @@ pub(crate) fn construct_drop_input_event<'s>(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_mouse_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -276,6 +281,7 @@ pub(crate) fn construct_mouse_event_for_target<'s>(
     construct_mouse_event_with_modifiers(scope, event_type, coordinates, button, buttons, modifiers)
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -303,6 +309,7 @@ pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -330,6 +337,7 @@ pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn construct_wheel_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
