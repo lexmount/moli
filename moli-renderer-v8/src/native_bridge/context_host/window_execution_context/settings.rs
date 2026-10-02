@@ -2,7 +2,6 @@ use super::super::JsContextHost;
 use super::super::OwnerDispatchScope;
 use super::WindowExecutionContextIdentity;
 use crate::document_runtime::DomHandle;
-use crate::util::set_private_value;
 use moli_url::WebOrigin;
 use std::rc::Rc;
 use url::Url;
@@ -22,13 +21,10 @@ pub(crate) struct WindowEnvironmentSettings {
 }
 
 impl WindowEnvironmentSettings {
-    pub(crate) const DOCUMENT_WRAPPER_SLOT: &'static str = "__moliWindowAssociatedDocument";
-
-    pub(in crate::native_bridge::context_host) fn bind_current_child_document<'s>(
-        scope: &mut v8::PinScope<'s, '_>,
+    pub(crate) fn bind_current_child_document(
+        scope: &mut v8::PinScope<'_, '_>,
         host: &JsContextHost,
         child_handle: DomHandle,
-        document_wrapper: v8::Local<'s, v8::Object>,
     ) -> Option<()> {
         // A reused element can point to a new Window. Only a currently
         // registered realm may change its associated Document; a retained old
@@ -42,16 +38,6 @@ impl WindowEnvironmentSettings {
         let owner = host.frame_owner_current_child_snapshot(child_handle)?;
         let origin = WebOrigin::from_serialized(&owner.settings.origin);
         let context = scope.get_current_context();
-        let window = context.global(scope);
-        // Realm retirement clears the shared wrapper cache. Keep the original
-        // Document as a private V8 edge so Window.document retains object
-        // identity without a Rust Global keeping this Context alive.
-        set_private_value(
-            scope,
-            window,
-            Self::DOCUMENT_WRAPPER_SLOT,
-            document_wrapper.into(),
-        );
         let _previous = context.set_slot(Rc::new(Self {
             document,
             origin,

@@ -2,7 +2,6 @@ use super::helpers::{
     window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
 };
 use super::*;
-use crate::native_bridge::WindowEnvironmentSettings;
 
 pub(in crate::context_bootstrap) fn window_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -91,62 +90,4 @@ pub(in crate::context_bootstrap) fn window_cross_origin_isolated_getter<'s>(
         .map(|policy| policy.cross_origin_isolated)
         .unwrap_or_else(|| host.cross_origin_isolated());
     rv.set_bool(isolated);
-}
-
-pub(in crate::context_bootstrap) fn window_document_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(receiver) = window_receiver(scope, &args) else {
-        return;
-    };
-    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
-        rv.set_null();
-        return;
-    };
-    let Some(context) = receiver.get_creation_context(scope) else {
-        rv.set_null();
-        return;
-    };
-    // A borrowed getter runs in its function's realm. Resolve both settings
-    // and wrappers in the receiver's realm, including a retained old Window.
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let handle = if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
-        let window = context.global(scope);
-        if let Some(document) = window_hidden_value(
-            scope,
-            window,
-            WindowEnvironmentSettings::DOCUMENT_WRAPPER_SLOT,
-        ) {
-            rv.set(document);
-            return;
-        }
-        settings.document_handle()
-    } else if let Some(handle) = window_child_context_handle(scope, receiver) {
-        // During bootstrap the Document wrapper can precede settings binding.
-        // Only this exact live Window may follow the child's current route.
-        let host = unsafe { &*host_ptr };
-        if host
-            .window_execution_context_identity_for_access_check(context)
-            .is_none_or(|identity| !host.window_execution_context_identity_is_current(identity))
-        {
-            rv.set_null();
-            return;
-        }
-        match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, handle) {
-            Some(document) => rv.set(document.into()),
-            None => rv.set_null(),
-        }
-        return;
-    } else {
-        unsafe { &*host_ptr }.document_handle()
-    };
-    match unsafe { &mut *host_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, handle)
-    {
-        Some(document) => rv.set(document.into()),
-        None => rv.set_null(),
-    }
 }

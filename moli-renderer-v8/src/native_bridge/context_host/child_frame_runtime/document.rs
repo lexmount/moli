@@ -1,11 +1,12 @@
 use super::super::{JsContextHost, WindowExecutionContextOwner};
 use super::document_slots::sync_child_document_window_slots;
+use crate::context_bootstrap::bind_current_child_window_document;
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
 use crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT;
 use crate::native_bridge::{
-    OwnerDispatchScope, WindowEnvironmentSettings,
+    OwnerDispatchScope,
     document::{detached_native_handle_for_runtime, is_html_document},
     node::remove_child_to_current_reaction_queue,
     throw_dom_exception,
@@ -112,9 +113,7 @@ impl JsContextHost {
             self.clear_child_browsing_context_live_foreign_pairings(scope, document_handle);
             install_child_document_stream_methods(scope, document, handle);
             if let Some(window) = window {
-                let _ = WindowEnvironmentSettings::bind_current_child_document(
-                    scope, self, handle, document,
-                );
+                let _ = bind_current_child_window_document(scope, self, handle, document);
                 sync_child_document_window_slots(
                     scope,
                     document,
