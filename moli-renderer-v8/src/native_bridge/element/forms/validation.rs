@@ -842,7 +842,9 @@ pub(in crate::native_bridge) fn dispatch_invalid_event(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
-    if let Some(event) = construct_simple_event(scope, "invalid", false, true, false) {
+    if let Some(event) =
+        construct_simple_event_for_target(scope, runtime_ptr, handle, "invalid", false, true, false)
+    {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
 }
