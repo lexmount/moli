@@ -1,39 +1,7 @@
+use super::super::ui::{UiEventInit, WindowReference, initialize_legacy_ui_event};
 use super::*;
-use crate::context_bootstrap::is_window_receiver;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
-
-struct WindowReference<'s>(v8::Local<'s, v8::Object>);
-
-impl<'s> webidl::WebIdlConverter<'s> for WindowReference<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        if let Ok(window) = v8::Local::<v8::Object>::try_from(value)
-            && is_window_receiver(scope, window)
-        {
-            return Ok(Self(window));
-        }
-        Err(webidl::WebIdlError::cannot_convert(context, "Window"))
-    }
-}
-
-/// UIEventInit members, including the legacy which member, in dictionary order.
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "KeyboardEventInit")]
-struct UiEventInitMembers<'s> {
-    #[webidl(default = 0)]
-    detail: i32,
-    #[webidl(nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
-    #[webidl(default = 0)]
-    which: u32,
-}
 
 /// Own KeyboardEventInit members, including the legacy code members.
 #[derive(webidl::WebIdlDictionary)]
@@ -71,15 +39,14 @@ impl Default for KeyboardEventInitMembers {
 
 #[derive(Default)]
 pub(super) struct KeyboardEventInit<'s> {
-    flags: (bool, bool, bool),
-    ui: UiEventInitMembers<'s>,
+    ui: UiEventInit<'s>,
     modifiers: super::super::modifiers::EventModifierInitMembers,
     keyboard: KeyboardEventInitMembers,
 }
 
 impl KeyboardEventInit<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        self.flags
+        self.ui.event_flags()
     }
 }
 
@@ -95,7 +62,6 @@ pub(super) fn parse_keyboard_event_init<'s>(
             // Parse the inheritance chain base-first. Each group's members are
             // read once in lexical order, before initializing any event state.
             Ok(KeyboardEventInit {
-                flags: super::super::init::parse_event_init(scope, Some(object))?,
                 ui: webidl::parse_dictionary_object(scope, object)?,
                 modifiers: webidl::parse_dictionary_object(scope, object)?,
                 keyboard: webidl::parse_dictionary_object(scope, object)?,
@@ -113,14 +79,11 @@ pub(super) fn parse_keyboard_event_init<'s>(
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct KeyboardEventInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    detail: i32,
     key: v8::Local<'scope, v8::String>,
     code: v8::Local<'scope, v8::String>,
     location: u32,
     char_code: u32,
     key_code: u32,
-    which: u32,
     repeat: bool,
     is_composing: bool,
 }
@@ -130,24 +93,17 @@ pub(super) fn initialize_keyboard_event<'s>(
     event: v8::Local<'s, v8::Object>,
     parsed: KeyboardEventInit<'s>,
 ) {
-    let view = parsed
-        .ui
-        .view
-        .map(|window| window.0.into())
-        .unwrap_or_else(|| v8::null(scope).into());
+    parsed.ui.initialize(scope, event);
     let key = v8_string_from_utf16_units(scope, &parsed.keyboard.key.0).expect("KeyboardEvent key");
     let code =
         v8_string_from_utf16_units(scope, &parsed.keyboard.code.0).expect("KeyboardEvent code");
     parsed.modifiers.initialize(scope, event);
     KeyboardEventInitDeclaration::new(
-        view,
-        parsed.ui.detail,
         key,
         code,
         parsed.keyboard.location,
         parsed.keyboard.char_code,
         parsed.keyboard.key_code,
-        parsed.ui.which,
         parsed.keyboard.repeat,
         parsed.keyboard.is_composing,
     )
@@ -183,9 +139,6 @@ struct InitKeyboardEventArgs<'s> {
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct LegacyKeyboardEventInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    #[webapi(constructor_default = 0)]
-    detail: i32,
     key: v8::Local<'scope, v8::String>,
     location: u32,
     #[webapi(constructor_default = false)]
@@ -210,10 +163,7 @@ pub(in crate::context_bootstrap) fn keyboard_event_init_callback<'s>(
     ) {
         return;
     }
-    let view = parsed
-        .view
-        .map(|window| window.0.into())
-        .unwrap_or_else(|| v8::null(scope).into());
+    initialize_legacy_ui_event(scope, event, parsed.view, 0);
     let key = v8_string_from_utf16_units(scope, &parsed.key.0).expect("KeyboardEvent key");
     super::super::modifiers::initialize_legacy_event_modifiers(
         scope,
@@ -223,7 +173,7 @@ pub(in crate::context_bootstrap) fn keyboard_event_init_callback<'s>(
         parsed.shift_key,
         parsed.meta_key,
     );
-    LegacyKeyboardEventInitDeclaration::new(view, key, parsed.location)
+    LegacyKeyboardEventInitDeclaration::new(key, parsed.location)
         .initialize(scope, event)
         .expect("legacy KeyboardEvent init declaration should initialize");
 }

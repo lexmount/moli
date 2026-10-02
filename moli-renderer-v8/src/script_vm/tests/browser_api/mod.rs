@@ -79,6 +79,7 @@ mod traversal;
 mod traversal_coordinator;
 mod trusted_types;
 mod trusted_types_attributes;
+mod ui_event_init;
 mod user_activation;
 mod value_events;
 mod web_audio;
