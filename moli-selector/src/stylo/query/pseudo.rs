@@ -686,11 +686,14 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
     let mut current = Some(handle);
     while let Some(handle) = current {
         if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            if let Some(direction) = element.attribute("dir").and_then(normalized_direction) {
+            if let Some(direction) = element
+                .attribute_ns("", "dir")
+                .and_then(normalized_direction)
+            {
                 return direction;
             }
             if element
-                .attribute("dir")
+                .attribute_ns("", "dir")
                 .is_some_and(|value| value.eq_ignore_ascii_case("auto"))
                 || element.is_html_element("bdi")
             {
@@ -724,7 +727,7 @@ pub(crate) fn html_auto_directionality_invalidation_root(
         if let Some(element) = node.as_element()
             && element.namespace() == "http://www.w3.org/1999/xhtml"
         {
-            let dir = element.attribute("dir");
+            let dir = element.attribute_ns("", "dir");
             let has_auto_direction = dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
                 || (element.is_html_element("bdi")
                     && !dir.is_some_and(|value| {
@@ -831,7 +834,7 @@ fn descendant_is_directionally_isolated_for_auto(element: &Element) -> bool {
     {
         return true;
     }
-    element.attribute("dir").is_some_and(|value| {
+    element.attribute_ns("", "dir").is_some_and(|value| {
         normalized_direction(value).is_some() || value.eq_ignore_ascii_case("auto")
     })
 }

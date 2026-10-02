@@ -7,10 +7,7 @@ mod object;
 mod slots;
 mod time;
 
-use crate::{
-    native_bridge::callback_value_dom_handle,
-    util::{context_host_ptr_from_global_bridge, object_number_property, v8_string},
-};
+use crate::util::{context_host_ptr_from_global_bridge, object_number_property, v8_string};
 
 pub(in crate::context_bootstrap) use crate::host::WINDOW_EVENT_SLOT;
 pub(in crate::context_bootstrap) use buffers::*;

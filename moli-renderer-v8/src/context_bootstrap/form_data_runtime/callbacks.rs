@@ -111,77 +111,82 @@ pub(super) fn form_data_constructor_callback<'s>(
         return;
     }
 
-    let mut entries = Vec::new();
     let Some(parsed) = webidl::parse_args::<FormDataConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(form) = parsed.form {
-        let Ok(form) = v8::Local::<v8::Object>::try_from(form) else {
-            throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
-            return;
-        };
-        if !web_api_interfaces::HTMLFormElement::is_instance(scope, form) {
-            throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
-            return;
+    let form = match parsed.form {
+        Some(value) => {
+            let Ok(form) = v8::Local::<v8::Object>::try_from(value) else {
+                throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
+                return;
+            };
+            if !web_api_interfaces::HTMLFormElement::is_instance(scope, form) {
+                throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
+                return;
+            }
+            Some(form)
         }
+        None => None,
+    };
+    // WebIDL converts the optional submitter even when the form is omitted.
+    let submitter = match parsed.submitter {
+        Some(value) if !value.is_null_or_undefined() => {
+            let Ok(submitter) = v8::Local::<v8::Object>::try_from(value) else {
+                throw_type_error(
+                    scope,
+                    "FormData constructor submitter must be an HTMLElement or null",
+                );
+                return;
+            };
+            if !web_api_interfaces::HTMLElement::is_instance(scope, submitter) {
+                throw_type_error(
+                    scope,
+                    "FormData constructor submitter must be an HTMLElement or null",
+                );
+                return;
+            }
+            Some(submitter)
+        }
+        _ => None,
+    };
+    let mut entries = Vec::new();
+    if let Some(form) = form {
         let Ok((form_runtime_ptr, form_handle)) =
             node_runtime_and_handle_from_object_or_detached(scope, form)
         else {
             throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
             return;
         };
-        let submitter = match parsed.submitter {
-            Some(value) if value.is_null_or_undefined() => None,
-            Some(value) => match v8::Local::<v8::Object>::try_from(value) {
-                Ok(submitter) => {
-                    if !web_api_interfaces::HTMLElement::is_instance(scope, submitter) {
-                        throw_type_error(
-                            scope,
-                            "FormData constructor submitter must be an HTMLElement or null",
-                        );
-                        return;
-                    }
-                    let Ok((submitter_runtime_ptr, submitter_handle)) =
-                        node_runtime_and_handle_from_object_or_detached(scope, submitter)
-                    else {
-                        throw_type_error(
-                            scope,
-                            "FormData constructor submitter must be a submit button",
-                        );
-                        return;
-                    };
-                    let runtime = unsafe { &*submitter_runtime_ptr };
-                    if !is_valid_submit_button(runtime, submitter_handle) {
-                        throw_type_error(
-                            scope,
-                            "FormData constructor submitter must be a submit button",
-                        );
-                        return;
-                    }
-                    if submitter_runtime_ptr != form_runtime_ptr
-                        || form_associated_form_owner(runtime, submitter_handle)
-                            != Some(form_handle)
-                    {
-                        throw_dom_exception(
-                            scope,
-                            "NotFoundError",
-                            8,
-                            "The specified element is not owned by this form element.",
-                        );
-                        return;
-                    }
-                    Some(submitter)
-                }
-                Err(_) => {
-                    throw_type_error(
-                        scope,
-                        "FormData constructor submitter must be an HTMLElement or null",
-                    );
-                    return;
-                }
-            },
-            None => None,
-        };
+        if let Some(submitter) = submitter {
+            let Ok((submitter_runtime_ptr, submitter_handle)) =
+                node_runtime_and_handle_from_object_or_detached(scope, submitter)
+            else {
+                throw_type_error(
+                    scope,
+                    "FormData constructor submitter must be a submit button",
+                );
+                return;
+            };
+            let runtime = unsafe { &*submitter_runtime_ptr };
+            if !is_valid_submit_button(runtime, submitter_handle) {
+                throw_type_error(
+                    scope,
+                    "FormData constructor submitter must be a submit button",
+                );
+                return;
+            }
+            if submitter_runtime_ptr != form_runtime_ptr
+                || form_associated_form_owner(runtime, submitter_handle) != Some(form_handle)
+            {
+                throw_dom_exception(
+                    scope,
+                    "NotFoundError",
+                    8,
+                    "The specified element is not owned by this form element.",
+                );
+                return;
+            }
+        }
         let Some(next_entries) =
             construct_form_data_entries_for_form(scope, form_runtime_ptr, form_handle, submitter)
         else {
