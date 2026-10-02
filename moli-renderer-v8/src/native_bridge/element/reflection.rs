@@ -8,7 +8,6 @@ use super::{
     element_attribute, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
-    set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
 };
 
 macro_rules! impl_reflection_callback_data {
@@ -1252,14 +1251,18 @@ pub(super) fn set_reflected_attribute_utf16(
 ) {
     let value = string_from_utf16_units_lossy(&units);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-            &value,
-            units,
-        );
+        let _ = unsafe { &mut *runtime_ptr }
+            .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                handle,
+                None,
+                None,
+                name,
+                name,
+                &value,
+                units,
+            );
     });
 }
 
@@ -1381,7 +1384,7 @@ pub(super) fn attribute_property_getter_from_object_or_detached<'s>(
     };
     let units = unsafe { &*runtime_ptr }
         .dom_host()
-        .get_attribute_utf16_units(handle, name)
+        .get_attribute_ns_utf16_units(handle, None, name)
         .unwrap_or_default();
     let Some(value) = v8_string_from_utf16_units(scope, &units) else {
         rv.set_null();
@@ -1418,7 +1421,7 @@ pub(super) fn nullable_attribute_property_getter_from_object_or_detached<'s>(
     };
     let Some(units) = unsafe { &*runtime_ptr }
         .dom_host()
-        .get_attribute_utf16_units(handle, name)
+        .get_attribute_ns_utf16_units(handle, None, name)
     else {
         rv.set_null();
         return;
