@@ -2,6 +2,7 @@ use super::helpers::{element_option_value, select_option_handles, selected_index
 use super::*;
 use crate::native_bridge::bridge::wrapped_handle_value_for_receiver;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
+use crate::util::v8_string_from_utf16_units;
 use crate::{
     native_bridge::{
         callback_value_dom_handle,
@@ -677,7 +678,7 @@ pub(in crate::native_bridge) fn select_value_getter_function<'s>(
         .copied()
         .and_then(|option| element_option_value(runtime, option))
         .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) else {
         rv.set_null();
         return;
     };
@@ -693,9 +694,13 @@ pub(in crate::native_bridge) fn select_value_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(next_value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLSelectElement", "value", false)
-    else {
+    let Some(next_value) = form_dom_string_property_utf16_value(
+        scope,
+        args.get(0),
+        "HTMLSelectElement",
+        "value",
+        false,
+    ) else {
         return;
     };
     let _ = unsafe { &mut *runtime_ptr }.set_select_value(scope, runtime_ptr, handle, &next_value);

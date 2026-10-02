@@ -1,12 +1,10 @@
 use super::*;
 
-pub(super) fn element_option_value(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
-    let dom = runtime.dom_host().dom();
-    let element = dom.node(handle).and_then(Node::as_element)?;
-    if !element.is_html_option() {
-        return None;
-    }
-    Some(element.option_value(dom, handle))
+pub(super) fn element_option_value(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Option<moli_dom::native::DomStringValue> {
+    runtime.dom_host().option_value_dom_string(handle)
 }
 
 pub(super) fn select_option_handles(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHandle> {

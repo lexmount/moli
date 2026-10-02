@@ -1,6 +1,6 @@
-use super::NativeDom;
 use super::element::Element;
 use super::node::{NativeNodeId, Node};
+use super::{DomStringValue, NativeDom};
 use crate::forms::{
     OptionDisabledAncestorStep, OptionNearestSelectStep, OptionNearestSelectTraversal,
     option_disabled_ancestor_step, parse_non_negative_integer_prefix,
@@ -14,11 +14,16 @@ impl NativeDom {
     }
 
     pub fn option_value(&self, node_id: NativeNodeId) -> Option<String> {
+        self.option_value_dom_string(node_id)
+            .map(|value| value.as_str_lossy().to_owned())
+    }
+
+    pub fn option_value_dom_string(&self, node_id: NativeNodeId) -> Option<DomStringValue> {
         let element = self.node(node_id).and_then(Node::as_element)?;
         if !element.is_html_option() {
             return None;
         }
-        Some(element.option_value(self, node_id))
+        Some(element.option_value_dom_string(self, node_id))
     }
 
     pub fn child_element_nodes(&self, root: NativeNodeId) -> Vec<NativeNodeId> {
