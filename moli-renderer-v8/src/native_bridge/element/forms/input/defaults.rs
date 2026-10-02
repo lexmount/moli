@@ -3,20 +3,9 @@ use super::super::*;
 pub(in crate::native_bridge) fn input_default_value_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        rv.set_empty_string();
-        return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "value").unwrap_or_default();
-    if let Some(value) = v8_string(scope, &value) {
-        rv.set(value.into());
-    } else {
-        rv.set_empty_string();
-    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "value", rv);
 }
 
 pub(in crate::native_bridge) fn input_default_value_setter_function<'s>(
@@ -24,22 +13,14 @@ pub(in crate::native_bridge) fn input_default_value_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(next) = form_dom_string_property_value(
+    set_dom_string_attribute_property_on_object(
         scope,
+        args.this(),
+        "value",
         args.get(0),
         "HTMLInputElement",
         "defaultValue",
-        false,
-    ) else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, "value", &next);
+    );
     rv.set_undefined();
 }
 

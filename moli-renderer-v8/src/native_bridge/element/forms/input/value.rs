@@ -1,5 +1,7 @@
 use super::super::*;
-use crate::util::utf16_len;
+use crate::dom::native::DomStringValue;
+use crate::native_bridge::element::reflection::set_reflected_attribute_utf16;
+use crate::util::v8_string_from_utf16_units;
 use crate::webidl;
 use moli_dom::forms::{
     InputStepDirection, InputStepError, InputStepOutcome, InputStepState, date_input_milliseconds,
@@ -78,13 +80,13 @@ fn input_type_setter_on_object<'s>(
     else {
         return;
     };
-    let previous_state: Option<(InputType, String)> = {
+    let previous_state: Option<(InputType, DomStringValue)> = {
         let runtime = unsafe { &*runtime_ptr };
         runtime
             .dom_host()
             .node(handle)
             .and_then(Node::as_element)
-            .map(|element| (element.input_type(), element.input_value().to_owned()))
+            .map(|element| (element.input_type(), element.input_value_dom_string()))
     };
 
     set_reflected_attribute(scope, runtime_ptr, handle, "type", &value);
@@ -99,7 +101,7 @@ fn input_type_setter_on_object<'s>(
                 .dom_host()
                 .node(handle)
                 .and_then(Node::as_element)
-                .map(Element::input_value)
+                .map(Element::input_value_dom_string)
                 .unwrap_or_default();
             if current_value != previous_value {
                 reset_input_selection_to_end(unsafe { &mut *runtime_ptr }, handle);
@@ -136,9 +138,9 @@ pub(in crate::native_bridge) fn input_value_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(Element::input_value)
+        .map(Element::input_value_dom_string)
         .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) else {
         rv.set_null();
         return;
     };
@@ -157,7 +159,7 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         return;
     };
     let Some(next_value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLInputElement", "value", true)
+        form_dom_string_property_utf16_value(scope, args.get(0), "HTMLInputElement", "value", true)
     else {
         return;
     };
@@ -171,7 +173,13 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         // Checkbox and radio inputs use the HTML default/on value mode. Their
         // IDL setter reflects the content attribute instead of creating a
         // dirty, non-attribute value.
-        set_reflected_attribute(scope, runtime_ptr, handle, "value", &next_value);
+        set_reflected_attribute_utf16(
+            scope,
+            runtime_ptr,
+            handle,
+            "value",
+            next_value.utf16_units().into_owned(),
+        );
         rv.set_undefined();
         return;
     }
@@ -192,13 +200,14 @@ fn set_input_value_and_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    next_value: &str,
+    next_value: impl Into<DomStringValue>,
 ) {
-    let previous_value: String = unsafe { &*runtime_ptr }
+    let next_value = next_value.into();
+    let previous_value = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(Element::input_value)
+        .map(Element::input_value_dom_string)
         .unwrap_or_default();
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_input_value(handle, next_value);
@@ -206,7 +215,7 @@ fn set_input_value_and_selection(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(Element::input_value)
+        .map(Element::input_value_dom_string)
         .unwrap_or_default();
     if current_value != previous_value {
         let selection_changed = reset_input_selection_to_end(runtime, handle);
@@ -228,7 +237,7 @@ fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) 
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(|element| utf16_len(&element.input_value()) as u32)
+        .map(|element| element.input_value_dom_string().utf16_units().len() as u32)
     else {
         return false;
     };

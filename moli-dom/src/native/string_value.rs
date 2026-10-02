@@ -63,6 +63,14 @@ impl DomStringValue {
             *self = Self::from_utf16(&units);
         }
     }
+
+    pub fn replace_utf16_range(&self, start: usize, count: usize, replacement: &[u16]) -> Self {
+        let mut units = self.utf16_units().into_owned();
+        let start = start.min(units.len());
+        let end = start.saturating_add(count).min(units.len());
+        units.splice(start..end, replacement.iter().copied());
+        Self::from_utf16(&units)
+    }
 }
 
 impl From<String> for DomStringValue {
@@ -83,6 +91,12 @@ impl From<&str> for DomStringValue {
 impl From<&String> for DomStringValue {
     fn from(text: &String) -> Self {
         text.as_str().into()
+    }
+}
+
+impl From<&DomStringValue> for DomStringValue {
+    fn from(value: &DomStringValue) -> Self {
+        value.clone()
     }
 }
 
@@ -125,6 +139,18 @@ mod tests {
         assert_eq!(
             &*value.utf16_units(),
             &[0xd83d, 0xde00, 0xd800, 0x74, 0x65, 0x78, 0x74]
+        );
+    }
+
+    #[test]
+    fn replacing_code_units_can_split_and_rejoin_surrogate_pairs() {
+        let original = DomStringValue::from("😀");
+        let split = original.replace_utf16_range(1, 1, &[0x78]);
+        assert_eq!(&*split.utf16_units(), &[0xd83d, 0x78]);
+        assert_eq!(split.replace_utf16_range(1, 1, &[0xde00]), original);
+        assert_eq!(
+            DomStringValue::from_utf16(&[0xd800]).replace_utf16_range(0, 1, &[0xdc00]),
+            DomStringValue::from_utf16(&[0xdc00])
         );
     }
 }
