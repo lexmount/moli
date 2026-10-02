@@ -7,6 +7,7 @@ mod dom_string_reflection;
 mod dom_surface;
 mod focus;
 mod form_data_brands;
+mod form_data_native_state;
 mod input_value_modes;
 mod live_document;
 mod option_select_values;
