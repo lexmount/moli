@@ -33,7 +33,7 @@ pub(in crate::native_bridge) fn form_action_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_usv_string_attribute_property_on_object(
         scope,
         args.this(),
         "action",
@@ -57,7 +57,7 @@ pub(in crate::native_bridge) fn form_accept_charset_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "accept-charset",
@@ -95,7 +95,7 @@ pub(in crate::native_bridge) fn form_autocomplete_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "autocomplete",
@@ -132,7 +132,7 @@ pub(in crate::native_bridge) fn form_enctype_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "enctype",
@@ -156,7 +156,7 @@ pub(in crate::native_bridge) fn form_encoding_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "enctype",
@@ -527,7 +527,7 @@ pub(in crate::native_bridge) fn form_name_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "name",
@@ -541,20 +541,14 @@ pub(in crate::native_bridge) fn form_name_setter_function<'s>(
 pub(in crate::native_bridge) fn form_target_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) =
-        html_element_getter_receiver(scope, args.this(), "HTMLFormElement", "target", "form")
-    else {
-        rv.set_empty_string();
+    if html_element_getter_receiver(scope, args.this(), "HTMLFormElement", "target", "form")
+        .is_none()
+    {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "target").unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "target", rv);
 }
 
 fn form_owner_document_url(runtime: &JsContextHost, handle: DomHandle) -> String {
@@ -573,19 +567,19 @@ pub(in crate::native_bridge) fn form_target_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) =
-        html_element_setter_receiver(scope, args.this(), "HTMLFormElement", "target", "form")
-    else {
-        rv.set_undefined();
+    if html_element_setter_receiver(scope, args.this(), "HTMLFormElement", "target", "form")
+        .is_none()
+    {
         return;
-    };
-    let Some(value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLFormElement", "target", false)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, "target", &value);
+    }
+    set_dom_string_attribute_property_on_object(
+        scope,
+        args.this(),
+        "target",
+        args.get(0),
+        "HTMLFormElement",
+        "target",
+    );
     rv.set_undefined();
 }
 
