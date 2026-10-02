@@ -237,8 +237,9 @@ pub fn construct_native_pointer_event<'s>(
     )
 }
 
-pub fn construct_native_pointer_click<'s>(
+pub fn construct_native_activation_pointer_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
     mouse: MouseEventInit<'s>,
     pointer_id: i32,
     pointer_type: &str,
@@ -247,7 +248,7 @@ pub fn construct_native_pointer_click<'s>(
     construct_trusted_subclass(
         scope,
         EventSubclassKind::PointerEvent,
-        "click",
+        event_type,
         SubclassInit::Pointing(PointerEventInitPayload::Pointer(init)),
     )
 }
