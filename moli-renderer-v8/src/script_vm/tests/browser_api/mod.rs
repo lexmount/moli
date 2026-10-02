@@ -27,6 +27,7 @@ mod ice_candidate;
 mod idle_callbacks;
 mod idle_detection;
 mod images;
+mod legacy_event_init;
 mod media;
 mod media_devices;
 mod media_query_list_events;
