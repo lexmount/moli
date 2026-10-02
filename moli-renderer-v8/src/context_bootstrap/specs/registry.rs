@@ -97,36 +97,12 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::MIDIAccess::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
-        interface: web_api_interfaces::MIDIInput::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIInputMap::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIOutput::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIOutputMap::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIPort::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaKeyMessageEvent::DESCRIPTOR,
@@ -161,10 +137,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
-        interface: web_api_interfaces::PaymentResponse::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::VideoDecoder::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 1 },
     },
@@ -178,10 +150,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::CSSTransition::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::CanvasCaptureMediaStreamTrack::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -201,20 +169,12 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
-        interface: web_api_interfaces::MediaSession::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::MediaSourceHandle::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaStream::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 0 },
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MediaStreamTrack::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaStreamTrackEvent::DESCRIPTOR,
@@ -233,19 +193,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::RemotePlayback::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::SourceBuffer::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::SourceBufferList::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::TimeRanges::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -255,10 +207,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::VideoFrame::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::VideoPlaybackQuality::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::AudioListener::DESCRIPTOR,
