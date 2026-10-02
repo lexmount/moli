@@ -178,7 +178,7 @@ impl NativeDom {
         if !option.is_html_option() {
             return false;
         }
-        if option.has_attribute("disabled") {
+        if option.has_attribute_ns("", "disabled") {
             return true;
         }
 
@@ -191,7 +191,7 @@ impl NativeDom {
             match option_disabled_ancestor_step(
                 element.namespace(),
                 element.local_name(),
-                element.has_attribute("disabled"),
+                element.has_attribute_ns("", "disabled"),
             ) {
                 OptionDisabledAncestorStep::Continue => {}
                 OptionDisabledAncestorStep::Disabled(disabled) => return disabled,
