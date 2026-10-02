@@ -585,6 +585,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::WakeLock::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WakeLockSentinel::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Clipboard::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

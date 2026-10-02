@@ -292,6 +292,8 @@ interfaces! {
     MediaStreamTrack: EventTarget;
     CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     MediaDevices: EventTarget;
+    WakeLock;
+    WakeLockSentinel: EventTarget;
     MediaError;
     MediaList;
     MediaQueryList: EventTarget;

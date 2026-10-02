@@ -74,6 +74,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "storageBuckets",
     "geolocation",
     "mediaCapabilities",
+    "wakeLock",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -193,6 +194,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     geolocation: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 33))]
+    wake_lock: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback)]
     cookie_enabled: (),
 }
@@ -591,6 +594,9 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
 
     #[webapi(data_property, enumerable)]
     media_capabilities: v8::Local<'scope, v8::Value>,
+
+    #[webapi(data_property, enumerable)]
+    wake_lock: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -892,6 +898,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
 ) {
     install_clipboard_template_bindings(scope, template, interface_name);
     install_geolocation_template_bindings(scope, template, interface_name);
+    super::wake_lock::install(scope, template, interface_name);
     install_navigator_collection_template_bindings(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
@@ -925,14 +932,17 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     }
 }
 
-fn filter_navigator_secure_context_exposure<'s>(
+pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     prototype: v8::Local<'s, v8::Object>,
-    secure_context: bool,
 ) -> Result<()> {
+    let window = scope.get_current_context().global(scope);
+    let secure_context =
+        super::super::runtime_state::window_realm_secure_context_available(scope, window);
     if !secure_context {
         delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "mediaDevices")?;
+        delete_object_property(scope, prototype, "wakeLock")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
@@ -1100,6 +1110,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
                 || navigator_geolocation_secure_context_available(scope, owner_child, owner_popup);
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
+        NavigatorSubobject::WakeLock => super::wake_lock::build(scope)?.into(),
     };
     Ok(value)
 }
@@ -1273,6 +1284,7 @@ fn build_window_navigator_backing_for_owner<'s>(
         storage_buckets: v8::undefined(scope).into(),
         geolocation: v8::undefined(scope).into(),
         media_capabilities: v8::undefined(scope).into(),
+        wake_lock: v8::undefined(scope).into(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
@@ -1294,15 +1306,19 @@ pub(super) fn build_window_navigator_object_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
     identity: Option<&BrowserIdentityProfile>,
-    storage_apis_available: bool,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, owner_child, None, identity)?;
+    bind_window_navigator(scope, backing)
+}
+
+fn bind_window_navigator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    backing: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let _ = ensure_intrinsic_interface_prototype(scope, "Navigator")?;
     let navigator = NavigatorObjectDeclaration::new(backing)
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind Navigator object: {error}"))?;
-    if let Some(prototype) = global_constructor_prototype(scope, "Navigator") {
-        filter_navigator_secure_context_exposure(scope, prototype, storage_apis_available)?;
-    }
     Ok(navigator)
 }
 
@@ -1358,9 +1374,7 @@ pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
     owner_popup: u64,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, None, Some(owner_popup), None)?;
-    NavigatorObjectDeclaration::new(backing)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind lightweight popup Navigator object: {error}"))
+    bind_window_navigator(scope, backing)
 }
 
 fn build_worker_navigator_backing<'s>(

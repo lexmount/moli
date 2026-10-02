@@ -105,6 +105,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "DeviceMotionEventRotationRate",
     "DeviceOrientationEvent",
     "MediaDevices",
+    "WakeLock",
+    "WakeLockSentinel",
     "SubtleCrypto",
     "CryptoKey",
     "PaymentResponse",
