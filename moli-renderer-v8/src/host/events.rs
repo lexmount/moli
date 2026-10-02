@@ -241,6 +241,30 @@ pub(crate) enum DispatchStatus {
     StopImmediate,
 }
 
+struct EventCallbackView<'s> {
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+}
+
+fn event_callback_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    callback: &crate::native_bridge::PreparedEventCallback,
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<EventCallbackView<'s>> {
+    let Ok(target) = v8::Local::<v8::Object>::try_from(receiver) else {
+        return Some(EventCallbackView { receiver, event });
+    };
+    let context = callback.relevant_context(scope);
+    let target = crate::context_bootstrap::event_worlds::target_in_realm(scope, target, context)?;
+    let event =
+        crate::context_bootstrap::event_worlds::event_in_realm(scope, target, event, context)?;
+    Some(EventCallbackView {
+        receiver: target.into(),
+        event,
+    })
+}
+
 pub(crate) fn invoke_prepared_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
@@ -253,14 +277,10 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
-    let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
-    let context = callback.relevant_context(scope);
-    let (receiver, event) =
-        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)?;
-    // Window.onerror's five arguments are JS values, not an Event conversion.
-    let event_arguments = [event.into()];
-    let arguments = if has_event_argument {
-        &event_arguments
+    let view = event_callback_view(scope, &callback, receiver, event)?;
+    let ordinary_arguments = [view.event.into()];
+    let arguments = if arguments.len() == 1 && arguments[0].strict_equals(event.into()) {
+        ordinary_arguments.as_slice()
     } else {
         arguments
     };
@@ -272,8 +292,8 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
         event_type,
         callback_name,
         callback,
-        receiver,
-        (!invocation_target_in_shadow_tree).then_some(event),
+        view.receiver,
+        (!invocation_target_in_shadow_tree).then_some(view.event),
         arguments,
     )
 }
@@ -330,16 +350,19 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
     event: v8::Local<'s, v8::Object>,
 ) {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
+    let Some(view) = event_callback_view(scope, &callback, receiver, event) else {
+        return;
+    };
     let _dom_debugger_pause = unsafe { &*host_ptr }
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
     let relevant_identity = callback.relevant_identity();
-    let arguments = [event.into()];
+    let arguments = [view.event.into()];
     let invocation = callback
         .invocation(
             scope,
-            receiver,
+            view.receiver,
             &arguments,
-            (!invocation_target_in_shadow_tree).then_some(event),
+            (!invocation_target_in_shadow_tree).then_some(view.event),
         )
         .with_execution_context_currentness(host_ptr, relevant_identity);
     CallbackInvoker::invoke_event_and_then(

@@ -239,14 +239,12 @@ fn invoke_simple_event_listeners<'s>(
             target,
             listener.relevant_context(),
         );
-        let Some(callback_event) =
-            crate::context_bootstrap::navigation_event_worlds::event_in_realm(
-                scope,
-                target,
-                event,
-                listener.relevant_context(),
-            )
-        else {
+        let Some(callback_event) = crate::context_bootstrap::event_worlds::event_in_realm(
+            scope,
+            target,
+            event,
+            listener.relevant_context(),
+        ) else {
             continue;
         };
         let callback_arguments = [callback_event.into()];
