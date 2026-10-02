@@ -1121,6 +1121,88 @@ fn concrete_protocol_output_rejects_missing_earlier_publication() {
 }
 
 #[tokio::test]
+async fn pending_navigation_does_not_suspend_projected_renderer_notifications() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let mut conn = CdpConnection::new();
+    let navigation = arm_background_navigation_request(&mut conn, "LOADER-next");
+    let mut scheduler = CdpScheduler::new(conn);
+    let message = json!({"method": "Runtime.consoleAPICalled", "params": {"marker": "current"}});
+    scheduler.queues.enqueue_renderer_output_publication(
+        publication_cursor(&publication),
+        ProtocolOutputSequence::from_messages(vec![message.clone()]),
+        Vec::new(),
+        Some(future_load_candidate(&publication)),
+    );
+
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+    assert_eq!(
+        scheduler
+            .complete_next_protocol_residence()
+            .await
+            .into_messages(),
+        vec![message]
+    );
+    assert!(
+        scheduler
+            .conn
+            .has_inflight_background_navigation_for_target(navigation.target_id())
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+}
+
+#[tokio::test]
+async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let load = deferred_main_document_load_observation_id(1);
+    let mut conn = CdpConnection::new();
+    let navigation = arm_background_navigation_request(&mut conn, "LOADER-next");
+    let mut scheduler = CdpScheduler::new(conn);
+    let message = json!({"method": "Runtime.consoleAPICalled", "params": {"marker": "after-load"}});
+    scheduler.queues.enqueue_renderer_output_publication(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![message.clone()]),
+        vec![load],
+        None,
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+    let fence = RendererOutputFence::new_for_test(cursor);
+    assert!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&fence)
+            .await
+            .is_empty()
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+
+    scheduler.queues.satisfy_load_predecessor(load);
+    assert_eq!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&fence)
+            .await
+            .into_messages(),
+        vec![message]
+    );
+    assert!(
+        scheduler
+            .conn
+            .has_inflight_background_navigation_for_target(navigation.target_id())
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+}
+
+#[tokio::test]
 async fn background_navigation_blocks_only_its_target_protocol_residences() {
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
