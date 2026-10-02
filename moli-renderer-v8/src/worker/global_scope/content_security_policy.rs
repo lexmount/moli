@@ -1149,29 +1149,3 @@ pub(super) fn worker_content_security_policy_error_message(
         violation.blocked_uri
     )
 }
-
-pub(super) fn worker_compilation_content_security_policy_violations(
-    state: &WorkerGlobalState,
-    protected_url: &Url,
-    kind: crate::content_security_policy::ContentSecurityPolicyNonUrlKind,
-    source: Option<&str>,
-    disposition: ContentSecurityPolicyDisposition,
-) -> Vec<ContentSecurityPolicyUrlViolation> {
-    let policies = match disposition {
-        ContentSecurityPolicyDisposition::Enforce => &state.content_security_policies,
-        ContentSecurityPolicyDisposition::Report => &state.content_security_report_only_policies,
-    };
-    policies
-        .iter()
-        .filter_map(|policy| {
-            crate::content_security_policy::content_security_policy_non_url_violation_with_source(
-                policy,
-                protected_url,
-                kind,
-                source,
-                disposition,
-                &state.content_security_reporting_endpoints,
-            )
-        })
-        .collect()
-}

@@ -1081,7 +1081,7 @@ impl JsContextHost {
         }
         if include_call_location
             && let Some((source_file, line_number, column_number)) =
-                crate::content_security_policy::current_script_violation_location(scope)
+                current_script_violation_location(scope)
         {
             for violation in [&mut report_only_violations, &mut enforced_violations]
                 .into_iter()
@@ -1151,7 +1151,7 @@ impl JsContextHost {
             );
         if !self.active_inspector_dispatch
             && let Some((source_file, line_number, column_number)) =
-                crate::content_security_policy::current_script_violation_location(scope)
+                current_script_violation_location(scope)
         {
             for violation in &mut violations {
                 violation.source_file.clone_from(&source_file);
@@ -1302,7 +1302,7 @@ impl JsContextHost {
         capture_current_script_location: bool,
     ) {
         let source_location = (capture_current_script_location && !self.active_inspector_dispatch)
-            .then(|| crate::content_security_policy::current_script_violation_location(scope))
+            .then(|| current_script_violation_location(scope))
             .flatten();
         for mut violation in self.trusted_types_sink_csp_violations_for_owner(owner, sink, sample) {
             if let Some((source_file, line_number, column_number)) = &source_location {
