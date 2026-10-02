@@ -436,12 +436,6 @@ interfaces! {
     MediaSession;
     MediaSource: EventTarget;
     MemoryInfo;
-    MIDIPort: EventTarget;
-    MIDIAccess: EventTarget;
-    MIDIInput: MIDIPort;
-    MIDIOutput: MIDIPort;
-    MIDIInputMap;
-    MIDIOutputMap;
     MessageChannel;
     MessageEvent: Event;
     MessagePort: EventTarget;
@@ -479,7 +473,6 @@ interfaces! {
     OscillatorNode: AudioScheduledSourceNode;
     PageTransitionEvent: Event;
     Path2D;
-    PaymentResponse: EventTarget;
     Performance: EventTarget;
     PerformanceEntry;
     PerformanceMark: PerformanceEntry;
@@ -527,7 +520,6 @@ interfaces! {
     ReadableStreamDefaultController;
     ReadableStreamDefaultReader;
     Request;
-    RemotePlayback: EventTarget;
     ResizeObserver;
     ResizeObserverEntry;
     ResizeObserverSize;
@@ -590,12 +582,6 @@ interfaces! {
     SVGStopElement: SVGElement;
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
-    SVGFEComponentTransferElement: SVGElement;
-    SVGFEFloodElement: SVGElement;
-    SVGFEImageElement: SVGElement;
-    SVGFEMergeElement: SVGElement;
-    SVGFEMergeNodeElement: SVGElement;
-    SVGFETileElement: SVGElement;
     SVGForeignObjectElement: SVGGraphicsElement;
     SVGGElement: SVGGraphicsElement;
     SVGGeometryElement: SVGGraphicsElement;
