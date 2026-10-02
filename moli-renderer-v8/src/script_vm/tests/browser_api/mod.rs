@@ -62,6 +62,7 @@ mod message_event_init;
 mod message_port_events;
 mod message_port_lifecycle;
 mod misc;
+mod native_event_construction;
 mod navigation;
 mod navigation_event_init;
 mod notification_init;
