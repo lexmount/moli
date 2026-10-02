@@ -15,10 +15,7 @@ pub(super) struct MouseInputState {
 
 pub(crate) enum MouseReleaseFollowUp {
     ActivateViaClick(DomHandle),
-    DispatchEvent {
-        name: &'static str,
-        target: DomHandle,
-    },
+    Auxiliary(DomHandle),
 }
 
 impl JsContextHost {
@@ -100,7 +97,7 @@ impl JsContextHost {
             return None;
         }
         match button {
-            0 | 1 => {
+            0..=4 => {
                 let dom = self.dom_host();
                 if !dom.is_connected(press.handle) {
                     return None;
@@ -118,16 +115,9 @@ impl JsContextHost {
                 Some(if button == 0 {
                     MouseReleaseFollowUp::ActivateViaClick(target)
                 } else {
-                    MouseReleaseFollowUp::DispatchEvent {
-                        name: "auxclick",
-                        target,
-                    }
+                    MouseReleaseFollowUp::Auxiliary(target)
                 })
             }
-            2 if press.handle == released => Some(MouseReleaseFollowUp::DispatchEvent {
-                name: "contextmenu",
-                target: released,
-            }),
             _ => None,
         }
     }
