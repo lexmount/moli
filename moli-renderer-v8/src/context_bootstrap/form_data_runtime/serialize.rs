@@ -13,7 +13,7 @@ use crate::native_bridge::{
         control_has_datalist_ancestor, element_internals_form_value_for_target,
         form_control_is_effectively_disabled, form_data_control_elements, text_control_value,
     },
-    node_runtime_and_handle_from_object_or_detached,
+    node_relevant_context_for_handle, node_runtime_and_handle_from_object_or_detached,
 };
 use moli_encoding::is_charset_sentinel_name;
 use moli_webapi_declare::WebApiObject;
@@ -31,6 +31,9 @@ pub(super) fn serialize_form_data_controls<'s>(
     form_handle: crate::document_runtime::DomHandle,
     submitter: Option<v8::Local<'s, v8::Object>>,
 ) -> Vec<(String, v8::Global<v8::Value>)> {
+    let context = node_relevant_context_for_handle(scope, runtime_ptr, form_handle)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let mut entries = Vec::new();
     let controls = form_data_control_elements(unsafe { &*runtime_ptr }, form_handle);
     for handle in controls {
