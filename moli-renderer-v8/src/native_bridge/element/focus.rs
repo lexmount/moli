@@ -1108,7 +1108,12 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     let Some(target) = access_key_target(unsafe { &*runtime_ptr }, &key) else {
         return;
     };
-    let Some(click) = construct_click_event(scope, runtime_ptr, target, 0.0, 0.0, 0, 0) else {
+    let modifiers = u8::from(event_boolean_property(scope, event, "altKey"))
+        | (u8::from(event_boolean_property(scope, event, "ctrlKey")) << 1)
+        | (u8::from(event_boolean_property(scope, event, "metaKey")) << 2)
+        | (u8::from(event_boolean_property(scope, event, "shiftKey")) << 3);
+    let Some(click) = construct_click_event(scope, runtime_ptr, target, 0.0, 0.0, 0, 0, modifiers)
+    else {
         return;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, target, click);
