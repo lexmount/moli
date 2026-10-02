@@ -1,5 +1,7 @@
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{JsContextHost, node_owner_document_relevant_context};
+use crate::native_bridge::{
+    JsContextHost, node_owner_document_relevant_context, node_relevant_context_for_handle,
+};
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
@@ -866,10 +868,14 @@ pub(crate) fn construct_simple_event<'s>(
 
 pub(crate) fn construct_submit_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     submitter: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
     cancelable: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_relevant_context_for_handle(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let init = SubmitEventInitDeclaration::new(
         bubbles,
         cancelable,
@@ -878,6 +884,37 @@ pub(crate) fn construct_submit_event<'s>(
     .bind(scope)
     .ok()?;
     construct_event(scope, "SubmitEvent", "submit", init)
+}
+
+pub(crate) fn construct_simple_event_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_relevant_context_for_handle(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_simple_event(scope, event_type, bubbles, cancelable, composed)
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct FormDataEventInitDeclaration<'s> {
+    form_data: v8::Local<'s, v8::Object>,
+    bubbles: bool,
+}
+
+pub(crate) fn construct_form_data_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    form_data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = FormDataEventInitDeclaration::new(form_data, true)
+        .bind(scope)
+        .ok()?;
+    construct_event(scope, "FormDataEvent", "formdata", init)
 }
 
 pub(crate) fn construct_command_event<'s>(

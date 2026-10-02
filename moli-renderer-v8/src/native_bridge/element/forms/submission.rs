@@ -6,7 +6,7 @@ use crate::native_bridge::element::{
     dispatch_beforeinput,
 };
 use crate::runtime::RendererInputDispatchOutcome;
-use crate::util::{v8_string, v8str};
+use crate::util::v8_string;
 use moli_dom::forms::normalize_form_submission_newlines;
 use moli_encoding::{
     encode_text_for_legacy_web, form_submission_encoding, form_urlencoded_serialize_pairs,
@@ -245,7 +245,15 @@ fn submit_form_with_submit_event_inner(
             })
     };
     if blocked_by_unclosed_form_control {
-        if let Some(event) = construct_simple_event(scope, "error", false, false, false) {
+        if let Some(event) = construct_simple_event_for_target(
+            scope,
+            runtime_ptr,
+            form_handle,
+            "error",
+            false,
+            false,
+            false,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
         }
         if let Some(id) = invocation {
@@ -268,7 +276,7 @@ fn submit_form_with_submit_event_inner(
     }
 
     let submitter_value = wrap_handle_value(scope, runtime_ptr, submitter_handle);
-    if let Some(event) = construct_submit_event(scope, submitter_value, true, true) {
+    if let Some(event) = construct_submit_event(scope, runtime_ptr, form_handle, submitter_value, true, true) {
         if invocation.is_some() {
             crate::context_bootstrap::mark_agent_submit_event(scope, event);
         }
@@ -402,7 +410,7 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
         return;
     }
 
-    if dispatch_form_reset_event(scope, runtime_ptr, form_handle, args.this()).allows_default() {
+    if dispatch_form_reset_event(scope, runtime_ptr, form_handle).allows_default() {
         crate::context_bootstrap::web_mcp::cancel_form_execution(scope, runtime_ptr, form_handle);
         let _ = reset_form_default_action(
             scope,
@@ -414,87 +422,26 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
     rv.set_undefined();
 }
 
-fn dispatch_form_reset_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge::element) fn dispatch_form_reset_event(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     form_handle: DomHandle,
-    receiver: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(event) = construct_simple_event(scope, "reset", true, true, false) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
-    };
-    align_event_constructor_function_realm_with_target(scope, event, receiver);
-    dispatch_public_event(scope, runtime_ptr, form_handle, event)
-}
-
-fn align_event_constructor_function_realm_with_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    target: v8::Local<'s, v8::Object>,
-) {
-    let Some(target_constructor) = target
-        .get(scope, v8str(scope, "constructor").into())
-        .and_then(|constructor| constructor.to_object(scope))
-    else {
-        return;
-    };
-    align_event_constructor_function_realm_with_constructor(scope, event, target_constructor);
-}
-
-fn align_event_constructor_function_realm_with_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    target_constructor: v8::Local<'s, v8::Object>,
-) {
-    let Some(event_prototype) = event.get_prototype(scope) else {
-        return;
-    };
-    let Some(function_body) = v8_string(scope, "") else {
-        return;
-    };
-    let Some(target_function_constructor) = target_constructor
-        .get(scope, v8str(scope, "constructor").into())
-        .and_then(|constructor| v8::Local::<v8::Function>::try_from(constructor).ok())
-    else {
-        return;
-    };
-    let Some(event_constructor_value) = target_function_constructor.call(
+    let Some(event) = construct_simple_event_for_target(
         scope,
-        v8::undefined(scope).into(),
-        &[function_body.into()],
+        runtime_ptr,
+        form_handle,
+        "reset",
+        true,
+        true,
+        false,
     ) else {
-        return;
+        return NodePublicEventDispatchOutcome {
+            default_prevented: true,
+            had_exception: false,
+        };
     };
-    let Ok(event_constructor) = v8::Local::<v8::Function>::try_from(event_constructor_value) else {
-        return;
-    };
-    event_constructor.set_name(v8str(scope, "Event"));
-    let _ = event_constructor.set(scope, v8str(scope, "prototype").into(), event_prototype);
-    if !crate::context_bootstrap::event_backing(scope, event)
-        .define_own_property(
-            scope,
-            v8str(scope, "constructor").into(),
-            event_constructor.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap_or(false)
-    {
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(
-            scope,
-            v8str(scope, "constructor").into(),
-            event_constructor.into(),
-        );
-    }
+    dispatch_public_event(scope, runtime_ptr, form_handle, event)
 }
 
 pub(in crate::native_bridge) fn form_submit_callback<'s>(
@@ -1038,12 +985,9 @@ fn serialize_form_submission_entries(
     submitter: Option<DomHandle>,
     submission_encoding: &'static encoding_rs::Encoding,
 ) -> Vec<(String, v8::Global<v8::Value>)> {
-    let Some(form) = wrap_handle_object(scope, runtime_ptr, form_handle) else {
-        return Vec::new();
-    };
     let submitter = submitter.and_then(|handle| wrap_handle_object(scope, runtime_ptr, handle));
     let mut entries =
-        construct_form_data_entries_for_form(scope, runtime_ptr, form_handle, form, submitter)
+        construct_form_data_entries_for_form(scope, runtime_ptr, form_handle, submitter)
             .unwrap_or_default();
     rewrite_charset_entries_for_submission(scope, submission_encoding.name(), &mut entries);
     entries
