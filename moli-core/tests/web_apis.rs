@@ -1,3 +1,6 @@
+#[path = "web_apis/body_utf8.rs"]
+mod body_utf8;
+
 #[path = "web_apis/font_queries.rs"]
 mod font_queries;
 
