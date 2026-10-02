@@ -64,6 +64,22 @@ fn dispatch_public_event_result<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<PublicEventDispatchResult, String> {
     let runtime = unsafe { &mut *runtime_ptr };
+    if crate::web_api_interfaces::UIEvent::is_instance(scope, event) {
+        // Native UI events identify the target's Document Window. The producer
+        // may be running in another realm, or the Document may be windowless.
+        let view = runtime
+            .owner_dispatch_scope_for_node(target)
+            .and_then(|target| {
+                let owner = runtime.current_window_execution_context_owner(target)?;
+                runtime.window_execution_context(scope, owner, target)
+            })
+            .map(|(_, context)| context.global(scope).into())
+            .unwrap_or_else(|| v8::null(scope).into());
+        let backing = crate::context_bootstrap::event_backing(scope, event);
+        if backing.create_data_property(scope, v8str(scope, "view").into(), view) != Some(true) {
+            return Err("failed to initialize native UIEvent view".to_owned());
+        }
+    }
     runtime.dispatch_public_event_best_effort(
         scope,
         runtime_ptr,
