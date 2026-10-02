@@ -386,3 +386,59 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         vec![false, false, false, false, false, true, false, false]
     );
 }
+
+#[test]
+fn worker_rectangle_interfaces_share_native_state_and_inheritance() {
+    crate::ensure_v8_for_test();
+    for realm in [
+        super::RealmKind::DedicatedWorker,
+        super::RealmKind::SharedWorker,
+        super::RealmKind::ServiceWorker,
+    ] {
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+        crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+            scope, global, realm, true,
+        )
+        .expect("worker rectangle interfaces should install");
+        let source = v8::String::new(
+            scope,
+            r#"
+          (() => {
+            const readonly = new DOMRectReadOnly(12, 34, -30, -40);
+            const mutable = DOMRect.fromRect(readonly);
+            mutable.x = 55;
+            mutable.width = 9;
+            const copy = DOMRectReadOnly.fromRect(mutable);
+            return JSON.stringify([
+              typeof DOMRect, typeof DOMRectReadOnly,
+              DOMRect.length, DOMRectReadOnly.length,
+              Object.getPrototypeOf(DOMRect.prototype) === DOMRectReadOnly.prototype,
+              mutable instanceof DOMRectReadOnly,
+              [readonly.x, readonly.y, readonly.width, readonly.height,
+               readonly.top, readonly.right, readonly.bottom, readonly.left],
+              [mutable.x, mutable.y, mutable.width, mutable.height],
+              [copy.x, copy.y, copy.width, copy.height],
+              Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype, "x").set === undefined,
+              String(readonly), String(mutable), String(copy)
+            ]);
+          })()
+        "#,
+        )
+        .expect("worker rectangle test source");
+        let script =
+            v8::Script::compile(scope, source, None).expect("worker rectangle test compile");
+        let result = crate::script_execution::execute_compiled_script(scope, script)
+            .expect("worker rectangle test evaluation")
+            .to_rust_string_lossy(scope);
+        assert_eq!(
+            result,
+            r#"["function","function",0,0,true,true,[12,34,-30,-40,-6,12,34,-18],[55,34,9,-40],[55,34,9,-40],true,"[object DOMRectReadOnly]","[object DOMRect]","[object DOMRectReadOnly]"]"#,
+            "realm {realm:?}"
+        );
+    }
+}
