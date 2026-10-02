@@ -13,7 +13,7 @@ pub(super) struct PendingMousePress {
 #[derive(Clone, Copy)]
 pub(super) enum MouseReleaseFollowUp {
     ActivateViaClick,
-    DispatchEvent(&'static str),
+    Auxiliary,
 }
 
 pub(super) fn mouse_button_mask(button: i32) -> i32 {
