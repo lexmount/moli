@@ -533,7 +533,7 @@ pub(in crate::native_bridge::element) fn dispatch_click_event(
     button: i32,
     buttons: i32,
     modifiers: u8,
-    source: ClickEventSource,
+    source: ClickEventSource<'_>,
 ) -> Option<NodePublicEventDispatchOutcome> {
     let event = {
         let document = unsafe { &*runtime_ptr }
@@ -582,7 +582,7 @@ fn click_handle_internal(
     buttons: i32,
     click_detail: i32,
     modifiers: u8,
-    source: ClickEventSource,
+    source: ClickEventSource<'_>,
     focus_behavior: ClickFocusBehavior,
 ) -> RendererInputDispatchOutcome {
     let user_initiated = source.is_trusted();
@@ -799,7 +799,11 @@ fn click_handle_internal(
                             0,
                             0,
                             modifiers,
-                            source,
+                            if user_initiated {
+                                ClickEventSource::UserAgent
+                            } else {
+                                ClickEventSource::Script
+                            },
                             // Label activation focuses its associated control,
                             // even when the initiating script click does not.
                             ClickFocusBehavior::Apply,

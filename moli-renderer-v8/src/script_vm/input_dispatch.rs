@@ -1835,6 +1835,7 @@ impl ScriptVm {
                         buttons,
                         click_count.max(1),
                         modifiers,
+                        &pointer,
                     );
                     if click_count >= 2
                         && let Some(event) = construct_mouse_event_with_detail_for_target(

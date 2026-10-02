@@ -27,10 +27,12 @@ use moli_webapi::events::subclasses::construct_native_mouse_event;
 use moli_webapi::events::subclasses::{MouseEventInit, construct_native_pointer_click};
 use moli_webapi::events::{construct_native_event, init::EventInit, state::mark_event_trusted};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::native_bridge::element) enum ClickEventSource {
+#[derive(Clone, Copy)]
+pub(in crate::native_bridge::element) enum ClickEventSource<'a> {
     #[cfg(any(test, feature = "devtools"))]
     Pointer,
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    PointerDevice(&'a crate::runtime::RendererPointerEventProperties),
     #[cfg(feature = "devtools")]
     Touch {
         pointer_id: i32,
@@ -39,9 +41,9 @@ pub(in crate::native_bridge::element) enum ClickEventSource {
     Script,
 }
 
-impl ClickEventSource {
+impl ClickEventSource<'_> {
     pub(in crate::native_bridge::element) fn is_trusted(self) -> bool {
-        self != Self::Script
+        !matches!(self, Self::Script)
     }
 }
 
@@ -486,7 +488,7 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     buttons: i32,
     modifiers: u8,
     view: Option<v8::Local<'s, v8::Object>>,
-    source: ClickEventSource,
+    source: ClickEventSource<'_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let init = mouse_event_init(
         scope,
@@ -501,7 +503,10 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     )?;
     match source {
         #[cfg(any(test, feature = "devtools"))]
-        ClickEventSource::Pointer => construct_native_mouse_event(scope, "click", init),
+        ClickEventSource::Pointer => construct_native_pointer_click(scope, init, 1, "mouse"),
+        ClickEventSource::PointerDevice(pointer) => {
+            construct_native_pointer_click(scope, init, pointer.pointer_id, &pointer.pointer_type)
+        }
         #[cfg(feature = "devtools")]
         ClickEventSource::Touch { pointer_id } => {
             construct_native_pointer_click(scope, init, pointer_id, "touch")
