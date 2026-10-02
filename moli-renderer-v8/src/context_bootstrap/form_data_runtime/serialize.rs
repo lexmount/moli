@@ -24,11 +24,6 @@ pub(super) fn serialize_form_data_controls<'s>(
     let context = node_owner_document_relevant_context(scope, runtime_ptr, form_handle)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    let submitter = submitter.and_then(|object| {
-        let (owner, handle) =
-            node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
-        (owner == runtime_ptr).then_some(handle)
-    });
     let mut entries = Vec::new();
     let controls = form_data_control_elements(unsafe { &*runtime_ptr }, form_handle);
     for handle in controls {
