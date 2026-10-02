@@ -755,7 +755,15 @@ fn dispatch_click_event(
     trusted: bool,
 ) -> Option<NodePublicEventDispatchOutcome> {
     let event = construct_click_event_with_detail_and_modifiers(
-        scope, x, y, detail, button, buttons, modifiers,
+        scope,
+        runtime_ptr,
+        handle,
+        x,
+        y,
+        detail,
+        button,
+        buttons,
+        modifiers,
     )?;
     crate::context_bootstrap::set_event_trusted(scope, event, trusted);
     Some(dispatch_public_event(scope, runtime_ptr, handle, event))
@@ -1416,11 +1424,18 @@ fn dispatch_input_and_change_events(
     if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
         return;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-    }
-    if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    for event_type in ["input", "change"] {
+        // A click or input listener can adopt the control into another Document.
+        // Resolve the creation realm separately for each subsequent event.
+        let Some(context) =
+            crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let Some(event) = construct_simple_event(scope, event_type, true, false, false) {
+            let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+        }
     }
 }
 
