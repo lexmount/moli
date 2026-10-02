@@ -19,6 +19,7 @@ pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
 pub(in crate::context_bootstrap) use data::{
     navigation_precommit_controller_for_event, run_navigate_event_precommit_handlers,
 };
+pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use pointer::{
     pointer_event_get_coalesced_events_callback, pointer_event_get_predicted_events_callback,
 };
@@ -28,7 +29,6 @@ pub(in crate::context_bootstrap::events) use data::{
 };
 
 pub(crate) use error::construct_original_error_event;
-pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;
 pub(crate) use security_policy::initialize_native_security_policy_violation_event;
 
 pub(crate) use input::clear_input_event_target_ranges;

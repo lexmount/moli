@@ -544,12 +544,6 @@ struct ErrorEventTemplateAccessorsDeclaration {
     error: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
-struct MessageEventTemplateMethodsDeclaration {
-    #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
-    init_message_event: (),
-}
 
 struct EventTemplateDeclaration {
     attributes: &'static [&'static str],
