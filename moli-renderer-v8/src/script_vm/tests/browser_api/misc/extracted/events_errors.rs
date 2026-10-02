@@ -157,7 +157,7 @@ fn host_dispatched_events_ignore_user_replaced_event_constructor() {
 
     assert_eq!(
         result,
-        r#"[{"type":"DOMContentLoaded","trusted":true,"target":true,"currentTarget":true,"bubbles":true,"cancelable":false,"intrinsicPrototype":true,"intrinsicInstance":true,"ownMethods":[],"inheritedMethods":true,"ownCancelBubble":false,"ownReturnValue":false,"ownTimeStamp":false,"ownIsTrusted":true,"keys":["type","target","srcElement","currentTarget","defaultPrevented","bubbles","cancelable","isTrusted","composed","eventPhase"]}]"#
+        r#"[{"type":"DOMContentLoaded","trusted":true,"target":true,"currentTarget":true,"bubbles":true,"cancelable":false,"intrinsicPrototype":true,"intrinsicInstance":true,"ownMethods":[],"inheritedMethods":true,"ownCancelBubble":false,"ownReturnValue":false,"ownTimeStamp":false,"ownIsTrusted":true,"keys":["isTrusted"]}]"#
     );
 }
 #[test]

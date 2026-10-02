@@ -17,8 +17,8 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     for (const name of Object.keys(event)) getters.add(own(event, name).get);
     if (event.type !== String(i) || event.detail.value !== i) throw new Error('captured instance');
   }
-  const type = own(first, 'type'), detail = own(first, 'detail');
-  const childType = own(child, 'type');
+  const type = own(Event.prototype, 'type'), detail = own(first, 'detail');
+  const childType = own(other.Event.prototype, 'type');
   let illegal = false;
   try { childType.get.call({}); }
   catch (error) { illegal = error instanceof other.TypeError; }
@@ -44,7 +44,8 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
   return JSON.stringify({
     getterCount: getters.size,
     fieldCount: Object.keys(first).length,
-    base: type.get === own(new Event('base'), 'type').get,
+    base: !own(first, 'type') && !own(new Event('base'), 'type') &&
+      type.get.call(first) === first.type && type.get.call(new Event('base')) === 'base',
     realm: type.get instanceof Function && childType.get instanceof other.Function &&
       childType.get !== type.get && !(childType.get instanceof Function),
     borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
