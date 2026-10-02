@@ -261,8 +261,6 @@ fn parser_inserted_frameset_window_event_handlers_reflect_on_window() {
 
 mod node_compilation;
 
-mod document_replacement;
-
 #[test]
 fn native_wheel_event_delta_accessors() {
     let mut vm = new_storage_test_vm("https://event-accessors.test/");
