@@ -1,9 +1,14 @@
 use super::*;
 use crate::forms::{ButtonTypeState, InputType, parse_non_negative_integer_prefix};
+use crate::native::DomStringValue;
 
 impl DomHost {
     pub fn option_value(&self, handle: DomHandle) -> Option<String> {
         self.dom.option_value(handle)
+    }
+
+    pub fn option_value_dom_string(&self, handle: DomHandle) -> Option<DomStringValue> {
+        self.dom.option_value_dom_string(handle)
     }
 
     pub fn input_datalist_handle(&self, handle: DomHandle) -> Option<DomHandle> {
