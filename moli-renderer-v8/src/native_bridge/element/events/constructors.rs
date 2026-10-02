@@ -88,7 +88,7 @@ struct MouseEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct ClickPointerEventInitDeclaration<'scope> {
+struct ActivationPointerEventIdentityDeclaration<'scope> {
     pointer_id: i32,
     pointer_type: v8::Local<'scope, v8::String>,
 }
@@ -996,10 +996,11 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_click_event_with_detail_and_modifiers(
+    construct_activation_pointer_event(
         scope,
         runtime_ptr,
         target,
+        "click",
         x,
         y,
         0,
@@ -1010,10 +1011,11 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     )
 }
 
-pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_modifiers<'s>(
+pub(crate) fn construct_activation_pointer_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     target: DomHandle,
+    event_type: &str,
     x: f64,
     y: f64,
     detail: i32,
@@ -1027,16 +1029,16 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
     let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let init = mouse_event_init(scope, x, y, detail, button, buttons, modifiers, None)?;
-    // Click keeps only the source pointer's identity. Pressure, tilt and all
+    // Activation keeps only the source pointer's identity. Pressure, tilt and all
     // other PointerEvent-specific attributes retain their dictionary defaults.
     let pointer_type = v8_string(scope, pointer.map_or("", |pointer| &pointer.pointer_type))?;
-    ClickPointerEventInitDeclaration::new(
+    ActivationPointerEventIdentityDeclaration::new(
         pointer.map_or(-1, |pointer| pointer.pointer_id),
         pointer_type,
     )
     .initialize(scope, init)
     .ok()?;
-    let event = construct_event(scope, "PointerEvent", "click", init)?;
+    let event = construct_event(scope, "PointerEvent", event_type, init)?;
     crate::context_bootstrap::set_event_internal_flag(
         scope,
         event,
