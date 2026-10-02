@@ -2286,6 +2286,7 @@ mod gamepad_interfaces;
 
 mod dom_elements;
 mod dom_exception_proxy_identity;
+mod dom_rect_factory_descriptors;
 mod dom_xhr;
 
 mod svg_length_list_native_receivers;
@@ -2372,6 +2373,7 @@ mod observer_documents;
 mod observer_element_arguments;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
+mod offline_audio_float;
 mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
