@@ -28,6 +28,7 @@ use super::{
 /// Applied before document-start scripts; live updates use Page commands.
 #[derive(Default)]
 pub struct RendererDocumentOptions {
+    pub top_level_browsing_context: crate::RendererTopLevelBrowsingContextState,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub document_start_scripts: Vec<DocumentStartScript>,

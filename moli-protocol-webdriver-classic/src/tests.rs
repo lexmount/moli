@@ -3250,6 +3250,7 @@ fn extracts_classic_window_handles_from_page_targets() {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
             moli_protocol::automation::DevToolsTargetInfo {
                 target_id: Some(DevToolsTargetId::from("TAB-PAGE-1")),
@@ -3262,6 +3263,7 @@ fn extracts_classic_window_handles_from_page_targets() {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
             moli_protocol::automation::DevToolsTargetInfo {
                 target_id: Some(DevToolsTargetId::from("WORKER-1")),
@@ -3274,6 +3276,7 @@ fn extracts_classic_window_handles_from_page_targets() {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
             moli_protocol::automation::DevToolsTargetInfo {
                 target_id: None,
@@ -3286,6 +3289,7 @@ fn extracts_classic_window_handles_from_page_targets() {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
         ],
     });

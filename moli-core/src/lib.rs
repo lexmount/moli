@@ -36,6 +36,6 @@ pub use moli_renderer_v8::{
     RendererOwnerRuntimeActivitySource, RendererProtocolObservation,
     RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorAsyncCompletion,
     RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
-    RendererRuntimeRemoteObjectResolution,
+    RendererRuntimeRemoteObjectResolution, RendererTopLevelBrowsingContextState,
 };
 pub use moli_renderer_v8::{RendererPageCommand, RendererPageReply};

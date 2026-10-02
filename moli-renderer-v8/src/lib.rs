@@ -30,6 +30,7 @@ mod abort_signal_route;
 mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;
+mod browsing_context_state;
 mod callback_invocation;
 #[cfg(test)]
 mod chromium_property_surface;
@@ -184,6 +185,7 @@ pub(crate) use crate::stylesheet_blocking::{
     collect_document_owned_blocking_stylesheets_before_in_view,
 };
 
+pub use browsing_context_state::RendererTopLevelBrowsingContextState;
 pub use context_bootstrap::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IndexedDbKey, IndexedDbObjectStoreOptions,
     IndexedDbOpenOptions, IndexedDbTransactionMode, SharedIndexedDbManager, WeakIndexedDbManager,

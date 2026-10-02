@@ -202,6 +202,7 @@ fn devtools_target_info_from_cdp_value_lossy(value: Value) -> DevToolsTargetInfo
             .and_then(Value::as_str)
             .map(crate::automation::DevToolsBrowserContextId::from),
         moli_popup_id: None,
+        moli_popup_alias_ids: Vec::new(),
     }
 }
 

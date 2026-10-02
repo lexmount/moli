@@ -472,6 +472,11 @@ impl JsContextHost {
         if let Some(popup_id) = active_lightweight_popup_id(scope) {
             return OwnerDispatchScope::LightweightPopup(popup_id);
         }
+        if let Some(identity) =
+            self.window_execution_context_identity_for_access_check(scope.get_current_context())
+        {
+            return identity.dispatch_scope();
+        }
         OwnerDispatchScope::Top
     }
 

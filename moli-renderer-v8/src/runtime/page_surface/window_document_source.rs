@@ -12,6 +12,7 @@ pub enum RendererWindowDocumentSource {
         frame_id: String,
         local_window_id: u64,
         document_id: u64,
+        top_level_popup_id: Option<u64>,
     },
     LightweightPopup {
         popup_id: u64,

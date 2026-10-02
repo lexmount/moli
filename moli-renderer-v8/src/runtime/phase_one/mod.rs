@@ -652,6 +652,7 @@ mod tests {
 
     pub(super) fn default_test_page_vm_env_config() -> PageVmEnvConfig {
         PageVmEnvConfig {
+            top_level_browsing_context: crate::RendererTopLevelBrowsingContextState::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,

@@ -16,8 +16,14 @@ use moli_core::network::SharedWebStorageStore;
 impl BrowserContext {
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {
         let target = self.page_targets.remove(target_id)?;
+        let popup_alias_ids = self.target_popup_alias_ids(target_id);
+        self.renderer_runtime()
+            .retire_lightweight_popup_ids(&popup_alias_ids);
         self.forget_target_opener_references_for_target(target_id);
+        self.target_browsing_context_group_ids.remove(target_id);
         self.forget_target_window_names_for_target(target_id);
+        self.target_top_level_browsing_context_states
+            .remove(target_id);
         self.forget_target_popup_id_for_target(target_id);
         Some(target)
     }
@@ -134,9 +140,80 @@ impl BrowserContext {
         Some(target_name.to_owned())
     }
 
-    pub(crate) fn target_id_for_window_name(&self, target_name: &str) -> Option<&str> {
+    pub(crate) fn target_id_for_window_name(
+        &self,
+        source_target_id: &str,
+        target_name: &str,
+    ) -> Option<&str> {
         let name = Self::reusable_window_open_target_name(target_name)?;
-        self.target_window_names.get(&name).map(String::as_str)
+        let source_group_id = self
+            .target_browsing_context_group_ids
+            .get(source_target_id)?;
+        let target_matches = |target: &PageTargetHost| {
+            self.target_browsing_context_group_ids
+                .get(target.target_id())
+                .is_some_and(|group_id| group_id == source_group_id)
+                && target
+                    .navigation_engine()
+                    .is_some_and(|engine| engine.top_level_window_name() == name)
+        };
+        if let Some(source) = self.page_target(source_target_id)
+            && target_matches(source)
+        {
+            return Some(source.target_id());
+        }
+        if let Some(target) = self
+            .page_targets
+            .iter()
+            .find(|target| target.target_id() != source_target_id && target_matches(target))
+        {
+            return Some(target.target_id());
+        }
+        let staged_target_matches = |target_id: &str, staged_name: &str| {
+            staged_name == name
+                && self.page_target(target_id).is_some_and(|target| {
+                    target.navigation_engine().is_none()
+                        && self
+                            .target_browsing_context_group_ids
+                            .get(target_id)
+                            .is_some_and(|group_id| group_id == source_group_id)
+                })
+        };
+        if self
+            .target_top_level_browsing_context_states
+            .get(source_target_id)
+            .is_some_and(|state| staged_target_matches(source_target_id, &state.window_name()))
+        {
+            return self
+                .page_target(source_target_id)
+                .map(PageTargetHost::target_id);
+        }
+        if let Some(target_id) = self
+            .target_top_level_browsing_context_states
+            .iter()
+            .find_map(|(target_id, state)| {
+                (target_id != source_target_id
+                    && staged_target_matches(target_id, &state.window_name()))
+                .then_some(target_id)
+            })
+        {
+            return Some(target_id);
+        }
+        if self
+            .target_window_names
+            .get(source_target_id)
+            .is_some_and(|staged_name| staged_target_matches(source_target_id, staged_name))
+        {
+            return self
+                .page_target(source_target_id)
+                .map(PageTargetHost::target_id);
+        }
+        self.target_window_names
+            .iter()
+            .find_map(|(target_id, staged_name)| {
+                (target_id != source_target_id && staged_target_matches(target_id, staged_name))
+                    .then_some(target_id.as_str())
+            })
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
@@ -147,27 +224,65 @@ impl BrowserContext {
 
     pub(crate) fn remember_target_window_name(&mut self, target_name: &str, target_id: &str) {
         if let Some(name) = Self::reusable_window_open_target_name(target_name) {
-            self.target_window_names.insert(name, target_id.to_owned());
+            if let Some(engine) = self
+                .page_target(target_id)
+                .and_then(PageTargetHost::navigation_engine)
+            {
+                engine.set_top_level_window_name(name);
+                return;
+            }
+            self.target_window_names.insert(target_id.to_owned(), name);
         }
     }
 
+    pub(crate) fn remember_target_top_level_browsing_context_state(
+        &mut self,
+        target_id: &str,
+        state: moli_core::RendererTopLevelBrowsingContextState,
+    ) {
+        if let Some(engine) = self.page_navigation_engine_mut(target_id) {
+            engine.set_top_level_browsing_context_state(state);
+            return;
+        }
+        self.target_top_level_browsing_context_states
+            .insert(target_id.to_owned(), state);
+    }
+
+    pub(crate) fn target_top_level_browsing_context_state(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::RendererTopLevelBrowsingContextState> {
+        self.page_navigation_engine(target_id)
+            .map(moli_core::runtime::NavigationEngine::top_level_browsing_context_state)
+            .or_else(|| {
+                self.target_top_level_browsing_context_states
+                    .get(target_id)
+                    .cloned()
+            })
+    }
+
     pub(crate) fn remember_target_popup_id(&mut self, popup_id: Option<u64>, target_id: &str) {
-        if let Some(popup_id) = popup_id
-            && let Some(replaced_popup_id) =
-                self.target_popup_ids.insert(target_id.to_owned(), popup_id)
-            && replaced_popup_id != popup_id
-        {
-            self.dismiss_pending_popup_javascript_dialogs(replaced_popup_id);
+        if let Some(popup_id) = popup_id {
+            self.target_popup_ids.insert(target_id.to_owned(), popup_id);
+            self.popup_target_ids.insert(popup_id, target_id.to_owned());
         }
     }
 
     pub(crate) fn forget_target_window_names_for_target(&mut self, target_id: &str) {
-        self.target_window_names
-            .retain(|_, mapped_target_id| mapped_target_id != target_id);
+        self.target_window_names.remove(target_id);
     }
 
     pub(crate) fn forget_target_popup_id_for_target(&mut self, target_id: &str) {
-        if let Some(popup_id) = self.target_popup_ids.remove(target_id) {
+        self.target_popup_ids.remove(target_id);
+        let popup_ids = self
+            .popup_target_ids
+            .iter()
+            .filter_map(|(popup_id, candidate_target_id)| {
+                (candidate_target_id == target_id).then_some(*popup_id)
+            })
+            .collect::<Vec<_>>();
+        for popup_id in popup_ids {
+            self.popup_target_ids.remove(&popup_id);
             self.dismiss_pending_popup_javascript_dialogs(popup_id);
         }
     }
@@ -176,13 +291,40 @@ impl BrowserContext {
         self.target_popup_ids.get(target_id).copied()
     }
 
-    pub(crate) fn target_id_for_popup_id(&self, popup_id: u64) -> Option<&str> {
-        self.target_popup_ids
+    pub(crate) fn target_popup_alias_ids(&self, target_id: &str) -> Vec<u64> {
+        let mut aliases = self
+            .popup_target_ids
             .iter()
-            .find_map(|(target_id, candidate)| {
-                (*candidate == popup_id && self.devtools_target_info(target_id).is_some())
-                    .then_some(target_id.as_str())
+            .filter_map(|(popup_id, candidate_target_id)| {
+                (candidate_target_id == target_id).then_some(*popup_id)
             })
+            .collect::<Vec<_>>();
+        aliases.sort_unstable();
+        aliases
+    }
+
+    pub(crate) fn target_id_for_popup_id(&self, popup_id: u64) -> Option<&str> {
+        self.popup_target_ids.get(&popup_id).and_then(|target_id| {
+            self.devtools_target_info(target_id)
+                .is_some()
+                .then_some(target_id.as_str())
+        })
+    }
+
+    pub(crate) fn reusable_target_id_for_popup_id(
+        &self,
+        source_target_id: &str,
+        popup_id: u64,
+    ) -> Option<&str> {
+        let candidate_target_id = self.target_id_for_popup_id(popup_id)?;
+        let source_group_id = self
+            .target_browsing_context_group_ids
+            .get(source_target_id)?;
+        (self
+            .target_browsing_context_group_ids
+            .get(candidate_target_id)
+            == Some(source_group_id))
+        .then_some(candidate_target_id)
     }
 
     pub(crate) fn remember_target_opener(
@@ -192,12 +334,23 @@ impl BrowserContext {
         opener_frame_id: String,
         can_access_opener: bool,
     ) {
+        let inherited_group_id = can_access_opener
+            .then(|| {
+                self.target_browsing_context_group_ids
+                    .get(&opener_target_id)
+                    .cloned()
+            })
+            .flatten();
         self.target_opener_ids
             .insert(target_id.to_owned(), opener_target_id);
         self.target_opener_frame_ids
             .insert(target_id.to_owned(), opener_frame_id);
         if can_access_opener {
             self.target_can_access_opener.insert(target_id.to_owned());
+            if let Some(group_id) = inherited_group_id {
+                self.target_browsing_context_group_ids
+                    .insert(target_id.to_owned(), group_id);
+            }
         } else {
             self.target_can_access_opener.remove(target_id);
         }
@@ -732,6 +885,7 @@ impl BrowserContext {
                 can_access_opener: self.target_can_access_opener.contains(target_id),
                 browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             });
         }
 
@@ -1123,6 +1277,7 @@ impl BrowserContext {
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         }
     }
 
@@ -1148,6 +1303,7 @@ impl BrowserContext {
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         }
     }
 
@@ -1166,6 +1322,7 @@ impl BrowserContext {
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         }
     }
 }
@@ -1357,17 +1514,165 @@ mod tests {
         );
 
         let mut context = BrowserContext::new("BC-window-name".to_owned());
+        for target_id in ["TID-spaced", "TID-exact"] {
+            context.stage_background_target(
+                target_id.to_owned(),
+                None,
+                "about:blank".to_owned(),
+                None,
+                None,
+            );
+        }
         context.remember_target_window_name(" ReportWindow ", "TID-spaced");
         context.remember_target_window_name("ReportWindow", "TID-exact");
         assert_eq!(
-            context.target_id_for_window_name(" ReportWindow "),
+            context.target_id_for_window_name("TID-spaced", " ReportWindow "),
             Some("TID-spaced")
         );
         assert_eq!(
-            context.target_id_for_window_name("ReportWindow"),
+            context.target_id_for_window_name("TID-exact", "ReportWindow"),
             Some("TID-exact")
         );
-        assert_eq!(context.target_id_for_window_name("reportwindow"), None);
+        assert_eq!(
+            context.target_id_for_window_name("TID-exact", "reportwindow"),
+            None
+        );
+    }
+
+    #[test]
+    fn staged_window_name_seeds_the_target_engine_and_live_renames_replace_it() {
+        let mut context = BrowserContext::new("BC-window-name-owner".to_owned());
+        context.stage_background_target(
+            "TID-named".to_owned(),
+            None,
+            "about:blank".to_owned(),
+            None,
+            None,
+        );
+        context.remember_target_window_name("reportWindow", "TID-named");
+        assert_eq!(
+            context.target_id_for_window_name("TID-named", "reportWindow"),
+            Some("TID-named"),
+            "the protocol registry must route a named target while it is staged"
+        );
+
+        context.bind_page_navigation_engines(
+            moli_core::runtime::NavigationRuntimeConfig::default(),
+            None,
+        );
+        let engine = context
+            .page_navigation_engine("TID-named")
+            .expect("binding the context installs the target engine");
+        assert_eq!(engine.top_level_window_name(), "reportWindow");
+        assert!(
+            context.target_window_names.is_empty(),
+            "the protocol registry is only staging storage once the renderer owner exists"
+        );
+        assert_eq!(
+            context.target_id_for_window_name("TID-named", "reportWindow"),
+            Some("TID-named"),
+            "installing the renderer owner must preserve the staged browsing-context name"
+        );
+
+        engine.set_top_level_window_name("renamedWindow");
+        assert_eq!(
+            context.target_id_for_window_name("TID-named", "reportWindow"),
+            None
+        );
+        assert_eq!(
+            context.target_id_for_window_name("TID-named", "renamedWindow"),
+            Some("TID-named"),
+            "after installation, named-target lookup must follow the live browsing context"
+        );
+    }
+
+    #[test]
+    fn named_target_lookup_stays_within_the_source_browsing_context_group() {
+        let mut context = BrowserContext::new("BC-window-name-groups".to_owned());
+        for target_id in ["TID-a", "TID-b", "TID-popup"] {
+            context.stage_background_target(
+                target_id.to_owned(),
+                None,
+                "about:blank".to_owned(),
+                None,
+                None,
+            );
+        }
+        context.remember_target_window_name("shared", "TID-a");
+        assert_eq!(
+            context.target_id_for_window_name("TID-b", "shared"),
+            None,
+            "an independently created tab must not target a same-name tab"
+        );
+
+        context.remember_target_opener("TID-popup", "TID-b".to_owned(), "FRAME-b".to_owned(), true);
+        context.remember_target_window_name("shared", "TID-popup");
+        assert_eq!(
+            context.target_id_for_window_name("TID-b", "shared"),
+            Some("TID-popup"),
+            "a popup that can access its opener belongs to the same target-name group"
+        );
+
+        context.remember_target_window_name("renamed", "TID-popup");
+        assert_eq!(
+            context.target_id_for_window_name("TID-b", "shared"),
+            None,
+            "the popup's old name must stop routing after a live rename"
+        );
+        assert_eq!(
+            context.target_id_for_window_name("TID-b", "renamed"),
+            Some("TID-popup"),
+            "a related popup is reusable by its current name"
+        );
+        assert_eq!(
+            context.target_id_for_window_name("TID-a", "renamed"),
+            None,
+            "renaming a popup must not expose it to an independent group"
+        );
+
+        context.remember_target_window_name("current", "TID-popup");
+        context.remember_target_window_name("current", "TID-b");
+        let renderer_runtime = context.renderer_runtime();
+        renderer_runtime.register_lightweight_popup_id(41);
+        context.remember_target_popup_id(Some(41), "TID-popup");
+        assert_eq!(
+            context.target_id_for_window_name("TID-b", "current"),
+            Some("TID-b"),
+            "the source navigable takes priority over another related target"
+        );
+        assert_eq!(
+            context.reusable_target_id_for_popup_id("TID-b", 41),
+            Some("TID-popup"),
+            "a call-time selected popup remains valid after its mutable name changes"
+        );
+
+        context.remember_target_window_name("source", "TID-b");
+        assert_eq!(
+            context.reusable_target_id_for_popup_id("TID-b", 41),
+            Some("TID-popup"),
+            "the popup identity is accepted when the canonical name resolver selects it"
+        );
+        assert_eq!(
+            context.reusable_target_id_for_popup_id("TID-a", 41),
+            None,
+            "a popup identity hint must not cross browsing-context groups"
+        );
+
+        renderer_runtime.register_lightweight_popup_id(42);
+        context.remember_target_popup_id(Some(42), "TID-popup");
+        assert_eq!(context.target_id_for_popup_id(41), Some("TID-popup"));
+        assert_eq!(context.target_id_for_popup_id(42), Some("TID-popup"));
+        assert_eq!(context.target_popup_alias_ids("TID-popup"), vec![41, 42]);
+        assert_eq!(context.target_popup_id("TID-popup"), Some(42));
+        assert!(renderer_runtime.lightweight_popup_id_is_live(41));
+        assert!(renderer_runtime.lightweight_popup_id_is_live(42));
+        context
+            .take_page_target_for_close("TID-popup")
+            .expect("popup target should close");
+        assert_eq!(context.target_id_for_popup_id(41), None);
+        assert_eq!(context.target_id_for_popup_id(42), None);
+        assert!(!renderer_runtime.lightweight_popup_id_is_live(41));
+        assert!(!renderer_runtime.lightweight_popup_id_is_live(42));
     }
 
     #[test]

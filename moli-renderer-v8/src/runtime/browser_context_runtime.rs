@@ -4,7 +4,7 @@ use std::sync::{
 };
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::{Rc, Weak},
 };
 
@@ -206,6 +206,8 @@ struct RendererBrowserContextRuntimeInner {
     service_worker_runtime: service_worker_runtime::LazyServiceWorkerRuntime,
     storage_partition_identity: RendererStoragePartitionIdentity,
     next_child_document_loader_id: AtomicU64,
+    next_lightweight_popup_id: AtomicU64,
+    live_lightweight_popup_ids: Mutex<HashSet<u64>>,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
     dedicated_worker_devtools_targets: Mutex<HashMap<u64, DedicatedWorkerDevToolsTarget>>,
@@ -368,6 +370,36 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
+    pub(crate) fn next_lightweight_popup_id(&self) -> u64 {
+        let id = self
+            .inner
+            .next_lightweight_popup_id
+            .fetch_add(1, Ordering::Relaxed);
+        assert_ne!(id, u64::MAX, "lightweight popup id space exhausted");
+        id
+    }
+
+    pub fn register_lightweight_popup_id(&self, popup_id: u64) {
+        self.inner
+            .live_lightweight_popup_ids
+            .lock()
+            .insert(popup_id);
+    }
+
+    pub fn retire_lightweight_popup_ids(&self, popup_ids: &[u64]) {
+        let mut live_popup_ids = self.inner.live_lightweight_popup_ids.lock();
+        for popup_id in popup_ids {
+            live_popup_ids.remove(popup_id);
+        }
+    }
+
+    pub fn lightweight_popup_id_is_live(&self, popup_id: u64) -> bool {
+        self.inner
+            .live_lightweight_popup_ids
+            .lock()
+            .contains(&popup_id)
+    }
+
     pub(crate) fn clipboard_snapshot(&self) -> ClipboardSnapshot {
         self.inner.clipboard_snapshot.lock().clone()
     }
@@ -582,6 +614,8 @@ impl RendererBrowserContextRuntime {
                 service_worker_runtime,
                 storage_partition_identity,
                 next_child_document_loader_id: AtomicU64::default(),
+                next_lightweight_popup_id: AtomicU64::new(1),
+                live_lightweight_popup_ids: Mutex::new(HashSet::new()),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
                 dedicated_worker_devtools_targets: Mutex::new(HashMap::new()),
@@ -1010,6 +1044,36 @@ mod tests {
             RendererPageReservationToken, renderer_output_transport_channel,
         },
     };
+
+    #[test]
+    fn lightweight_popup_ids_are_unique_across_hosts_in_one_browser_context() {
+        let browser_context = RendererBrowserContextRuntime::new();
+        let first_host = browser_context.handle();
+        let second_host = browser_context.handle();
+
+        assert_eq!(first_host.next_lightweight_popup_id(), 1);
+        assert_eq!(second_host.next_lightweight_popup_id(), 2);
+
+        let other_browser_context = RendererBrowserContextRuntime::new();
+        assert_eq!(
+            other_browser_context.handle().next_lightweight_popup_id(),
+            1
+        );
+    }
+
+    #[test]
+    fn lightweight_popup_retirement_is_shared_across_hosts() {
+        let browser_context = RendererBrowserContextRuntime::new();
+        let first_host = browser_context.handle();
+        let second_host = browser_context.handle();
+        let popup_id = first_host.next_lightweight_popup_id();
+
+        assert!(!second_host.lightweight_popup_id_is_live(popup_id));
+        first_host.register_lightweight_popup_id(popup_id);
+        assert!(second_host.lightweight_popup_id_is_live(popup_id));
+        first_host.retire_lightweight_popup_ids(&[popup_id]);
+        assert!(!second_host.lightweight_popup_id_is_live(popup_id));
+    }
 
     async fn assert_single_page_reservation_release(
         output_rx: &mut crate::runtime::RendererOutputTransportReceiver,

@@ -1902,7 +1902,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                 "method": "Runtime.evaluate",
                 "sessionId": opener_session_id,
                 "params": {
-                    "expression": "window.open('data:text/html,first-popup', 'reportWindow') !== null"
+                    "expression": "window.__namedPopup = window.open('data:text/html,first-popup', 'reportWindow'); window.__namedPopup !== null"
                 }
             }))
             .await;
@@ -1926,7 +1926,6 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                     .any(|message| message["method"] == json!("Page.windowOpen")),
                 "first named window.open should emit Page.windowOpen: {first_sent:?}"
             );
-
             ctx.process_async(json!({
                 "id": 15,
                 "method": "Runtime.evaluate",
@@ -1990,6 +1989,117 @@ async fn window_open_named_target_reuses_existing_popup_target() {
             assert_eq!(
                 browser_context.target_url(),
                 "data:text/html,second-popup"
+            );
+            ctx.process_async(json!({
+                "id": 141,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": target_id }
+            }))
+            .await;
+            let popup_session_id = take_response_by_id(&mut ctx, 141)["result"]["sessionId"]
+                .as_str()
+                .expect("popup session id")
+                .to_owned();
+            ctx.sent.clear();
+
+            ctx.process_async(json!({
+                "id": 16,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.__namedPopup.name = 'renamedWindow'; window.__namedPopup.name"
+                }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 16)["result"]["result"]["value"],
+                json!("renamedWindow")
+            );
+            ctx.process_async(json!({
+                "id": 161,
+                "method": "Runtime.evaluate",
+                "sessionId": popup_session_id,
+                "params": { "expression": "window.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 161)["result"]["result"]["value"],
+                json!("renamedWindow"),
+                "a proxy rename must be immediately visible in the target"
+            );
+            ctx.process_async(json!({
+                "id": 162,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.open('data:text/html,renamed-popup', 'renamedWindow') !== null"
+                }
+            }))
+            .await;
+            let renamed_sent = ctx.take_all();
+            assert!(
+                !renamed_sent
+                    .iter()
+                    .any(|message| message["method"] == json!("Target.targetCreated")),
+                "opening a popup by its live renamed Window.name must reuse its bound target: {renamed_sent:?}"
+            );
+            ctx.wait_for_scheduler_message("renamed popup target navigation", |message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+                    && message["params"]["targetInfo"]["url"]
+                        == json!("data:text/html,renamed-popup")
+            })
+            .await;
+            let browser_context = ctx.conn.browser_context.as_ref().unwrap();
+            assert_eq!(
+                browser_context.target_id_for_window_name("TID-opener-name", "renamedWindow"),
+                Some(target_id.as_str())
+            );
+            assert_eq!(
+                browser_context.target_id_for_window_name("TID-opener-name", "reportWindow"),
+                None,
+                "renaming a live popup must invalidate its previous target name"
+            );
+
+            ctx.process_async(json!({
+                "id": 163,
+                "method": "Runtime.evaluate",
+                "sessionId": popup_session_id,
+                "params": { "expression": "window.name = 'targetRenamed'; window.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 163)["result"]["result"]["value"],
+                json!("targetRenamed")
+            );
+            ctx.process_async(json!({
+                "id": 164,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": { "expression": "window.__namedPopup.name" }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 164)["result"]["result"]["value"],
+                json!("targetRenamed"),
+                "a target rename must be immediately visible through its retained proxy"
+            );
+
+            ctx.process_async(json!({
+                "id": 17,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.open('about:blank', 'renamedWindow') !== null"
+                }
+            }))
+            .await;
+            let old_name_sent = ctx.take_all();
+            assert!(
+                old_name_sent
+                    .iter()
+                    .any(|message| message["method"] == json!("Target.targetCreated")),
+                "the target's previous name must no longer resolve to it: {old_name_sent:?}"
             );
         })
         .await;

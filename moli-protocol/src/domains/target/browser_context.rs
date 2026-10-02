@@ -385,6 +385,7 @@ pub(super) fn devtools_browser_target_info() -> DevToolsTargetInfo {
         can_access_opener: false,
         browser_context_id: None,
         moli_popup_id: None,
+        moli_popup_alias_ids: Vec::new(),
     }
 }
 

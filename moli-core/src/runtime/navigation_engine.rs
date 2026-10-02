@@ -1,4 +1,5 @@
 use crate::{
+    RendererTopLevelBrowsingContextState,
     network::{ResourceRequestClient, SharedWebStorageStore},
     page::{
         CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
@@ -424,6 +425,7 @@ pub struct NavigationEngine {
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
+    top_level_browsing_context: RendererTopLevelBrowsingContextState,
     document_activity: moli_page_types::DocumentActivity,
     // Standalone engines share this last-drop owner. BrowserContext engines
     // leave it empty and borrow only the context's weak, bound access.
@@ -453,6 +455,26 @@ impl Default for NavigationEngine {
 }
 
 impl NavigationEngine {
+    pub fn top_level_window_name(&self) -> String {
+        self.top_level_browsing_context.window_name()
+    }
+
+    pub fn top_level_browsing_context_state(&self) -> RendererTopLevelBrowsingContextState {
+        self.top_level_browsing_context.clone()
+    }
+
+    pub fn set_top_level_window_name(&self, value: impl Into<String>) {
+        self.top_level_browsing_context
+            .set_window_name(value.into());
+    }
+
+    pub fn set_top_level_browsing_context_state(
+        &mut self,
+        state: RendererTopLevelBrowsingContextState,
+    ) {
+        self.top_level_browsing_context = state;
+    }
+
     /// Reserves a renderer Page identity before the corresponding creation
     /// command is enqueued.
     ///
@@ -583,6 +605,7 @@ impl NavigationEngine {
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
+            top_level_browsing_context: RendererTopLevelBrowsingContextState::default(),
             document_activity: Default::default(),
             standalone_lifetime_owner,
         })
@@ -634,6 +657,7 @@ impl NavigationEngine {
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
+            top_level_browsing_context: RendererTopLevelBrowsingContextState::default(),
             document_activity: Default::default(),
             standalone_lifetime_owner: renderer_owner_source.standalone_lifetime_owner.clone(),
         })
@@ -1535,6 +1559,7 @@ impl NavigationEngine {
             top_level_storage_key,
             moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
             moli_renderer_v8::RendererDocumentOptions {
+                top_level_browsing_context: self.top_level_browsing_context.clone(),
                 indexed_db_manager,
                 storage_bucket_store,
                 document_start_scripts,
@@ -1815,6 +1840,7 @@ impl NavigationEngine {
                 reserved_service_worker_client,
                 None,
                 moli_renderer_v8::RendererDocumentOptions {
+                    top_level_browsing_context: self.top_level_browsing_context.clone(),
                     indexed_db_manager,
                     storage_bucket_store,
                     document_start_scripts,
@@ -2068,6 +2094,7 @@ impl NavigationEngine {
                 web_storage,
                 options.response_body,
                 moli_renderer_v8::RendererDocumentOptions {
+                    top_level_browsing_context: self.top_level_browsing_context.clone(),
                     indexed_db_manager,
                     storage_bucket_store,
                     document_start_scripts: options.document_start_scripts,

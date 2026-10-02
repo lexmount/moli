@@ -48,20 +48,18 @@ pub(crate) fn popup_activation_creates_new_target_for_owner(
     owner: &CommandOwnerScope,
     target_name: &str,
 ) -> bool {
-    if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
+    if let Some((browser_context_id, Some(source_target_id))) =
+        conn.target_owner_identity_for_owner(owner)
+    {
         return conn
             .browser_context_by_id(&browser_context_id)
             .is_none_or(|browser_context| {
                 browser_context
-                    .target_id_for_window_name(target_name)
+                    .target_id_for_window_name(&source_target_id, target_name)
                     .is_none()
             });
     }
-    conn.browser_context.as_ref().is_none_or(|browser_context| {
-        browser_context
-            .target_id_for_window_name(target_name)
-            .is_none()
-    })
+    true
 }
 pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
@@ -1142,6 +1140,7 @@ mod devtools_runtime_entry_tests {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
             None,
         )

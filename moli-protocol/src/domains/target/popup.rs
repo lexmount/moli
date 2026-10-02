@@ -34,6 +34,9 @@ impl PopupTargetOpenerIdentity {
 pub(crate) struct PopupTargetCreation {
     browser_context_id: String,
     popup_id: Option<u64>,
+    selected_existing_target: bool,
+    allows_named_target_selection: bool,
+    navigation_requested: bool,
     url: String,
     target_name: String,
     opener: Option<PopupTargetOpenerIdentity>,
@@ -41,12 +44,16 @@ pub(crate) struct PopupTargetCreation {
     disposition: moli_core::page::RendererPopupDisposition,
     session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
     initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    top_level_browsing_context: Option<moli_core::RendererTopLevelBrowsingContextState>,
 }
 
 impl PopupTargetCreation {
     pub(crate) fn new(
         browser_context_id: String,
         popup_id: Option<u64>,
+        selected_existing_target: bool,
+        allows_named_target_selection: bool,
+        navigation_requested: bool,
         url: String,
         target_name: String,
         opener: Option<PopupTargetOpenerIdentity>,
@@ -54,10 +61,14 @@ impl PopupTargetCreation {
         disposition: moli_core::page::RendererPopupDisposition,
         session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
+        top_level_browsing_context: Option<moli_core::RendererTopLevelBrowsingContextState>,
     ) -> Self {
         Self {
             browser_context_id,
             popup_id,
+            selected_existing_target,
+            allows_named_target_selection,
+            navigation_requested,
             url,
             target_name,
             opener,
@@ -65,6 +76,7 @@ impl PopupTargetCreation {
             disposition,
             session_storage_store,
             initial_empty_document_storage_key,
+            top_level_browsing_context,
         }
     }
 }
@@ -77,6 +89,9 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
     let PopupTargetCreation {
         browser_context_id,
         popup_id,
+        selected_existing_target,
+        allows_named_target_selection,
+        navigation_requested,
         url,
         target_name,
         opener,
@@ -84,6 +99,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         disposition,
         session_storage_store,
         initial_empty_document_storage_key,
+        top_level_browsing_context,
     } = creation;
     let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
         tracing::debug!(
@@ -95,48 +111,91 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         return None;
     };
 
-    if let Some(existing_target_id) = browser_context
-        .target_id_for_window_name(&target_name)
-        .map(str::to_owned)
-    {
-        let navigation =
+    let existing_target_id = if selected_existing_target {
+        let selected = opener.as_ref().and_then(|opener| {
+            popup_id.and_then(|popup_id| {
+                browser_context.reusable_target_id_for_popup_id(&opener.target_id, popup_id)
+            })
+        });
+        let Some(selected) = selected else {
+            tracing::debug!(
+                browser_context_id,
+                ?popup_id,
+                ?target_name,
+                "dropping accepted popup action after its selected target became unavailable"
+            );
+            return None;
+        };
+        Some(selected)
+    } else if allows_named_target_selection {
+        opener.as_ref().and_then(|opener| {
+            browser_context.target_id_for_window_name(&opener.target_id, &target_name)
+        })
+    } else {
+        None
+    };
+    if let Some(existing_target_id) = existing_target_id.map(str::to_owned) {
+        if let Some(incoming_state) = top_level_browsing_context.as_ref()
+            && let Some(owner_state) =
+                browser_context.target_top_level_browsing_context_state(&existing_target_id)
+        {
+            let observed_name = incoming_state.window_name();
+            incoming_state.bind_to(&owner_state);
+            if observed_name != target_name {
+                owner_state.set_window_name(observed_name);
+            }
+        }
+        let should_navigate = if navigation_requested {
             popup_target_has_loaded_page(conn, &browser_context_id, &existing_target_id)
-                .then(|| {
-                    PopupTargetNavigationOwnerAction::capture(
-                        conn,
-                        &browser_context_id,
-                        &existing_target_id,
-                        url.clone(),
-                        PopupTargetNavigationKind::NamedTargetReuse,
-                    )
-                })
-                .flatten();
+        } else {
+            false
+        };
+        let navigation = should_navigate
+            .then(|| {
+                PopupTargetNavigationOwnerAction::capture(
+                    conn,
+                    &browser_context_id,
+                    &existing_target_id,
+                    url.clone(),
+                    PopupTargetNavigationKind::NamedTargetReuse,
+                )
+            })
+            .flatten();
         let activation = (disposition == moli_core::page::RendererPopupDisposition::Foreground)
             .then(|| {
                 PopupTargetActivationAction::capture(conn, &browser_context_id, &existing_target_id)
             })
             .flatten();
 
-        let target_url_updated = conn
-            .browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.update_target_url(&existing_target_id, url.clone())
-            });
-        if target_url_updated {
-            emit_target_info_changed_for_target_background_event(
-                conn,
-                out,
-                &browser_context_id,
-                &existing_target_id,
-            );
-            if let Some(navigation) = navigation {
-                conn.publish_popup_target_navigation_owner_action(navigation);
+        let target_updated = if navigation_requested {
+            conn.browser_context_by_id_mut(&browser_context_id)
+                .is_some_and(|browser_context| {
+                    browser_context.update_target_url(&existing_target_id, url.clone())
+                })
+        } else {
+            conn.browser_context_by_id(&browser_context_id)
+                .and_then(|browser_context| {
+                    browser_context.devtools_target_info(&existing_target_id)
+                })
+                .is_some()
+        };
+        if target_updated {
+            if navigation_requested {
+                emit_target_info_changed_for_target_background_event(
+                    conn,
+                    out,
+                    &browser_context_id,
+                    &existing_target_id,
+                );
+                if let Some(navigation) = navigation {
+                    conn.publish_popup_target_navigation_owner_action(navigation);
+                }
             }
             if let Some(activation) = activation {
                 conn.publish_popup_target_activation_action(activation);
             }
         }
-        return (target_url_updated
+        return (target_updated
             && remember_resolved_popup_target(
                 conn,
                 &browser_context_id,
@@ -200,7 +259,11 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                 can_access_opener,
             );
         }
-        browser_context.remember_target_window_name(&target_name, &target_id);
+        if let Some(state) = top_level_browsing_context {
+            browser_context.remember_target_top_level_browsing_context_state(&target_id, state);
+        } else {
+            browser_context.remember_target_window_name(&target_name, &target_id);
+        }
         browser_context.remember_target_popup_id(popup_id, &target_id);
     }
 

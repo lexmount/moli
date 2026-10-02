@@ -19,6 +19,7 @@ pub(crate) fn tab_target_info_from_page_target_info(
         can_access_opener: page_target_info.can_access_opener,
         browser_context_id: page_target_info.browser_context_id,
         moli_popup_id: None,
+        moli_popup_alias_ids: Vec::new(),
     }
 }
 
@@ -65,6 +66,7 @@ mod tests {
                 can_access_opener: false,
                 browser_context_id: Some(DevToolsBrowserContextId::from("BID-1")),
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
         );
 

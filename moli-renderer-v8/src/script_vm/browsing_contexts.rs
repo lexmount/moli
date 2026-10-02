@@ -201,6 +201,23 @@ impl ScriptVm {
             .set_web_storage_handles(handles);
     }
 
+    pub(crate) fn set_top_level_browsing_context_state(
+        &mut self,
+        state: crate::RendererTopLevelBrowsingContextState,
+    ) {
+        self._context_host
+            .borrow_mut()
+            .set_top_level_browsing_context_state(state);
+    }
+
+    pub(crate) fn top_level_browsing_context_state(
+        &self,
+    ) -> crate::RendererTopLevelBrowsingContextState {
+        self._context_host
+            .borrow()
+            .top_level_browsing_context_state()
+    }
+
     pub(crate) fn web_storage_handles(&self) -> crate::RendererWebStorageHandles {
         let host = self._context_host.borrow();
         crate::RendererWebStorageHandles::new(

@@ -1225,7 +1225,7 @@ impl JsContextHost {
         self.child_window_proxy_records.realm_top(scope, handle)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_window<'s>(
+    pub(crate) fn child_browsing_context_parent_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
@@ -1291,7 +1291,7 @@ impl JsContextHost {
         set_object_slot(scope, window, "__moliWindowTop", top.into());
     }
 
-    pub(in crate::native_bridge::context_host) fn child_window_object_slot<'s>(
+    pub(crate) fn child_window_object_slot<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         window: v8::Local<'s, v8::Object>,
         name: &str,
@@ -1311,27 +1311,12 @@ impl JsContextHost {
         (!is_cross_origin_window_proxy(scope, object)).then_some(object)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_top_for_realm_global<
-        's,
-    >(
+    pub(crate) fn child_browsing_context_parent_top_for_realm_global<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
         global: v8::Local<'s, v8::Object>,
     ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
-        let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
-        else {
-            let top = self
-                .child_window_proxy_records
-                .browsing_context_top(scope, handle)
-                .unwrap_or_else(|| self.child_browsing_context_root_window(scope, handle, global));
-            let parent = self
-                .child_window_proxy_records
-                .browsing_context_parent(scope, handle)
-                .unwrap_or_else(|| self.child_browsing_context_parent_window(scope, handle, top));
-            return (parent, top);
-        };
-
         if let Some(popup_owner) =
             self.child_browsing_context_popup_owner_window_for_realm(scope, handle)
         {
@@ -1342,44 +1327,26 @@ impl JsContextHost {
             let top = self
                 .child_window_proxy_records
                 .browsing_context_top(scope, handle)
-                .or_else(|| {
-                    Self::child_window_non_cross_origin_object_slot(
-                        scope,
-                        window,
-                        "__moliWindowTop",
-                    )
-                })
                 .unwrap_or_else(|| self.child_browsing_context_root_window(scope, handle, global));
             let parent = self
                 .child_window_proxy_records
                 .browsing_context_parent(scope, handle)
-                .or_else(|| {
-                    Self::child_window_non_cross_origin_object_slot(
-                        scope,
-                        window,
-                        "__moliWindowParent",
-                    )
-                })
                 .unwrap_or_else(|| self.child_browsing_context_parent_window(scope, handle, top));
             return (parent, top);
         }
 
-        let existing_top = Self::child_window_object_slot(scope, window, "__moliWindowTop");
-        let top = existing_top
-            .filter(|top| is_cross_origin_window_proxy(scope, *top))
-            .or_else(|| {
-                self.cross_origin_window_endpoint_projection_for_child(
-                    scope,
-                    handle,
-                    PendingWindowMessageEndpoint::TopWindow,
-                )
-            })
+        let top = self
+            .cross_origin_window_endpoint_projection_for_child(
+                scope,
+                handle,
+                PendingWindowMessageEndpoint::TopWindow,
+            )
             .unwrap_or(global);
         let parent = self.child_browsing_context_parent_window(scope, handle, top);
         (parent, top)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_root_window<'s>(
+    pub(crate) fn child_browsing_context_root_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,

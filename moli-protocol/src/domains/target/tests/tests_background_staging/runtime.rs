@@ -449,16 +449,27 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     let mut ctx = TestContext::new();
     tokio::task::LocalSet::new()
         .run_until(async {
+    let active_target_id = "TID-000000000NPA";
     let owner = load_same_context_loaded_background_runtime_owner_async(
         &mut ctx,
         "BID-9-NAMED-POPUP",
-        "TID-000000000NPA",
+        active_target_id,
         "<title>active</title><main>active target</main>",
         "data:text/html,<title>background</title><main>background target</main>",
         1041949440,
     )
     .await;
     ctx.enable_background_navigation_scheduler_for_test();
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .remember_target_opener(
+            &owner.target_id,
+            active_target_id.to_owned(),
+            active_target_id.to_owned(),
+            true,
+        );
     ctx.conn
         .browser_context
         .as_mut()
@@ -553,6 +564,28 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     .await;
     let response = take_response_by_id(&mut ctx, 1041949447);
     assert_eq!(response["result"]["result"]["value"], json!("named target"));
+
+    ctx.process_async(json!({
+        "id": 1041949448,
+        "method": "Runtime.evaluate",
+        "sessionId": owner.session_id,
+        "params": {
+            "expression": "window.name"
+        }
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 1041949448);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!("reportWindow"),
+        "a reused named target must retain its browsing-context name across Document replacement"
+    );
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    assert_eq!(
+        browser_context.target_id_for_window_name(active_target_id, "reportWindow"),
+        Some(owner.target_id.as_str()),
+        "the popup proxy name and the live target engine must share one browsing-context owner"
+    );
         })
         .await;
 }

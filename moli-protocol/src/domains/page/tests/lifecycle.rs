@@ -3043,7 +3043,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
-    assert!(bc.target_id_for_window_name("close-me").is_none());
+    assert!(bc.target_id_for_window_name("TID-1", "close-me").is_none());
     assert!(!bc.target_opener_ids.contains_key("TID-popup-after-close"));
     assert!(
         !bc.target_opener_frame_ids

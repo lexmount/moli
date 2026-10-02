@@ -190,8 +190,8 @@ use super::document::{
 };
 use activation::navigate_form_target_browsing_context;
 pub(crate) use activation::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    SpecialBrowsingContextTarget, existing_browsing_context_target_for_dispatch_scope,
+    navigate_existing_browsing_context_target_for_dispatch_scope, navigate_named_iframe_target,
 };
 pub(crate) use activation::{
     activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,

@@ -818,6 +818,7 @@ pub(crate) struct JsContextHost {
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     page_context_resources_closed: bool,
     page_default_context: Option<v8::Weak<v8::Context>>,
+    top_level_browsing_context: crate::RendererTopLevelBrowsingContextState,
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     pub(super) bridge: NativeDomBridge,
     backend_node_registry: SharedRendererBackendNodeRegistry,
@@ -1025,14 +1026,12 @@ pub(crate) struct JsContextHost {
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
     #[cfg(test)]
     pending_popup_activations: Vec<RendererPendingPopupActivation>,
-    next_lightweight_popup_id: u64,
     next_lightweight_popup_local_window_id: u64,
     next_lightweight_popup_document_id: u64,
     next_lightweight_popup_document_load_id: u64,
     next_lightweight_popup_classic_script_load_id: u64,
     lightweight_popup_browsing_contexts:
         HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
-    lightweight_popup_window_names: HashMap<String, u64>,
     lightweight_popup_document_handles: HashMap<DomHandle, u64>,
     pending_lightweight_popup_document_loads:
         HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,

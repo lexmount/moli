@@ -67,6 +67,7 @@ fn service_worker_target_info() -> DevToolsTargetInfo {
         can_access_opener: false,
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-service-worker")),
         moli_popup_id: None,
+        moli_popup_alias_ids: Vec::new(),
     }
 }
 
@@ -82,6 +83,7 @@ fn shared_worker_target_info() -> DevToolsTargetInfo {
         can_access_opener: false,
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-shared-worker")),
         moli_popup_id: None,
+        moli_popup_alias_ids: Vec::new(),
     }
 }
 

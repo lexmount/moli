@@ -212,6 +212,7 @@ impl JsContextHost {
             output_journal: None,
             page_context_resources_closed: false,
             page_default_context: None,
+            top_level_browsing_context: crate::RendererTopLevelBrowsingContextState::default(),
             v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry::default(),
             bridge: NativeDomBridge::new(bindings),
             dom_agent_state: crate::runtime::RendererDomAgentState::new(
@@ -408,13 +409,11 @@ impl JsContextHost {
             pending_download_activations: Vec::new(),
             #[cfg(test)]
             pending_popup_activations: Vec::new(),
-            next_lightweight_popup_id: 1,
             next_lightweight_popup_local_window_id: 1,
             next_lightweight_popup_document_id: 1,
             next_lightweight_popup_document_load_id: 0,
             next_lightweight_popup_classic_script_load_id: 0,
             lightweight_popup_browsing_contexts: HashMap::new(),
-            lightweight_popup_window_names: HashMap::new(),
             lightweight_popup_document_handles: HashMap::new(),
             pending_lightweight_popup_document_loads: HashMap::new(),
             pending_lightweight_popup_classic_script_loads: HashMap::new(),
@@ -476,6 +475,35 @@ impl JsContextHost {
         };
         host.initialize_style_element_sources_for_document(host.document_handle());
         host
+    }
+
+    pub(crate) fn top_level_window_name(&self) -> String {
+        self.top_level_browsing_context.window_name()
+    }
+
+    pub(crate) fn top_level_browsing_context_state(
+        &self,
+    ) -> crate::RendererTopLevelBrowsingContextState {
+        self.top_level_browsing_context.clone()
+    }
+
+    pub(crate) fn set_top_level_window_name(&self, value: String) {
+        self.top_level_browsing_context.set_window_name(value);
+    }
+
+    pub(crate) fn window_name_for_dispatch_scope(
+        &self,
+        scope: super::OwnerDispatchScope,
+    ) -> Option<String> {
+        match scope {
+            super::OwnerDispatchScope::Top => Some(self.top_level_window_name()),
+            super::OwnerDispatchScope::Child(handle) => self
+                .child_browsing_context_window_name(handle)
+                .map(str::to_owned),
+            super::OwnerDispatchScope::LightweightPopup(popup_id) => self
+                .lightweight_popup_top_level_browsing_context_state(popup_id)
+                .map(|state| state.window_name()),
+        }
     }
 
     pub(crate) fn set_root_document_lifecycle(

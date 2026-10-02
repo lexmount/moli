@@ -1598,6 +1598,7 @@ pub struct DevToolsTargetInfo {
     pub can_access_opener: bool,
     pub browser_context_id: Option<DevToolsBrowserContextId>,
     pub moli_popup_id: Option<u64>,
+    pub moli_popup_alias_ids: Vec<u64>,
 }
 
 impl DevToolsTargetInfo {

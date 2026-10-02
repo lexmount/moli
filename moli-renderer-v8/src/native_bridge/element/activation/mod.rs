@@ -15,8 +15,8 @@ pub(crate) use default_action::{
 };
 pub(in crate::native_bridge) use targets::named_iframe_target_handle_for_navigation;
 pub(crate) use targets::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    SpecialBrowsingContextTarget, existing_browsing_context_target_for_dispatch_scope,
+    navigate_existing_browsing_context_target_for_dispatch_scope, navigate_named_iframe_target,
 };
 pub(in crate::native_bridge::element) use targets::{
     queue_deferred_named_iframe_target_navigation_from_document,

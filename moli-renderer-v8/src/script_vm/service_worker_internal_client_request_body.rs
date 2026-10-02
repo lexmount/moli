@@ -251,6 +251,8 @@ impl ScriptVm {
                     host_ptr,
                     None,
                     None,
+                    None,
+                    true,
                     "_blank",
                     &url,
                     creator_base_url.clone(),
@@ -262,6 +264,9 @@ impl ScriptVm {
             let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
                 host.lightweight_popup_initial_empty_document_storage_key(popup_id)
             });
+            let top_level_browsing_context = popup_id.and_then(|popup_id| {
+                host.lightweight_popup_top_level_browsing_context_state(popup_id)
+            });
             host.record_pending_popup_activation(
                 crate::RendererPendingPopupActivation::browser_context(
                     popup_id,
@@ -272,7 +277,8 @@ impl ScriptVm {
                 .with_initial_auxiliary_state(
                     session_storage_store,
                     initial_empty_document_storage_key,
-                ),
+                )
+                .with_top_level_browsing_context_state(top_level_browsing_context),
                 None,
             );
             if let Some(popup_id) = popup_id {
@@ -333,6 +339,8 @@ impl ScriptVm {
                     host_ptr,
                     None,
                     None,
+                    None,
+                    true,
                     "_blank",
                     &url,
                     creator_base_url.clone(),
@@ -344,6 +352,9 @@ impl ScriptVm {
             let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
                 host.lightweight_popup_initial_empty_document_storage_key(popup_id)
             });
+            let top_level_browsing_context = popup_id.and_then(|popup_id| {
+                host.lightweight_popup_top_level_browsing_context_state(popup_id)
+            });
             host.record_pending_popup_activation(
                 crate::RendererPendingPopupActivation::browser_context(
                     popup_id,
@@ -354,7 +365,8 @@ impl ScriptVm {
                 .with_initial_auxiliary_state(
                     session_storage_store,
                     initial_empty_document_storage_key,
-                ),
+                )
+                .with_top_level_browsing_context_state(top_level_browsing_context),
                 None,
             );
             host_scope.restore(scope, previous_owner_context);

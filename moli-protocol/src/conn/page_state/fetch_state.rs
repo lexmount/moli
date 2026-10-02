@@ -60,6 +60,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+        let target_id = host.target_id().to_owned();
         if self.page_targets.is_empty() {
             host.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
@@ -69,7 +70,12 @@ impl BrowserContext {
             let engine = self.new_page_navigation_engine(config);
             host.install_navigation_engine(engine);
         }
-        self.page_targets.insert(host)
+        let inserted = self.page_targets.insert(host);
+        if inserted {
+            self.target_browsing_context_group_ids
+                .insert(target_id.clone(), target_id);
+        }
+        inserted
     }
 
     #[cfg(test)]

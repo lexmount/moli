@@ -54,6 +54,7 @@ fn renderer_dialog_for_test(
             frame_id: frame_id.to_owned(),
             local_window_id: 1,
             document_id: 1,
+            top_level_popup_id: None,
         }
     });
     RendererPendingJavaScriptDialog::new(

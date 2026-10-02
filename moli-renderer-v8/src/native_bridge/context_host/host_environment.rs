@@ -444,6 +444,13 @@ impl JsContextHost {
         self.session_storage_store = handles.session_storage();
     }
 
+    pub(crate) fn set_top_level_browsing_context_state(
+        &mut self,
+        state: crate::RendererTopLevelBrowsingContextState,
+    ) {
+        self.top_level_browsing_context = state;
+    }
+
     pub(crate) fn set_stored_document_start_scripts(
         &mut self,
         scripts: &[crate::DocumentStartScript],

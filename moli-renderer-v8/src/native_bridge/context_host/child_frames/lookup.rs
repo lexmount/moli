@@ -54,6 +54,24 @@ impl JsContextHost {
         self.lightweight_popup_id_for_document_handle(owner_document)
     }
 
+    pub(crate) fn child_browsing_context_top_level_popup_id(
+        &self,
+        handle: DomHandle,
+    ) -> Option<u64> {
+        let mut current = Some(handle);
+        let mut visited = HashSet::new();
+        while let Some(handle) = current {
+            if !visited.insert(handle) {
+                return None;
+            }
+            if let Some(popup_id) = self.child_browsing_context_popup_owner_id(handle) {
+                return Some(popup_id);
+            }
+            current = self.child_browsing_context_parent_handle(handle);
+        }
+        None
+    }
+
     fn collect_child_browsing_context_handles_in_document_order_from_document(
         &self,
         document: DomHandle,

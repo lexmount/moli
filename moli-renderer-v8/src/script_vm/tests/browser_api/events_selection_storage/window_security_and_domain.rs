@@ -1,6 +1,65 @@
 use super::*;
 
 #[tokio::test]
+async fn cross_origin_window_open_special_targets_preserve_allowed_proxy_surface() {
+    for nested in [false, true] {
+        let leaf = r#"<!doctype html><script>
+for (const target of ['_parent', '_top']) {
+  const selected = open('', target);
+  let denied = false;
+  try { selected.document; } catch (error) { denied = error.name === 'SecurityError'; }
+  selected.postMessage({ target, denied, same: selected === parent, isTop: selected === top }, '*');
+}
+</script>"#
+            .to_owned();
+        let mut bodies = Vec::new();
+        if nested {
+            bodies.push(
+                r#"<!doctype html><script>
+addEventListener('message', event => parent.postMessage(event.data, '*'));
+</script><iframe src='/leaf'></iframe>"#
+                    .to_owned(),
+            );
+        }
+        bodies.push(leaf);
+        let server = StaticHttpServer::spawn_with_bodies(bodies).await;
+        let loader = static_http_loader([]);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://different-origin.test/parent",
+            &loader,
+        );
+        vm.eval(&format!(
+            r#"
+globalThis.results = [];
+addEventListener('message', event => results.push(event.data));
+const frame = document.createElement('iframe');
+frame.src = {:?};
+(document.body || document.documentElement).append(frame);
+"#,
+            server.base_url().join("/child").unwrap().as_str()
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(results.length)",
+            "2",
+            "special target messages",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("JSON.stringify(results.sort((a, b) => a.target.localeCompare(b.target)))")
+                .unwrap(),
+            if nested {
+                r#"[{"target":"_parent","denied":false,"same":true,"isTop":false},{"target":"_top","denied":true,"same":false,"isTop":true}]"#
+            } else {
+                r#"[{"target":"_parent","denied":true,"same":true,"isTop":true},{"target":"_top","denied":true,"same":true,"isTop":true}]"#
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn same_origin_nested_children_share_window_security_token_without_top_access() {
     let (root_url, server) = spawn_nested_same_origin_window_access_server().await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -1537,8 +1596,21 @@ async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_stor
     assert_eq!(
         vm.eval("globalThis.__aboutBlankPopupStorageMessage || 'missing'")
             .expect("about:blank popup message should evaluate"),
-        r#"{"popupBefore":null,"popupAfter":"popup-first-party","childAfter":"child-partition","opener":true}"#
+        r#"{"popupBefore":null,"popupAfter":"popup-first-party","childAfter":"child-partition","opener":true,"isolatedReturn":true}"#
     );
+    {
+        let host = vm._context_host.borrow();
+        let ordinary = host
+            .lightweight_popup_initial_empty_document_storage_key(1)
+            .expect("ordinary popup storage identity");
+        let isolated = host
+            .lightweight_popup_initial_empty_document_storage_key(2)
+            .expect("noopener popup storage identity");
+        assert_eq!(
+            ordinary, isolated,
+            "creator storage identity must survive noopener"
+        );
+    }
     assert_eq!(
         vm.eval("localStorage.getItem('popup-scope')")
             .expect("top localStorage should evaluate"),

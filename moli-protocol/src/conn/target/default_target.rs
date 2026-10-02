@@ -63,6 +63,7 @@ impl DefaultTargetLifecycle {
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(DEFAULT_BROWSER_CONTEXT_ID)),
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         })
     }
 

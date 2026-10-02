@@ -188,6 +188,7 @@ impl JsContextHost {
                     frame_id,
                     local_window_id: owner.local_window_id.0,
                     document_id: owner.document_id.0,
+                    top_level_popup_id: self.child_browsing_context_top_level_popup_id(handle),
                 }
             }
             (

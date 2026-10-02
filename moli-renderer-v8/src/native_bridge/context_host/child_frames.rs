@@ -1270,6 +1270,12 @@ impl JsContextHost {
         };
         entry.set_window_name(name);
     }
+
+    pub(crate) fn child_browsing_context_window_name(&self, handle: DomHandle) -> Option<&str> {
+        self.child_browsing_contexts
+            .get(&handle)
+            .map(ChildBrowsingContextEntry::window_name)
+    }
 }
 
 fn child_navigation_current_url(seed: &NavigationHistoryEntrySeed) -> Option<&str> {

@@ -91,10 +91,14 @@ pub(super) async fn emit_prepared(
             source,
             disposition,
             popup_id,
+            selected_existing_target,
+            allows_named_target_selection,
+            navigation_requested,
             url,
             target_name,
             session_storage_store,
             initial_empty_document_storage_key,
+            top_level_browsing_context,
         ) = activation.into_parts();
         let can_access_opener = matches!(
             &source,
@@ -107,6 +111,9 @@ pub(super) async fn emit_prepared(
         let creation = PopupTargetCreation::new(
             page_owner.browser_context_id().to_owned(),
             popup_id,
+            selected_existing_target,
+            allows_named_target_selection,
+            navigation_requested,
             url,
             target_name,
             opener,
@@ -114,6 +121,7 @@ pub(super) async fn emit_prepared(
             disposition,
             session_storage_store,
             initial_empty_document_storage_key,
+            top_level_browsing_context,
         );
         let browser_context_id = page_owner.browser_context_id().to_owned();
         let target_id =
@@ -159,8 +167,15 @@ fn resolve_devtools_opener(
                 .is_some()
                 .then(|| PopupTargetOpenerIdentity::new(target_id, target_id))
         }
-        RendererWindowDocumentSource::ChildFrame { frame_id, .. } => {
-            let target_id = page_owner.target_id()?;
+        RendererWindowDocumentSource::ChildFrame {
+            frame_id,
+            top_level_popup_id,
+            ..
+        } => {
+            let target_id = match top_level_popup_id {
+                Some(popup_id) => browser_context.target_id_for_popup_id(*popup_id)?,
+                None => page_owner.target_id()?,
+            };
             browser_context
                 .devtools_target_info(target_id)
                 .is_some()
@@ -245,6 +260,23 @@ mod tests {
             popup_id,
             url.to_owned(),
             "_blank".to_owned(),
+            RendererPopupDisposition::Background,
+        )
+    }
+
+    fn named_window_activation(
+        exposes_opener: bool,
+        popup_id: u64,
+        url: &str,
+        target_name: &str,
+    ) -> RendererPendingPopupActivation {
+        RendererPendingPopupActivation::window(
+            source_document(),
+            RendererWindowDocumentSource::RootFrame,
+            exposes_opener,
+            Some(popup_id),
+            url.to_owned(),
+            target_name.to_owned(),
             RendererPopupDisposition::Background,
         )
     }
@@ -344,6 +376,227 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn noopener_named_popup_reuses_a_related_target_without_changing_its_opener() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
+        let owner = page_owner("BID-1", "TID-opener");
+
+        emit(
+            &mut conn,
+            owner.clone(),
+            vec![named_window_activation(
+                true,
+                80,
+                "about:blank#related",
+                "report",
+            )],
+        )
+        .await;
+        emit(
+            &mut conn,
+            owner,
+            vec![named_window_activation(
+                false,
+                81,
+                "about:blank#isolated",
+                "report",
+            )],
+        )
+        .await;
+
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        assert_eq!(
+            context.target_id_for_popup_id(80),
+            context.target_id_for_popup_id(81)
+        );
+        let target_id = context.target_id_for_popup_id(80).unwrap();
+        let info = context.devtools_target_info(target_id).unwrap();
+        assert_eq!(info.url, "about:blank#isolated");
+        assert_eq!(
+            info.opener_id.as_ref().map(|id| id.as_str()),
+            Some("TID-opener")
+        );
+        assert!(info.can_access_opener);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn selected_popup_identity_survives_same_turn_window_name_change() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
+        let owner = page_owner("BID-1", "TID-opener");
+
+        emit(
+            &mut conn,
+            owner.clone(),
+            vec![named_window_activation(
+                true,
+                82,
+                "about:blank#first",
+                "old",
+            )],
+        )
+        .await;
+        let target_id = conn
+            .browser_context_by_id("BID-1")
+            .and_then(|context| context.target_id_for_popup_id(82))
+            .expect("first popup target")
+            .to_owned();
+        let target_count = conn
+            .browser_context_by_id("BID-1")
+            .unwrap()
+            .devtools_target_infos()
+            .len();
+        conn.browser_context_by_id_mut("BID-1")
+            .unwrap()
+            .remember_target_window_name("new", &target_id);
+
+        emit(
+            &mut conn,
+            owner,
+            vec![
+                named_window_activation(true, 82, "about:blank#next", "old")
+                    .with_selected_existing_target(true),
+            ],
+        )
+        .await;
+
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        assert_eq!(context.devtools_target_infos().len(), target_count);
+        assert_eq!(context.target_id_for_popup_id(82), Some(target_id.as_str()));
+        assert_eq!(
+            context
+                .devtools_target_info(&target_id)
+                .map(|info| info.url),
+            Some("about:blank#next".to_owned())
+        );
+        assert_eq!(
+            context.target_id_for_window_name("TID-opener", "new"),
+            Some(target_id.as_str())
+        );
+        assert_eq!(context.target_id_for_window_name("TID-opener", "old"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn empty_url_keeps_the_selected_popup_document() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
+        let owner = page_owner("BID-1", "TID-opener");
+
+        emit(
+            &mut conn,
+            owner.clone(),
+            vec![named_window_activation(
+                true,
+                83,
+                "about:blank#existing-document",
+                "report",
+            )],
+        )
+        .await;
+        let target_id = conn
+            .browser_context_by_id("BID-1")
+            .and_then(|context| context.target_id_for_popup_id(83))
+            .expect("named popup target")
+            .to_owned();
+        let target_count = conn
+            .browser_context_by_id("BID-1")
+            .unwrap()
+            .devtools_target_infos()
+            .len();
+
+        emit(
+            &mut conn,
+            owner,
+            vec![
+                named_window_activation(true, 83, "about:blank", "report")
+                    .with_selected_existing_target(true)
+                    .with_navigation_requested(false),
+            ],
+        )
+        .await;
+
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        assert_eq!(context.devtools_target_infos().len(), target_count);
+        assert_eq!(context.target_id_for_popup_id(83), Some(target_id.as_str()));
+        assert_eq!(
+            context
+                .devtools_target_info(&target_id)
+                .map(|info| info.url),
+            Some("about:blank#existing-document".to_owned())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_selected_popup_identity_does_not_fall_back_to_its_old_name() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
+        let owner = page_owner("BID-1", "TID-opener");
+
+        emit(
+            &mut conn,
+            owner.clone(),
+            vec![named_window_activation(
+                true,
+                84,
+                "about:blank#selected",
+                "report",
+            )],
+        )
+        .await;
+        let selected_target_id = conn
+            .browser_context_by_id("BID-1")
+            .and_then(|context| context.target_id_for_popup_id(84))
+            .expect("selected popup target")
+            .to_owned();
+        conn.browser_context_by_id_mut("BID-1")
+            .unwrap()
+            .take_page_target_for_close(&selected_target_id)
+            .expect("close selected popup target");
+
+        emit(
+            &mut conn,
+            owner.clone(),
+            vec![named_window_activation(
+                true,
+                85,
+                "about:blank#replacement",
+                "report",
+            )],
+        )
+        .await;
+        let replacement_target_id = conn
+            .browser_context_by_id("BID-1")
+            .and_then(|context| context.target_id_for_popup_id(85))
+            .expect("replacement popup target")
+            .to_owned();
+        let target_count = conn
+            .browser_context_by_id("BID-1")
+            .unwrap()
+            .devtools_target_infos()
+            .len();
+
+        emit(
+            &mut conn,
+            owner,
+            vec![
+                named_window_activation(true, 84, "about:blank#must-not-land", "report")
+                    .with_selected_existing_target(true),
+            ],
+        )
+        .await;
+
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        assert_eq!(context.devtools_target_infos().len(), target_count);
+        assert_eq!(context.target_id_for_popup_id(84), None);
+        assert_eq!(
+            context
+                .devtools_target_info(&replacement_target_id)
+                .map(|info| info.url),
+            Some("about:blank#replacement".to_owned())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn removed_opener_downgrades_access_without_rebinding_to_current_target() {
         let mut conn = CdpConnection::default();
         conn.browser_context = Some(context("BID-1", "TID-current", "SID-1"));
@@ -382,6 +635,7 @@ mod tests {
                     frame_id: "FRAME-child".to_owned(),
                     local_window_id: 9,
                     document_id: 11,
+                    top_level_popup_id: None,
                 },
                 true,
                 Some(43),
@@ -402,6 +656,51 @@ mod tests {
             Some("FRAME-child")
         );
         assert!(info.can_access_opener);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn child_inside_lightweight_popup_uses_popup_as_its_top_level_opener() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
+        let owner = page_owner("BID-1", "TID-root");
+
+        emit(
+            &mut conn,
+            owner,
+            vec![
+                window_activation(
+                    RendererWindowDocumentSource::RootFrame,
+                    true,
+                    Some(70),
+                    "about:blank#parent-popup",
+                ),
+                window_activation(
+                    RendererWindowDocumentSource::ChildFrame {
+                        frame_id: "FRAME-popup-child".to_owned(),
+                        local_window_id: 9,
+                        document_id: 11,
+                        top_level_popup_id: Some(70),
+                    },
+                    true,
+                    Some(71),
+                    "about:blank#child-popup",
+                ),
+            ],
+        )
+        .await;
+
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        let parent_target_id = context.target_id_for_popup_id(70).unwrap();
+        let child_target_id = context.target_id_for_popup_id(71).unwrap();
+        let child = context.devtools_target_info(child_target_id).unwrap();
+        assert_eq!(
+            child.opener_id.as_ref().map(|id| id.as_str()),
+            Some(parent_target_id)
+        );
+        assert_eq!(
+            child.opener_frame_id.as_ref().map(|id| id.as_str()),
+            Some("FRAME-popup-child")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

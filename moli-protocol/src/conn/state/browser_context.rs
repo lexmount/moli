@@ -54,8 +54,17 @@ pub struct BrowserContext {
     /// an implicit-noopener `_blank` target still has an `openerId`, but is
     /// intentionally absent from this set.
     pub(crate) target_can_access_opener: HashSet<String>,
+    /// Stable browsing-context group membership for top-level page targets.
+    ///
+    /// A popup that retains script access to its opener inherits the opener's
+    /// group. Independent targets and noopener popups keep their own group so
+    /// a matching `window.name` cannot route navigation across that boundary.
+    pub(crate) target_browsing_context_group_ids: HashMap<String, String>,
     pub target_window_names: HashMap<String, String>,
+    pub(crate) target_top_level_browsing_context_states:
+        HashMap<String, moli_core::RendererTopLevelBrowsingContextState>,
     pub target_popup_ids: HashMap<String, u64>,
+    pub(crate) popup_target_ids: HashMap<u64, String>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
@@ -505,8 +514,11 @@ impl BrowserContext {
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
             target_can_access_opener: HashSet::new(),
+            target_browsing_context_group_ids: HashMap::new(),
             target_window_names: HashMap::new(),
+            target_top_level_browsing_context_states: HashMap::new(),
             target_popup_ids: HashMap::new(),
+            popup_target_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),
@@ -563,11 +575,14 @@ impl BrowserContext {
 
         let renderer_runtime = self.renderer_runtime_owner_access();
         let sender = self.renderer_output_transport_sender.clone();
+        let target_window_names = &self.target_window_names;
+        let target_top_level_browsing_context_states =
+            &self.target_top_level_browsing_context_states;
         for host in self.page_targets.iter_mut() {
             if host.navigation_engine().is_some() {
                 continue;
             }
-            let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
+            let mut engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
                 config.clone(),
                 renderer_runtime.clone(),
             )
@@ -575,8 +590,25 @@ impl BrowserContext {
             if let Some(sender) = sender.clone() {
                 engine.set_renderer_output_transport_sender(sender);
             }
+            if let Some(state) = target_top_level_browsing_context_states.get(host.target_id()) {
+                engine.set_top_level_browsing_context_state(state.clone());
+            } else if let Some(window_name) = target_window_names.get(host.target_id()) {
+                engine.set_top_level_window_name(window_name.clone());
+            }
             host.install_navigation_engine(engine);
         }
+        let page_targets = &self.page_targets;
+        self.target_window_names.retain(|target_id, _| {
+            page_targets
+                .get(target_id)
+                .is_none_or(|target| target.navigation_engine().is_none())
+        });
+        self.target_top_level_browsing_context_states
+            .retain(|target_id, _| {
+                page_targets
+                    .get(target_id)
+                    .is_none_or(|target| target.navigation_engine().is_none())
+            });
     }
 
     pub(crate) fn set_renderer_output_transport_sender(
@@ -912,6 +944,11 @@ impl BrowserContext {
             "targetOpenerCount": self.target_opener_ids.len(),
             "targetOpenerFrameCount": self.target_opener_frame_ids.len(),
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
+            "targetBrowsingContextGroupCount": self
+                .target_browsing_context_group_ids
+                .values()
+                .collect::<HashSet<_>>()
+                .len(),
             "targetWindowNameCount": self.target_window_names.len(),
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
@@ -1642,7 +1679,33 @@ impl BrowserContext {
     }
 
     pub(crate) fn rekey_active_target(&mut self, target_id: impl Into<String>) -> bool {
-        self.page_targets.rekey_active(target_id.into())
+        let Some(previous_target_id) = self.active_target_id().map(str::to_owned) else {
+            return false;
+        };
+        let target_id = target_id.into();
+        if !self.page_targets.rekey_active(target_id.clone()) {
+            return false;
+        }
+        let previous_group_id = self
+            .target_browsing_context_group_ids
+            .remove(&previous_target_id)
+            .unwrap_or_else(|| previous_target_id.clone());
+        if previous_group_id == previous_target_id {
+            for group_id in self.target_browsing_context_group_ids.values_mut() {
+                if *group_id == previous_target_id {
+                    *group_id = target_id.clone();
+                }
+            }
+        }
+        self.target_browsing_context_group_ids.insert(
+            target_id.clone(),
+            if previous_group_id == previous_target_id {
+                target_id
+            } else {
+                previous_group_id
+            },
+        );
+        true
     }
 
     pub(crate) fn active_session_id(&self) -> Option<&str> {

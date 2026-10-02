@@ -2526,16 +2526,28 @@ async fn classic_popup_window_handles_by_id_for_script_result(
         .execute(window_handles_command(&context))
         .await
     {
-        Ok(AutomationResult::GetTargets(result)) => Ok(result
-            .targets
-            .into_iter()
-            .filter(|target| target.kind == moli_protocol::automation::DevToolsTargetKind::Page)
-            .filter_map(|target| {
-                let popup_id = target.moli_popup_id?;
-                let target_id = target.target_id?.into_string();
-                Some((popup_id, target_id))
-            })
-            .collect()),
+        Ok(AutomationResult::GetTargets(result)) => {
+            let mut handles = BTreeMap::new();
+            for target in result
+                .targets
+                .into_iter()
+                .filter(|target| target.kind == moli_protocol::automation::DevToolsTargetKind::Page)
+            {
+                let Some(target_id) = target.target_id.map(|id| id.into_string()) else {
+                    continue;
+                };
+                let mut aliases = target.moli_popup_alias_ids;
+                if aliases.is_empty()
+                    && let Some(popup_id) = target.moli_popup_id
+                {
+                    aliases.push(popup_id);
+                }
+                for popup_id in aliases {
+                    handles.insert(popup_id, target_id.clone());
+                }
+            }
+            Ok(handles)
+        }
         Ok(_) => Err(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "window handles returned an unexpected result",

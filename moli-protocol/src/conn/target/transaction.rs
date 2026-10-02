@@ -749,6 +749,7 @@ mod tests {
             can_access_opener: false,
             browser_context_id: None,
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         };
         let prepared = PreparedTargetAttach::new(
             "TID-page",
@@ -858,6 +859,7 @@ mod tests {
             can_access_opener: false,
             browser_context_id: None,
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         };
         let prepared = PreparedTargetHostDelta::created("TID-worker", Some(target_info.clone()));
 

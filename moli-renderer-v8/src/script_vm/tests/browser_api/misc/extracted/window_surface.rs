@@ -833,3 +833,111 @@ fn window_dialog_and_open_arguments_use_webidl_conversion() {
         "undefined|TypeError|false|RangeError|null|TypeError|[object Window]|TypeError|TypeError|RangeError"
     );
 }
+#[test]
+fn window_name_accessors_reject_non_window_receivers_without_mutating_the_window() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const descriptor = Object.getOwnPropertyDescriptor(window, "name");
+              const outcome = callback => {
+                try { callback(); return "ok"; }
+                catch (error) { return error.name; }
+              };
+              const before = window.name;
+              return JSON.stringify({
+                setter: outcome(() => descriptor.set.call({}, "forged")),
+                getter: outcome(() => descriptor.get.call({})),
+                before,
+                after: window.name
+              });
+            })()
+            "#,
+        )
+        .expect("window.name illegal receiver probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"setter":"TypeError","getter":"TypeError","before":"","after":""}"#
+    );
+}
+
+#[test]
+fn window_name_accessors_follow_the_receiver_realm_and_preserve_state_on_conversion_errors() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = document.createElement("iframe");
+              (document.body || document.documentElement || document).appendChild(frame);
+              const child = frame.contentWindow;
+              const parentDescriptor = Object.getOwnPropertyDescriptor(window, "name");
+              const childDescriptor = Object.getOwnPropertyDescriptor(child, "name");
+
+              parentDescriptor.set.call(child, "child-from-parent-realm");
+              childDescriptor.set.call(window, "parent-from-child-realm");
+              const borrowedParent = childDescriptor.get.call(window);
+              const borrowedChild = parentDescriptor.get.call(child);
+
+              const popup = window.open("about:blank", "popup-owner");
+              const borrowedPopupBefore = parentDescriptor.get.call(popup);
+              parentDescriptor.set.call(popup, "renamed-popup-owner");
+              const borrowedPopupAfter = parentDescriptor.get.call(popup);
+              const openerAfterPopupRename = window.name;
+
+              const iterator = document.createNodeIterator(document);
+              let invalidReceiverGetter;
+              let invalidReceiverSetter;
+              let invalidReceiverConverted = false;
+              try {
+                parentDescriptor.get.call(iterator);
+              } catch (error) {
+                invalidReceiverGetter = error.name;
+              }
+              try {
+                parentDescriptor.set.call(iterator, {
+                  toString() {
+                    invalidReceiverConverted = true;
+                    return "forged";
+                  }
+                });
+              } catch (error) {
+                invalidReceiverSetter = error.name;
+              }
+
+              let conversionError;
+              try {
+                childDescriptor.set.call(window, {
+                  toString() { throw new RangeError("window-name-conversion"); }
+                });
+              } catch (error) {
+                conversionError = `${error.name}:${error.message}`;
+              }
+
+              return JSON.stringify({
+                borrowedParent,
+                borrowedChild,
+                borrowedPopupBefore,
+                borrowedPopupAfter,
+                openerAfterPopupRename,
+                invalidReceiverGetter,
+                invalidReceiverSetter,
+                invalidReceiverConverted,
+                parentAfterError: window.name,
+                childAfterError: child.name,
+                conversionError
+              });
+            })()
+            "#,
+        )
+        .expect("borrowed Window.name accessors should preserve their receiver realm");
+
+    assert_eq!(
+        result,
+        r#"{"borrowedParent":"parent-from-child-realm","borrowedChild":"child-from-parent-realm","borrowedPopupBefore":"popup-owner","borrowedPopupAfter":"renamed-popup-owner","openerAfterPopupRename":"parent-from-child-realm","invalidReceiverGetter":"TypeError","invalidReceiverSetter":"TypeError","invalidReceiverConverted":false,"parentAfterError":"parent-from-child-realm","childAfterError":"child-from-parent-realm","conversionError":"RangeError:window-name-conversion"}"#
+    );
+}

@@ -1126,6 +1126,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+                    top_level_browsing_context: crate::RendererTopLevelBrowsingContextState::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,

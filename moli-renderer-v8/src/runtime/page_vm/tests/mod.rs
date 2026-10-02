@@ -658,6 +658,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
         local_executor,
         loader,
         &PageVmEnvConfig {
+            top_level_browsing_context: crate::RendererTopLevelBrowsingContextState::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id,
             main_document_commit: None,

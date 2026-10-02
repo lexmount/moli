@@ -47,10 +47,14 @@ pub struct RendererPendingPopupActivation {
     source: RendererPopupActivationSource,
     disposition: RendererPopupDisposition,
     popup_id: Option<u64>,
+    selected_existing_target: bool,
+    allows_named_target_selection: bool,
+    navigation_requested: bool,
     url: String,
     target_name: String,
     session_storage_store: Option<SharedWebStorageStore>,
     initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    top_level_browsing_context: Option<crate::RendererTopLevelBrowsingContextState>,
 }
 
 impl RendererPendingPopupActivation {
@@ -67,6 +71,9 @@ impl RendererPendingPopupActivation {
             !is_special_browsing_context_target(&target_name),
             "popup activation must not carry an existing-context special target"
         );
+        let allows_named_target_selection = !target_name.is_empty()
+            && !target_name.eq_ignore_ascii_case("_blank")
+            && !is_special_browsing_context_target(&target_name);
         Self {
             source: RendererPopupActivationSource::Window {
                 root_document,
@@ -75,10 +82,14 @@ impl RendererPendingPopupActivation {
             },
             disposition,
             popup_id,
+            selected_existing_target: false,
+            allows_named_target_selection,
+            navigation_requested: true,
             url,
             target_name,
             session_storage_store: None,
             initial_empty_document_storage_key: None,
+            top_level_browsing_context: None,
         }
     }
 
@@ -96,10 +107,14 @@ impl RendererPendingPopupActivation {
             source: RendererPopupActivationSource::BrowserContext,
             disposition,
             popup_id,
+            selected_existing_target: false,
+            allows_named_target_selection: false,
+            navigation_requested: true,
             url,
             target_name,
             session_storage_store: None,
             initial_empty_document_storage_key: None,
+            top_level_browsing_context: None,
         }
     }
 
@@ -119,6 +134,24 @@ impl RendererPendingPopupActivation {
     ) -> Self {
         self.session_storage_store = session_storage_store;
         self.initial_empty_document_storage_key = initial_empty_document_storage_key;
+        self
+    }
+
+    pub fn with_top_level_browsing_context_state(
+        mut self,
+        state: Option<crate::RendererTopLevelBrowsingContextState>,
+    ) -> Self {
+        self.top_level_browsing_context = state;
+        self
+    }
+
+    pub fn with_selected_existing_target(mut self, selected: bool) -> Self {
+        self.selected_existing_target = selected;
+        self
+    }
+
+    pub fn with_navigation_requested(mut self, requested: bool) -> Self {
+        self.navigation_requested = requested;
         self
     }
 
@@ -149,19 +182,27 @@ impl RendererPendingPopupActivation {
         RendererPopupActivationSource,
         RendererPopupDisposition,
         Option<u64>,
+        bool,
+        bool,
+        bool,
         String,
         String,
         Option<SharedWebStorageStore>,
         Option<moli_storage_key::MoliStorageKey>,
+        Option<crate::RendererTopLevelBrowsingContextState>,
     ) {
         (
             self.source,
             self.disposition,
             self.popup_id,
+            self.selected_existing_target,
+            self.allows_named_target_selection,
+            self.navigation_requested,
             self.url,
             self.target_name,
             self.session_storage_store,
             self.initial_empty_document_storage_key,
+            self.top_level_browsing_context,
         )
     }
 }
@@ -171,6 +212,9 @@ impl PartialEq for RendererPendingPopupActivation {
         self.source == other.source
             && self.disposition == other.disposition
             && self.popup_id == other.popup_id
+            && self.selected_existing_target == other.selected_existing_target
+            && self.allows_named_target_selection == other.allows_named_target_selection
+            && self.navigation_requested == other.navigation_requested
             && self.url == other.url
             && self.target_name == other.target_name
             && match (&self.session_storage_store, &other.session_storage_store) {
@@ -179,6 +223,14 @@ impl PartialEq for RendererPendingPopupActivation {
                 _ => false,
             }
             && self.initial_empty_document_storage_key == other.initial_empty_document_storage_key
+            && match (
+                &self.top_level_browsing_context,
+                &other.top_level_browsing_context,
+            ) {
+                (None, None) => true,
+                (Some(left), Some(right)) => left.shares_identity_with(right),
+                _ => false,
+            }
     }
 }
 

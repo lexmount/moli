@@ -3274,6 +3274,8 @@ impl CdpConnection {
                 if let Some(target_id) = page_or_worker_target_info.target_id.as_ref() {
                     page_or_worker_target_info.moli_popup_id =
                         browser_context.target_popup_id(target_id.as_str());
+                    page_or_worker_target_info.moli_popup_alias_ids =
+                        browser_context.target_popup_alias_ids(target_id.as_str());
                 }
                 if let Some(tab_target_info) = self
                     .target_control

@@ -1066,6 +1066,7 @@ async fn execute_page_owned_work_on_script_execution_lane(
 /// environment setup does not grow owner-loop wiring fields.
 #[derive(Clone)]
 pub(crate) struct PageVmEnvConfig {
+    pub(crate) top_level_browsing_context: crate::RendererTopLevelBrowsingContextState,
     pub(crate) root_frame_id: Option<String>,
     pub(crate) main_document_commit: Option<super::RendererMainDocumentCommit>,
     pub(crate) top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
@@ -4379,6 +4380,9 @@ impl PageVm {
                 .set_storage_bucket_store(storage_bucket_store);
         }
         page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
+        page_vm
+            .vm_mut()
+            .set_top_level_browsing_context_state(env.top_level_browsing_context.clone());
         page_vm
             .vm_mut()
             .set_script_execution_disabled(env.script_execution_disabled);

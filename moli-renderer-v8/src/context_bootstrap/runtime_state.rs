@@ -31,9 +31,10 @@ use crate::{
     },
     network_host,
     util::{
-        callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, create_script_origin_with_base_url, get_private_value,
-        script_base_url_continuation_data, set_private_value, throw_type_error, v8_string, v8str,
+        callback_data_index_value, callback_data_item, context_host_ptr_from_context_slot,
+        context_host_ptr_from_global_bridge, context_host_ptr_from_window_object,
+        create_script_origin_with_base_url, get_private_value, script_base_url_continuation_data,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
     webidl_iterator::install_webidl_collection_iterator_intrinsics,
@@ -925,8 +926,22 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
-        .unwrap_or_else(|| v8::String::empty(scope).into());
+    let Some(owner) = window_name_owner(scope, receiver) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    let value = match owner {
+        WindowNameOwner::TopLevel(host_ptr) => {
+            v8_string(scope, &unsafe { &*host_ptr }.top_level_window_name())
+                .map(v8::Local::<v8::Value>::from)
+        }
+        WindowNameOwner::Child { .. } => object_hidden_value(scope, receiver, WINDOW_NAME_SLOT),
+        WindowNameOwner::LightweightPopup { host_ptr, popup_id } => unsafe { &*host_ptr }
+            .lightweight_popup_top_level_browsing_context_state(popup_id)
+            .and_then(|state| v8_string(scope, &state.window_name()))
+            .map(v8::Local::<v8::Value>::from),
+    }
+    .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
 }
 
@@ -936,15 +951,24 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    let next = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    if let Some(handle) = child_context_handle_from_owner(scope, receiver)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+    let Some(owner) = window_name_owner(scope, receiver) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    let Some(next) = args.get(0).to_string(scope) else {
+        return;
+    };
+    let next = next.to_rust_string_lossy(scope);
+    match owner {
+        WindowNameOwner::TopLevel(host_ptr) => {
+            unsafe { &*host_ptr }.set_top_level_window_name(next.clone());
+        }
+        WindowNameOwner::Child { host_ptr, handle } => {
+            unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+        }
+        WindowNameOwner::LightweightPopup { host_ptr, popup_id } => {
+            unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next);
+        }
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
 }
@@ -985,6 +1009,48 @@ fn window_status_runtime_setter<'s>(
         return;
     };
     set_private_value(scope, receiver, WINDOW_STATUS_RUNTIME_SLOT, next.into());
+}
+
+enum WindowNameOwner {
+    TopLevel(*mut JsContextHost),
+    Child {
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+    },
+    LightweightPopup {
+        host_ptr: *mut JsContextHost,
+        popup_id: u64,
+    },
+}
+
+fn window_name_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<WindowNameOwner> {
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+    {
+        return context_host_ptr_from_global_bridge(scope)
+            .map(|host_ptr| WindowNameOwner::LightweightPopup { host_ptr, popup_id });
+    }
+    if !super::window_receiver::is_window_receiver(scope, receiver) {
+        return None;
+    }
+    let host_ptr = context_host_ptr_from_window_object(scope, receiver).or_else(|| {
+        receiver
+            .get_creation_context(scope)
+            .and_then(context_host_ptr_from_context_slot)
+            .or_else(|| {
+                receiver
+                    .strict_equals(scope.get_current_context().global(scope).into())
+                    .then(|| context_host_ptr_from_global_bridge(scope))
+                    .flatten()
+            })
+    })?;
+    if let Some(handle) = super::window_accessors::window_child_context_handle(scope, receiver) {
+        Some(WindowNameOwner::Child { host_ptr, handle })
+    } else {
+        Some(WindowNameOwner::TopLevel(host_ptr))
+    }
 }
 
 fn install_public_window_surface_accessors<'s>(

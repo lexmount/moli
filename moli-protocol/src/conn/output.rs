@@ -3984,6 +3984,7 @@ impl BackgroundTargetCreatedEvent {
             can_access_opener: false,
             browser_context_id: event.browser_context_id,
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         });
         build_event(
             "Target.targetCreated",
@@ -5009,6 +5010,7 @@ mod tests {
                 can_access_opener: true,
                 browser_context_id: Some(DevToolsBrowserContextId::from("BID-target-info")),
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
         );
 
@@ -5049,6 +5051,7 @@ mod tests {
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from("BID-created")),
             moli_popup_id: None,
+            moli_popup_alias_ids: Vec::new(),
         };
         let mut attached = BackgroundProtocolEvent::target_attached(TargetAttachmentEvent {
             target_id: DevToolsTargetId::from("TID-attached"),
@@ -5065,6 +5068,7 @@ mod tests {
                 can_access_opener: false,
                 browser_context_id: None,
                 moli_popup_id: None,
+                moli_popup_alias_ids: Vec::new(),
             },
             waiting_for_debugger: true,
         });
