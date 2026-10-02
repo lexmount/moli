@@ -87,6 +87,7 @@ define_event_core_attribute_getter!(event_src_element_getter_function, "srcEleme
 pub(in crate::context_bootstrap) use moli_webapi::events::event_constructor_callback;
 
 pub(crate) use moli_webapi::events::state::{
+    EVENT_MOUSE_POSITIONLESS_SLOT,
     set_event_dispatch_fields_with_original_target,
     EVENT_BACKING_SLOT, EVENT_COMPOSED_PATH_SLOT, EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT,
     EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path,

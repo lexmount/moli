@@ -1,6 +1,8 @@
 //! V8-managed Event state shared by payload bindings and the host dispatcher.
 //! This module does not retain native hosts or persistent V8 handles.
 
+pub const EVENT_MOUSE_POSITIONLESS_SLOT: &str = "__moliMouseEventPositionless";
+
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{get_private_value, set_private_value, throw_type_error, v8_string, v8str};
 use moli_webapi_declare::WebApiObject;

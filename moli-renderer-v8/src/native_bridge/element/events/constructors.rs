@@ -25,6 +25,7 @@ pub(crate) use devtools::{
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
 
+use crate::runtime::RendererPointerEventProperties;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 pub(crate) use moli_webapi::events::subclasses::InputEventCoordinates;
 #[cfg(any(test, feature = "devtools"))]
@@ -32,21 +33,21 @@ use moli_webapi::events::subclasses::construct_native_mouse_event;
 use moli_webapi::events::subclasses::{MouseEventInit, construct_native_pointer_click};
 use moli_webapi::events::{construct_native_event, init::EventInit, state::mark_event_trusted};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::native_bridge::element) enum ClickEventSource {
+#[derive(Clone, Copy)]
+pub(in crate::native_bridge::element) enum ClickEventSource<'a> {
     #[cfg(any(test, feature = "devtools"))]
     Pointer,
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    PointerWithProperties(&'a RendererPointerEventProperties),
     #[cfg(feature = "devtools")]
-    Touch {
-        pointer_id: i32,
-    },
+    Touch { pointer_id: i32 },
     UserAgent,
     Script,
 }
 
-impl ClickEventSource {
+impl ClickEventSource<'_> {
     pub(in crate::native_bridge::element) fn is_trusted(self) -> bool {
-        self != Self::Script
+        !matches!(self, Self::Script)
     }
 }
 
@@ -318,6 +319,28 @@ fn mouse_event_init<'s>(
 }
 
 #[cfg(any(feature = "devtools", test))]
+pub(crate) fn construct_touch_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    x: f64,
+    y: f64,
+    target: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let point = TouchEventPoint {
+        identifier: 0,
+        x,
+        y,
+        target,
+        is_target_touch: true,
+    };
+    let active_points = match event_type {
+        "touchend" | "touchcancel" => Vec::new(),
+        _ => vec![point],
+    };
+    construct_touch_event_with_points(scope, event_type, &active_points, &[point])
+}
+
+#[cfg(any(feature = "devtools", test))]
 #[derive(Clone, Copy)]
 pub(crate) struct TouchEventPoint<'s> {
     pub identifier: i32,
@@ -484,7 +507,7 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     buttons: i32,
     modifiers: u8,
     view: Option<v8::Local<'s, v8::Object>>,
-    source: ClickEventSource,
+    source: ClickEventSource<'_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let init = mouse_event_init(
         scope,
@@ -497,16 +520,24 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
         None,
         view,
     )?;
-    match source {
+    // Click retains only the pointing device's identity. Pressure, tilt and
+    // the remaining PointerEvent fields use their dictionary defaults.
+    let (pointer_id, pointer_type, positionless) = match source {
         #[cfg(any(test, feature = "devtools"))]
-        ClickEventSource::Pointer => construct_native_mouse_event(scope, "click", init),
+        ClickEventSource::Pointer => (1, "mouse", false),
+        ClickEventSource::PointerWithProperties(pointer) => {
+            (pointer.pointer_id, pointer.pointer_type.as_str(), false)
+        }
         #[cfg(feature = "devtools")]
-        ClickEventSource::Touch { pointer_id } => {
-            construct_native_pointer_click(scope, init, pointer_id, "touch")
-        }
-        ClickEventSource::UserAgent | ClickEventSource::Script => {
-            // Blink reserves -1 for clicks with no pointing device.
-            construct_native_pointer_click(scope, init, -1, "")
-        }
-    }
+        ClickEventSource::Touch { pointer_id } => (pointer_id, "touch", false),
+        ClickEventSource::UserAgent | ClickEventSource::Script => (-1, "", true),
+    };
+    let event = construct_native_pointer_click(scope, init, pointer_id, pointer_type)?;
+    crate::context_bootstrap::set_event_internal_flag(
+        scope,
+        event,
+        crate::context_bootstrap::EVENT_MOUSE_POSITIONLESS_SLOT,
+        positionless,
+    );
+    Some(event)
 }
