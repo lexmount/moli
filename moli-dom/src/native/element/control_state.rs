@@ -4,7 +4,7 @@ use crate::forms::{
 };
 use crate::native::{DomStringValue, NativeNodeId};
 use indexmap::IndexSet;
-use moli_html_input_type::InputType;
+use moli_html_input_type::{InputType, InputValueMode};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -260,7 +260,9 @@ impl ElementControlState {
         let attribute = |name: &str| {
             attributes
                 .iter()
-                .find(|attribute| attribute.local_name() == name)
+                .find(|attribute| {
+                    attribute.namespace().is_empty() && attribute.local_name() == name
+                })
                 .map(Attribute::value)
         };
 
@@ -950,39 +952,6 @@ impl ElementControlState {
                     ));
                 }
             }
-            ("input", "type") => {
-                // A non-dirty input value continues to follow the `value`
-                // content attribute across type changes. Sanitization can
-                // make that default observable (for example, color exposes
-                // `#000000`), but it must not turn the sanitized result into
-                // the source for a later type change.
-                let source = if self.input_value_dirty {
-                    self.input_value.clone().unwrap_or_default()
-                } else {
-                    input_context.value_attribute.cloned().unwrap_or_default()
-                };
-                let value = sanitize_input_dom_string_for_type_with_context(
-                    input_type,
-                    &source,
-                    input_context,
-                );
-                self.input_value = Some(value);
-                self.input_bad_input = false;
-
-                // The default/on mode exposes "on" when an empty dirty value
-                // changes into a checkable state. The filename mode likewise
-                // starts with an empty, non-dirty value.
-                if (input_type.is_checkable()
-                    && self
-                        .input_value
-                        .as_ref()
-                        .is_none_or(DomStringValue::is_empty))
-                    || input_type == InputType::File
-                {
-                    self.input_value_dirty = false;
-                    self.input_value_user_edited = false;
-                }
-            }
             ("input", "multiple") if input_type == InputType::Email => {
                 let source = if self.input_value_dirty {
                     self.input_value.clone().unwrap_or_default()
@@ -1020,6 +989,41 @@ impl ElementControlState {
             }
             _ => {}
         }
+    }
+
+    pub(super) fn change_input_type(
+        &mut self,
+        previous: InputType,
+        current: InputType,
+        context: InputValueSanitizationContext<'_>,
+    ) {
+        if previous == current {
+            return;
+        }
+        let previous_value = self.input_value.clone().unwrap_or_default();
+        let source = if current.value_mode() == InputValueMode::Value
+            && previous.value_mode() != InputValueMode::Value
+        {
+            self.input_value_dirty = false;
+            self.input_value_user_edited = false;
+            context.value_attribute.cloned().unwrap_or_default()
+        } else if current.value_mode() == InputValueMode::Filename {
+            self.selected_files.clear();
+            DomStringValue::default()
+        } else {
+            previous_value.clone()
+        };
+        let value = sanitize_input_dom_string_for_type_with_context(current, &source, context);
+        self.input_bad_input = false;
+        if current.supports_variable_length_selection() {
+            if !previous.supports_variable_length_selection() {
+                self.set_selection_range_with_direction(0, 0, "none");
+            } else if value != previous_value {
+                let end = value.utf16_units().len() as u32;
+                self.set_selection_range_with_direction(end, end, "none");
+            }
+        }
+        self.input_value = Some(value);
     }
 }
 
