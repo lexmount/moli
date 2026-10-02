@@ -1,6 +1,3 @@
-mod dom_rect_factory_descriptors;
-mod offline_audio_float;
-
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
 use super::{
     PostParseDriverStep, PostParseLifecycleAdvance, PostParseLifecycleCompletionAction,
@@ -2232,6 +2229,7 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod device_events;
 mod dom_elements;
+mod dom_rect_factory_descriptors;
 mod dom_xhr;
 mod dynamic_inline_scripts;
 mod element_click;
@@ -2276,6 +2274,7 @@ mod observer_documents;
 mod observer_element_arguments;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
+mod offline_audio_float;
 mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
