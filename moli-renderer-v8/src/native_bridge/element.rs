@@ -414,6 +414,7 @@ pub(crate) use forms::{
     queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
     replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
+    text_control_value_dom_string,
 };
 pub(in crate::native_bridge) use forms::{
     resize_select_options, select_add_insertion_point, select_options_resize_target,

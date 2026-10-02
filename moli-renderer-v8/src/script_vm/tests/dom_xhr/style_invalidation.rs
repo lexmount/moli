@@ -2834,7 +2834,7 @@ fn detached_input_and_textarea_track_dirty_state_for_form_reset() {
     '<html><body><form id="form">' +
       '<input id="text" name="q" value="seed">' +
       '<input id="check" type="checkbox" checked>' +
-      '<textarea id="bio" name="bio" value="initial"></textarea>' +
+      '<textarea id="bio" name="bio" value="ignored">initial</textarea>' +
     '</form></body></html>',
     'text/html'
   );
@@ -2901,6 +2901,6 @@ fn detached_input_and_textarea_track_dirty_state_for_form_reset() {
 
     assert_eq!(
         result,
-        "seed:seed:seed:true:true:true:initial:initial:initial|typed:new-default:new-default:false:true:true:dirty-bio:default-bio:default-bio|new-default:new-default:true:true:default-bio:default-bio|false:false:true"
+        "seed:seed:seed:true:true:true:initial:initial:ignored|typed:new-default:new-default:false:true:true:dirty-bio:default-bio:ignored|new-default:new-default:true:true:default-bio:default-bio|false:false:true"
     );
 }

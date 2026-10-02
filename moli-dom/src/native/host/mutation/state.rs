@@ -253,7 +253,11 @@ impl DomHost {
         did_change
     }
 
-    pub fn set_input_value(&mut self, handle: DomHandle, value: &str) -> bool {
+    pub fn set_input_value(
+        &mut self,
+        handle: DomHandle,
+        value: impl Into<crate::native::DomStringValue>,
+    ) -> bool {
         let has_connected_datalist =
             self.is_connected(handle) && self.input_datalist_handle(handle).is_some();
         let did_change = {
@@ -277,7 +281,7 @@ impl DomHost {
     pub fn set_input_value_with_dirty(
         &mut self,
         handle: DomHandle,
-        value: &str,
+        value: impl Into<crate::native::DomStringValue>,
         dirty: bool,
     ) -> bool {
         let has_connected_datalist =
@@ -300,7 +304,11 @@ impl DomHost {
         did_change
     }
 
-    pub fn set_input_value_from_user_edit(&mut self, handle: DomHandle, value: &str) -> bool {
+    pub fn set_input_value_from_user_edit(
+        &mut self,
+        handle: DomHandle,
+        value: impl Into<crate::native::DomStringValue>,
+    ) -> bool {
         let has_connected_datalist =
             self.is_connected(handle) && self.input_datalist_handle(handle).is_some();
         let did_change = {

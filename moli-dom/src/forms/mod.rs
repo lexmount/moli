@@ -7,7 +7,7 @@ mod validity;
 
 pub use button_type::ButtonTypeState;
 pub(crate) use input_type::{
-    InputValueSanitizationContext, sanitize_input_value_for_type_with_context,
+    InputValueSanitizationContext, sanitize_input_dom_string_for_type_with_context,
 };
 pub use input_type::{
     email_value_type_mismatch, form_control_type_supports_intrinsic_validation,
@@ -41,9 +41,9 @@ pub use option::{
 pub use text::{
     apply_textarea_wrapping_transformation, normalize_custom_validation_message,
     normalize_form_submission_newlines, normalize_textarea_api_value,
-    parse_non_negative_integer_prefix, parse_non_negative_length_attribute,
-    parse_positive_integer_prefix, text_control_suffers_too_long, text_control_suffers_too_short,
-    text_control_value_length,
+    normalize_textarea_dom_string_value, parse_non_negative_integer_prefix,
+    parse_non_negative_length_attribute, parse_positive_integer_prefix,
+    text_control_suffers_too_long, text_control_suffers_too_short, text_control_value_length,
 };
 pub use validity::FormControlValidity;
 

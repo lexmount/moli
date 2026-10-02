@@ -20,8 +20,7 @@ pub(in crate::native_bridge) use selection::{
     text_control_selection_start_setter_function, text_control_set_range_text_callback,
     text_control_set_selection_range_callback,
 };
-pub(in crate::native_bridge) use value::normalize_textarea_api_value;
-pub(crate) use value::{is_text_control, text_control_value};
+pub(crate) use value::{is_text_control, text_control_value, text_control_value_dom_string};
 pub(in crate::native_bridge) use value::{
     textarea_value_getter_function, textarea_value_setter_function,
 };

@@ -5,7 +5,7 @@ use super::super::{
 };
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, is_text_control,
-    text_control_value,
+    text_control_value_dom_string,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
 use super::global_attributes::parse_tab_index_attribute;
@@ -680,7 +680,7 @@ fn dispatch_pending_text_control_change_if_needed(
     let Some(committed_value) = committed_value else {
         return;
     };
-    let current_value = text_control_value(unsafe { &*runtime_ptr }, handle);
+    let current_value = text_control_value_dom_string(unsafe { &*runtime_ptr }, handle);
     if current_value != committed_value {
         dispatch_text_control_event(scope, runtime_ptr, handle, "change");
     }

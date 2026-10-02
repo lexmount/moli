@@ -1,4 +1,5 @@
 use super::numeric::{is_valid_number_input_value, number_aligns_to_step};
+use crate::native::DomStringValue;
 use moli_html_input_temporal::{
     datetime_local_input_milliseconds, datetime_local_input_value_from_milliseconds,
     is_valid_date_input_value, is_valid_month_input_value, is_valid_time_input_value,
@@ -28,7 +29,7 @@ pub(crate) struct InputValueSanitizationContext<'a> {
     pub min: Option<&'a str>,
     pub max: Option<&'a str>,
     pub step: Option<&'a str>,
-    pub value_attribute: Option<&'a str>,
+    pub value_attribute: Option<&'a DomStringValue>,
 }
 
 pub fn sanitize_input_value_for_type(input_type: InputType, value: &str) -> String {
@@ -59,74 +60,115 @@ pub(crate) fn sanitize_input_value_for_type_with_context(
     value: &str,
     context: InputValueSanitizationContext<'_>,
 ) -> String {
+    sanitize_input_dom_string_for_type_with_context(input_type, &value.into(), context)
+        .as_str_lossy()
+        .to_owned()
+}
+
+pub(crate) fn sanitize_input_dom_string_for_type_with_context(
+    input_type: InputType,
+    value: &DomStringValue,
+    context: InputValueSanitizationContext<'_>,
+) -> DomStringValue {
     match input_type {
         // Text-family — strip newlines / CR but leave whitespace runs alone.
         InputType::Text | InputType::Search | InputType::Tel | InputType::Password => {
-            strip_input_value_line_breaks(value)
+            DomStringValue::from_utf16(&strip_input_value_line_breaks(value))
         }
         // URL — strip newlines AND trim leading/trailing ASCII whitespace.
         InputType::Url => {
             let stripped = strip_input_value_line_breaks(value);
-            stripped.trim_matches(is_ascii_whitespace_char).to_owned()
+            DomStringValue::from_utf16(trim_ascii_whitespace(&stripped))
         }
         InputType::Email => sanitize_email_input_value(value, context.multiple),
-        InputType::Number if !is_valid_number_input_value(value) => String::new(),
-        InputType::Date if !is_valid_date_input_value(value) => String::new(),
-        InputType::Time if !is_valid_time_input_value(value) => String::new(),
-        InputType::DatetimeLocal => datetime_local_input_milliseconds(value)
+        InputType::Number if !is_valid_number_input_value(value.as_str_lossy()) => {
+            DomStringValue::default()
+        }
+        InputType::Date if !is_valid_date_input_value(value.as_str_lossy()) => {
+            DomStringValue::default()
+        }
+        InputType::Time if !is_valid_time_input_value(value.as_str_lossy()) => {
+            DomStringValue::default()
+        }
+        InputType::DatetimeLocal => datetime_local_input_milliseconds(value.as_str_lossy())
             .and_then(datetime_local_input_value_from_milliseconds)
-            .unwrap_or_default(),
-        InputType::Month if !is_valid_month_input_value(value) => String::new(),
-        InputType::Week if !is_valid_week_input_value(value) => String::new(),
-        InputType::Range => sanitize_range_value(value, context),
+            .unwrap_or_default()
+            .into(),
+        InputType::Month if !is_valid_month_input_value(value.as_str_lossy()) => {
+            DomStringValue::default()
+        }
+        InputType::Week if !is_valid_week_input_value(value.as_str_lossy()) => {
+            DomStringValue::default()
+        }
+        InputType::Range => sanitize_range_value(value.as_str_lossy(), context).into(),
         // HTML-compatible color inputs accept CSS colors, discard alpha, and
         // expose an opaque lowercase sRGB simple color.
-        InputType::Color => sanitize_color_value(value),
+        InputType::Color => sanitize_color_value(value.as_str_lossy()).into(),
         // File — IDL value is always the empty string when set
         // programmatically; the user-selected files are the only path to a
         // non-empty file list.
-        InputType::File => String::new(),
-        _ => value.to_owned(),
+        InputType::File => DomStringValue::default(),
+        _ => value.clone(),
     }
 }
 
-fn sanitize_email_input_value(value: &str, multiple: bool) -> String {
+fn sanitize_email_input_value(value: &DomStringValue, multiple: bool) -> DomStringValue {
     let stripped = strip_input_value_line_breaks(value);
     if !multiple {
-        return sanitize_email_address(stripped.trim_matches(is_ascii_whitespace_char));
+        return DomStringValue::from_utf16(&sanitize_email_address(trim_ascii_whitespace(
+            &stripped,
+        )));
     }
-    stripped
-        .split(',')
-        .map(|address| address.trim_matches(is_ascii_whitespace_char))
-        .map(sanitize_email_address)
-        .collect::<Vec<String>>()
-        .join(",")
+    let mut units = Vec::new();
+    for (index, address) in stripped.split(|unit| *unit == u16::from(b',')).enumerate() {
+        if index != 0 {
+            units.push(u16::from(b','));
+        }
+        units.extend(sanitize_email_address(trim_ascii_whitespace(address)));
+    }
+    DomStringValue::from_utf16(&units)
 }
 
-fn sanitize_email_address(address: &str) -> String {
-    let Some((local, domain)) = address.rsplit_once('@') else {
-        return address.to_owned();
+fn sanitize_email_address(address: &[u16]) -> Vec<u16> {
+    let Some(index) = address.iter().rposition(|unit| *unit == u16::from(b'@')) else {
+        return address.to_vec();
     };
     // Only IDN domains need conversion. URL host parsing would also lowercase
     // ordinary addresses and percent-decode invalid email domain syntax.
-    if domain.is_ascii() || domain.contains('%') {
-        return address.to_owned();
+    let domain = &address[index + 1..];
+    if domain.iter().all(|unit| *unit <= 0x7f) || domain.contains(&u16::from(b'%')) {
+        return address.to_vec();
     }
-    let Ok(url::Host::Domain(domain)) = url::Host::parse(domain) else {
-        return address.to_owned();
+    let Ok(domain) = String::from_utf16(domain) else {
+        return address.to_vec();
     };
-    format!("{local}@{domain}")
+    let Ok(url::Host::Domain(domain)) = url::Host::parse(&domain) else {
+        return address.to_vec();
+    };
+    let mut units = address[..=index].to_vec();
+    units.extend(domain.encode_utf16());
+    units
 }
 
-fn strip_input_value_line_breaks(value: &str) -> String {
+fn strip_input_value_line_breaks(value: &DomStringValue) -> Vec<u16> {
     value
-        .chars()
-        .filter(|ch| !matches!(ch, '\n' | '\r'))
+        .utf16_units()
+        .iter()
+        .copied()
+        .filter(|unit| !matches!(unit, 0x0a | 0x0d))
         .collect()
 }
 
-fn is_ascii_whitespace_char(ch: char) -> bool {
-    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0C')
+fn trim_ascii_whitespace(units: &[u16]) -> &[u16] {
+    let start = units
+        .iter()
+        .position(|unit| !matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20))
+        .unwrap_or(units.len());
+    let end = units
+        .iter()
+        .rposition(|unit| !matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20))
+        .map_or(start, |index| index + 1);
+    &units[start..end]
 }
 
 fn sanitize_range_value(value: &str, context: InputValueSanitizationContext<'_>) -> String {
@@ -142,7 +184,11 @@ fn sanitize_range_value(value: &str, context: InputValueSanitizationContext<'_>)
     let step_base = context
         .min
         .and_then(parse_valid_range_number)
-        .or_else(|| context.value_attribute.and_then(parse_valid_range_number))
+        .or_else(|| {
+            context
+                .value_attribute
+                .and_then(|value| parse_valid_range_number(value.as_str_lossy()))
+        })
         .unwrap_or(0.0);
     let step = match context.step {
         Some(step) if step.eq_ignore_ascii_case("any") => None,
@@ -417,7 +463,8 @@ mod tests {
 
     #[test]
     fn range_uses_element_limits_and_step_alignment() {
-        let sanitize = |value, min, max, step, value_attribute| {
+        let sanitize = |value, min, max, step, value_attribute: Option<&str>| {
+            let default_value = value_attribute.map(crate::native::DomStringValue::from);
             sanitize_input_value_for_type_with_context(
                 InputType::Range,
                 value,
@@ -425,7 +472,7 @@ mod tests {
                     min,
                     max,
                     step,
-                    value_attribute,
+                    value_attribute: default_value.as_ref(),
                     ..Default::default()
                 },
             )
