@@ -20,6 +20,8 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    Lock;
+    LockManager;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
