@@ -189,7 +189,10 @@ impl DocumentRuntime {
         let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
         let prepublished_removals =
             self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child);
-        let effects = self.remove_child_effects_in_structural_scope(parent, child);
+        let mut effects = self.remove_child_effects_in_structural_scope(parent, child);
+        if source_profile.suppress_observers {
+            effects.suppress_child_list_mutations_for_target(parent);
+        }
         self.apply_tree_removal_node_iterator_plan_if_changed(host_ptr, &removal_plan, &effects);
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,

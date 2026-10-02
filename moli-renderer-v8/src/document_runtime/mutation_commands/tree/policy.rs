@@ -23,6 +23,7 @@ pub(super) struct TreeMutationSourceProfile {
     pub(super) nonce_policy: TreeNoncePolicy,
     pub(super) upgrade_connected_subtrees: bool,
     pub(super) queue_parser_details_toggle_events: bool,
+    pub(super) suppress_observers: bool,
 }
 
 impl TreeNoncePolicy {
@@ -55,6 +56,7 @@ impl TreeMutationSourceProfile {
             nonce_policy,
             upgrade_connected_subtrees: true,
             queue_parser_details_toggle_events: false,
+            suppress_observers: false,
         }
     }
 
@@ -72,6 +74,7 @@ impl TreeMutationSourceProfile {
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
+            suppress_observers: false,
         }
     }
 
@@ -96,6 +99,12 @@ impl TreeMutationSourceProfile {
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
+            suppress_observers: false,
         }
+    }
+
+    pub(super) fn suppressing_observers(mut self) -> Self {
+        self.suppress_observers = true;
+        self
     }
 }

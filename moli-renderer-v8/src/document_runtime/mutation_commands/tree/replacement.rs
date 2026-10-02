@@ -18,6 +18,69 @@ struct TreeReplacementPlan<'a> {
 }
 
 impl DocumentRuntime {
+    /// DOM replace-all: conversion has already completed. Suppress only this
+    /// operation's intermediate target records, then queue one replacement.
+    pub(crate) fn replace_all_children_with_node_appending_to_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        node: DomHandle,
+        detached: bool,
+    ) -> bool {
+        let removed = self.dom_host.child_handles(parent).collect::<Vec<_>>();
+        let added = self
+            .fragment_insertion_children(node)
+            .unwrap_or_else(|| vec![node]);
+        let source_profile =
+            TreeMutationSourceProfile::js_dom_api_appending_to_current_reaction_queue()
+                .suppressing_observers();
+        for &child in &removed {
+            if !self.remove_child_with_source_profile(
+                scope,
+                host_ptr,
+                parent,
+                child,
+                source_profile,
+            ) {
+                return false;
+            }
+        }
+        let inserted = if detached {
+            self.insert_detached_native_child_with_source_profile(
+                scope,
+                host_ptr,
+                parent,
+                node,
+                None,
+                source_profile,
+            )
+        } else {
+            self.insert_before_with_source_profile(
+                scope,
+                host_ptr,
+                parent,
+                node,
+                None,
+                source_profile,
+            )
+        };
+        if !inserted {
+            return false;
+        }
+        if self.dom_host.mutation_records_enabled() && (!removed.is_empty() || !added.is_empty()) {
+            let mut effects = crate::dom::native::DomMutationEffects::default();
+            effects.queue_child_list_mutation(parent, &added, &removed, None, None);
+            crate::observer_runtime::queue_mutation_records(
+                scope,
+                host_ptr,
+                &self.dom_host,
+                &effects,
+            );
+        }
+        true
+    }
+
     pub(crate) fn replace_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

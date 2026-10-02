@@ -52,6 +52,28 @@ impl DocumentRuntime {
         reference_child: Option<DomHandle>,
         reaction_policy: TreeReactionDispatchPolicy,
     ) -> bool {
+        self.insert_detached_native_child_with_source_profile(
+            scope,
+            host_ptr,
+            parent,
+            child,
+            reference_child,
+            TreeMutationSourceProfile::js_dom_api_with(
+                reaction_policy,
+                TreeNoncePolicy::HideInsertedContentAttributes,
+            ),
+        )
+    }
+
+    pub(super) fn insert_detached_native_child_with_source_profile(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        child: DomHandle,
+        reference_child: Option<DomHandle>,
+        source_profile: TreeMutationSourceProfile,
+    ) -> bool {
         let insertion_roots = self
             .fragment_insertion_children(child)
             .unwrap_or_else(|| vec![child]);
@@ -64,10 +86,7 @@ impl DocumentRuntime {
             true,
             false,
             ConnectedScriptMutationPolicy::DeferToOwner,
-            TreeMutationSourceProfile::js_dom_api_with(
-                reaction_policy,
-                TreeNoncePolicy::HideInsertedContentAttributes,
-            ),
+            source_profile,
         );
         if changed {
             self.dispatch_detached_native_iframe_load_after_insert(
