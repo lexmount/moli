@@ -145,3 +145,38 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod relative_authority_tests {
+    use url::Url;
+
+    fn assert_url(url: &Url, expected: &str, path: &str) {
+        assert_eq!(url.as_str(), expected);
+        assert_eq!(url.path(), path);
+        url.check_invariants().unwrap();
+        assert_eq!(Url::parse(url.as_str()).unwrap(), *url);
+    }
+
+    #[test]
+    fn relative_authority_references_replace_credentials_ports_and_queries() {
+        for scheme in ["http", "https", "ws", "wss", "ftp"] {
+            let base = Url::parse(&format!("{scheme}://user:pass@old.test:123/a/b?q#f")).unwrap();
+            let url = base.join("//new.test/a/../p?next#frag").unwrap();
+            assert_url(&url, &format!("{scheme}://new.test/p?next#frag"), "/p");
+            assert_eq!(url.host_str(), Some("new.test"));
+            assert_eq!(url.port(), None);
+            assert!(url.username().is_empty());
+            assert_eq!(url.password(), None);
+            for input in ["///", r"/\\", "////?query", r"\\#fragment"] {
+                assert!(base.join(input).is_err(), "{scheme}: {input:?}");
+            }
+            for input in ["/p", r"\p"] {
+                assert_url(
+                    &base.join(input).unwrap(),
+                    &format!("{scheme}://user:pass@old.test:123/p"),
+                    "/p",
+                );
+            }
+        }
+    }
+}
