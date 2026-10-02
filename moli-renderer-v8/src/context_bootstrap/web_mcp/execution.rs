@@ -300,20 +300,22 @@ fn start_callback<'s>(
             let mut scope = try_catch.init();
             // Invoke enters the callback's relevant realm before allocating
             // input (including nested objects/arrays) and its options object.
-            let input =
-                v8::json::parse(&scope, js_string(&scope, &input)).ok_or("Invalid tool input")?;
+            let input = v8::json::parse(&scope, js_string(&scope, &input))
+                .filter(|input| input.is_object())
+                .ok_or(CallbackInvocationError::InvalidInput)?;
             let options = v8::Object::new(&scope);
             let _ = options.create_data_property(
                 &scope,
                 js_string(&scope, "signal").into(),
                 signal.into(),
             );
-            let resolver = v8::PromiseResolver::new(&scope).ok_or(callback_unavailable)?;
+            let resolver = v8::PromiseResolver::new(&scope)
+                .ok_or(CallbackInvocationError::CallbackUnavailable)?;
             match callback.call(&scope, receiver, &[input, options.into()]) {
                 Some(value) => {
                     resolver
                         .resolve(&scope, value)
-                        .ok_or(callback_unavailable)?;
+                        .ok_or(CallbackInvocationError::CallbackUnavailable)?;
                 }
                 None => {
                     let exception = scope
@@ -322,35 +324,56 @@ fn start_callback<'s>(
                     scope.reset();
                     resolver
                         .reject(&scope, exception)
-                        .ok_or(callback_unavailable)?;
+                        .ok_or(CallbackInvocationError::CallbackUnavailable)?;
                 }
             }
             Ok(v8::Global::new(&scope, resolver.get_promise(&scope)))
         },
     );
-    match result {
+    // Chromium activates a live tool even when parsing its input fails. Keep
+    // that failure distinct from a retired or otherwise unavailable callback,
+    // and retain the owner before finish_error removes the pending invocation.
+    let activation_owner = match result {
         PreparedWindowWebIdlCallbackFunctionOutcome::Returned(promise) => {
             let promise = v8::Local::new(scope, &promise);
             await_response(scope, host_ptr, id, promise);
-            if unsafe { &*host_ptr }
+            unsafe { &*host_ptr }
                 .native_bridge()
                 .web_mcp
                 .pending
                 .get(&id)
-                .is_some_and(|pending| {
-                    document_owner(unsafe { &*host_ptr }, pending.document) == Some(pending.owner)
-                })
-            {
-                dispatch_event(scope, target, "toolactivated", Some(&name));
-            }
+                .map(|pending| pending.owner)
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(message) => {
-            finish_error(scope, host_ptr, id, message);
+        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(
+            CallbackInvocationError::InvalidInput,
+        ) => {
+            let owner = unsafe { &*host_ptr }
+                .native_bridge()
+                .web_mcp
+                .pending
+                .get(&id)
+                .map(|pending| pending.owner);
+            finish_error(scope, host_ptr, id, "Invalid tool input");
+            owner
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Retired => {
+        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(
+            CallbackInvocationError::CallbackUnavailable,
+        )
+        | PreparedWindowWebIdlCallbackFunctionOutcome::Retired => {
             finish_error(scope, host_ptr, id, callback_unavailable);
+            None
         }
+    };
+    if activation_owner.is_some()
+        && document_owner(unsafe { &*host_ptr }, document) == activation_owner
+    {
+        dispatch_event(scope, target, "toolactivated", Some(&name));
     }
+}
+
+enum CallbackInvocationError {
+    InvalidInput,
+    CallbackUnavailable,
 }
 
 enum InvocationExecutor {

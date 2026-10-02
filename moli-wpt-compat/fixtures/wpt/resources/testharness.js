@@ -115,6 +115,16 @@
   }
 
   function installWaitHelpers(context) {
+    context.step_wait = function (
+      condition,
+      description,
+      timeout = 3000,
+      interval = 100,
+    ) {
+      return new Promise(resolve => {
+        context.step_wait_func(condition, resolve, description, timeout, interval);
+      });
+    };
     context.step_wait_func = function (
       condition,
       callback,
@@ -723,7 +733,11 @@
     INDEX_SIZE_ERR: "IndexSizeError",
   };
 
-  global.promise_rejects_dom = function (test, name, promise, description) {
+  global.promise_rejects_dom = function (test, name, constructorOrPromise, promiseOrDescription, description) {
+    const hasConstructor = typeof constructorOrPromise === 'function';
+    const constructor = hasConstructor ? constructorOrPromise : global.DOMException;
+    const promise = hasConstructor ? promiseOrDescription : constructorOrPromise;
+    description = hasConstructor ? description : promiseOrDescription;
     const expectedName = domExceptionLegacyNames[name] || name;
     return Promise.resolve(promise).then(
       function () {
@@ -731,6 +745,10 @@
       },
       function (error) {
         if (error && error.name === expectedName) {
+          if (hasConstructor) {
+            global.assert_true(error instanceof constructor,
+              (description || 'promise_rejects_dom') + ': exception belongs to the supplied realm');
+          }
           return;
         }
         throw assertionError(

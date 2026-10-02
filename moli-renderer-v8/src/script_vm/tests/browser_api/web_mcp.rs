@@ -104,6 +104,105 @@ fn web_mcp_get_tools_omits_schemas_that_serialize_to_json_primitives() {
 }
 
 #[test]
+fn web_mcp_execution_rejects_inputs_that_serialize_to_json_primitives() {
+    for (value, accepted) in [
+        ("null", false),
+        ("42", false),
+        ("true", false),
+        ("'text'", false),
+        ("[]", true),
+        ("{}", true),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+        vm.eval(&format!(
+            r#"
+            globalThis.calls = 0;
+            globalThis.activations = 0;
+            globalThis.probe = 'pending';
+            document.modelContext.addEventListener('toolactivated', () => activations++);
+            document.modelContext.registerTool({{
+                name: 'echo', description: 'Echo', execute: input => {{ calls++; return input; }}
+            }})
+                .then(() => document.modelContext.getTools())
+                .then(([tool]) => document.modelContext.executeTool(tool, {{toJSON: () => ({value})}}))
+                .then(result => probe = result, error => probe = error.name);
+        "#
+        ))
+        .unwrap();
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify({probe, calls, activations})")
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let expected = if accepted {
+            serde_json::json!({"probe": value, "calls": 1, "activations": 1})
+        } else {
+            serde_json::json!({"probe": "UnknownError", "calls": 0, "activations": 1})
+        };
+        assert_eq!(result, expected, "toJSON returned {value}");
+    }
+}
+
+#[test]
+fn web_mcp_execution_does_not_activate_tools_that_fail_before_input_validation() {
+    for (tool_window, invocation, error) in [
+        (
+            "window",
+            "document.modelContext.executeTool(tool, 42)",
+            "TypeError",
+        ),
+        (
+            "window",
+            "document.modelContext.executeTool(tool, {toJSON() {throw new Error('serialization failed')}})",
+            "Error",
+        ),
+        (
+            "frame.contentWindow",
+            "document.modelContext.executeTool(tool, {toJSON() {frame.remove(); return null}})",
+            "InvalidStateError",
+        ),
+        (
+            "window",
+            "(() => {const pending = document.modelContext.executeTool(tool, {toJSON: () => null}); registration.abort(); return pending})()",
+            "UnknownError",
+        ),
+        (
+            "window",
+            "(() => {const pending = document.modelContext.executeTool(tool, {toJSON: () => null}); frame.remove(); return pending})()",
+            "UnknownError",
+        ),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+        vm.eval(&format!(
+            r#"
+            globalThis.frame = document.createElement('iframe');
+            document.body.append(frame);
+            globalThis.calls = 0;
+            globalThis.activations = 0;
+            globalThis.probe = 'pending';
+            globalThis.registration = new AbortController();
+            const context = {tool_window}.document.modelContext;
+            context.addEventListener('toolactivated', () => activations++);
+            const execute = frame.contentWindow.eval('input => {{parent.calls++; return input}}');
+            context.registerTool({{name: 'echo', description: 'Echo', execute}}, {{signal: registration.signal}})
+                .then(() => document.modelContext.getTools())
+                .then(([tool]) => {invocation})
+                .then(result => probe = result, error => probe = error.name);
+        "#
+        ))
+        .unwrap();
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify({probe, calls, activations})")
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"probe": error, "calls": 0, "activations": 0}),
+            "{invocation} targeting {tool_window}"
+        );
+    }
+}
+
+#[test]
 fn web_mcp_execution_creates_input_and_options_in_the_callback_realm() {
     for (callback_window, tool_window) in [
         ("frame.contentWindow", "parent"),
