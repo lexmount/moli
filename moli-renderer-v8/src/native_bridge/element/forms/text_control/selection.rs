@@ -12,7 +12,7 @@ use crate::native_bridge::element::{
 use crate::util::{
     utf16_next_scalar_boundary, utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after,
 };
-use crate::util::{utf16_replace_units_range_lossy, utf16_units, v8str};
+use crate::util::{utf16_units, v8str};
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -28,8 +28,8 @@ struct TextControlSetSelectionRangeArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "setRangeText")]
 struct TextControlSetRangeTextArgs {
-    #[webidl(required)]
-    replacement: String,
+    #[webidl(required, converter = "raw")]
+    replacement: webidl::DomString16,
     start: Option<u32>,
     end: Option<u32>,
     selection_mode: Option<String>,
@@ -295,8 +295,8 @@ fn replace_text_control_selection_with_events(
     {
         return false;
     }
-    let value = text_control_value(runtime, handle);
-    let value_units = utf16_units(&value);
+    let value = text_control_value_dom_string(runtime, handle);
+    let value_units = value.utf16_units();
     let (start, end) = runtime
         .text_control_selection(handle)
         .map(|selection| {
@@ -363,12 +363,8 @@ fn replace_text_control_selection_with_events(
         // empty scripted input insertion must not turn those into an input event.
         return true;
     }
-    let next_value = utf16_replace_units_range_lossy(
-        &value_units,
-        start,
-        end.saturating_sub(start),
-        &replacement_units,
-    );
+    let next_value =
+        value.replace_utf16_range(start, end.saturating_sub(start), &replacement_units);
 
     let runtime = unsafe { &mut *runtime_ptr };
     let changed = runtime.set_input_value_from_user_edit(handle, &next_value);
@@ -715,8 +711,8 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
         return;
     }
 
-    let value = text_control_value(runtime, handle);
-    let value_units = utf16_units(&value);
+    let value = text_control_value_dom_string(runtime, handle);
+    let value_units = value.utf16_units();
     let value_len = value_units.len() as u32;
     let (current_start, current_end) = current_selection_or_end(runtime, handle, value_len);
     let start = parsed.start.unwrap_or(current_start);
@@ -734,10 +730,9 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
     let start = start.min(value_len);
     let end = end.min(value_len);
 
-    let replacement_units = utf16_units(&parsed.replacement);
+    let replacement_units = parsed.replacement.0;
     let replacement_len = replacement_units.len() as u32;
-    let next_value = utf16_replace_units_range_lossy(
-        &value_units,
+    let next_value = value.replace_utf16_range(
         start as usize,
         end.saturating_sub(start) as usize,
         &replacement_units,
@@ -751,7 +746,7 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
 
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_input_value(handle, &next_value);
-    let value_changed = text_control_value(runtime, handle) != value;
+    let value_changed = text_control_value_dom_string(runtime, handle) != value;
     let replacement_end = start + replacement_len;
     let (next_start, next_end) = match mode {
         "select" => (start, replacement_end),
@@ -808,9 +803,9 @@ pub(in crate::native_bridge) fn text_control_select_callback(
         return;
     };
     if unsafe { &*runtime_ptr }.text_control_has_selection_editor(handle) {
-        let len = text_control_value(unsafe { &*runtime_ptr }, handle)
-            .encode_utf16()
-            .count() as u32;
+        let len = text_control_value_dom_string(unsafe { &*runtime_ptr }, handle)
+            .utf16_units()
+            .len() as u32;
         let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
     }
     crate::native_bridge::element::focus_text_control_preserving_selection(

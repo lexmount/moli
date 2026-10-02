@@ -1227,7 +1227,7 @@ pub(crate) struct PageScriptHost {
 
 struct PendingTextControlChangeCommit {
     handle: DomHandle,
-    committed_value: String,
+    committed_value: moli_dom::native::DomStringValue,
 }
 
 #[derive(Clone, Copy, Default)]

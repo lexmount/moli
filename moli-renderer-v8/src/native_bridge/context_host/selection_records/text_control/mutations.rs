@@ -1,4 +1,4 @@
-use super::{PageScriptHost, TextControlSelection, text_control_value};
+use super::{PageScriptHost, TextControlSelection, text_control_value_dom_string};
 use crate::document_runtime::DomHandle;
 use crate::dom::native::DomMutationEffects;
 
@@ -49,7 +49,7 @@ impl PageScriptHost {
             }
         }
         for &(control, _) in &changed {
-            let value = text_control_value(self, control);
+            let value = text_control_value_dom_string(self, control);
             let document = self.dom_host().owner_document_handle(control);
             if let Some(selected) = document
                 .and_then(|document| {
