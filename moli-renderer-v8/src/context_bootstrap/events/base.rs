@@ -87,12 +87,12 @@ define_event_core_attribute_getter!(event_src_element_getter_function, "srcEleme
 pub(in crate::context_bootstrap) use moli_webapi::events::event_constructor_callback;
 
 pub(crate) use moli_webapi::events::state::{
-    EVENT_BACKING_SLOT, EVENT_COMPOSED_PATH_SLOT, EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT,
-    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path,
-    define_event_is_trusted_accessor, define_event_property, event_backing, event_initialized,
-    event_internal_bool_flag, event_is_dispatching, event_time_stamp, event_trusted,
-    mark_event_trusted, set_event_composed_path, set_event_initialized, set_event_internal_flag,
-    set_event_trusted,
+    EVENT_BACKING_SLOT, EVENT_COMPOSED_PATH_SLOT, EVENT_DISPATCHING_SLOT,
+    EVENT_MOUSE_POSITIONLESS_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
+    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, define_event_is_trusted_accessor,
+    define_event_property, event_backing, event_initialized, event_internal_bool_flag,
+    event_is_dispatching, event_time_stamp, event_trusted, mark_event_trusted,
+    set_event_composed_path, set_event_initialized, set_event_internal_flag, set_event_trusted,
 };
 
 pub(crate) fn initialize_event_object_with_type<'s>(

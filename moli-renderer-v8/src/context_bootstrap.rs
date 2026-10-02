@@ -372,7 +372,7 @@ pub(crate) fn build_encoded_video_chunk_from_clone_payload<'s>(
 }
 
 pub(crate) use self::events::{
-    EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
+    EVENT_DISPATCHING_SLOT, EVENT_MOUSE_POSITIONLESS_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value,
     apply_event_handler_return_value, clear_event_composed_path, construct_original_error_event,
     construct_original_message_event, error_event_handler_arguments, event_attribute,

@@ -295,6 +295,7 @@ pub(crate) fn activate_handle_after_pointer_release(
     buttons: i32,
     click_detail: i32,
     modifiers: u8,
+    pointer: &crate::runtime::RendererPointerEventProperties,
 ) -> RendererInputDispatchOutcome {
     // Ordinary pointer focus belongs to uncanceled mouse-down default action.
     // Reapplying it here would undo a canceled pointerdown/mousedown. Label
@@ -308,7 +309,7 @@ pub(crate) fn activate_handle_after_pointer_release(
         buttons,
         click_detail,
         modifiers,
-        ClickEventSource::Pointer,
+        ClickEventSource::PointerWithProperties(pointer),
         ClickFocusBehavior::Preserve,
     )
 }
