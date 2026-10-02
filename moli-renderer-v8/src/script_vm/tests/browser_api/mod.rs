@@ -106,6 +106,7 @@ mod window_onerror;
 mod worker_listener_invocation;
 mod worker_options;
 
+mod control_activation;
 mod document_domain_lifetime;
 mod document_domain_setter;
 
