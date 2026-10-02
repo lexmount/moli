@@ -944,6 +944,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::RtcDataChannelEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RTCPeerConnectionIceErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcPeerConnectionIceErrorEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::RTCRtpReceiver::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
