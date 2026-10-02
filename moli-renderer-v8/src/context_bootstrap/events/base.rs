@@ -10,6 +10,7 @@ pub(crate) const EVENT_STOP_PROPAGATION_SLOT: &str = "__lmSp";
 pub(crate) const EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT: &str = "__lmSip";
 pub(crate) const EVENT_PASSIVE_SLOT: &str = "__lmPassive";
 pub(crate) const EVENT_COMPOSED_PATH_SLOT: &str = "__lmCp";
+pub(crate) const EVENT_MOUSE_POSITIONLESS_SLOT: &str = "__moliMouseEventPositionless";
 const EVENT_INITIALIZED_SLOT: &str = "__moliEventInitialized";
 const EVENT_TRUSTED_PRIVATE_SLOT: &str = "__moliEventTrusted";
 const EVENT_TIMESTAMP_PRIVATE_SLOT: &str = "__moliEventTimeStamp";
