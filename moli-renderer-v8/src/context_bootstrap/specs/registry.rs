@@ -1148,6 +1148,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ResizeObserver,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ReportBody::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PerformanceObserver::DESCRIPTOR,
         kind: ConstructorKind::PerformanceObserver,
     },

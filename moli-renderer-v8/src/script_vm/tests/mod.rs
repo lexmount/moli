@@ -2163,6 +2163,7 @@ mod post_parse;
 mod queue_microtask;
 mod remote_playback_interface;
 mod rendering_update;
+mod report_body_interface_exposure;
 mod script_terminal_completion;
 mod streams;
 mod svg_filter_interfaces;
