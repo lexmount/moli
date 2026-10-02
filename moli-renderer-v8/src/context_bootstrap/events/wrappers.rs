@@ -31,9 +31,8 @@ impl AttributeProjection {
     fn for_property(property: &str) -> Self {
         match property {
             "target" | "srcElement" | "currentTarget" => Self::Target,
-            "signal" | "formData" | "sourceElement" | "relatedTarget" | "submitter" | "source" => {
-                Self::PlatformObject
-            }
+            "signal" | "formData" | "sourceElement" | "relatedTarget" | "submitter" | "source"
+            | "view" => Self::PlatformObject,
             "from" => Self::NavigationEntry,
             "destination" => Self::NavigationDestination,
             // Arbitrary JS payloads have their own value access semantics;
@@ -55,10 +54,10 @@ impl AttributeProjection {
         match self {
             Self::Value => Some(value),
             Self::Target => Some(match v8::Local::<v8::Object>::try_from(value) {
-                Ok(target) => crate::context_bootstrap::shared_event_targets::target_in_realm(
-                    scope, target, context,
-                )
-                .into(),
+                Ok(target) => {
+                    crate::context_bootstrap::event_worlds::target_in_realm(scope, target, context)
+                        .map(Into::into)?
+                }
                 Err(_) => value,
             }),
             Self::PlatformObject => {

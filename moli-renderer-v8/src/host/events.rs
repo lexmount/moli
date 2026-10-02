@@ -323,6 +323,57 @@ pub(crate) enum DispatchStatus {
     StopImmediate,
 }
 
+struct EventCallbackView<'s> {
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+}
+
+fn event_callback_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: EventTargetHandle,
+    callback: &crate::native_bridge::PreparedEventCallback,
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<EventCallbackView<'s>> {
+    let context = callback.relevant_context(scope);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = &mut catch.init();
+    let node_context = if let EventTargetHandle::Node(node) = target {
+        Some(unsafe { &*host_ptr }.node_event_execution_context(scope, node)?)
+    } else {
+        None
+    };
+    let window = node_context
+        .map(|context| context.global(scope))
+        .or_else(|| v8::Local::<v8::Object>::try_from(receiver).ok());
+    if let Some(window) = window {
+        match crate::native_bridge::window_event_access(scope, window, context) {
+            crate::native_bridge::WindowEventAccess::Retired
+            | crate::native_bridge::WindowEventAccess::Denied => return None,
+            crate::native_bridge::WindowEventAccess::Allowed
+            | crate::native_bridge::WindowEventAccess::Unmanaged => {}
+        }
+    }
+    let values = if let Some(node_context) = node_context {
+        crate::context_bootstrap::node_event_callback_values(
+            scope,
+            receiver,
+            event,
+            node_context,
+            context,
+        )
+    } else {
+        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)
+    };
+    if scope.exception().is_some() {
+        return None;
+    }
+    let (receiver, event) = values?;
+    Some(EventCallbackView { receiver, event })
+}
+
 pub(crate) fn invoke_prepared_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -469,19 +520,23 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
     event: v8::Local<'s, v8::Object>,
 ) {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
+    let Some(view) = event_callback_view(scope, host_ptr, target, &callback, receiver, event)
+    else {
+        return;
+    };
     let _dom_debugger_pause = unsafe { &*host_ptr }
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
     let relevant_identity = callback.relevant_identity();
-    let arguments = [event.into()];
+    let arguments = [view.event.into()];
     let invocation = CallbackInvocation::new(
         callback.callback(scope),
-        receiver,
+        view.receiver,
         callback.relevant_context(scope),
         callback.incumbent_context(scope),
         callback.is_callable(),
         "handleEvent",
         &arguments,
-        (!invocation_target_in_shadow_tree).then_some(event),
+        (!invocation_target_in_shadow_tree).then_some(view.event),
     )
     .with_execution_context_currentness(host_ptr, relevant_identity);
     CallbackInvoker::invoke_event_and_then(
