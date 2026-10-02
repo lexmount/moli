@@ -1188,14 +1188,26 @@ fn dispatch_input_and_change_events(
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
-    if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
+    if !unsafe { &*runtime_ptr }
+        .dom_host()
+        .is_connected_to_document(handle)
+    {
         return;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-    }
-    if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    for event_type in ["input", "change"] {
+        // A click or input listener can adopt the control into another Document.
+        // Resolve the creation realm separately for each subsequent event.
+        let Some(context) =
+            crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let Some(event) =
+            construct_simple_event(scope, event_type, true, false, event_type == "input")
+        {
+            let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+        }
     }
 }
 
@@ -1359,7 +1371,7 @@ fn perform_option_click_default_action(
         }
     }
     if changed {
-        if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+        if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
             let _ = dispatch_public_event(scope, runtime_ptr, select_handle, event);
         }
         if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
