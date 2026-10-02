@@ -1,10 +1,1 @@
 css/css-nesting/implicit-parent-insertion-crash.html
-dom/nodes/node-appendchild-crash.html
-html/semantics/embedded-content/the-iframe-element/iframe-append-to-child-document.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
-html/semantics/scripting-1/the-template-element/template-construction-in-inactive-document-crash.html
-html/semantics/scripting-1/the-template-element/template-element/template-construction-in-inactive-document-crash.html
-html/semantics/scripting-1/the-template-element/template-element/template-content-move-to-inactive-document-crash.html
