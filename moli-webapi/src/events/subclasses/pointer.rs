@@ -8,8 +8,8 @@ use moli_webidl as webidl;
 
 mod native;
 pub use native::{
-    InputEventCoordinates, PointerEventProperties, construct_native_drag_event,
-    construct_native_mouse_event, construct_native_pointer_click, construct_native_pointer_event,
+    InputEventCoordinates, PointerEventProperties, construct_native_activation_pointer_event,
+    construct_native_drag_event, construct_native_mouse_event, construct_native_pointer_event,
     construct_native_wheel_event,
 };
 

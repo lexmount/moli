@@ -30,10 +30,10 @@ pub use payload::{
     construct_native_submit_event, construct_native_track_event,
 };
 pub use pointer::{
-    InputEventCoordinates, MouseEventInit, PointerEventProperties, construct_native_drag_event,
-    construct_native_mouse_event, construct_native_pointer_click, construct_native_pointer_event,
-    construct_native_wheel_event, pointer_event_get_coalesced_events_callback,
-    pointer_event_get_predicted_events_callback,
+    InputEventCoordinates, MouseEventInit, PointerEventProperties,
+    construct_native_activation_pointer_event, construct_native_drag_event,
+    construct_native_mouse_event, construct_native_pointer_event, construct_native_wheel_event,
+    pointer_event_get_coalesced_events_callback, pointer_event_get_predicted_events_callback,
 };
 pub use values::{
     construct_native_clipboard_event, construct_native_command_event,

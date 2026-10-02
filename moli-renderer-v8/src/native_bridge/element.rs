@@ -309,6 +309,8 @@ use event_handlers::{
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::construct_clipboard_event;
+#[cfg(feature = "devtools")]
+pub(crate) use events::construct_activation_pointer_event;
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     construct_command_event, construct_form_data_event, construct_input_event,
