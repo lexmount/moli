@@ -59,16 +59,27 @@ pub(in crate::native_bridge::element) fn form_dom_string_property_value<'s>(
     property: &'static str,
     treat_null_as_empty_string: bool,
 ) -> Option<String> {
+    form_dom_string_property_utf16_value(scope, value, owner, property, treat_null_as_empty_string)
+        .map(|value| value.as_str_lossy().to_owned())
+}
+
+pub(in crate::native_bridge::element) fn form_dom_string_property_utf16_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    owner: &'static str,
+    property: &'static str,
+    treat_null_as_empty_string: bool,
+) -> Option<crate::dom::native::DomStringValue> {
     let options = webidl::StringOptions {
         treat_null_as_empty_string,
     };
-    match webidl::convert_with_options::<webidl::DomString>(
+    match webidl::convert_with_options::<webidl::DomString16>(
         scope,
         value,
         webidl::Context::member(owner, property),
         &options,
     ) {
-        Ok(value) => Some(value.0),
+        Ok(value) => Some(crate::dom::native::DomStringValue::from_utf16(&value.0)),
         Err(error) => {
             webidl::throw_error(scope, &error);
             None
@@ -225,6 +236,7 @@ pub(crate) use self::text_control::{
     replace_text_control_selection, restore_focused_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
+    text_control_value_dom_string,
 };
 pub(in crate::native_bridge) use self::text_control::{
     text_control_select_callback, text_control_selection_direction_getter_function,
@@ -275,12 +287,13 @@ fn normalized_form_enctype(value: &str) -> &'static str {
         .unwrap_or("application/x-www-form-urlencoded")
 }
 
-pub(super) fn node_direct_text_content(
+pub(super) fn node_direct_text_content_dom_string(
     runtime: &JsContextHost,
     handle: DomHandle,
-) -> Option<String> {
+) -> Option<crate::dom::native::DomStringValue> {
     let dom = runtime.dom_host().dom();
-    dom.node(handle).map(|node| node.direct_text_content(dom))
+    dom.node(handle)
+        .map(|node| node.direct_text_content_dom_string(dom))
 }
 
 #[cfg(test)]

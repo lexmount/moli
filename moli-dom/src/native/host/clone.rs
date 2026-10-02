@@ -581,12 +581,7 @@ impl DomHost {
         let _ = clone_element
             .set_custom_element_is_name(element.custom_element_is_name().map(str::to_owned));
         let _ = clone_element.mark_undefined_custom_element_candidate_from_identity();
-        let input_value = element.input_value();
-        let _ = if element.input_value_user_edited() {
-            clone_element.set_input_value_from_user_edit(&input_value)
-        } else {
-            clone_element.set_input_value_with_dirty(&input_value, element.input_value_dirty())
-        };
+        let _ = clone_element.copy_text_control_value_from(element);
         let _ = clone_element.set_checked_with_dirty(element.checked(), element.checked_dirty());
         let _ = clone_element.set_selected(element.selected());
         let _ = clone_element.set_indeterminate(element.indeterminate());

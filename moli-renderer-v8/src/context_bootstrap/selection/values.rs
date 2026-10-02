@@ -216,7 +216,7 @@ pub(in crate::context_bootstrap) fn selection_type<'s>(
 pub(in crate::context_bootstrap) fn selection_text_control_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
-) -> Option<String> {
+) -> Option<moli_dom::native::DomStringValue> {
     let handle = selection_record_handle(scope, selection)?;
     let host = context_host_ptr_from_global_bridge(scope)?;
     unsafe { &*host }.selection_record_text_control_text(handle)

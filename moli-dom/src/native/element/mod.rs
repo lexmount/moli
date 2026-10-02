@@ -19,12 +19,12 @@ use rare_data::ElementRareData;
 use selectors::attr::CaseSensitivity;
 use thin_vec::ThinVec;
 
-use super::NativeDom;
 use super::node::{NativeNodeId, Node};
+use super::{DomStringValue, NativeDom};
 use crate::custom_elements::is_valid_custom_element_name;
 use crate::forms::{
     ButtonTypeState, InputType, InputValueSanitizationContext, is_valid_number_input_value,
-    sanitize_input_value_for_type_with_context,
+    sanitize_input_dom_string_for_type_with_context,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,8 +548,31 @@ impl Element {
         }
         self.control_state()
             .input_value()
+            .map(DomStringValue::as_str_lossy)
             .unwrap_or_default()
             .to_owned()
+    }
+
+    pub fn input_value_dom_string(&self) -> DomStringValue {
+        if self.is_html_input()
+            && self.input_type().is_checkable()
+            && !self.input_value_dirty()
+            && self.attribute("value").is_none()
+        {
+            return "on".into();
+        }
+        self.control_state()
+            .input_value()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn attribute_dom_string(&self, name: &str) -> Option<DomStringValue> {
+        let value = self.attribute(name)?;
+        Some(
+            self.attribute_utf16_units(name)
+                .map_or_else(|| value.into(), DomStringValue::from_utf16),
+        )
     }
 
     pub fn input_value_dirty(&self) -> bool {
@@ -635,8 +658,9 @@ impl Element {
         self.is_html_element("link") && self.control_state().link_created_by_parser()
     }
 
-    fn sanitized_input_value(&self, value: &str) -> String {
-        sanitize_input_value_for_type_with_context(
+    fn sanitized_input_value(&self, value: &DomStringValue) -> DomStringValue {
+        let default_value = self.attribute_dom_string("value");
+        sanitize_input_dom_string_for_type_with_context(
             self.input_type(),
             value,
             InputValueSanitizationContext {
@@ -644,7 +668,7 @@ impl Element {
                 min: self.attribute("min"),
                 max: self.attribute("max"),
                 step: self.attribute("step"),
-                value_attribute: self.attribute("value"),
+                value_attribute: default_value.as_ref(),
             },
         )
     }
@@ -653,16 +677,34 @@ impl Element {
         if !self.is_html_input() || self.input_value_dirty() {
             return false;
         }
-        let source = self.attribute("value").unwrap_or_default().to_owned();
+        let source = self.attribute_dom_string("value").unwrap_or_default();
         let value = self.sanitized_input_value(&source);
         self.control_state_mut()
-            .set_input_value_with_dirty(&value, false)
+            .set_input_value_with_dirty(value, false)
     }
 
-    pub fn set_input_value(&mut self, value: &str) -> bool {
+    pub fn set_input_value(&mut self, value: impl Into<DomStringValue>) -> bool {
+        self.set_input_value_with_dirty(value, true)
+    }
+
+    pub fn copy_text_control_value_from(&mut self, source: &Self) -> bool {
+        let value = source.input_value_dom_string();
+        if source.input_value_user_edited() {
+            self.set_input_value_from_user_edit(value)
+        } else {
+            self.set_input_value_with_dirty(value, source.input_value_dirty())
+        }
+    }
+
+    pub fn set_input_value_with_dirty(
+        &mut self,
+        value: impl Into<DomStringValue>,
+        dirty: bool,
+    ) -> bool {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
         }
+        let value = value.into();
         if self.is_html_input() && self.input_type() == InputType::File {
             if !value.is_empty() {
                 return false;
@@ -670,30 +712,12 @@ impl Element {
             return self.set_selected_files(Vec::new());
         }
         let value = if self.is_html_input() {
-            self.sanitized_input_value(value)
+            self.sanitized_input_value(&value)
         } else {
-            value.to_owned()
-        };
-        self.control_state_mut().set_input_value(&value)
-    }
-
-    pub fn set_input_value_with_dirty(&mut self, value: &str, dirty: bool) -> bool {
-        if !self.is_html_input() && !self.is_html_textarea() {
-            return false;
-        }
-        if self.is_html_input() && self.input_type() == InputType::File {
-            if !value.is_empty() {
-                return false;
-            }
-            return self.set_selected_files(Vec::new());
-        }
-        let value = if self.is_html_input() {
-            self.sanitized_input_value(value)
-        } else {
-            value.to_owned()
+            value
         };
         self.control_state_mut()
-            .set_input_value_with_dirty(&value, dirty)
+            .set_input_value_with_dirty(value, dirty)
     }
 
     pub fn set_autofilled(&mut self, autofilled: bool) -> bool {
@@ -703,29 +727,30 @@ impl Element {
         self.control_state_mut().set_autofilled(autofilled)
     }
 
-    pub fn set_input_value_from_user_edit(&mut self, value: &str) -> bool {
+    pub fn set_input_value_from_user_edit(&mut self, value: impl Into<DomStringValue>) -> bool {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
         }
         if self.is_html_input() && self.input_type() == InputType::File {
             return false;
         }
+        let value = value.into();
         let (value, bad_input) = if self.is_html_input() {
             let input_type = self.input_type();
             let bad_input = input_type == InputType::Number
                 && !value.is_empty()
-                && !is_valid_number_input_value(value);
+                && !is_valid_number_input_value(value.as_str_lossy());
             let value = if bad_input {
-                String::new()
+                DomStringValue::default()
             } else {
-                self.sanitized_input_value(value)
+                self.sanitized_input_value(&value)
             };
             (value, bad_input)
         } else {
-            (value.to_owned(), false)
+            (value, false)
         };
         let control_state = self.control_state_mut();
-        let value_changed = control_state.set_input_value_from_user_edit(&value, bad_input);
+        let value_changed = control_state.set_input_value_from_user_edit(value, bad_input);
         let autofill_changed = control_state.set_autofilled(false);
         value_changed || autofill_changed
     }
@@ -1278,7 +1303,7 @@ impl Element {
         let is_html_input =
             self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == "input";
         let input_value_attribute = is_html_input
-            .then(|| self.attribute("value").map(str::to_owned))
+            .then(|| self.attribute_dom_string("value"))
             .flatten();
         let input_min = is_html_input
             .then(|| self.attribute("min").map(str::to_owned))
@@ -1303,7 +1328,7 @@ impl Element {
                 min: input_min.as_deref(),
                 max: input_max.as_deref(),
                 step: input_step.as_deref(),
-                value_attribute: input_value_attribute.as_deref(),
+                value_attribute: input_value_attribute.as_ref(),
             },
             attribute_name,
             attribute_value,

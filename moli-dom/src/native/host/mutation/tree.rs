@@ -108,9 +108,8 @@ impl DomHost {
             let mut effects = DomMutationEffects::changed();
             effects.record_textarea_value_change(
                 parent,
-                previous_textarea_value.as_deref(),
-                self.textarea_value_excluding_children(parent, &[])
-                    .as_deref(),
+                previous_textarea_value.as_ref(),
+                self.textarea_value_excluding_children(parent, &[]).as_ref(),
             );
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             self.clear_popover_open_states(&removal_context.open_popovers, &mut effects);
@@ -382,17 +381,12 @@ impl DomHost {
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             effects.extend_stylesheet_owner_changes(shadow_stylesheet_owner_changes);
             if let Some((old_parent, before, after)) = removed_textarea_value {
-                effects.record_textarea_value_change(
-                    old_parent,
-                    before.as_deref(),
-                    after.as_deref(),
-                );
+                effects.record_textarea_value_change(old_parent, before.as_ref(), after.as_ref());
             }
             effects.record_textarea_value_change(
                 parent,
-                previous_textarea_value.as_deref(),
-                self.textarea_value_excluding_children(parent, &[])
-                    .as_deref(),
+                previous_textarea_value.as_ref(),
+                self.textarea_value_excluding_children(parent, &[]).as_ref(),
             );
             if single_child_was_connected_before_insert && !self.is_connected(child) {
                 effects.mark_disconnected_root(child);
@@ -728,8 +722,7 @@ impl DomHost {
                     effects.record_textarea_value_change(
                         parent,
                         Some(&before),
-                        self.textarea_value_excluding_children(parent, &[])
-                            .as_deref(),
+                        self.textarea_value_excluding_children(parent, &[]).as_ref(),
                     );
                 }
                 if let Some(parent) = self.parent_node(handle) {

@@ -1183,7 +1183,7 @@ pub(crate) struct JsContextHost {
 
 struct PendingTextControlChangeCommit {
     handle: DomHandle,
-    committed_value: String,
+    committed_value: moli_dom::native::DomStringValue,
 }
 
 #[derive(Clone, Copy, Default)]

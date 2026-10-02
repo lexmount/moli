@@ -137,7 +137,7 @@ pub(super) struct HtmlButtonElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLInputElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLInputElement, enumerable, receiver)]
 pub(super) struct HtmlInputElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,

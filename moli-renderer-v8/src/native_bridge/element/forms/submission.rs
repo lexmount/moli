@@ -132,7 +132,7 @@ const FORM_SUBMISSION_MULTIPART_BOUNDARY_PREFIX: &str = "----MoliFormBoundary";
 enum FormResetPlan {
     InputValue {
         handle: DomHandle,
-        value: String,
+        value: crate::dom::native::DomStringValue,
     },
     Checked {
         handle: DomHandle,
@@ -495,11 +495,11 @@ pub(in crate::native_bridge) fn reset_form_default_action(
     for plan in plans {
         match plan {
             FormResetPlan::InputValue { handle, value } => {
-                let previous_value = text_control_value(runtime, handle);
+                let previous_value = text_control_value_dom_string(runtime, handle);
                 did_change |= runtime.set_input_value_with_dirty(handle, &value, false);
-                let next_value = text_control_value(runtime, handle);
+                let next_value = text_control_value_dom_string(runtime, handle);
                 if next_value != previous_value {
-                    let end = next_value.encode_utf16().count() as u32;
+                    let end = next_value.utf16_units().len() as u32;
                     let selection_changed =
                         runtime.set_text_control_selection(handle, end, end, "none");
                     did_change |= selection_changed;
@@ -1185,13 +1185,13 @@ fn build_form_reset_plan(runtime: &JsContextHost, handle: DomHandle) -> Option<F
             } else {
                 Some(FormResetPlan::InputValue {
                     handle,
-                    value: element.attribute("value").unwrap_or_default().to_owned(),
+                    value: element.attribute_dom_string("value").unwrap_or_default(),
                 })
             }
         }
         "textarea" => Some(FormResetPlan::InputValue {
             handle,
-            value: node_direct_text_content(runtime, handle).unwrap_or_default(),
+            value: node_direct_text_content_dom_string(runtime, handle).unwrap_or_default(),
         }),
         "select" => Some(FormResetPlan::Select {
             handle,

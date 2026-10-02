@@ -1,17 +1,18 @@
 use super::*;
-use crate::forms::normalize_textarea_api_value;
+use crate::forms::normalize_textarea_dom_string_value;
+use crate::native::DomStringValue;
 
 impl DomHost {
     pub(super) fn textarea_value_excluding_children(
         &self,
         parent: DomHandle,
         excluded: &[DomHandle],
-    ) -> Option<String> {
+    ) -> Option<DomStringValue> {
         let element = self.node(parent)?.as_element()?;
         if !element.is_html_textarea() || element.input_value_dirty() {
             return None;
         }
-        let mut value = String::new();
+        let mut units = Vec::new();
         for child in self.child_handles(parent) {
             if excluded.contains(&child) {
                 continue;
@@ -19,11 +20,15 @@ impl DomHost {
             let Some(node) = self.node(child) else {
                 continue;
             };
-            if node.is_text() || node.is_cdata_section() {
-                value.push_str(node.node_value().unwrap_or_default());
+            if (node.is_text() || node.is_cdata_section())
+                && let Some(value) = node.character_data_value()
+            {
+                value.append_utf16_units_to(&mut units);
             }
         }
-        Some(normalize_textarea_api_value(&value))
+        Some(normalize_textarea_dom_string_value(
+            &DomStringValue::from_utf16(&units),
+        ))
     }
 }
 

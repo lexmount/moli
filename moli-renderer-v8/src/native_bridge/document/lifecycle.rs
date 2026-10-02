@@ -9,7 +9,7 @@ use crate::native_bridge::element::{
     document_copy_command_supported, form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
     replace_text_control_selection, restore_focused_text_control_selection,
-    run_document_copy_command, text_control_value,
+    run_document_copy_command, text_control_value_dom_string,
 };
 use crate::{
     custom_elements,
@@ -18,8 +18,7 @@ use crate::{
     parser::HtmlParser,
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
-        utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
-        utf16_scalar_boundary_at_or_after, utf16_units, v8_string, v8str,
+        utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, v8_string, v8str,
     },
     webidl,
 };
@@ -1160,8 +1159,8 @@ fn exec_command_delete_text_control(
     if !is_text_control(runtime, handle) {
         return None;
     }
-    let value = text_control_value(runtime, handle);
-    let value_units = utf16_units(&value);
+    let value = text_control_value_dom_string(runtime, handle);
+    let value_units = value.utf16_units();
     let value_len = value_units.len() as u32;
     let (start, end) = runtime
         .text_control_selection(handle)
@@ -1197,12 +1196,8 @@ fn exec_command_delete_text_control(
     }
     let caret = from;
 
-    let next_value = utf16_replace_units_range_lossy(
-        &value_units,
-        from as usize,
-        to.saturating_sub(from) as usize,
-        &[],
-    );
+    let next_value =
+        value.replace_utf16_range(from as usize, to.saturating_sub(from) as usize, &[]);
     let runtime = unsafe { &mut *runtime_ptr };
     let changed = runtime.set_input_value_from_user_edit(handle, &next_value);
     if changed {
