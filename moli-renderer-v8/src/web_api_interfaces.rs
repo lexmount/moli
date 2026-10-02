@@ -20,6 +20,10 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    LargestContentfulPaint: PerformanceEntry;
+    PerformanceEventTiming: PerformanceEntry;
+    PerformancePaintTiming: PerformanceEntry;
+    PerformanceServerTiming;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;

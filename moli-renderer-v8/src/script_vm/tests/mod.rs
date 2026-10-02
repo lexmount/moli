@@ -2183,3 +2183,5 @@ mod intersection_target_order;
 mod observer_element_arguments;
 
 mod media_device_interfaces;
+
+mod performance_timing_interface_exposure_interfaces;
