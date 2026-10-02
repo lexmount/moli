@@ -652,7 +652,7 @@ fn parser_inserted_frameset_window_event_handlers_reflect_on_window() {
 
 mod node_compilation;
 
-mod document_replacement;
+
 
 #[test]
 fn added_window_and_dom_handler_properties_share_native_registration() {
