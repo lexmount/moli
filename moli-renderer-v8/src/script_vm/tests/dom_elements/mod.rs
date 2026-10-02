@@ -10,6 +10,7 @@ mod dom_surface;
 mod focus;
 mod form_data_brands;
 mod live_document;
+mod text_control_values;
 mod text_controls;
 #[cfg(feature = "devtools")]
 mod viewport_input;

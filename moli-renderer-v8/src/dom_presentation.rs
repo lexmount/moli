@@ -132,19 +132,7 @@ pub(crate) fn normalize_textarea_api_value<'a>(value: impl Into<Cow<'a, str>>) -
     if !value.as_bytes().contains(&b'\r') {
         return value;
     }
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
-            }
-            output.push('\n');
-        } else {
-            output.push(ch);
-        }
-    }
-    Cow::Owned(output)
+    Cow::Owned(moli_dom::forms::normalize_textarea_api_value(&value))
 }
 
 pub(crate) fn form_control_data(

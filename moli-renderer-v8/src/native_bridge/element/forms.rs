@@ -59,16 +59,27 @@ pub(in crate::native_bridge::element) fn form_dom_string_property_value<'s>(
     property: &'static str,
     treat_null_as_empty_string: bool,
 ) -> Option<String> {
+    form_dom_string_property_utf16_value(scope, value, owner, property, treat_null_as_empty_string)
+        .map(|value| value.as_str_lossy().to_owned())
+}
+
+pub(in crate::native_bridge::element) fn form_dom_string_property_utf16_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    owner: &'static str,
+    property: &'static str,
+    treat_null_as_empty_string: bool,
+) -> Option<crate::dom::native::DomStringValue> {
     let options = webidl::StringOptions {
         treat_null_as_empty_string,
     };
-    match webidl::convert_with_options::<webidl::DomString>(
+    match webidl::convert_with_options::<webidl::DomString16>(
         scope,
         value,
         webidl::Context::member(owner, property),
         &options,
     ) {
-        Ok(value) => Some(value.0),
+        Ok(value) => Some(crate::dom::native::DomStringValue::from_utf16(&value.0)),
         Err(error) => {
             webidl::throw_error(scope, &error);
             None
@@ -228,7 +239,7 @@ pub(crate) use self::text_control::replace_text_control_selection_after_beforein
 pub(crate) use self::text_control::{
     dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_value,
+    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_value, text_control_value_dom_string,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use self::text_control::{
@@ -284,12 +295,13 @@ fn normalized_form_enctype(value: &str) -> &'static str {
         .unwrap_or("application/x-www-form-urlencoded")
 }
 
-pub(super) fn node_direct_text_content(
+pub(super) fn node_direct_text_content_dom_string(
     runtime: &PageScriptHost,
     handle: DomHandle,
-) -> Option<String> {
+) -> Option<crate::dom::native::DomStringValue> {
     let dom = runtime.dom_host().dom();
-    dom.node(handle).map(|node| node.direct_text_content(dom))
+    dom.node(handle)
+        .map(|node| node.direct_text_content_dom_string(dom))
 }
 
 #[cfg(test)]

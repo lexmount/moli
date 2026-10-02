@@ -1,6 +1,5 @@
 use super::super::*;
-use crate::native_bridge::document::detached_native_handle_for_runtime;
-use crate::util::utf16_len;
+use crate::util::v8_string_from_utf16_units;
 
 fn textarea_string_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -82,11 +81,9 @@ pub(in crate::native_bridge) fn textarea_default_value_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = detached_textarea_value_attribute(scope, runtime_ptr, args.this(), handle)
-        .unwrap_or_else(|| {
-            node_direct_text_content(unsafe { &*runtime_ptr }, handle).unwrap_or_default()
-        });
-    if let Some(value) = v8_string(scope, &value) {
+    let value =
+        node_direct_text_content_dom_string(unsafe { &*runtime_ptr }, handle).unwrap_or_default();
+    if let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) {
         rv.set(value.into());
     } else {
         rv.set_empty_string();
@@ -103,7 +100,7 @@ pub(in crate::native_bridge) fn textarea_default_value_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(next) = form_dom_string_property_value(
+    let Some(next) = form_dom_string_property_utf16_value(
         scope,
         args.get(0),
         "HTMLTextAreaElement",
@@ -112,32 +109,8 @@ pub(in crate::native_bridge) fn textarea_default_value_setter_function<'s>(
     ) else {
         return;
     };
-    if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-        set_reflected_attribute(scope, runtime_ptr, handle, "value", &next);
-    }
     let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &next);
-    // Child removal reactions can set .value and make the control dirty.
-    let runtime = unsafe { &mut *runtime_ptr };
-    if runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| !element.input_value_dirty())
-    {
-        let value = text_control_value(runtime, handle);
-        let _ = runtime.set_input_value_with_dirty(handle, &value, false);
-    }
     rv.set_undefined();
-}
-
-fn detached_textarea_value_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    receiver: v8::Local<'s, v8::Object>,
-    handle: DomHandle,
-) -> Option<String> {
-    detached_native_handle_for_runtime(scope, runtime_ptr, receiver)?;
-    element_attribute(unsafe { &*runtime_ptr }, handle, "value")
 }
 
 pub(in crate::native_bridge) fn textarea_text_length_getter_function<'s>(
@@ -150,8 +123,8 @@ pub(in crate::native_bridge) fn textarea_text_length_getter_function<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = text_control_value(unsafe { &*runtime_ptr }, handle);
-    rv.set_uint32(utf16_len(&value) as u32);
+    let value = text_control_value_dom_string(unsafe { &*runtime_ptr }, handle);
+    rv.set_uint32(value.utf16_units().len() as u32);
 }
 
 pub(in crate::native_bridge) fn textarea_type_getter_function<'s>(
