@@ -2331,7 +2331,6 @@ mod gamepad_interfaces;
 mod document_create_event;
 mod dom_elements;
 mod dom_exception_proxy_identity;
-mod dom_rect_factory_descriptors;
 
 mod exception_utf16_arguments;
 
@@ -2443,7 +2442,7 @@ mod svg_text_position_native_receivers;
 mod observer_documents;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
-mod offline_audio_float;
+mod payment_response_interfaces;
 mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
@@ -2480,6 +2479,7 @@ mod streams;
 
 mod location_own_native_receivers;
 
+mod string_timers;
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
 mod svg_geometry_receivers;
@@ -2487,6 +2487,7 @@ mod svg_length_validation;
 
 mod svg_image_aspect_ratio_receivers;
 
+mod svg_number_list_native_receivers;
 mod svg_number_validation;
 mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
@@ -2526,7 +2527,6 @@ mod window_scheduling_receivers;
 
 mod window_immutable_prototype_chain;
 
-mod payment_response_interfaces;
 mod window_getter_consolidation;
 mod window_node_events;
 #[cfg(feature = "devtools")]
