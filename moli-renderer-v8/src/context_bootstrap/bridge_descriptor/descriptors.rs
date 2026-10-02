@@ -198,30 +198,6 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(
-        web_api_interfaces::SVGFEComponentTransferElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGFEFloodElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGFEImageElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGFEMergeElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGFEMergeNodeElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGFETileElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
         web_api_interfaces::SVGFECompositeElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
@@ -376,14 +352,6 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(
         web_api_interfaces::SVGSVGElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGSwitchElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGMPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
     descriptor(
