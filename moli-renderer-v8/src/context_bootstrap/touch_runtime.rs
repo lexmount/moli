@@ -275,9 +275,13 @@ fn build_touch_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     touches: &[v8::Local<'s, v8::Object>],
 ) -> v8::Local<'s, v8::Object> {
-    let list = TouchListObjectDeclaration::new(touches.len() as u32)
-        .bind(scope)
-        .expect("TouchList declaration should bind");
+    let prototype = exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "TouchList")
+        .expect("TouchList intrinsic prototype should materialize");
+    let list = v8::Object::new(scope);
+    assert_eq!(list.set_prototype(scope, prototype.into()), Some(true));
+    TouchListObjectDeclaration::new(touches.len() as u32)
+        .initialize(scope, list)
+        .expect("TouchList declaration should initialize");
     for (index, touch) in touches.iter().enumerate() {
         let key = v8::Integer::new_from_unsigned(scope, index as u32)
             .to_string(scope)
