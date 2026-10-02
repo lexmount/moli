@@ -662,7 +662,7 @@ pub(crate) fn html_auto_directionality_invalidation_root(
         if let Some(element) = node.as_element()
             && element.namespace() == "http://www.w3.org/1999/xhtml"
         {
-            let dir = element.attribute("dir");
+            let dir = element.attribute_ns("", "dir");
             let has_auto_direction = dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
                 || (element.is_html_element("bdi")
                     && !dir.is_some_and(|value| {

@@ -24,6 +24,11 @@ pub(super) fn serialize_form_data_controls<'s>(
     let context = node_owner_document_relevant_context(scope, runtime_ptr, form_handle)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let submitter = submitter.and_then(|object| {
+        let (owner, handle) =
+            node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
+        (owner == runtime_ptr).then_some(handle)
+    });
     let mut entries = Vec::new();
     let controls = form_data_control_elements(unsafe { &*runtime_ptr }, form_handle);
     for handle in controls {
@@ -173,7 +178,7 @@ fn append_form_data_entries_for_control(
     } else if element.is_html_select() {
         if !name.is_empty() {
             for option in runtime.dom_host().select_selected_option_elements(handle) {
-                if !form_control_is_effectively_disabled(runtime, option)
+                if !runtime.dom_host().option_is_disabled(option)
                     && let Some(option_element) =
                         runtime.dom_host().node(option).and_then(Node::as_element)
                 {
