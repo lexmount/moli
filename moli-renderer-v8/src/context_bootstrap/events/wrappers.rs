@@ -26,9 +26,8 @@ impl AttributeProjection {
     fn for_property(property: &str) -> Self {
         match property {
             "target" | "srcElement" | "currentTarget" => Self::Target,
-            "signal" | "formData" | "sourceElement" | "relatedTarget" | "submitter" | "source" => {
-                Self::PlatformObject
-            }
+            "signal" | "formData" | "sourceElement" | "relatedTarget" | "submitter" | "source"
+            | "view" => Self::PlatformObject,
             "from" => Self::NavigationEntry,
             "destination" => Self::NavigationDestination,
             // Arbitrary JS payloads (detail, data, reason, info, error, state)
@@ -50,10 +49,10 @@ impl AttributeProjection {
         match self {
             Self::Value => Some(value),
             Self::Target => Some(match v8::Local::<v8::Object>::try_from(value) {
-                Ok(target) => crate::context_bootstrap::shared_event_targets::target_in_realm(
-                    scope, target, context,
-                )
-                .into(),
+                Ok(target) => {
+                    crate::context_bootstrap::event_worlds::target_in_realm(scope, target, context)
+                        .map(Into::into)?
+                }
                 Err(_) => value,
             }),
             Self::PlatformObject => {
@@ -246,6 +245,14 @@ pub(in crate::context_bootstrap) fn event_value_attribute_getter<'s>(
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     event_attribute_getter::<0>(scope, args, rv);
+}
+
+pub(in crate::context_bootstrap) fn event_platform_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    event_attribute_getter::<2>(scope, args, rv);
 }
 
 pub(super) fn event_attribute_in_wrapper<'s>(

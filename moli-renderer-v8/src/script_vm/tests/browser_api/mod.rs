@@ -25,6 +25,7 @@ mod document_domain_lifetime;
 mod document_domain_setter;
 mod document_open_navigation_abort;
 mod document_open_origin;
+mod dom_event_worlds;
 mod event_constructor_type;
 mod event_handlers;
 mod event_listener_options;

@@ -17,17 +17,18 @@ use super::{
         event_cancelable_getter_function, event_composed_getter_function,
         event_composed_path_callback, event_current_target_getter_function,
         event_default_prevented_getter_function, event_event_phase_getter_function,
-        event_get_modifier_state_callback, event_prevent_default_callback,
-        event_return_value_getter_function, event_return_value_setter_function,
-        event_src_element_getter_function, event_stop_immediate_propagation_callback,
-        event_stop_propagation_callback, event_target_getter_function,
-        event_time_stamp_getter_function, event_type_getter_function, event_value_attribute_getter,
-        focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
-        keyboard_event_init_callback, message_event_init_callback,
-        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
-        submit_event_agent_invoked_getter_function, submit_event_respond_with_callback, submit_event_submitter_getter_function, toggle_event_source_getter_function,
-        track_event_track_getter_function, ui_event_init_callback,
-        ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
+        event_get_modifier_state_callback, event_platform_attribute_getter,
+        event_prevent_default_callback, event_return_value_getter_function,
+        event_return_value_setter_function, event_src_element_getter_function,
+        event_stop_immediate_propagation_callback, event_stop_propagation_callback,
+        event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
+        event_value_attribute_getter, focus_event_related_target_getter_function,
+        form_data_event_form_data_getter_function, keyboard_event_init_callback,
+        message_event_init_callback, mouse_event_related_target_getter_function,
+        pointer_event_get_predicted_events_callback, submit_event_agent_invoked_getter_function, submit_event_respond_with_callback, submit_event_submitter_getter_function,
+        toggle_event_source_getter_function, track_event_track_getter_function,
+        ui_event_init_callback, ui_event_pseudo_target_getter_function,
+        ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -222,7 +223,7 @@ struct ToggleEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
 struct UiEventTemplateMethodsDeclaration {
-    #[webapi(accessor_property = "view", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "view"))]
+    #[webapi(accessor_property = "view", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "view"))]
     view: (),
     #[webapi(accessor_property = "detail", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
     detail: (),
