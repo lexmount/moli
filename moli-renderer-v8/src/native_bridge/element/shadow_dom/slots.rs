@@ -14,7 +14,7 @@ use super::super::super::{
     },
 };
 use super::super::{
-    attribute_property_getter_from_object_or_detached, set_attribute_property_on_object_or_detached,
+    attribute_property_getter_from_object_or_detached, set_dom_string_attribute_property_on_object,
 };
 use crate::native_bridge::document;
 
@@ -31,7 +31,14 @@ pub(in crate::native_bridge) fn slot_name_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    set_attribute_property_on_object_or_detached(scope, args.this(), "name", args.get(0));
+    set_dom_string_attribute_property_on_object(
+        scope,
+        args.this(),
+        "name",
+        args.get(0),
+        "HTMLSlotElement",
+        "name",
+    );
 }
 
 pub(in crate::native_bridge) fn node_slot_getter_function<'s>(
@@ -47,7 +54,14 @@ pub(in crate::native_bridge) fn node_slot_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    set_attribute_property_on_object_or_detached(scope, args.this(), "slot", args.get(0));
+    set_dom_string_attribute_property_on_object(
+        scope,
+        args.this(),
+        "slot",
+        args.get(0),
+        "Element",
+        "slot",
+    );
 }
 
 pub(in crate::native_bridge) fn slot_assigned_slot_getter_function<'s>(

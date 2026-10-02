@@ -1,6 +1,6 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
-use crate::util::{string_from_utf16_units_lossy, v8_string, v8_value_to_dom_string_u16};
+use crate::util::{string_from_utf16_units_lossy, v8_string, v8_string_from_utf16_units};
 use crate::webidl;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
@@ -862,10 +862,13 @@ pub(super) enum UsvStringReflection {
     AreaPing,
     FrameLongDesc,
     IframeLongDesc,
+    ImageSrcset,
+    LinkImageSrcset,
     ModCite,
     ObjectCodeBase,
     ObjectData,
     QuoteCite,
+    SourceSrcset,
     Count,
 }
 
@@ -887,6 +890,14 @@ const USV_STRING_REFLECTION_DESCRIPTORS: &[(UsvStringReflection, ReflectedAttrib
         ReflectedAttributeDescriptor::new("HTMLIFrameElement", "longdesc", "longDesc"),
     ),
     (
+        UsvStringReflection::ImageSrcset,
+        ReflectedAttributeDescriptor::new("HTMLImageElement", "srcset", "srcset"),
+    ),
+    (
+        UsvStringReflection::LinkImageSrcset,
+        ReflectedAttributeDescriptor::new("HTMLLinkElement", "imagesrcset", "imageSrcset"),
+    ),
+    (
         UsvStringReflection::ModCite,
         ReflectedAttributeDescriptor::new("HTMLModElement", "cite", "cite"),
     ),
@@ -901,6 +912,10 @@ const USV_STRING_REFLECTION_DESCRIPTORS: &[(UsvStringReflection, ReflectedAttrib
     (
         UsvStringReflection::QuoteCite,
         ReflectedAttributeDescriptor::new("HTMLQuoteElement", "cite", "cite"),
+    ),
+    (
+        UsvStringReflection::SourceSrcset,
+        ReflectedAttributeDescriptor::new("HTMLSourceElement", "srcset", "srcset"),
     ),
 ];
 
@@ -1228,21 +1243,21 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
     });
 }
 
-fn set_reflected_attribute_utf16_units(
+pub(super) fn set_reflected_attribute_utf16(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::JsContextHost,
     handle: DomHandle,
     name: &str,
-    value: &str,
     units: Vec<u16>,
 ) {
+    let value = string_from_utf16_units_lossy(&units);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             name,
-            value,
+            &value,
             units,
         );
     });
@@ -1308,11 +1323,10 @@ pub(super) fn set_usv_string_attribute_property_on_object<'s>(
     owner: &'static str,
     property: &'static str,
 ) {
-    let Some(value) = property_usv_string_value(scope, value, owner, property) else {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
+    let Some(value) = property_usv_string_value(scope, value, owner, property) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
@@ -1329,10 +1343,10 @@ pub(super) fn set_dom_string_attribute_property_on_object<'s>(
     let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
+    let Some(units) = property_dom_string_utf16_value(scope, value, owner, property) else {
         return;
     };
-    set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
+    set_reflected_attribute_utf16(scope, runtime_ptr, handle, name, units);
 }
 
 pub(super) fn set_nullable_dom_string_attribute_property_on_object<'s>(
@@ -1350,31 +1364,33 @@ pub(super) fn set_nullable_dom_string_attribute_property_on_object<'s>(
         remove_reflected_attribute(scope, runtime_ptr, handle, name);
         return;
     }
-    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
+    let Some(units) = property_dom_string_utf16_value(scope, value, owner, property) else {
         return;
     };
-    set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
-}
-
-pub(super) fn set_dom_string_attribute_property_utf16_on_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let Some(units) = v8_value_to_dom_string_u16(scope, value, false) else {
-        return;
-    };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return;
-    };
-    let units = units.into_vec();
-    let value = string_from_utf16_units_lossy(&units);
-    set_reflected_attribute_utf16_units(scope, runtime_ptr, handle, name, &value, units);
+    set_reflected_attribute_utf16(scope, runtime_ptr, handle, name, units);
 }
 
 pub(super) fn attribute_property_getter_from_object_or_detached<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
+        return;
+    };
+    let units = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute_utf16_units(handle, name)
+        .unwrap_or_default();
+    let Some(value) = v8_string_from_utf16_units(scope, &units) else {
+        rv.set_null();
+        return;
+    };
+    rv.set(value.into());
+}
+
+pub(super) fn usv_string_attribute_property_getter_from_object_or_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &str,
@@ -1400,11 +1416,14 @@ pub(super) fn nullable_attribute_property_getter_from_object_or_detached<'s>(
     let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let Some(value) = element_attribute(unsafe { &*runtime_ptr }, handle, name) else {
+    let Some(units) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute_utf16_units(handle, name)
+    else {
         rv.set_null();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &units) else {
         rv.set_null();
         return;
     };
@@ -1441,6 +1460,25 @@ pub(super) fn property_dom_string_value<'s>(
     property: &'static str,
 ) -> Option<String> {
     match webidl::convert::<webidl::DomString>(
+        scope,
+        value,
+        webidl::Context::member(owner, property),
+    ) {
+        Ok(value) => Some(value.0),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
+pub(super) fn property_dom_string_utf16_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    owner: &'static str,
+    property: &'static str,
+) -> Option<Vec<u16>> {
+    match webidl::convert::<webidl::DomString16>(
         scope,
         value,
         webidl::Context::member(owner, property),

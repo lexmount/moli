@@ -17,7 +17,8 @@ use super::details_dialog::main_summary_child;
 use super::reflection::{
     DomStringReflection, ElementReflectionInterface, NullToEmptyDomStringReflection,
     UnsignedLongReflection, UsvStringReflection, element_reflection_receiver_or_throw,
-    remove_reflected_attribute,
+    property_dom_string_utf16_value, remove_reflected_attribute, set_reflected_attribute_utf16,
+    usv_string_attribute_property_getter_from_object_or_detached,
 };
 use super::{
     attribute_property_getter_from_object_or_detached,
@@ -188,32 +189,19 @@ pub(in crate::native_bridge) fn dom_string_reflection_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(local_name) = descriptor.html_local_name else {
-        attribute_property_getter_from_object_or_detached(
+    if let Some(local_name) = descriptor.html_local_name
+        && html_element_getter_receiver(
             scope,
             args.this(),
-            descriptor.attribute,
-            rv,
-        );
+            descriptor.interface,
+            descriptor.member,
+            local_name,
+        )
+        .is_none()
+    {
         return;
-    };
-    let Some((runtime_ptr, handle)) = html_element_getter_receiver(
-        scope,
-        args.this(),
-        descriptor.interface,
-        descriptor.member,
-        local_name,
-    ) else {
-        rv.set_empty_string();
-        return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, descriptor.attribute)
-        .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), descriptor.attribute, rv);
 }
 
 fn html_dom_string_attribute_getter<'s>(
@@ -250,13 +238,19 @@ pub(in crate::native_bridge) fn dom_string_reflection_setter_function<'s>(
                 descriptor.interface,
                 descriptor.member,
                 local_name,
-            ) && let Some(value) = property_dom_string_value(
+            ) && let Some(units) = property_dom_string_utf16_value(
                 scope,
                 args.get(0),
                 descriptor.interface,
                 descriptor.member,
             ) {
-                set_reflected_attribute(scope, runtime_ptr, handle, descriptor.attribute, &value);
+                set_reflected_attribute_utf16(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    descriptor.attribute,
+                    units,
+                );
             }
         } else {
             set_html_dom_string_attribute_for_receiver(
@@ -289,6 +283,23 @@ pub(in crate::native_bridge) fn usv_string_reflection_setter_function<'s>(
         );
     }
     rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn usv_string_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) = UsvStringReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    usv_string_attribute_property_getter_from_object_or_detached(
+        scope,
+        args.this(),
+        descriptor.attribute,
+        rv,
+    );
 }
 
 pub(in crate::native_bridge) fn html_as_getter_function<'s>(
@@ -702,7 +713,7 @@ pub(in crate::native_bridge) fn html_ping_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "ping", rv);
+    usv_string_attribute_property_getter_from_object_or_detached(scope, args.this(), "ping", rv);
 }
 
 pub(in crate::native_bridge) fn html_hreflang_getter_function<'s>(
@@ -1046,7 +1057,7 @@ pub(super) fn set_dom_string_treat_null_as_empty_on_object<'s>(
     let options = webidl::StringOptions {
         treat_null_as_empty_string: true,
     };
-    let value = match webidl::convert_with_options::<webidl::DomString>(
+    let units = match webidl::convert_with_options::<webidl::DomString16>(
         scope,
         value,
         webidl::Context::member(owner, property),
@@ -1058,7 +1069,7 @@ pub(super) fn set_dom_string_treat_null_as_empty_on_object<'s>(
             return;
         }
     };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
+    set_reflected_attribute_utf16(scope, runtime_ptr, handle, attribute, units);
 }
 
 pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_getter_function<'s>(
@@ -1504,22 +1515,14 @@ pub(in crate::native_bridge) fn html_media_getter_function<'s>(
 fn html_target_getter_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
     owner: &'static str,
     local_name: &'static str,
 ) {
-    let Some((runtime_ptr, handle)) =
-        html_element_getter_receiver(scope, args.this(), owner, "target", local_name)
-    else {
-        rv.set_empty_string();
+    if html_element_getter_receiver(scope, args.this(), owner, "target", local_name).is_none() {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "target").unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "target", rv);
 }
 
 pub(in crate::native_bridge) fn anchor_target_getter_function<'s>(
@@ -1566,10 +1569,10 @@ fn set_html_target_for_receiver<'s>(
     else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, value, owner, "target") else {
+    let Some(units) = property_dom_string_utf16_value(scope, value, owner, "target") else {
         return;
     };
-    set_reflected_attribute(scope, runtime_ptr, handle, "target", &value);
+    set_reflected_attribute_utf16(scope, runtime_ptr, handle, "target", units);
 }
 
 pub(in crate::native_bridge) fn anchor_target_setter_function<'s>(
