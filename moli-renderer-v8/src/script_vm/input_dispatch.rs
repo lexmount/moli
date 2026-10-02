@@ -1818,7 +1818,7 @@ impl ScriptVm {
                 let _ = cache_input_files_from_selected_files(scope, input, &selected_files);
             }
             if changed {
-                if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+                if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
                     let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                 }
                 if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
@@ -2111,8 +2111,7 @@ impl ScriptVm {
                     .is_some_and(|element| element.checked());
                 if !already_checked {
                     let _ = runtime.set_checked_state(scope, runtime_ptr, next_handle, true);
-                    if let Some(event) = construct_simple_event(scope, "input", true, false, false)
-                    {
+                    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
                         let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
                     }
                     if let Some(event) = construct_simple_event(scope, "change", true, false, false)
@@ -2170,7 +2169,7 @@ impl ScriptVm {
                     );
                 }
                 let _ = runtime.set_select_explicit_none(scope, runtime_ptr, handle, false);
-                if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+                if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
                     let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                 }
                 if let Some(event) = construct_simple_event(scope, "change", true, false, false) {

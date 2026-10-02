@@ -194,7 +194,7 @@ fn perform_file_input_drop_default_action(
     if let Some(input) = node_wrapper_from_handle(scope, handle) {
         let _ = cache_input_files_from_selected_files(scope, input, &files);
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
@@ -1437,7 +1437,10 @@ fn dispatch_input_and_change_events(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
-    if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
+    if !unsafe { &*runtime_ptr }
+        .dom_host()
+        .is_connected_to_document(handle)
+    {
         return;
     }
     for event_type in ["input", "change"] {
@@ -1449,7 +1452,9 @@ fn dispatch_input_and_change_events(
             return;
         };
         let scope = &mut v8::ContextScope::new(scope, context);
-        if let Some(event) = construct_simple_event(scope, event_type, true, false, false) {
+        if let Some(event) =
+            construct_simple_event(scope, event_type, true, false, event_type == "input")
+        {
             let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
         }
     }
@@ -1613,7 +1618,7 @@ fn perform_option_click_default_action(
         }
     }
     if changed {
-        if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+        if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
             let _ = dispatch_public_event(scope, runtime_ptr, select_handle, event);
         }
         if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
