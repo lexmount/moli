@@ -42,17 +42,7 @@ pub fn apply_cursor_direction_by_key<T>(
         entries.reverse();
     }
     if direction.is_unique() {
-        let mut deduped = Vec::with_capacity(entries.len());
-        let mut last_key: Option<Key> = None;
-        for entry in entries {
-            let key = key_for(&entry).clone();
-            if last_key.as_ref().is_some_and(|last| last == &key) {
-                continue;
-            }
-            last_key = Some(key);
-            deduped.push(entry);
-        }
-        return deduped;
+        entries.dedup_by(|right, left| key_for(left) == key_for(right));
     }
     entries
 }
