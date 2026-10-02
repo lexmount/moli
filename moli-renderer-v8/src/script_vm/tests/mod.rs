@@ -2286,7 +2286,6 @@ mod gamepad_interfaces;
 
 mod dom_elements;
 mod dom_exception_proxy_identity;
-mod dom_rect_factory_descriptors;
 mod dom_xhr;
 
 mod svg_length_list_native_receivers;
@@ -2351,8 +2350,8 @@ mod svg_matrix_native_receivers;
 mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
-mod midi_owner_interfaces;
 mod media_device_interfaces;
+mod midi_owner_interfaces;
 mod mouse_snapshot;
 mod native_bridge_identity;
 
@@ -2373,7 +2372,7 @@ mod observer_documents;
 mod observer_element_arguments;
 mod observer_receivers;
 mod offline_audio_context_interfaces;
-mod offline_audio_float;
+mod payment_response_interfaces;
 mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
@@ -2401,6 +2400,7 @@ mod streams;
 
 mod location_own_native_receivers;
 
+mod string_timers;
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
 mod svg_geometry_receivers;
@@ -2412,7 +2412,6 @@ mod svg_number_validation;
 mod svg_number_list_native_receivers;
 mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
-mod string_timers;
 mod svg_value_factories;
 
 mod idb_cursor_native_receivers;
@@ -2445,12 +2444,9 @@ mod window_execution_context;
 mod window_getter_consolidation;
 mod window_receiver_access;
 mod worklet_interfaces;
-mod payment_response_interfaces;
 
 mod report_body_interface_exposure;
 
-mod media_device_interfaces;
-mod dom_rect_factory_descriptors;
 mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 mod resize_observer_entries;
