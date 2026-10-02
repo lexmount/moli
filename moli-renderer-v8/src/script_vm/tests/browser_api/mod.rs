@@ -62,6 +62,7 @@ mod media_devices;
 mod media_player_init;
 mod media_query_list_events;
 mod message_channel;
+mod message_event_init;
 mod message_port_events;
 mod message_port_lifecycle;
 mod midi_events;
@@ -136,7 +137,6 @@ mod worker_options;
 
 mod error_event_init;
 mod keyboard_event_init;
-mod message_event_init;
 mod window_current_event_private;
 
 mod video_codec_support;
