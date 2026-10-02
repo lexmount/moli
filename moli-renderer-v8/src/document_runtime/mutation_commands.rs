@@ -4,7 +4,7 @@ use dom::ElementState as StyloElementState;
 use tracing::debug;
 
 use crate::style_engine::{self, StyleAttributeImpact};
-use moli_dom::native::{DomStringValue, Element, Node, NodeType};
+use moli_dom::native::{DomAttributeMutation, DomStringValue, Element, Node, NodeType};
 use moli_selector::stylo_flat_tree_heading_descendants;
 
 use super::*;
@@ -48,6 +48,46 @@ struct TreeInsertionEffects {
 }
 
 impl DocumentRuntime {
+    fn additional_attribute_changes(
+        effects: &DomMutationEffects,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) -> Vec<DomAttributeMutation> {
+        effects
+            .style()
+            .attribute_mutations()
+            .iter()
+            .filter(|mutation| {
+                mutation.target() != handle
+                    || mutation.namespace() != namespace
+                    || mutation.local_name() != local_name
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn dispatch_additional_attribute_changed_reactions(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        changes: &[DomAttributeMutation],
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) {
+        for change in changes {
+            self.apply_attribute_changed_reaction_policy(
+                scope,
+                host_ptr,
+                change.target(),
+                change.local_name(),
+                change.namespace(),
+                change.old_value(),
+                change.new_value(),
+                reaction_policy,
+            );
+        }
+    }
+
     fn tree_insertion_effects_for_roots(
         &mut self,
         host_ptr: *mut JsContextHost,
@@ -522,6 +562,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_mutation_outcome(handle, name, value)
             .into_parts();
+        let additional_attribute_changes =
+            Self::additional_attribute_changes(&effects, handle, None, name);
         if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, name);
         }
@@ -561,6 +603,12 @@ impl DocumentRuntime {
                 reaction_policy,
             );
         }
+        self.dispatch_additional_attribute_changed_reactions(
+            scope,
+            host_ptr,
+            &additional_attribute_changes,
+            reaction_policy,
+        );
         if changed {
             self.dispatch_custom_element_form_state_attribute_change(scope, host_ptr, handle, name);
         }
@@ -631,6 +679,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
             .into_parts();
+        let additional_attribute_changes =
+            Self::additional_attribute_changes(&effects, handle, None, name);
         if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, name);
         }
@@ -674,6 +724,12 @@ impl DocumentRuntime {
                 reaction_policy,
             );
         }
+        self.dispatch_additional_attribute_changed_reactions(
+            scope,
+            host_ptr,
+            &additional_attribute_changes,
+            reaction_policy,
+        );
         if changed {
             self.dispatch_custom_element_form_state_attribute_change(scope, host_ptr, handle, name);
         }
@@ -1130,6 +1186,8 @@ impl DocumentRuntime {
                 .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
         };
         let (effects, old_value) = outcome.into_parts();
+        let additional_attribute_changes =
+            Self::additional_attribute_changes(&effects, handle, namespace, local_name);
         if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, local_name);
         }
@@ -1173,6 +1231,12 @@ impl DocumentRuntime {
                 reaction_policy,
             );
         }
+        self.dispatch_additional_attribute_changed_reactions(
+            scope,
+            host_ptr,
+            &additional_attribute_changes,
+            reaction_policy,
+        );
         if changed
             && namespace.is_none()
             && local_name == "disabled"
@@ -1526,10 +1590,6 @@ impl DocumentRuntime {
         files: Vec<crate::dom::native::SelectedFile>,
     ) -> bool {
         self.dom_host.set_input_files(handle, files)
-    }
-
-    pub(crate) fn set_selection_range(&mut self, handle: DomHandle, start: u32, end: u32) -> bool {
-        self.dom_host.set_selection_range(handle, start, end)
     }
 
     pub(crate) fn set_selection_range_with_direction(
