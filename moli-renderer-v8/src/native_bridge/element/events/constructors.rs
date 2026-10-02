@@ -455,10 +455,8 @@ pub(crate) fn construct_submit_event<'s>(
     bubbles: bool,
     cancelable: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_native_submit_event(scope, submitter, bubbles, cancelable)
 }
@@ -472,10 +470,8 @@ pub(crate) fn construct_simple_event_for_target<'s>(
     cancelable: bool,
     composed: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_simple_event(scope, event_type, bubbles, cancelable, composed)
 }

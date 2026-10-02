@@ -250,7 +250,15 @@ fn submit_form_with_submit_event_inner(
             })
     };
     if blocked_by_unclosed_form_control {
-        if let Some(event) = construct_simple_event(scope, "error", false, false, false) {
+        if let Some(event) = construct_simple_event_for_target(
+            scope,
+            runtime_ptr,
+            form_handle,
+            "error",
+            false,
+            false,
+            false,
+        ) {
             let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
         }
         if let Some(id) = invocation {
@@ -1053,12 +1061,9 @@ fn serialize_form_submission_entries(
     submitter: Option<DomHandle>,
     submission_encoding: &'static encoding_rs::Encoding,
 ) -> Vec<(String, v8::Global<v8::Value>)> {
-    let Some(form) = wrap_handle_object(scope, runtime_ptr, form_handle) else {
-        return Vec::new();
-    };
     let submitter = submitter.and_then(|handle| wrap_handle_object(scope, runtime_ptr, handle));
     let mut entries =
-        construct_form_data_entries_for_form(scope, runtime_ptr, form_handle, form, submitter)
+        construct_form_data_entries_for_form(scope, runtime_ptr, form_handle, submitter)
             .unwrap_or_default();
     rewrite_charset_entries_for_submission(scope, submission_encoding.name(), &mut entries);
     entries
