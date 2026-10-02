@@ -120,6 +120,8 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "script" => "SVGScriptElement",
         "svg" => "SVGSVGElement",
         "style" => "SVGStyleElement",
+        "switch" => "SVGSwitchElement",
+        "mpath" => "SVGMPathElement",
         "symbol" => "SVGSymbolElement",
         "text" => "SVGTextElement",
         "title" => "SVGTitleElement",

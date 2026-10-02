@@ -435,6 +435,8 @@ interfaces! {
     SVGSVGElement: SVGGraphicsElement;
     SVGScriptElement: SVGElement;
     SVGStyleElement: SVGElement;
+    SVGSwitchElement: SVGGraphicsElement;
+    SVGMPathElement: SVGElement;
     SVGSymbolElement: SVGGraphicsElement;
     SVGTSpanElement: SVGTextPositioningElement;
     SVGTextContentElement: SVGGraphicsElement;
