@@ -839,6 +839,7 @@ mod tests {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }
     }
 

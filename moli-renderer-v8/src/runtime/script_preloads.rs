@@ -603,6 +603,7 @@ impl BufferedDocumentPreloadState {
                     script.clone(),
                     source,
                     outcome.source_bytes,
+                    outcome.muted_errors,
                 );
                 ParserBlockingPreloadDisposition::Ready(AppliedPreloadedScriptSource {
                     network_result: script_preload_network_result(outcome.network_result),
@@ -680,6 +681,7 @@ impl BufferedDocumentPreloadState {
                         script.clone(),
                         source,
                         outcome.source_bytes,
+                        outcome.muted_errors,
                     );
                     Some(AppliedPreloadedScriptSource {
                         network_result: script_preload_network_result(outcome.network_result),

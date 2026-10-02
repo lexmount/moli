@@ -168,6 +168,157 @@ async fn classic_script_exception_reports_window_error_then_completes() {
     );
 }
 
+#[tokio::test]
+async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"
+        globalThis.__mutedClassicScriptErrors = [];
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__mutedClassicScriptErrors.push({
+            message,
+            source,
+            line,
+            column,
+            errorIsNull: error === null,
+          });
+          return true;
+        };
+        "installed";
+        "#,
+    )
+    .expect("window error observer should install");
+
+    for (position, source) in [
+        (8, "throw new Error('runtime secret');"),
+        (9, "function syntaxError( {"),
+    ] {
+        let mut script = ready_dynamic_runtime_script(position);
+        script.url = Url::parse(&format!("https://cross-origin.test/script-{position}.js"))
+            .expect("cross-origin script URL");
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            true,
+        );
+
+        let outcome = vm
+            .execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("a muted exception should still complete classic script evaluation");
+        assert!(matches!(
+            outcome,
+            crate::script_vm::LoadedScriptExecutionOutcome::Completed(
+                crate::script_vm::PreparedScriptBodyActivity::Entered
+            )
+        ));
+        assert_eq!(script.base_url.as_str(), "about:blank");
+    }
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__mutedClassicScriptErrors)")
+            .expect("muted classic script errors should remain observable"),
+        r#"[{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true},{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true}]"#,
+    );
+}
+
+#[tokio::test]
+async fn directly_loaded_classic_scripts_preserve_response_error_taint() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind classic script error server");
+    let origin = format!("http://{}", listener.local_addr().expect("server address"));
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().await.expect("accept script request");
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let read = stream.read(&mut chunk).await.expect("read script request");
+                assert!(read > 0, "script request must contain complete headers");
+                request.extend_from_slice(&chunk[..read]);
+            }
+            let source = "throw 7;";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{source}",
+                source.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write script response");
+        }
+    });
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (position, cross_origin, cors) in [(10, false, false), (11, true, false), (12, true, true)]
+    {
+        let document_url = if cross_origin {
+            "http://document.test/page.html".to_owned()
+        } else {
+            format!("{origin}/page.html")
+        };
+        let (mut vm, _completion_queue) =
+            new_parsed_test_vm_with_loader_and_resource_completion_queue(
+                &document_url,
+                "<!doctype html><html><head></head><body></body></html>",
+                &loader,
+            );
+        vm.eval(
+            r#"
+            window.onerror = (message, source, line, column, error) => {
+              globalThis.__directClassicScriptError = [
+                message === "Script error.", source === "", line === 0,
+                column === 0, error === null, error === 7
+              ];
+              return true;
+            };
+            "installed";
+            "#,
+        )
+        .expect("install direct script error observer");
+        let body = vm
+            .document_runtime
+            .snapshot_document()
+            .document_body_handle()
+            .expect("HTML body");
+        let node = vm.document_runtime.dom_host_mut().create_element("script");
+        assert!(vm.document_runtime.dom_host_mut().append_child(body, node));
+        let handle = format!("direct-classic-{position}");
+        vm.document_runtime
+            .bind_runtime_owned_script_handle_for_node(node, &handle);
+        let mut script = ready_dynamic_runtime_script(position);
+        script.node_id = node;
+        script.host_script_handle = Some(handle);
+        script.url = Url::parse(&format!("{origin}/script-{position}.js")).expect("script URL");
+        script.base_url = script.url.clone();
+        script.initiator_url = Url::parse(&document_url).expect("document URL");
+        if cors {
+            script.fetch_metadata.cross_origin = Some("anonymous".to_owned());
+        }
+        assert!(
+            vm.execute_prepared_script_once(&loader, &script)
+                .await
+                .expect("directly fetched script should complete evaluation")
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(__directClassicScriptError)")
+                .expect("read directly loaded script error"),
+            if cross_origin && !cors {
+                "[true,true,true,true,true,false]"
+            } else {
+                "[false,false,false,false,false,true]"
+            },
+            "cross_origin={cross_origin}, cors={cors}",
+        );
+    }
+    server.await.expect("classic script server should finish");
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,
