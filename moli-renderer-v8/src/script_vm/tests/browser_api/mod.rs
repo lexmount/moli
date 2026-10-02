@@ -118,6 +118,7 @@ mod traversal_coordinator;
 mod traversal_receivers;
 mod trusted_types;
 mod trusted_types_attributes;
+mod ui_event_init;
 mod user_activation;
 mod value_event_init;
 mod value_events;

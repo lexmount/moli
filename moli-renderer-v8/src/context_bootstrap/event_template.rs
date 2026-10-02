@@ -1,10 +1,10 @@
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
-        composition_event_init_callback, event_init_event_callback, mouse_event_init_callback,
-        text_event_init_callback, ui_event_init_callback,
+        event_init_event_callback, mouse_event_init_callback, text_event_init_callback,
     },
     events::{
+        composition_event_init_callback, ui_event_init_callback,
         event_bubbles_getter_function, event_cancel_bubble_getter_function,
         event_cancel_bubble_setter_function, event_cancelable_getter_function,
         event_composed_getter_function, event_composed_path_callback,

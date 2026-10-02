@@ -35,6 +35,9 @@ pub(in crate::context_bootstrap) use value::{
 
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
+pub(in crate::context_bootstrap) use ui::{
+    composition_event_init_callback, ui_event_init_callback,
+};
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
