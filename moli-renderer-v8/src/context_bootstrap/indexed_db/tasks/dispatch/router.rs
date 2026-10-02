@@ -51,21 +51,15 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::RequestSuccess => flush_request_success_task(scope, task),
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
-        IndexedDbTaskKind::OpenBlocked => flush_open_blocked_task(scope, task),
-        IndexedDbTaskKind::DeleteBlocked => flush_delete_blocked_task(scope, task),
-        IndexedDbTaskKind::DrainBlockedOpens => flush_drain_blocked_open_requests_task(scope),
+        IndexedDbTaskKind::DrainConnectionRequests => {
+            crate::context_bootstrap::indexed_db::flush_indexed_db_connection_requests(scope, None)
+        }
         IndexedDbTaskKind::DatabasesSettle => flush_databases_settle_task(scope, task),
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
         IndexedDbTaskKind::TransactionAbort => flush_transaction_abort_task(scope, task),
     }
-    if !indexed_db_runtime_array_contains_object(
-        scope,
-        IndexedDbRuntimeArray::BlockedOpenQueue,
-        task,
-    ) {
-        unregister_indexed_db_task(scope, task);
-    }
+    unregister_indexed_db_task(scope, task);
     owner.defer_restore(scope, owner_restore);
     true
 }

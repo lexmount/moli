@@ -99,6 +99,7 @@ pub use style::{
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    validate_web_font_bytes,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

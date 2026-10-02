@@ -19,20 +19,6 @@ pub(in crate::context_bootstrap::indexed_db) fn has_open_database_connections_fo
     !local_open_database_connections_for_key(scope, key).is_empty()
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn open_database_connection_version_for_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    key: &str,
-) -> Option<u64> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        return unsafe { &*host_ptr }.indexed_db_open_connection_version(key);
-    }
-    local_open_database_connections_for_key(scope, key)
-        .into_iter()
-        .filter_map(|database| object_number_property(scope, database, "version"))
-        .map(|version| version as u64)
-        .max()
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_to_open_connections(
     scope: &mut v8::PinScope<'_, '_>,
     key: &str,
@@ -85,7 +71,6 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
     owner: IndexedDbExecutionOwner,
     handle: DatabaseHandle,
     database_key: String,
-    version: u64,
     database: v8::Local<'_, v8::Object>,
 ) {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -99,7 +84,6 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
             execution_context,
             handle,
             database_key,
-            version,
             database,
         );
         return;
@@ -111,8 +95,7 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
     );
 }
 
-/// Removes a connection and schedules blocked-request rechecks in every page
-/// realm that was waiting on the same database key.
+/// Removes a connection and wakes only the head connection request for its key.
 ///
 /// Returns true when the page-owned coordinator handled the connection. Worker
 /// and standalone contexts retain their realm-local fallback queue.
@@ -143,34 +126,6 @@ pub(in crate::context_bootstrap::indexed_db) fn unregister_open_database_connect
     }
     replace_indexed_db_runtime_array(scope, IndexedDbRuntimeArray::OpenDatabases, next);
     false
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn register_blocked_database_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    database_key: String,
-    owner: IndexedDbExecutionOwner,
-) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let execution_context = owner
-        .execution_context()
-        .expect("Page blocked IndexedDB request must retain its exact accepting Window realm");
-    unsafe { &*host_ptr }.register_indexed_db_blocked_context(database_key, execution_context);
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn unregister_blocked_database_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    database_key: &str,
-    owner: IndexedDbExecutionOwner,
-) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let execution_context = owner
-        .execution_context()
-        .expect("Page blocked IndexedDB request must retain its exact accepting Window realm");
-    unsafe { &*host_ptr }.unregister_indexed_db_blocked_context(database_key, execution_context);
 }
 
 fn local_open_database_connections_for_key<'s>(
