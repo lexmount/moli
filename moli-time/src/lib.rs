@@ -6,7 +6,7 @@ use std::{
 };
 
 mod timers;
-pub use timers::{ReadyTimer, TimerId, TimerReadyAllowance, TimerScheduler};
+pub use timers::{ReadyTimer, TimerId, TimerScheduler};
 
 pub fn unix_epoch_millis() -> f64 {
     SystemTime::now()
