@@ -1,5 +1,6 @@
 use super::super::headers::HeadersGuard;
 use super::*;
+use crate::native_bridge::WindowEnvironmentSettings;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_url::WebOrigin;
@@ -354,13 +355,20 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
     }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &*host_ptr };
-        let api_base_url = child_handle
-            .and_then(|handle| host.child_browsing_context_base_url(handle))
-            .unwrap_or_else(|| {
-                let owner = effective_subresource_request_owner(scope, host);
-                subresource_api_base_url(scope, host, owner)
-                    .unwrap_or_else(|| host.document_url().clone())
-            });
+        let api_base_url =
+            if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
+                settings
+                    .api_base_url(host)
+                    .ok_or(RequestUrlError::AssociatedDocumentUnavailable)?
+            } else {
+                child_handle
+                    .and_then(|handle| host.child_browsing_context_base_url(handle))
+                    .unwrap_or_else(|| {
+                        let owner = effective_subresource_request_owner(scope, host);
+                        subresource_api_base_url(scope, host, owner)
+                            .unwrap_or_else(|| host.document_url().clone())
+                    })
+            };
         resolve_context_url(&api_base_url, input, None)
             .map(|url| url.to_string())
             .map_err(RequestUrlError::from)
@@ -396,6 +404,9 @@ pub(super) fn normalize_request_referrer(scope: &mut v8::PinScope<'_, '_>, input
 }
 
 fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<WebOrigin> {
+    if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
+        return Some(settings.origin().clone());
+    }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &*host_ptr };
         let owner = effective_subresource_request_owner(scope, host);

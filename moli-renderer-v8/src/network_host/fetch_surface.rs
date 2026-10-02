@@ -987,10 +987,9 @@ fn readable_stream_locked(
 pub(in crate::network_host) fn new_abort_signal_for_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global
-        .get(scope, v8str(scope, "AbortController").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let ctor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "AbortController")
+            .ok()?;
     let controller = ctor.new_instance(scope, &[])?;
     controller.get(scope, v8str(scope, "signal").into())
 }
@@ -1002,10 +1001,9 @@ pub(in crate::network_host) fn new_abort_signal_for_request_with_source<'s>(
     let Some(source) = source else {
         return new_abort_signal_for_request(scope);
     };
-    let global = scope.get_current_context().global(scope);
-    let abort_signal_ctor = global
-        .get(scope, v8str(scope, "AbortSignal").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let abort_signal_ctor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "AbortSignal")
+            .ok()?;
     let any = abort_signal_ctor
         .get(scope, v8str(scope, "any").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;

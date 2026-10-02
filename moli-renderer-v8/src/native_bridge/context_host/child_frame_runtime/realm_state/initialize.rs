@@ -12,7 +12,7 @@ use crate::{
         sync_window_location_history_navigation_runtime_surface,
     },
     native_bridge::{
-        JsContextHost, OwnerDispatchScope, WindowExecutionContextOwner,
+        JsContextHost, OwnerDispatchScope, WindowEnvironmentSettings, WindowExecutionContextOwner,
         child_window_surface::{
             bind_materialized_child_window_indexed_db_factory,
             initialize_child_window_realm_environment, rebind_child_window_document_environment,
@@ -65,6 +65,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     sync_child_document_window_slots(scope, document, global, true);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
+    bind_document_settings(host, scope, &snapshot)?;
 
     Ok(ChildWindowRealmProjection {
         parent,
@@ -125,7 +126,17 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
         .ok_or_else(|| anyhow::anyhow!("missing rebound child Document wrapper"))?;
     sync_child_document_window_slots(scope, document, global, true);
     set_object_slot(scope, global, "document", document.into());
-    validate_child_window_realm_snapshot(host, &snapshot)
+    validate_child_window_realm_snapshot(host, &snapshot)?;
+    bind_document_settings(host, scope, &snapshot)
+}
+
+fn bind_document_settings(
+    host: &JsContextHost,
+    scope: &mut v8::PinScope<'_, '_>,
+    snapshot: &super::model::ChildWindowRealmSnapshot,
+) -> Result<()> {
+    WindowEnvironmentSettings::bind_current_child_document(scope, host, snapshot.handle)
+        .ok_or_else(|| anyhow::anyhow!("missing current child settings Document"))
 }
 
 fn validate_registered_realm(

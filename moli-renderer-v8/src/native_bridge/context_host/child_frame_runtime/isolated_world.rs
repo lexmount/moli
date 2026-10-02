@@ -80,6 +80,10 @@ impl JsContextHost {
         let owner = self
             .current_child_document_task_owner(handle)
             .ok_or_else(|| anyhow::anyhow!("missing child LocalWindow owner"))?;
+        let frame_id = self
+            .frame_owner_frame_id_for_child_handle(handle)
+            .ok_or_else(|| anyhow::anyhow!("missing child frame identity"))?
+            .0;
         let execution_context_owner = WindowExecutionContextOwner::Frame(owner.local_window_id);
         let dispatch_scope = OwnerDispatchScope::Child(handle);
         if let Some((_, context)) =
@@ -141,7 +145,9 @@ impl JsContextHost {
                 stale.runtime_observable_context_token,
             );
             let stale_context = v8::Local::new(scope, &stale.context);
-            stale_context.detach_global();
+            if self.child_window_proxy_frame_is_current(handle, &stale.frame_id) {
+                stale_context.detach_global();
+            }
         }
 
         let caller_global = scope.get_current_context().global(scope);
@@ -179,6 +185,7 @@ impl JsContextHost {
         pending_contexts.borrow_mut().insert(
             handle,
             PrebootstrappedChildDefaultContext {
+                frame_id,
                 local_window_id: owner.local_window_id,
                 context,
                 bridge_ref,

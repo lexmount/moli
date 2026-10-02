@@ -897,6 +897,18 @@ impl JsContextHost {
         self.child_window_proxy_records.clear_live_records(handle);
     }
 
+    /// Only navigation within the same browsing context reuses its proxy.
+    /// A removed/reinserted iframe element can have the same DOM handle while
+    /// exposing an entirely new browsing context and WindowProxy.
+    pub(crate) fn child_window_proxy_frame_is_current(
+        &self,
+        handle: DomHandle,
+        frame_id: &str,
+    ) -> bool {
+        self.frame_owner_frame_id_for_child_handle(handle)
+            .is_some_and(|current| current.0 == frame_id)
+    }
+
     pub(in crate::native_bridge::context_host) fn retain_live_child_window_proxy_records(
         &mut self,
         live_handles: &HashSet<DomHandle>,
