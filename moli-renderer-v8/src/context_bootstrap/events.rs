@@ -34,6 +34,7 @@ pub(in crate::context_bootstrap) use value::{
 };
 
 use moli_webapi::events::subclasses::{COMMAND_EVENT_COMMAND_SLOT, COMMAND_EVENT_SOURCE_SLOT, TOGGLE_EVENT_SOURCE_SLOT};
+pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
@@ -402,7 +403,6 @@ pub(in crate::context_bootstrap) use wrappers::{
 };
 
 pub(in crate::context_bootstrap) use modifiers::event_get_modifier_state_callback;
-pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 pub(crate) use subclasses::construct_original_error_event;
 
