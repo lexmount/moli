@@ -164,7 +164,7 @@ pub(super) struct HtmlOptionElementTextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLLabelElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLabelElement, enumerable, receiver)]
 pub(super) struct HtmlLabelElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "htmlFor",

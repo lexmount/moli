@@ -358,7 +358,7 @@ pub(in crate::native_bridge) fn label_html_for_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_form_dom_string_attribute_property_on_object(
+    set_dom_string_attribute_property_on_object(
         scope,
         args.this(),
         "for",
