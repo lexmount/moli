@@ -31,8 +31,9 @@ use super::{
     dispatch_public_event, element_attribute, element_has_attribute, html_element_getter_receiver,
     html_element_setter_receiver, parse_non_negative_dimension, property_usv_string_value,
     reflected_element_attribute_handle, resolve_url_like_attribute,
-    set_attribute_property_on_object_or_detached, set_reflected_attribute,
-    set_reflected_boolean_attribute,
+    set_attribute_property_on_object_or_detached, set_dom_string_attribute_property_on_object,
+    set_reflected_attribute, set_reflected_boolean_attribute,
+    set_usv_string_attribute_property_on_object,
 };
 use std::str::FromStr;
 
@@ -73,24 +74,6 @@ pub(in crate::native_bridge::element) fn form_dom_string_property_value<'s>(
             None
         }
     }
-}
-
-pub(in crate::native_bridge::element) fn set_form_dom_string_attribute_property_on_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    attribute: &str,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) {
-    let Some(value) = form_dom_string_property_value(scope, value, owner, property, false) else {
-        return;
-    };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
 }
 
 pub(in crate::native_bridge::element) fn textarea_getter_receiver<'s>(
