@@ -1108,7 +1108,7 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     let Some(target) = access_key_target(unsafe { &*runtime_ptr }, &key) else {
         return;
     };
-    let Some(click) = construct_click_event(scope, 0.0, 0.0, 0, 0) else {
+    let Some(click) = construct_click_event(scope, runtime_ptr, target, 0.0, 0.0, 0, 0) else {
         return;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, target, click);

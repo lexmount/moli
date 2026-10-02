@@ -1,3 +1,5 @@
+use crate::document_runtime::DomHandle;
+use crate::native_bridge::{JsContextHost, node_owner_document_relevant_context};
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
@@ -463,17 +465,6 @@ fn modifier_key_state(modifiers: u8) -> ModifierKeyState {
     }
 }
 
-pub(crate) fn construct_mouse_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    x: f64,
-    y: f64,
-    button: i32,
-    buttons: i32,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_mouse_event_with_modifiers(scope, event_type, x, y, button, buttons, 0)
-}
-
 pub(crate) fn construct_mouse_event_with_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -931,16 +922,30 @@ pub(crate) fn construct_interest_event<'s>(
 
 pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     x: f64,
     y: f64,
     button: i32,
     buttons: i32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_mouse_event(scope, "click", x, y, button, buttons)
+    construct_click_event_with_detail_and_modifiers(
+        scope,
+        runtime_ptr,
+        target,
+        x,
+        y,
+        0,
+        button,
+        buttons,
+        0,
+    )
 }
 
 pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     x: f64,
     y: f64,
     detail: i32,
@@ -948,6 +953,10 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    // Activation follows the target's current Document, including adopted nodes
+    // and windowless Documents, rather than the realm of a borrowed click().
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_detail_and_modifiers(
         scope, "click", x, y, detail, button, buttons, modifiers,
     )
