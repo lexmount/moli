@@ -112,9 +112,9 @@ pub(crate) use trusted_types::{
 };
 
 pub(crate) use forms::{
-    autocomplete_field_name, autofill_related_form_control_elements, form_associated_form_owner,
-    form_control_elements, form_data_control_elements, is_valid_submit_button,
-    submit_form_with_submit_event,
+    autocomplete_field_name, autofill_related_form_control_elements, control_has_datalist_ancestor,
+    form_associated_form_owner, form_control_elements, form_data_control_elements,
+    is_valid_submit_button, submit_form_with_submit_event,
 };
 pub(in crate::native_bridge) use forms::{form_named_control_matches, form_named_image_matches};
 #[cfg(test)]

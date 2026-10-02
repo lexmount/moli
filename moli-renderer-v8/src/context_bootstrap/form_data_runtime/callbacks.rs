@@ -14,10 +14,11 @@ use crate::{
             construct_form_data_event, dispatch_public_event, form_associated_form_owner,
             is_valid_submit_button,
         },
-        node_relevant_context_for_handle, node_runtime_and_handle_from_object, throw_dom_exception,
+        node_relevant_context_for_handle, node_runtime_and_handle_from_object_or_detached,
+        throw_dom_exception,
     },
     util::serialize_v8_iter_array,
-    webidl,
+    web_api_interfaces, webidl,
 };
 
 #[derive(webidl::WebIdlArgs)]
@@ -119,13 +120,12 @@ pub(super) fn form_data_constructor_callback<'s>(
             throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
             return;
         };
-        if object_string_property_defined(scope, form, "tagName")
-            .is_none_or(|tag| !tag.eq_ignore_ascii_case("form"))
-        {
+        if !web_api_interfaces::HTMLFormElement::is_instance(scope, form) {
             throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
             return;
         }
-        let Ok((form_runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, form)
+        let Ok((form_runtime_ptr, form_handle)) =
+            node_runtime_and_handle_from_object_or_detached(scope, form)
         else {
             throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
             return;
@@ -134,8 +134,15 @@ pub(super) fn form_data_constructor_callback<'s>(
             Some(value) if value.is_null_or_undefined() => None,
             Some(value) => match v8::Local::<v8::Object>::try_from(value) {
                 Ok(submitter) => {
+                    if !web_api_interfaces::HTMLElement::is_instance(scope, submitter) {
+                        throw_type_error(
+                            scope,
+                            "FormData constructor submitter must be an HTMLElement or null",
+                        );
+                        return;
+                    }
                     let Ok((submitter_runtime_ptr, submitter_handle)) =
-                        node_runtime_and_handle_from_object(scope, submitter)
+                        node_runtime_and_handle_from_object_or_detached(scope, submitter)
                     else {
                         throw_type_error(
                             scope,
@@ -143,16 +150,7 @@ pub(super) fn form_data_constructor_callback<'s>(
                         );
                         return;
                     };
-                    if submitter_runtime_ptr != form_runtime_ptr {
-                        throw_dom_exception(
-                            scope,
-                            "NotFoundError",
-                            8,
-                            "The specified element is not owned by this form element.",
-                        );
-                        return;
-                    }
-                    let runtime = unsafe { &*form_runtime_ptr };
+                    let runtime = unsafe { &*submitter_runtime_ptr };
                     if !is_valid_submit_button(runtime, submitter_handle) {
                         throw_type_error(
                             scope,
@@ -160,7 +158,10 @@ pub(super) fn form_data_constructor_callback<'s>(
                         );
                         return;
                     }
-                    if form_associated_form_owner(runtime, submitter_handle) != Some(form_handle) {
+                    if submitter_runtime_ptr != form_runtime_ptr
+                        || form_associated_form_owner(runtime, submitter_handle)
+                            != Some(form_handle)
+                    {
                         throw_dom_exception(
                             scope,
                             "NotFoundError",
