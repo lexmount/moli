@@ -369,6 +369,8 @@ interfaces! {
     PushSubscriptionOptions;
     QuotaExceededError: DOMException;
     RTCDataChannel: EventTarget;
+    RTCError: DOMException;
+    RTCErrorEvent: Event;
     RTCIceCandidate;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;

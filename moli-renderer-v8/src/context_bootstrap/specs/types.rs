@@ -39,6 +39,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     PopStateEvent,
     PageTransitionEvent,
     DomException,
+    RtcError,
+    RtcErrorEvent,
     DomError,
     QuotaExceededError,
     CustomElementRegistry,

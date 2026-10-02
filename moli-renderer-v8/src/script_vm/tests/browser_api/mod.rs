@@ -41,6 +41,7 @@ mod platform_identity;
 mod pointer_lock;
 mod popup_hyperlinks;
 mod promise_rejection;
+mod rtc_error;
 mod security_policy;
 mod service_worker_drain;
 mod session_description;
