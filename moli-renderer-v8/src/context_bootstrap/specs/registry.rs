@@ -149,11 +149,19 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::StylePropertyMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::StylePropertyMapReadOnly::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::CSSStyleValue::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSImageValue::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -167,6 +175,90 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::CSSUnitValue::DESCRIPTOR,
         kind: ConstructorKind::CssUnitValue,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathValue::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSNumericArray::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathSum::DESCRIPTOR,
+        kind: ConstructorKind::CssMathSum,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathProduct::DESCRIPTOR,
+        kind: ConstructorKind::CssMathProduct,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathNegate::DESCRIPTOR,
+        kind: ConstructorKind::CssMathNegate,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathInvert::DESCRIPTOR,
+        kind: ConstructorKind::CssMathInvert,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathMin::DESCRIPTOR,
+        kind: ConstructorKind::CssMathMin,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathMax::DESCRIPTOR,
+        kind: ConstructorKind::CssMathMax,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMathClamp::DESCRIPTOR,
+        kind: ConstructorKind::CssMathClamp,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSTransformComponent::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSTransformValue::DESCRIPTOR,
+        kind: ConstructorKind::CssTransformValue,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSTranslate::DESCRIPTOR,
+        kind: ConstructorKind::CssTranslate,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSRotate::DESCRIPTOR,
+        kind: ConstructorKind::CssRotate,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSScale::DESCRIPTOR,
+        kind: ConstructorKind::CssScale,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSSkew::DESCRIPTOR,
+        kind: ConstructorKind::CssSkew,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSSkewX::DESCRIPTOR,
+        kind: ConstructorKind::CssSkewX,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSSkewY::DESCRIPTOR,
+        kind: ConstructorKind::CssSkewY,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSPerspective::DESCRIPTOR,
+        kind: ConstructorKind::CssPerspective,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSMatrixComponent::DESCRIPTOR,
+        kind: ConstructorKind::CssMatrixComponent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSUnparsedValue::DESCRIPTOR,
+        kind: ConstructorKind::CssUnparsedValue,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSVariableReferenceValue::DESCRIPTOR,
+        kind: ConstructorKind::CssVariableReferenceValue,
     },
     ConstructorSpec {
         interface: web_api_interfaces::CSSStyleProperties::DESCRIPTOR,
@@ -1121,7 +1213,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrixReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrix::DESCRIPTOR,

@@ -12,6 +12,14 @@ pub(crate) use moli_css_parse::{
     canonical_style_property_name, escape_top_level_semicolons, serialize_style_property_name,
 };
 
+/// Filter Stylo's names to the public CSS property surface. Accessor installation
+/// and computed declaration enumeration must use the same exposure policy.
+pub(crate) fn stylo_property_is_chromium_exposed(name: &str) -> bool {
+    !name.starts_with("-moz-")
+        && !name.starts_with("-x-")
+        && !matches!(name, "mask-position-x" | "mask-position-y")
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.item")]
 pub(crate) struct CssStyleDeclarationItemArgs {
@@ -853,6 +861,15 @@ pub(crate) fn box_shorthand_value_components(value: &str) -> Option<Vec<String>>
 /// Splits only top-level comma layers while preserving nested component text.
 /// The caller is responsible for using this only after grammar validation.
 pub(crate) fn top_level_comma_separated_component_values(value: &str) -> Option<Vec<String>> {
+    top_level_comma_separated_component_sources(value)?
+        .iter()
+        .map(|source| moli_css_parse::normalize_cssom_component_value_serialization(source))
+        .collect()
+}
+
+/// Preserve original tokens for Typed OM numeric parsing. CSSOM serialization
+/// can round doubles even when the declaration's grammar is already valid.
+pub(crate) fn top_level_comma_separated_component_sources(value: &str) -> Option<Vec<String>> {
     let mut input = ParserInput::new(value);
     let mut input = Parser::new(&mut input);
     let mut layers = Vec::new();
@@ -955,7 +972,7 @@ fn push_top_level_comma_component(
 ) -> Option<()> {
     let start = layer_start.take()?;
     let raw = input.slice(start..layer_end?);
-    layers.push(moli_css_parse::normalize_cssom_component_value_serialization(raw)?);
+    layers.push(raw.to_owned());
     Some(())
 }
 

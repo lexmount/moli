@@ -559,18 +559,12 @@ static CSS_STYLE_DECLARATION_STANDARD_PROPERTY_NAMES: LazyLock<Vec<&'static str>
         let mut names = Vec::from(LIGHTWEIGHT_STYLE_PROPERTIES);
         let mut seen = names.iter().copied().collect::<HashSet<_>>();
         for name in moli_css_parse::stylo_enabled_style_rule_property_names() {
-            if stylo_property_is_chromium_exposed(name) && seen.insert(name) {
+            if crate::css_style::stylo_property_is_chromium_exposed(name) && seen.insert(name) {
                 names.push(name);
             }
         }
         names
     });
-
-fn stylo_property_is_chromium_exposed(name: &str) -> bool {
-    !name.starts_with("-moz-")
-        && !name.starts_with("-x-")
-        && !matches!(name, "mask-position-x" | "mask-position-y")
-}
 
 pub(crate) fn css_style_declaration_exposes_property_name(property: &str) -> bool {
     CSS_STYLE_DECLARATION_EXPOSED_PROPERTY_NAMES.contains(property)
@@ -2149,6 +2143,18 @@ fn remove_stylo_style_entry<'s>(
     store_stylo_declaration_block(scope, style, &block);
 }
 
+fn invalidate_stylo_typed_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) {
+    if let Some(mut block) = stored_stylo_declaration_block(scope, style)
+        && block.invalidate_typed_units_for_property(name)
+    {
+        store_stylo_declaration_block(scope, style, &block);
+    }
+}
+
 fn set_style_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
@@ -2242,6 +2248,7 @@ fn set_style_entry<'s>(
                 &name, value, priority, None,
             )
         {
+            invalidate_stylo_typed_units(scope, style, &name);
             let mut names = style_names(scope, style);
             clear_style_property_names(scope, style, &mut names, &name, &parsed.affected_names);
             for entry in parsed.entries {
@@ -2257,6 +2264,7 @@ fn set_style_entry<'s>(
     let Some(value) = value.as_deref() else {
         return;
     };
+    invalidate_stylo_typed_units(scope, style, &name);
     let mut names = style_names(scope, style);
     if value.is_empty() {
         set_style_property_value(scope, style, &name, "");
@@ -3052,6 +3060,91 @@ fn style_item_callback<'s>(
         rv.set(name.into());
     } else {
         rv.set(v8::String::empty(scope).into());
+    }
+}
+
+// Shared native entry points for Typed OM. Both inline DOM declarations and
+// rule declarations retain their existing storage, notification and cascade paths.
+pub(crate) fn css_declaration_property_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<String> {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_property_value_from_object(scope, style, name);
+    }
+    let style = lightweight_style_receiver(scope, style)?;
+    Some(style_property_value(scope, style, name))
+}
+
+pub(crate) fn css_declaration_property_names<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> Vec<String> {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_property_names_from_object(scope, style)
+            .unwrap_or_default();
+    }
+    lightweight_style_receiver(scope, style)
+        .map(|style| style_property_names(scope, style))
+        .unwrap_or_default()
+}
+
+pub(crate) fn set_css_declaration_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: &str,
+) {
+    set_typed_css_declaration_property(scope, style, name, value, None);
+}
+
+pub(crate) fn css_declaration_typed_unit_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<moli_css_parse::CssDeclaredUnitValue> {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_typed_unit_value_from_object(
+            scope, style, name,
+        );
+    }
+    stored_stylo_declaration_block(scope, style)?
+        .typed_unit_value(name)
+        .cloned()
+}
+
+pub(crate) fn set_typed_css_declaration_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: &str,
+    unit: Option<moli_css_parse::CssDeclaredUnitValue>,
+) {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        crate::native_bridge::element::set_typed_style_property_from_object(
+            scope, style, name, value, false, unit,
+        );
+    } else if let Some(style) = lightweight_style_receiver(scope, style) {
+        set_style_entry(scope, style, name, value, false);
+        if let Some(unit) = unit
+            && let Some(mut block) = stored_stylo_declaration_block(scope, style)
+            && block.retain_typed_unit_value(name, unit)
+        {
+            store_stylo_declaration_block(scope, style, &block);
+        }
+        notify_style_changed(scope, style);
+    }
+}
+
+pub(crate) fn clear_css_declaration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) {
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        crate::native_bridge::element::clear_inline_style_from_object(scope, style);
+    } else {
+        set_lightweight_css_style_css_text(scope, style, "");
     }
 }
 

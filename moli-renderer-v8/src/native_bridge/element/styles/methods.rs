@@ -31,8 +31,7 @@ pub(crate) fn style_set_property_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, args.this())
-    else {
+    let Ok((_, _, mode)) = style_runtime_and_handle_from_object(scope, args.this()) else {
         throw_style_declaration_method_illegal_invocation(scope, "setProperty");
         return;
     };
@@ -52,26 +51,58 @@ pub(crate) fn style_set_property_callback<'s>(
         );
         return;
     }
-    if parsed.property.starts_with("--")
-        && !moli_css_parse::is_cssom_custom_property_name(&parsed.property)
-    {
-        return;
-    }
-    let name = canonical_style_property_name(&parsed.property);
     if !parsed.priority.is_empty() && !parsed.priority.eq_ignore_ascii_case("important") {
         return;
     }
+    set_style_property_from_object(
+        scope,
+        args.this(),
+        &parsed.property,
+        &parsed.value,
+        parsed.priority.eq_ignore_ascii_case("important"),
+    );
+}
+
+/// Mutate the native declaration without consulting author-overridable JS methods.
+pub(crate) fn set_style_property_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+    value: &str,
+    priority: bool,
+) {
+    set_typed_style_property_from_object(scope, style, property, value, priority, None);
+}
+
+pub(crate) fn set_typed_style_property_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+    value: &str,
+    priority: bool,
+    unit: Option<moli_css_parse::CssDeclaredUnitValue>,
+) {
+    let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
+        return;
+    };
+    if mode == StyleMode::Computed {
+        return;
+    }
+    if property.starts_with("--") && !moli_css_parse::is_cssom_custom_property_name(property) {
+        return;
+    }
+    let name = canonical_style_property_name(property);
     if !supported_declared_property(&name) {
         return;
     }
-    let priority = parsed.priority.eq_ignore_ascii_case("important");
     if set_inline_style_property_with_pdb_storage(
         scope,
         runtime_ptr,
         handle,
         &name,
-        &parsed.value,
+        value,
         priority,
+        unit.as_ref(),
     )
     .is_some()
     {
@@ -80,14 +111,14 @@ pub(crate) fn style_set_property_callback<'s>(
     let (style_object_entries, current_base_url) = {
         let runtime = unsafe { &*runtime_ptr };
         (
-            style_entries_for_style_object(scope, args.this(), runtime, handle),
+            style_entries_for_style_object(scope, style, runtime, handle),
             style_base_url(runtime, handle),
         )
     };
     let mut entries = style_object_entries.entries;
-    let update_inline_style_base = name == "background-image" && !parsed.value.is_empty();
+    let update_inline_style_base = name == "background-image" && !value.is_empty();
     if let Some(longhands) = shorthand_longhands(&name) {
-        if parsed.value.is_empty() {
+        if value.is_empty() {
             if !entries.iter().any(|entry| {
                 entry.name == name || longhands.iter().any(|longhand| entry.name == *longhand)
             }) {
@@ -100,7 +131,7 @@ pub(crate) fn style_set_property_callback<'s>(
             let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
                 &entries,
                 &name,
-                &parsed.value,
+                value,
                 priority,
                 Some(&current_base_url),
             ) else {
@@ -114,7 +145,7 @@ pub(crate) fn style_set_property_callback<'s>(
             entries.extend(parsed_entries.entries);
         }
     } else if name == "all" {
-        if parsed.value.is_empty() {
+        if value.is_empty() {
             if !entries
                 .iter()
                 .any(|entry| entry.name == "all" || all_shorthand_applies_to(&entry.name))
@@ -125,7 +156,7 @@ pub(crate) fn style_set_property_callback<'s>(
         } else {
             let Some(parsed_entries) = parse_style_property_entries_for_cssom_write(
                 &name,
-                &parsed.value,
+                value,
                 priority,
                 Some(&current_base_url),
             ) else {
@@ -134,7 +165,7 @@ pub(crate) fn style_set_property_callback<'s>(
             entries.retain(|entry| entry.name != "all");
             entries.extend(parsed_entries.entries);
         }
-    } else if parsed.value.is_empty() {
+    } else if value.is_empty() {
         let before_len = entries.len();
         if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(&name) {
             retain_unaffected_style_entries(&mut entries, &name, &affected_names);
@@ -148,7 +179,7 @@ pub(crate) fn style_set_property_callback<'s>(
         let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
             &entries,
             &name,
-            &parsed.value,
+            value,
             priority,
             Some(&current_base_url),
         ) else {
@@ -176,6 +207,8 @@ pub(crate) fn style_set_property_callback<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
+        &name,
+        unit,
     );
 }
 
@@ -233,7 +266,7 @@ pub(crate) fn style_get_property_value_callback<'s>(
     }
 }
 
-pub(crate) fn computed_style_property_value_from_object<'s>(
+pub(crate) fn style_property_value_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
     property: &str,
@@ -241,9 +274,6 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return None;
     };
-    if mode != StyleMode::Computed {
-        return None;
-    }
     if style_object_forces_empty_computed(scope, style, mode) {
         return Some(String::new());
     }
@@ -257,16 +287,13 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
     Some(value)
 }
 
-pub(crate) fn computed_style_property_names_from_object<'s>(
+pub(crate) fn style_property_names_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<String>> {
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return None;
     };
-    if mode != StyleMode::Computed {
-        return None;
-    }
     if style_object_forces_empty_computed(scope, style, mode) {
         return Some(Vec::new());
     }
@@ -277,6 +304,78 @@ pub(crate) fn computed_style_property_names_from_object<'s>(
         mode,
         context,
     ))
+}
+
+pub(crate) fn style_typed_unit_value_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<moli_css_parse::CssDeclaredUnitValue> {
+    let (runtime_ptr, handle, StyleMode::Inline) =
+        style_runtime_and_handle_from_object(scope, style).ok()?
+    else {
+        return None;
+    };
+    unsafe { &*runtime_ptr }
+        .element_inline_style_declaration_state(handle)?
+        .block
+        .typed_unit_value(property)
+        .cloned()
+}
+
+/// Typed OM observes computed values, before CSSOM resolves percentages and
+/// auto sizes against layout. Reuse the declaration's document/viewport and
+/// retained style observation rather than reading serialized used values.
+pub(crate) fn computed_typed_style_value_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<moli_css_parse::ParsedTypedStyleValue> {
+    let (runtime_ptr, handle, StyleMode::Computed) =
+        style_runtime_and_handle_from_object(scope, style).ok()?
+    else {
+        return None;
+    };
+    if style_object_forces_empty_computed(scope, style, StyleMode::Computed) {
+        return None;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, style);
+    let read = super::ComputedStyleRead::new_with_context(runtime, handle, context);
+    let computed = read.computed_values()?;
+    let id = style::properties::PropertyId::parse_enabled_for_all_content(property).ok()?;
+    if let style::properties::PropertyId::Custom(name) = &id
+        && computed.custom_properties().inherited.get(name).is_none()
+        && computed
+            .custom_properties()
+            .non_inherited
+            .get(name)
+            .is_none()
+    {
+        return None;
+    }
+    let mut css_text = String::new();
+    computed
+        .computed_or_resolved_property_value(id.clone(), None, &mut css_text)
+        .ok()?;
+    if css_text.is_empty() && !property.starts_with("--") {
+        return None;
+    }
+    let values = if property.starts_with("--") {
+        Some(moli_css_parse::TypedStyleValueList::Native(
+            style::typed_om::TypedValueList {
+                values: [style::typed_om::TypedValue::Unparsed(
+                    moli_css_parse::reify_unparsed_style_value(&css_text, None)?,
+                )]
+                .into_iter()
+                .collect(),
+            },
+        ))
+    } else {
+        id.longhand_id()
+            .and_then(|id| moli_css_parse::computed_typed_style_value_list(&computed, id))
+    };
+    Some(moli_css_parse::ParsedTypedStyleValue { css_text, values })
 }
 
 pub(crate) fn style_remove_property_callback<'s>(
@@ -322,8 +421,16 @@ pub(crate) fn style_remove_property_callback<'s>(
         previous
     };
     if name == "all" {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
+        if set_inline_style_property_with_pdb_storage(
+            scope,
+            runtime_ptr,
+            handle,
+            &name,
+            "",
+            false,
+            None,
+        )
+        .is_some()
         {
             if let Some(previous) = v8_string(scope, &previous) {
                 rv.set(previous.into());
@@ -333,8 +440,16 @@ pub(crate) fn style_remove_property_callback<'s>(
             return;
         }
     } else {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
+        if set_inline_style_property_with_pdb_storage(
+            scope,
+            runtime_ptr,
+            handle,
+            &name,
+            "",
+            false,
+            None,
+        )
+        .is_some()
         {
             if let Some(previous) = v8_string(scope, &previous) {
                 rv.set(previous.into());
@@ -368,6 +483,7 @@ pub(crate) fn style_remove_property_callback<'s>(
             handle,
             &entries,
             inline_base_url.as_ref(),
+            &name,
         );
         if let Some(previous) = v8_string(scope, &previous) {
             rv.set(previous.into());
@@ -391,6 +507,7 @@ pub(crate) fn style_remove_property_callback<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
+        &name,
     );
     if let Some(previous) = v8_string(scope, &previous) {
         rv.set(previous.into());
@@ -475,4 +592,25 @@ fn throw_style_declaration_method_illegal_invocation(
         scope,
         &format!("Failed to execute '{method}' on 'CSSStyleDeclaration': Illegal invocation."),
     );
+}
+
+/// Whether this native CSS declaration represents computed rather than specified style.
+pub(crate) fn style_declaration_is_computed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> bool {
+    style_runtime_and_handle_from_object(scope, style)
+        .is_ok_and(|(_, _, mode)| mode == StyleMode::Computed)
+}
+
+pub(crate) fn clear_inline_style_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) {
+    let Ok((runtime_ptr, handle, StyleMode::Inline)) =
+        style_runtime_and_handle_from_object(scope, style)
+    else {
+        return;
+    };
+    super::declaration::set_inline_style_css_text_with_pdb_storage(scope, runtime_ptr, handle, "");
 }

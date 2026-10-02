@@ -10,19 +10,33 @@ use super::super::{
         webgl_rendering_context_constructor_callback,
     },
     css_fontface_runtime::font_face_constructor_callback,
-    css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
+    css_runtime::{
+        css_keyword_value_constructor_callback, css_math_clamp_constructor_callback,
+        css_math_invert_constructor_callback, css_math_max_constructor_callback,
+        css_math_min_constructor_callback, css_math_negate_constructor_callback,
+        css_math_product_constructor_callback, css_math_sum_constructor_callback,
+        css_matrix_component_constructor_callback, css_perspective_constructor_callback,
+        css_rotate_constructor_callback, css_scale_constructor_callback,
+        css_skew_constructor_callback, css_skew_x_constructor_callback,
+        css_skew_y_constructor_callback, css_transform_value_constructor_callback,
+        css_translate_constructor_callback, css_unit_value_constructor_callback,
+        css_unparsed_value_constructor_callback, css_variable_reference_value_constructor_callback,
+    },
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
         build_value_event_template, event_constructor_callback,
     },
-    exposed_interfaces::install_interface_template_metadata,
+    exposed_interfaces::{TemplateBuildProfile, install_interface_template_metadata},
     file_api::{
         data_transfer_constructor_callback, file_constructor_callback,
         file_reader_constructor_callback, file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
-    geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
+    geometry_runtime::{
+        dom_matrix_constructor_callback, dom_matrix_readonly_constructor_callback,
+        dom_point_constructor_callback,
+    },
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
     location_runtime::build_location_constructor_template,
@@ -84,6 +98,14 @@ use anyhow::{Result, anyhow};
 pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    build_profiled_constructor_template(scope, spec, TemplateBuildProfile::Window)
+}
+
+pub(in crate::context_bootstrap) fn build_profiled_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = match spec.kind {
         ConstructorKind::Illegal => v8::FunctionTemplate::builder(illegal_constructor_callback)
@@ -516,6 +538,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::DomMatrixReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMMatrixReadOnly,
+                dom_matrix_readonly_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DomMatrix => {
             v8::FunctionTemplate::builder(dom_matrix_constructor_callback)
                 .length(0)
@@ -862,6 +892,150 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(2)
             .build(scope)
         }
+        ConstructorKind::CssMathSum => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathSum,
+                css_math_sum_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathProduct => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathProduct,
+                css_math_product_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathNegate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathNegate,
+                css_math_negate_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMathInvert => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathInvert,
+                css_math_invert_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMathMin => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathMin,
+                css_math_min_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathMax => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathMax,
+                css_math_max_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::CssMathClamp => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMathClamp,
+                css_math_clamp_constructor_callback
+            ))
+            .length(3)
+            .build(scope)
+        }
+        ConstructorKind::CssTransformValue => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSTransformValue,
+                css_transform_value_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssTranslate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSTranslate,
+                css_translate_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssRotate => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSRotate,
+                css_rotate_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssScale => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSScale,
+                css_scale_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssSkew => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkew,
+                css_skew_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::CssSkewX => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkewX,
+                css_skew_x_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssSkewY => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSSkewY,
+                css_skew_y_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssPerspective => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSPerspective,
+                css_perspective_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssMatrixComponent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSMatrixComponent,
+                css_matrix_component_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssUnparsedValue => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSUnparsedValue,
+                css_unparsed_value_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::CssVariableReferenceValue => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::CSSVariableReferenceValue,
+                css_variable_reference_value_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::FontFace => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::FontFace,
@@ -968,24 +1142,27 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
     };
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 pub(in crate::context_bootstrap) fn build_constructor_template_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
+    profile: TemplateBuildProfile,
+    length: i32,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = v8::FunctionTemplate::builder(callback)
-        .length(1)
+        .length(length)
         .build(scope);
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 fn finalize_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
     template: v8::Local<'s, v8::FunctionTemplate>,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let class_name = v8_string(scope, spec.interface.name()).ok_or_else(|| {
         anyhow!(
@@ -1002,7 +1179,7 @@ fn finalize_constructor_template<'s>(
         template.read_only_prototype();
     }
 
-    install_constructor_template_bindings(scope, template, spec);
+    install_constructor_template_bindings(scope, template, spec, profile);
     install_interface_template_metadata(scope, template, spec.interface.name());
 
     Ok(template)
