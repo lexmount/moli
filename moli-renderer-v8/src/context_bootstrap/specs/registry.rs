@@ -573,6 +573,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CanvasCaptureMediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaDevices::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -583,6 +591,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::ClipboardItem::DESCRIPTOR,
         kind: ConstructorKind::ClipboardItem,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaSession::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaCapabilities::DESCRIPTOR,
@@ -1182,6 +1194,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::MediaError::DESCRIPTOR,
         kind: ConstructorKind::MediaError,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TimeRanges::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoPlaybackQuality::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::TextTrack::DESCRIPTOR,
