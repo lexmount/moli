@@ -99,7 +99,7 @@ pub(super) struct TextPrototypeReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLSlotElement)]
+#[webapi(interface = web_api_interfaces::HTMLSlotElement, receiver)]
 pub(super) struct HtmlSlotElementPrototypeDeclaration {
     #[webapi(
         accessor_property,

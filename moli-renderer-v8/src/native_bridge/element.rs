@@ -503,7 +503,7 @@ pub(super) use global_attributes::{
     table_cell_no_wrap_getter_function, table_cell_no_wrap_setter_function,
     table_cell_scope_getter_function, table_ch_getter_function, table_ch_off_getter_function,
     table_v_align_getter_function, unsigned_long_reflection_setter_function,
-    usv_string_reflection_setter_function,
+    usv_string_reflection_getter_function, usv_string_reflection_setter_function,
 };
 use html_elements::{
     body_background_getter_function, body_background_setter_function, li_value_getter_function,
@@ -613,7 +613,7 @@ use reflection::{
     property_dom_string_value, property_string_value, property_usv_string_value,
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
-    set_dom_string_attribute_property_on_object, set_dom_string_attribute_property_utf16_on_object,
+    set_dom_string_attribute_property_on_object,
     set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
     set_reflected_style_attribute_with_inline_base_url,
     set_usv_string_attribute_property_on_object,
@@ -1034,14 +1034,12 @@ pub(crate) fn element_attribute_for_object(
 fn element_id_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "id") else {
-        rv.set_null();
+    if element_getter_receiver(scope, args.this(), "id").is_none() {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "id").unwrap_or_default();
-    set_element_string_return_value(scope, &mut rv, &value);
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "id", rv);
 }
 
 fn element_heading_offset_getter_function<'s>(
@@ -1137,22 +1135,26 @@ fn element_id_setter_function<'s>(
     if element_setter_receiver(scope, args.this(), "id").is_none() {
         return;
     }
-    set_dom_string_attribute_property_utf16_on_object(scope, args.this(), "id", args.get(0));
+    set_dom_string_attribute_property_on_object(
+        scope,
+        args.this(),
+        "id",
+        args.get(0),
+        "Element",
+        "id",
+    );
     rv.set_undefined();
 }
 
 fn element_class_name_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "className")
-    else {
-        rv.set_null();
+    if element_getter_receiver(scope, args.this(), "className").is_none() {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "class").unwrap_or_default();
-    set_element_string_return_value(scope, &mut rv, &value);
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "class", rv);
 }
 
 fn element_class_name_setter_function<'s>(
