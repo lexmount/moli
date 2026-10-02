@@ -1,7 +1,6 @@
 use super::super::{
-    attribute_property_getter_from_object_or_detached, element_attribute,
-    html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
-    set_dom_string_attribute_property_on_object, set_reflected_attribute,
+    attribute_property_getter_from_object_or_detached, html_element_getter_receiver,
+    html_element_setter_receiver, set_dom_string_attribute_property_on_object,
 };
 
 pub(in crate::native_bridge::element) fn meta_content_getter_function<'s>(
@@ -43,20 +42,12 @@ fn meta_string_getter<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
     attribute: &'static str,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) =
-        html_element_getter_receiver(scope, receiver, "HTMLMetaElement", member, "meta")
-    else {
-        rv.set_empty_string();
+    if html_element_getter_receiver(scope, receiver, "HTMLMetaElement", member, "meta").is_none() {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
-    if let Some(value) = crate::util::v8_string(scope, &value) {
-        rv.set(value.into());
-    } else {
-        rv.set_empty_string();
     }
+    attribute_property_getter_from_object_or_detached(scope, receiver, attribute, rv);
 }
 
 fn meta_string_setter<'s>(
@@ -66,15 +57,17 @@ fn meta_string_setter<'s>(
     attribute: &'static str,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) =
-        html_element_setter_receiver(scope, receiver, "HTMLMetaElement", member, "meta")
-    else {
+    if html_element_setter_receiver(scope, receiver, "HTMLMetaElement", member, "meta").is_none() {
         return;
-    };
-    let Some(value) = property_dom_string_value(scope, value, "HTMLMetaElement", member) else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
+    }
+    set_dom_string_attribute_property_on_object(
+        scope,
+        receiver,
+        attribute,
+        value,
+        "HTMLMetaElement",
+        member,
+    );
 }
 
 macro_rules! body_attr_reflection {

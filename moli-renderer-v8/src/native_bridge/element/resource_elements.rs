@@ -1179,54 +1179,6 @@ fn generic_src_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn image_srcset_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "srcset", rv);
-}
-
-fn image_srcset_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "srcset",
-        args.get(0),
-        "HTMLImageElement",
-        "srcset",
-    );
-    rv.set_undefined();
-}
-
-fn source_srcset_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "srcset", rv);
-}
-
-fn source_srcset_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "srcset",
-        args.get(0),
-        "HTMLSourceElement",
-        "srcset",
-    );
-    rv.set_undefined();
-}
-
 fn iframe_src_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1777,7 +1729,7 @@ pub(super) struct HtmlAreaElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable, receiver)]
 pub(super) struct HtmlImageElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1838,8 +1790,9 @@ pub(super) struct HtmlImageElementUrlPrototypeDeclaration {
     src: (),
     #[webapi(
         accessor_property,
-        getter = image_srcset_getter_function,
-        setter = image_srcset_setter_function
+        getter = usv_string_reflection_getter_function,
+        setter = usv_string_reflection_setter_function,
+        data = UsvStringReflection::ImageSrcset
     )]
     srcset: (),
     #[webapi(
@@ -1911,7 +1864,7 @@ pub(super) struct HtmlImageElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLSourceElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLSourceElement, enumerable, receiver)]
 pub(super) struct HtmlSourceElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1940,8 +1893,9 @@ pub(super) struct HtmlSourceElementUrlPrototypeDeclaration {
     height: (),
     #[webapi(
         accessor_property,
-        getter = source_srcset_getter_function,
-        setter = source_srcset_setter_function
+        getter = usv_string_reflection_getter_function,
+        setter = usv_string_reflection_setter_function,
+        data = UsvStringReflection::SourceSrcset
     )]
     srcset: (),
     #[webapi(
@@ -2204,8 +2158,15 @@ pub(super) struct HtmlBaseElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLLinkElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLinkElement, enumerable, receiver)]
 pub(super) struct HtmlLinkElementUrlPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "imageSrcset",
+        getter = usv_string_reflection_getter_function,
+        setter = usv_string_reflection_setter_function,
+        data = UsvStringReflection::LinkImageSrcset
+    )]
+    image_srcset: (),
     #[webapi(
         accessor_property,
         getter = link_disabled_getter_function,
