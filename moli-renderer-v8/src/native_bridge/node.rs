@@ -899,6 +899,26 @@ pub(crate) fn node_relevant_context<'s>(
     })
 }
 
+pub(crate) fn node_relevant_context_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Context>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, handle)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    // Native events use the default-world target's realm. Adoption changes its
+    // owner Document, but must not replace an existing reflector's realm.
+    if let Some(object) =
+        super::document::paired_detached_native_object_for_handle(scope, runtime_ptr, handle)
+    {
+        return node_relevant_context(scope, object);
+    }
+    let object = unsafe { &mut *runtime_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, runtime_ptr, handle)?;
+    node_relevant_context(scope, object)
+}
+
 pub(super) fn node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,

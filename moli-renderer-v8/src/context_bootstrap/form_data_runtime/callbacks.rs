@@ -7,23 +7,18 @@ use super::storage::{
 use super::*;
 use crate::{
     callback_invocation::invoke_synchronous_webidl_callback_function,
+    context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor,
     native_bridge::{
         JsContextHost,
-        element::{form_associated_form_owner, is_valid_submit_button},
-        node_runtime_and_handle_from_object, throw_dom_exception,
+        element::{
+            construct_form_data_event, dispatch_public_event, form_associated_form_owner,
+            is_valid_submit_button,
+        },
+        node_relevant_context_for_handle, node_runtime_and_handle_from_object, throw_dom_exception,
     },
     util::serialize_v8_iter_array,
     webidl,
 };
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct FormDataEventInitDeclaration<'scope> {
-    form_data: v8::Local<'scope, v8::Object>,
-    bubbles: bool,
-    cancelable: bool,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "FormData")]
@@ -186,13 +181,9 @@ pub(super) fn form_data_constructor_callback<'s>(
             },
             None => None,
         };
-        let Some(next_entries) = construct_form_data_entries_for_form(
-            scope,
-            form_runtime_ptr,
-            form_handle,
-            form,
-            submitter,
-        ) else {
+        let Some(next_entries) =
+            construct_form_data_entries_for_form(scope, form_runtime_ptr, form_handle, submitter)
+        else {
             return;
         };
         entries = next_entries;
@@ -206,7 +197,6 @@ pub(crate) fn construct_form_data_entries_for_form<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     form_handle: crate::document_runtime::DomHandle,
-    form: v8::Local<'s, v8::Object>,
     submitter: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<Vec<(String, v8::Global<v8::Value>)>> {
     if !unsafe { &mut *runtime_ptr }.begin_form_data_construction(form_handle) {
@@ -220,67 +210,32 @@ pub(crate) fn construct_form_data_entries_for_form<'s>(
     }
 
     let entries = serialize_form_data_controls(scope, runtime_ptr, form_handle, submitter);
-    let entries = dispatch_form_data_event_with_entries(scope, form, &entries).unwrap_or(entries);
+    let entries = dispatch_form_data_event_with_entries(scope, runtime_ptr, form_handle, &entries)
+        .unwrap_or(entries);
     unsafe { &mut *runtime_ptr }.end_form_data_construction(form_handle);
     Some(entries)
 }
 
 fn dispatch_form_data_event_with_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    form: v8::Local<'s, v8::Object>,
+    runtime_ptr: *mut JsContextHost,
+    form_handle: crate::document_runtime::DomHandle,
     entries: &[(String, v8::Global<v8::Value>)],
 ) -> Option<Vec<(String, v8::Global<v8::Value>)>> {
+    let context = node_relevant_context_for_handle(scope, runtime_ptr, form_handle)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let form_data = new_empty_form_data_object(scope)?;
     set_form_data_entries(scope, form_data, entries);
-    dispatch_form_data_event(scope, form, form_data);
+    let event = construct_form_data_event(scope, form_data)?;
+    let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
     Some(form_data_entries(scope, form_data))
 }
 
 fn new_empty_form_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "FormData").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let constructor = ensure_intrinsic_interface_constructor(scope, "FormData").ok()?;
     constructor.new_instance(scope, &[])
-}
-
-fn dispatch_form_data_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    form: v8::Local<'s, v8::Object>,
-    form_data: v8::Local<'s, v8::Object>,
-) {
-    let Ok((runtime_ptr, form_handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, form)
-    else {
-        return;
-    };
-    let Some(event) = new_form_data_event(scope, form_data) else {
-        return;
-    };
-    crate::context_bootstrap::events::mark_event_trusted(scope, event);
-    let _ = crate::native_bridge::element::dispatch_public_event(
-        scope,
-        runtime_ptr,
-        form_handle,
-        event,
-    );
-}
-
-fn new_form_data_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    form_data: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "FormDataEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init = FormDataEventInitDeclaration::new(form_data, true, false)
-        .bind(scope)
-        .expect("FormDataEvent init declaration should bind");
-    let event_type = v8str(scope, "formdata");
-    constructor.new_instance(scope, &[event_type.into(), init.into()])
 }
 
 pub(super) fn form_data_append_callback<'s>(
