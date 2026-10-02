@@ -227,10 +227,9 @@ pub(crate) fn event_composed_path_value<'s>(
                 let value = if let (Ok(target), Some(context)) =
                     (v8::Local::<v8::Object>::try_from(value), context)
                 {
-                    crate::context_bootstrap::shared_event_targets::target_in_realm(
-                        scope, target, context,
-                    )
-                    .into()
+                    crate::context_bootstrap::event_worlds::target_in_realm(scope, target, context)
+                        .map(Into::into)
+                        .unwrap_or(value)
                 } else {
                     value
                 };

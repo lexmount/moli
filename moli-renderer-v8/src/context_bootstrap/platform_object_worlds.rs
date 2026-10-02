@@ -20,6 +20,9 @@ pub(super) fn in_realm<'s>(
     if let Some(wrapper) = world_wrappers::get(scope, object, context) {
         return Some(wrapper.into());
     }
+    if super::is_window_receiver(scope, object) {
+        return Some(window_in_realm(scope, object, context).into());
+    }
     let scope = &mut v8::ContextScope::new(scope, context);
     let wrapper = if web_api_interfaces::AbortSignal::is_instance(scope, object) {
         let wrapper = abort_signal::new_signal(scope)?;
@@ -51,4 +54,35 @@ pub(super) fn in_realm<'s>(
     };
     world_wrappers::insert(scope, object, wrapper);
     Some(wrapper.into())
+}
+
+fn window_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> v8::Local<'s, v8::Object> {
+    let Some(source_context) = window.get_creation_context(scope) else {
+        return window;
+    };
+    if !window.strict_equals(source_context.global(scope).into()) {
+        return window;
+    }
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return window;
+    };
+    if crate::util::context_host_ptr_from_context_slot(source_context) != Some(host_ptr) {
+        return window;
+    }
+    let host = unsafe { &*host_ptr };
+    let source = host.window_execution_context_identity_for_access_check(source_context);
+    let destination = host.window_execution_context_identity_for_access_check(context);
+    if let (Some(source), Some(destination)) = (source, destination)
+        && source.owner() == destination.owner()
+        && host.window_execution_context_identity_is_current(source)
+        && host.window_execution_context_identity_is_current(destination)
+    {
+        context.global(scope)
+    } else {
+        window
+    }
 }
