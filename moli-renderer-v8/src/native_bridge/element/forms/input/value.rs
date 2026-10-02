@@ -71,43 +71,22 @@ fn input_type_setter_on_object<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     let Some(value) =
-        form_dom_string_property_value(scope, value, "HTMLInputElement", "type", false)
+        form_dom_string_property_utf16_value(scope, value, "HTMLInputElement", "type", false)
     else {
         return;
     };
-    let canonical = InputType::from_attribute_value(Some(&value));
+    let canonical = InputType::from_attribute_value(Some(value.as_str_lossy()));
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
         return;
     };
-    let previous_state: Option<(InputType, DomStringValue)> = {
-        let runtime = unsafe { &*runtime_ptr };
-        runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::as_element)
-            .map(|element| (element.input_type(), element.input_value_dom_string()))
-    };
-
-    set_reflected_attribute(scope, runtime_ptr, handle, "type", &value);
-
-    if let Some((previous_type, previous_value)) = previous_state {
-        let was_selectable = previous_type.supports_variable_length_selection();
-        let is_selectable = canonical.supports_variable_length_selection();
-        if !was_selectable && is_selectable {
-            let _ = unsafe { &mut *runtime_ptr }.set_selection_range(handle, 0, 0);
-        } else if was_selectable && is_selectable {
-            let current_value = unsafe { &*runtime_ptr }
-                .dom_host()
-                .node(handle)
-                .and_then(Node::as_element)
-                .map(Element::input_value_dom_string)
-                .unwrap_or_default();
-            if current_value != previous_value {
-                reset_input_selection_to_end(unsafe { &mut *runtime_ptr }, handle);
-            }
-        }
-    }
+    set_reflected_attribute_utf16(
+        scope,
+        runtime_ptr,
+        handle,
+        "type",
+        value.utf16_units().into_owned(),
+    );
 
     if canonical == InputType::Radio {
         let checked = unsafe { &*runtime_ptr }
@@ -169,10 +148,7 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         .and_then(Node::as_element)
         .map(Element::input_type)
         .unwrap_or_default();
-    if input_type.is_checkable() {
-        // Checkbox and radio inputs use the HTML default/on value mode. Their
-        // IDL setter reflects the content attribute instead of creating a
-        // dirty, non-attribute value.
+    if input_type.value_mode().reflects_content_attribute() {
         set_reflected_attribute_utf16(
             scope,
             runtime_ptr,
