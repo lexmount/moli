@@ -1,9 +1,8 @@
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
-        composition_event_init_callback, custom_event_init_callback, event_init_event_callback,
-        mouse_event_init_callback, storage_event_init_callback, text_event_init_callback,
-        ui_event_init_callback,
+        custom_event_init_callback, event_init_event_callback, mouse_event_init_callback,
+        storage_event_init_callback, text_event_init_callback,
     },
     events::{
         clipboard_change_event_change_id_getter_function, clipboard_change_event_types_getter_function,
@@ -14,6 +13,7 @@ use super::{
         before_unload_event_return_value_setter_function,
         close_event_code_getter_function, close_event_reason_getter_function,
         close_event_was_clean_getter_function, event_bubbles_getter_function,
+        composition_event_init_callback, ui_event_init_callback,
         event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
         event_cancelable_getter_function, event_composed_getter_function,
         event_composed_path_callback, event_current_target_getter_function,
