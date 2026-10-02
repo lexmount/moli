@@ -316,6 +316,13 @@ struct StorageEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
+struct MessageEventTemplateMethodsDeclaration {
+    #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
+    init_message_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
 struct KeyboardEventTemplateMethodsDeclaration {
     #[webapi(constant = "DOM_KEY_LOCATION_STANDARD", value = 0u32)]
