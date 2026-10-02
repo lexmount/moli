@@ -1044,6 +1044,7 @@ impl ScriptVm {
                         buttons,
                         click_count.max(1),
                         modifiers,
+                        &pointer,
                     );
                     if click_count >= 2
                         && let Some(event) = construct_mouse_event_with_detail_and_modifiers(
@@ -1402,6 +1403,7 @@ impl ScriptVm {
                     y,
                     0,
                     0,
+                    &pointer,
                 ));
             }
             Ok(input_dispatch_outcome(true))
@@ -2015,7 +2017,7 @@ impl ScriptVm {
                         0.0,
                         0,
                         0,
-                        1,
+                        0,
                         modifiers,
                     ));
                 }
@@ -2056,7 +2058,7 @@ impl ScriptVm {
                         0.0,
                         0,
                         0,
-                        1,
+                        0,
                         modifiers,
                     ));
                 }
