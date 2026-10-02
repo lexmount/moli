@@ -178,6 +178,140 @@ async fn native_activation_events_follow_target_documents_across_realms_and_adop
 }
 
 #[tokio::test]
+async fn checkable_controls_use_dom_connectedness_and_composed_input_events() {
+    let mut vm = native_ui_test_vm().await;
+    assert_eq!(
+        vm.eval(include_str!("native_control_activation.js"))
+            .unwrap(),
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__uiEventResults)").unwrap()
+    );
+}
+
+#[tokio::test]
+async fn checkable_controls_finish_followup_events_after_listener_tree_mutations() {
+    let mut vm = native_ui_test_vm().await;
+    assert_eq!(vm.eval(r#"(() => {
+      const other=document.getElementById('child').contentWindow;
+      for (const document of [window.document,window.document.implementation.createHTMLDocument('')]) {
+        for (const type of ['checkbox','radio']) for (const action of ['click','dispatch']) {
+          for (const mutation of ['remove-in-click','attach-in-click','remove-in-input','adopt-in-input','cancel']) {
+            const input=document.createElement('input'); input.type=type; input.indeterminate=true;
+            if (mutation!=='attach-in-click') document.body.appendChild(input);
+            const events=[];
+            for (const name of ['click','input','change']) input.addEventListener(name,event=>{
+              events.push({name,realm:event instanceof (name==='change' && mutation==='adopt-in-input'?other.Event:Event),
+                flags:event.bubbles && !event.cancelable && event.composed===(name==='input')});
+              if (name==='click') {
+                if (mutation==='remove-in-click') input.remove();
+                if (mutation==='attach-in-click') document.body.appendChild(input);
+                if (mutation==='cancel') event.preventDefault();
+              }
+              if (name==='input') {
+                if (mutation==='remove-in-input') input.remove();
+                if (mutation==='adopt-in-input') other.document.body.appendChild(input);
+              }
+            });
+            if (action==='click') other.HTMLElement.prototype.click.call(input);
+            else input.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+            const expected=mutation==='cancel'||mutation==='remove-in-click'?'click':'click,input,change';
+            if (events.map(e=>e.name).join(',')!==expected ||
+              !events.filter(e=>e.name!=='click').every(e=>e.realm && e.flags) ||
+              input.checked!==(mutation!=='cancel') ||
+              input.indeterminate!==(type==='radio'||mutation==='cancel')) return false;
+            input.remove();
+          }
+        }
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn native_select_radio_and_file_input_events_cross_shadow_boundaries() {
+    let mut vm = new_storage_html_test_vm("https://native-control-input.test/");
+    vm.eval(r#"
+      const host=document.body.appendChild(document.createElement('div'));
+      const root=host.attachShadow({mode:'open'});
+      root.innerHTML='<select id=select><option value=a>A</option><option value=b>B</option></select><form><input id=radio1 type=radio name=group checked><fieldset disabled><input id=ignored type=radio name=group></fieldset><input id=radio2 type=radio name=group></form><input id=outsider type=radio name=group><input id=upload type=file>';
+      const select=root.getElementById('select'),radio1=root.getElementById('radio1'),
+        radio2=root.getElementById('radio2');
+      globalThis.upload=root.getElementById('upload');
+      globalThis.nativeControlRows=[]; globalThis.nativeControlHostRows=[];
+      for (const control of [select,radio1,radio2,upload]) for (const type of ['input','change']) {
+        control.addEventListener(type,event=>nativeControlRows.push({
+          type,target:event.target===control,constructor:event.constructor===Event,
+          ui:!(event instanceof UIEvent),trusted:event.isTrusted,bubbles:event.bubbles,
+          cancelable:!event.cancelable,composed:event.composed===(type==='input')}));
+      }
+      for (const type of ['input','change']) host.addEventListener(type,event=>{
+        nativeControlHostRows.push({type,target:event.target===host});
+      });
+      select.focus(); 'ready'
+    "#).unwrap();
+    vm.dispatch_key_event("keydown", "ArrowDown", "ArrowDown", "", 0, false, false)
+        .unwrap();
+    vm.eval("select.options[0].click(); radio1.focus(); 'ready'")
+        .unwrap();
+    vm.dispatch_key_event("keydown", "ArrowRight", "ArrowRight", "", 0, false, false)
+        .unwrap();
+    assert_eq!(vm.eval("radio2.checked && root.activeElement===radio2 && !root.getElementById('ignored').checked && !root.getElementById('outsider').checked").unwrap(), "true");
+    vm.dispatch_key_event("keydown", "ArrowRight", "ArrowRight", "", 0, false, false)
+        .unwrap();
+    assert_eq!(vm.eval("radio1.checked && root.activeElement===radio1 && !root.getElementById('outsider').checked").unwrap(), "true");
+    let upload = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let upload = global
+                .get(scope, crate::util::v8str(scope, "upload").into())
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .unwrap();
+            Ok(
+                crate::native_bridge::node_runtime_and_handle_from_object(scope, upload)
+                    .unwrap()
+                    .1,
+            )
+        })
+        .unwrap();
+    assert!(
+        vm.set_file_input_files(
+            upload,
+            vec![crate::dom::native::SelectedFile {
+                bytes: b"content".to_vec(),
+                mime_type: "text/plain".to_owned(),
+                name: "example.txt".to_owned(),
+                last_modified: 1.0,
+            }],
+            false,
+        )
+        .unwrap()
+    );
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify({rows:nativeControlRows,host:nativeControlHostRows})")
+            .unwrap(),
+    )
+    .unwrap();
+    let rows = facts["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 10, "{facts}");
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row["type"], if index % 2 == 0 { "input" } else { "change" });
+        for (field, value) in row.as_object().unwrap() {
+            if field != "type" {
+                assert_eq!(value, true, "{field}: {facts}");
+            }
+        }
+    }
+    assert_eq!(
+        facts["host"],
+        serde_json::json!([
+        {"type":"input","target":true},{"type":"input","target":true},
+        {"type":"input","target":true},{"type":"input","target":true},
+        {"type":"input","target":true}])
+    );
+}
+
+#[tokio::test]
 async fn native_form_events_use_target_realms_and_bypass_author_construction_hooks() {
     let mut vm = native_ui_test_vm().await;
     assert_eq!(

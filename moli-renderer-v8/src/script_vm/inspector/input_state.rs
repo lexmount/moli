@@ -75,36 +75,14 @@ pub(in crate::script_vm) fn radio_group_members(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> Vec<DomHandle> {
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return Vec::new();
-    };
-    let Some(root) = runtime.dom_host().document_element_handle() else {
-        return Vec::new();
-    };
-    let name = element.attribute("name").unwrap_or_default();
-    if name.is_empty() {
-        return Vec::new();
-    }
-
-    runtime
-        .dom_host()
-        .elements_by_tag_name(root, "input", true)
+    let dom = runtime.dom_host();
+    dom.radio_group_members(handle)
         .into_iter()
         .filter(|candidate| {
-            runtime
-                .dom_host()
-                .node(*candidate)
-                .and_then(Node::as_element)
-                .is_some_and(|candidate_element| {
-                    candidate_element.is_html_input()
-                        && candidate_element.input_type() == InputType::Radio
-                        && candidate_element.attribute("name") == Some(name)
-                        && !candidate_element.has_attribute("disabled")
-                        && runtime
-                            .dom_host()
-                            .node(*candidate)
-                            .is_some_and(Node::is_connected)
-                })
+            dom.is_connected_to_document(*candidate)
+                && !crate::native_bridge::element::form_control_is_effectively_disabled(
+                    runtime, *candidate,
+                )
         })
         .collect()
 }
