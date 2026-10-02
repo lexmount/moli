@@ -340,7 +340,9 @@ pub(crate) use self::encoded_video_chunk::{
     build_encoded_video_chunk_from_clone_payload, encoded_video_chunk_clone_payload_from_object,
 };
 pub(crate) use self::events::{
-    EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
+    EVENT_DISPATCHING_SLOT,
+    EVENT_PASSIVE_SLOT,
+    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT,
     EventHandlerType,
     apply_before_unload_event_handler_return_value,
@@ -352,6 +354,7 @@ pub(crate) use self::events::{
     initialize_event_wrapper, initialize_native_security_policy_violation_event,
     mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
+    EVENT_MOUSE_POSITIONLESS_SLOT,
     submit_event_submitter_value,
     set_event_source_value,
     error_event_handler_arguments,

@@ -90,6 +90,13 @@ struct MouseEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
+struct ClickPointerEventInitDeclaration<'scope> {
+    pointer_id: i32,
+    pointer_type: v8::Local<'scope, v8::String>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
 struct PointerEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -582,8 +589,29 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
     modifiers: u8,
     related_target: Option<v8::Local<'s, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let init = mouse_event_init(
+        scope,
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
+        related_target,
+    )?;
+    construct_event(scope, "MouseEvent", event_type, init)
+}
+
+fn mouse_event_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    coordinates: InputEventCoordinates,
+    detail: i32,
+    button: i32,
+    buttons: i32,
+    modifiers: u8,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let modifier_keys = modifier_key_state(modifiers);
-    let init = MouseEventInitDeclaration::new(
+    MouseEventInitDeclaration::new(
         true,
         true,
         true,
@@ -601,8 +629,7 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
         related_target,
     )
     .bind(scope)
-    .ok()?;
-    construct_event(scope, "MouseEvent", event_type, init)
+    .ok()
 }
 
 pub(crate) fn construct_pointer_event<'s>(
@@ -1050,6 +1077,7 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
     y: f64,
     button: i32,
     buttons: i32,
+    modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_click_event_with_detail_and_modifiers(
         scope,
@@ -1059,7 +1087,8 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
         0,
         button,
         buttons,
-        0,
+        modifiers,
+        None,
     )
 }
 
@@ -1072,18 +1101,28 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
     button: i32,
     buttons: i32,
     modifiers: u8,
+    pointer: Option<&RendererPointerEventProperties>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     // Activation follows the target's current Document, including adopted nodes
     // and windowless Documents, rather than the realm of a borrowed click().
     let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
-    construct_mouse_event_with_detail_and_modifiers(
-        scope,
-        "click",
-        coordinates,
-        detail,
-        button,
-        buttons,
-        modifiers,
+    let init = mouse_event_init(scope, coordinates, detail, button, buttons, modifiers, None)?;
+    // Click keeps only the source pointer's identity. Pressure, tilt and all
+    // other PointerEvent-specific attributes retain their dictionary defaults.
+    let pointer_type = v8_string(scope, pointer.map_or("", |pointer| &pointer.pointer_type))?;
+    ClickPointerEventInitDeclaration::new(
+        pointer.map_or(-1, |pointer| pointer.pointer_id),
+        pointer_type,
     )
+    .initialize(scope, init)
+    .ok()?;
+    let event = construct_event(scope, "PointerEvent", "click", init)?;
+    crate::context_bootstrap::set_event_internal_flag(
+        scope,
+        event,
+        crate::context_bootstrap::EVENT_MOUSE_POSITIONLESS_SLOT,
+        pointer.is_none(),
+    );
+    Some(event)
 }

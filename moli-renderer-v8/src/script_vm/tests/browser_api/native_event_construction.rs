@@ -257,9 +257,12 @@ fn native_click_projects_target_document_events_into_isolated_listener_worlds() 
     let isolated = vm.create_isolated_world("native-click", false).unwrap();
     let observe = r#"
         globalThis.nativeClickRows=[];
-        const Ui=UIEvent, Mouse=MouseEvent, target=document.getElementById('target');
+        const Ui=UIEvent, Mouse=MouseEvent, Pointer=PointerEvent, target=document.getElementById('target');
         target.addEventListener('click',event=>nativeClickRows.push({
             ui:event instanceof Ui,mouse:event instanceof Mouse,view:event.view===window,
+            pointer:event instanceof Pointer,pointerId:event.pointerId===-1,
+            pointerType:event.pointerType==='',primary:event.isPrimary===false,
+            offsets:event.offsetX===0 && event.offsetY===0,detail:event.detail===0,
             target:event.target===target,current:event.currentTarget===target,
             currentEvent:window.event===event,trusted:event.isTrusted===false}));
         'ready'
@@ -282,6 +285,91 @@ fn native_click_projects_target_document_events_into_isolated_listener_worlds() 
             }
         }
     }
+}
+
+#[test]
+fn native_pointer_click_preserves_identity_without_copying_contact_properties() {
+    let mut vm = new_storage_html_test_vm("https://native-pointer-click.test/");
+    vm.eval(r#"
+        document.body.innerHTML='<button id=target>click</button>';
+        const target=document.getElementById('target'), NativePointer=PointerEvent;
+        globalThis.nativePointerClicks=[];
+        target.addEventListener('click',event=>nativePointerClicks.push({
+            pointer:event instanceof NativePointer,view:event.view===window,
+            id:event.pointerId===17,type:event.pointerType==='pen',
+            pressure:event.pressure===0 && event.tangentialPressure===0,
+            tilt:event.tiltX===0 && event.tiltY===0 && event.twist===0,
+            contact:event.width===1 && event.height===1 && event.isPrimary===false,
+            coordinates:event.clientX===31 && event.clientY===42,
+            detail:event.detail===2,modifiers:event.ctrlKey && event.shiftKey,
+            trusted:event.isTrusted,target:event.target===target,
+            sequences:event.getCoalescedEvents().length===0 && event.getPredictedEvents().length===0}));
+        'ready'
+    "#).unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
+        let global = scope.get_current_context().global(scope);
+        let target = global
+            .get(scope, crate::util::v8str(scope, "target").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .unwrap();
+        let (_, handle) =
+            crate::native_bridge::node_runtime_and_handle_from_object(scope, target).unwrap();
+        let pointer = crate::runtime::RendererPointerEventProperties {
+            pointer_id: 17,
+            pointer_type: "pen".to_owned(),
+            pressure: 0.75,
+            tangential_pressure: 0.25,
+            tilt_x: 23.0,
+            tilt_y: -17.0,
+            twist: 31.0,
+        };
+        let outcome = element::activate_handle_after_pointer_release(
+            scope,
+            runtime_ptr,
+            handle,
+            31.0,
+            42.0,
+            0,
+            0,
+            2,
+            10,
+            &pointer,
+        );
+        assert!(outcome.handled);
+        Ok(())
+    })
+    .unwrap();
+    let facts: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(nativePointerClicks)").unwrap()).unwrap();
+    let rows = facts.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{facts}");
+    for (field, value) in rows[0].as_object().unwrap() {
+        assert_eq!(value, true, "{field}: {facts}");
+    }
+}
+
+#[test]
+fn native_click_materialization_preserves_unread_author_pointer_binding() {
+    let mut vm = new_storage_html_test_vm("https://native-click-lazy.test/");
+    assert_eq!(
+        vm.eval(r#"(() => {
+            const target=document.body.appendChild(document.createElement('button'));
+            let captured, reads=0;
+            const getter=()=>{reads++;throw Error('author PointerEvent');};
+            Object.defineProperty(globalThis,'PointerEvent',{configurable:false,get:getter});
+            target.addEventListener('click',event=>captured=event);
+            target.click();
+            const binding=Object.getOwnPropertyDescriptor(globalThis,'PointerEvent');
+            captured.initMouseEvent('probe',false,false,null,0,0,0,31,42,false,false,false,false,0,null);
+            const author=new MouseEvent('probe',{clientX:31,clientY:42});
+            return reads===0 && binding.get===getter && !binding.configurable &&
+                Object.prototype.toString.call(captured)==='[object PointerEvent]' &&
+                captured.pointerId===-1 && captured.pointerType==='' && !captured.isTrusted &&
+                captured.offsetX===0 && captured.offsetY===0 &&
+                captured.clientX===31 && captured.clientY===42 && author.offsetX===31 && author.offsetY===42;
+        })()"#).unwrap(),
+        "true"
+    );
 }
 
 #[test]
