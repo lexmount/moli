@@ -1888,3 +1888,20 @@ fn dom_matrix_window_operations_use_webidl_descriptors() {
         "function,0,true,true,true|function,1,true,true,true|function,0,true,true,true|function,1,true,true,true|function,0,true,true,true|function,1,true,true,true"
     );
 }
+
+#[test]
+fn dom_point_from_point_has_a_webidl_operation_descriptor() {
+    let mut vm = new_storage_test_vm("https://geometry-descriptors.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const descriptor = Object.getOwnPropertyDescriptor(DOMPoint, 'fromPoint');
+        const point = descriptor.value({x: 12, y: 34});
+        return [typeof descriptor.value, descriptor.enumerable, descriptor.writable,
+            descriptor.configurable, descriptor.value.length, point.x, point.y].join('|');
+    })()"#
+        )
+        .unwrap(),
+        "function|true|true|true|0|12|34"
+    );
+}

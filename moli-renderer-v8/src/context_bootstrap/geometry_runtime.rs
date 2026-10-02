@@ -202,7 +202,7 @@ struct DomPointPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPoint)]
+#[webapi(interface = web_api_interfaces::DOMPoint, enumerable)]
 struct DomPointConstructorDeclaration {
     #[webapi(static_method = "fromPoint", length = 0, callback = dom_point_from_point_callback)]
     from_point: (),
