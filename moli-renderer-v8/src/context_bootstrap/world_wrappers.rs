@@ -1,4 +1,4 @@
-//! Weak wrapper identities for platform objects exposed by Navigation events.
+//! Weak wrapper identities for Events and their platform object fields.
 //! A retained native object must not keep another world's realm alive merely
 //! because that world once observed it.
 
