@@ -156,6 +156,14 @@ fn window_event_value_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    // Real globals keep the current event in their concrete callback realm.
+    // Resolving only the Document owner would read the default world's slot
+    // even when this receiver is an isolated world's Window.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
+    {
+        return object_own_hidden_value(scope, receiver, WINDOW_EVENT_SLOT);
+    }
     let target_event = context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))
         .and_then(|host_ptr| {
