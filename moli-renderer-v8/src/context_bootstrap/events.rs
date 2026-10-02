@@ -34,6 +34,7 @@ pub(in crate::context_bootstrap) use value::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
@@ -683,13 +684,11 @@ pub(crate) use wrappers::{
     initialize_event_wrapper, new_event_state, new_event_wrapper, set_event_private_value,
 };
 
-pub(in crate::context_bootstrap) use message::message_event_init_callback;
 pub(in crate::context_bootstrap) use wrappers::{
     event_platform_attribute_getter, event_value_attribute_getter,
 };
 
 pub(in crate::context_bootstrap) use modifiers::event_get_modifier_state_callback;
-pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 pub(crate) use subclasses::construct_original_error_event;
 
