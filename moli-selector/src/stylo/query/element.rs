@@ -643,6 +643,8 @@ impl SelectorsElement for QueryElement<'_> {
             NonTSPseudoClass::ReadOnly => self.matches_read_only_pseudo(),
             NonTSPseudoClass::ReadWrite => self.matches_read_write_pseudo(),
             NonTSPseudoClass::PlaceholderShown => self.matches_placeholder_shown_pseudo(),
+            NonTSPseudoClass::ToolFormActive => self.element().web_mcp_form_active(),
+            NonTSPseudoClass::ToolSubmitActive => self.element().web_mcp_submit_active(),
             NonTSPseudoClass::InRange => self.matches_in_range_pseudo(),
             NonTSPseudoClass::OutOfRange => self.matches_out_of_range_pseudo(),
             NonTSPseudoClass::Valid => {

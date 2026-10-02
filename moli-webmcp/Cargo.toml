@@ -1,0 +1,15 @@
+[package]
+license.workspace = true
+name = "moli-webmcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+indexmap = { version = "2.6", features = ["serde"] }
+moli-dom = { path = "../moli-dom" }
+num-bigint = "0.4.6"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["raw_value"] }
+
+[lints]
+workspace = true

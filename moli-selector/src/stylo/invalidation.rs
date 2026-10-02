@@ -1566,6 +1566,12 @@ fn ascii_whitespace_tokens(value: &str) -> Vec<String> {
 
 fn stylo_retained_dependency_state_for_element(element: &Element) -> ElementState {
     let mut state = ElementState::empty();
+    if element.web_mcp_form_active() {
+        state |= ElementState::TOOL_FORM_ACTIVE;
+    }
+    if element.web_mcp_submit_active() {
+        state |= ElementState::TOOL_SUBMIT_ACTIVE;
+    }
     const HEADING_NAMES: [(&str, u64); 6] = [
         ("h1", 1),
         ("h2", 2),

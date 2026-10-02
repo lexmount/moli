@@ -500,6 +500,8 @@ where
             | NonTSPseudoClass::ReadOnly
             | NonTSPseudoClass::ReadWrite
             | NonTSPseudoClass::PlaceholderShown
+            | NonTSPseudoClass::ToolFormActive
+            | NonTSPseudoClass::ToolSubmitActive
             | NonTSPseudoClass::InRange
             | NonTSPseudoClass::OutOfRange
             | NonTSPseudoClass::Valid
