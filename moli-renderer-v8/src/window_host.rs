@@ -1828,14 +1828,13 @@ fn dispatch_window_message_event<'s>(
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
-    let global = scope.get_current_context().global(scope);
     let source: v8::Local<'_, v8::Value> =
         source_window
             .map(Into::into)
             .unwrap_or_else(|| match source_endpoint {
                 PendingWindowMessageEndpoint::TopWindow => {
                     top_window_message_source_for_target(scope, host, target)
-                        .unwrap_or_else(|| global.into())
+                        .unwrap_or_else(|| v8::null(scope).into())
                 }
                 PendingWindowMessageEndpoint::ChildWindow(handle) => {
                     child_window_message_source(scope, host, handle)
@@ -1847,6 +1846,7 @@ fn dispatch_window_message_event<'s>(
                     .map(Into::into)
                     .unwrap_or_else(|| v8::null(scope).into()),
             });
+
     let event_name = event_type;
     let Some(event) = crate::context_bootstrap::construct_original_message_event(
         scope,

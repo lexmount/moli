@@ -280,6 +280,13 @@ struct StorageEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
+struct MessageEventTemplateMethodsDeclaration {
+    #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
+    init_message_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
 struct KeyboardEventTemplateMethodsDeclaration {
     #[webapi(method = "initKeyboardEvent", length = 1, callback = keyboard_event_init_callback)]
@@ -558,6 +565,10 @@ pub(super) fn install_event_template_bindings<'s>(
         "StorageEvent" => {
             let proto = template.prototype_template(scope);
             StorageEventTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "MessageEvent" => {
+            let proto = template.prototype_template(scope);
+            MessageEventTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
         "KeyboardEvent" => {
             let proto = template.prototype_template(scope);
