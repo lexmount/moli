@@ -20,6 +20,8 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    CSSAnimation: Animation;
+    CSSTransition: Animation;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
