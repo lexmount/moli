@@ -1353,6 +1353,102 @@ fn html_slot_element_slotchange_mutation_observer_delivery_keeps_later_signal() 
     assert_eq!(async_log, "mo1:0|slot:1|mo2:1|slot:2");
 }
 #[test]
+fn slot_attribute_mutation_apis_preserve_assignment_and_microtask_order() {
+    let mut vm = new_storage_test_vm("https://slot-attribute-apis.test/");
+    for api in ["property", "attribute", "namespace", "attr-node"] {
+        assert_eq!(
+            vm.eval(&format!(
+                r#"
+        (() => {{
+          if (!document.documentElement) document.appendChild(document.createElement('html'));
+          if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+          const host=document.body.appendChild(document.createElement('div'));
+          const shadow=host.attachShadow({{mode:'open'}});
+          const named=document.createElement('slot');
+          named.name='title';
+          const fallback=document.createElement('slot');
+          shadow.append(named,fallback);
+          const child=host.appendChild(document.createElement('p'));
+          child.setAttribute('slot','');
+          globalThis.__slotApis={{api:'{api}',named,fallback,child,log:[]}};
+          named.addEventListener('slotchange',()=>__slotApis.log.push('title'));
+          fallback.addEventListener('slotchange',()=>__slotApis.log.push('default'));
+          return true;
+        }})()
+        "#
+            ))
+            .unwrap(),
+            "true"
+        );
+        vm.eval("__slotApis.log.length=0").unwrap();
+        assert_eq!(
+            vm.eval(
+                r#"
+        (() => {
+          const {api,child,log}=__slotApis;
+          if (api==='property') child.slot='title';
+          else if (api==='attribute') child.setAttribute('slot','title');
+          else if (api==='namespace') child.setAttributeNS(null,'slot','title');
+          else child.getAttributeNode('slot').value='title';
+          return log.length===0 && child.assignedSlot===__slotApis.named;
+        })()
+        "#
+            )
+            .unwrap(),
+            "true",
+            "{api} synchronous assignment"
+        );
+        assert_eq!(
+            vm.eval("__slotApis.log.join('|')").unwrap(),
+            "default|title",
+            "{api} deferred reassignment order"
+        );
+        vm.eval(
+            r#"
+        __slotApis.log.length=0;
+        __slotApis.child.setAttributeNS('urn:foreign','foreign:slot','other');
+        __slotApis.named.setAttributeNS('urn:foreign','foreign:name','other');
+        "#,
+        )
+        .unwrap();
+        assert_eq!(vm.eval("__slotApis.log.join('|')").unwrap(), "");
+        assert_eq!(
+            vm.eval(
+                r#"
+        __slotApis.child.removeAttributeNS(null,'slot');
+        __slotApis.log.length===0 && __slotApis.child.assignedSlot===__slotApis.fallback
+        "#
+            )
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            vm.eval("__slotApis.log.join('|')").unwrap(),
+            "title|default"
+        );
+        vm.eval(
+            r#"
+        __slotApis.log.length=0;
+        __slotApis.child.setAttributeNS(null,'slot','title');
+        "#,
+        )
+        .unwrap();
+        vm.eval("__slotApis.log.length=0").unwrap();
+        assert_eq!(
+            vm.eval(
+                r#"
+        __slotApis.named.setAttributeNS(null,'name','other');
+        __slotApis.log.length===0 && __slotApis.child.assignedSlot===null
+        "#
+            )
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(vm.eval("__slotApis.log.join('|')").unwrap(), "title");
+    }
+}
+
+#[test]
 fn html_slot_element_slotchange_preserves_reassignment_signal_order() {
     let mut vm = new_storage_test_vm("https://html-slotchange-reassignment-order.test/");
 

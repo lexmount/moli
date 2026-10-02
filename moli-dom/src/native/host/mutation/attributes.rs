@@ -1,8 +1,134 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::native::{Attribute, DomStringValue};
+use moli_html_input_type::InputType;
+
+struct InputValueAttributeChange {
+    previous: Option<Arc<str>>,
+    current: DomStringValue,
+}
+
+#[derive(Default)]
+struct SlotAttributeMutationSnapshots {
+    host_child_assignments: Vec<(DomHandle, Vec<DomHandle>)>,
+    shadow_slot: Option<(DomHandle, String, Vec<DomHandle>)>,
+    shadow_assignments: Vec<(DomHandle, Vec<DomHandle>)>,
+}
+
+impl SlotAttributeMutationSnapshots {
+    fn record(self, host: &DomHost, effects: &mut DomMutationEffects, handle: DomHandle) {
+        host.record_host_child_slot_changes_from_snapshots(effects, self.host_child_assignments);
+        if let Some((shadow_root, prior_name, prior_assigned_nodes)) = self.shadow_slot {
+            host.record_slot_assignment_changes_from_snapshots(effects, self.shadow_assignments);
+            host.record_slot_changes_for_shadow_tree_slot_name_change(
+                effects,
+                shadow_root,
+                handle,
+                &prior_name,
+                &prior_assigned_nodes,
+            );
+        }
+    }
+}
+
+impl InputValueAttributeChange {
+    fn record(self, effects: &mut DomMutationEffects, handle: DomHandle, records_enabled: bool) {
+        effects.mark_attribute_change(
+            handle,
+            "value",
+            None,
+            self.previous,
+            Some(self.current.as_str_lossy()),
+            records_enabled,
+        );
+    }
+}
 
 impl DomHost {
+    fn slot_attribute_mutation_snapshots(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        value: &str,
+    ) -> SlotAttributeMutationSnapshots {
+        if namespace.is_some_and(|namespace| !namespace.is_empty()) {
+            return SlotAttributeMutationSnapshots::default();
+        }
+        let host_child_assignments = if local_name.eq_ignore_ascii_case("slot") {
+            self.node(handle)
+                .and_then(Node::parent_node)
+                .map(|parent| {
+                    self.slot_assignment_snapshots_for_host_child_names(
+                        parent,
+                        handle,
+                        &[&self.slot_name_for_node(handle), value],
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let shadow_slot = self.shadow_tree_slot_name_change(handle, local_name);
+        let shadow_assignments = shadow_slot
+            .as_ref()
+            .map(|(shadow_root, prior_name, _)| {
+                self.slot_assignment_snapshots_for_shadow_slot_names(
+                    *shadow_root,
+                    &[prior_name, value],
+                )
+            })
+            .unwrap_or_default();
+        SlotAttributeMutationSnapshots {
+            host_child_assignments,
+            shadow_slot,
+            shadow_assignments,
+        }
+    }
+
+    fn input_type_value_attribute_change(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        value: Option<&str>,
+    ) -> Option<InputValueAttributeChange> {
+        if namespace.is_some_and(|namespace| !namespace.is_empty()) || local_name != "type" {
+            return None;
+        }
+        let element = self.node(handle)?.as_element()?;
+        let current = element.input_type_change_value_attribute(
+            element.input_type(),
+            InputType::from_attribute_value(value),
+        )?;
+        Some(InputValueAttributeChange {
+            previous: element.attribute_ns("", "value").map(Arc::from),
+            current,
+        })
+    }
+
+    fn input_type_value_attribute_change_for_qualified_name(
+        &self,
+        handle: DomHandle,
+        name: &str,
+        value: Option<&str>,
+    ) -> Option<InputValueAttributeChange> {
+        if !name.eq_ignore_ascii_case("type") {
+            return None;
+        }
+        let element = self.node(handle)?.as_element()?;
+        let attribute = element
+            .attributes()
+            .iter()
+            .find(|attribute| attribute.name_matches(name));
+        self.input_type_value_attribute_change(
+            handle,
+            attribute.map(Attribute::namespace),
+            attribute.map_or("type", Attribute::local_name),
+            value,
+        )
+    }
     pub fn explicit_element_references(
         &self,
         handle: DomHandle,
@@ -145,38 +271,9 @@ impl DomHost {
         }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
-        let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
-            self.node(handle)
-                .and_then(Node::as_element)
-                .map(|_| self.slot_name_for_node(handle))
-        } else {
-            None
-        };
-        let prior_shadow_slot_name = self.shadow_tree_slot_name_change(handle, name);
-        let host_child_slot_assignment_snapshots = if name.eq_ignore_ascii_case("slot") {
-            self.node(handle)
-                .and_then(Node::parent_node)
-                .map(|parent| {
-                    let mut slot_names = Vec::new();
-                    if let Some(prior_name) = prior_slot_name.as_deref() {
-                        slot_names.push(prior_name);
-                    }
-                    slot_names.push(value);
-                    self.slot_assignment_snapshots_for_host_child_names(parent, handle, &slot_names)
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let shadow_slot_assignment_snapshots = prior_shadow_slot_name
-            .as_ref()
-            .map(|(shadow_root, prior_name, _prior_assigned_nodes)| {
-                self.slot_assignment_snapshots_for_shadow_slot_names(
-                    *shadow_root,
-                    &[prior_name.as_str(), value],
-                )
-            })
-            .unwrap_or_default();
+        let slot_changes = self.slot_attribute_mutation_snapshots(handle, None, name, value);
+        let input_value_change =
+            self.input_type_value_attribute_change_for_qualified_name(handle, name, Some(value));
         let changed = if let Some(units) = units {
             self.dom
                 .set_attribute_utf16_units(handle, name, value, units)
@@ -232,25 +329,10 @@ impl DomHost {
                 Some(value),
                 records_enabled,
             );
-            if name.eq_ignore_ascii_case("slot") {
-                self.record_host_child_slot_changes_from_snapshots(
-                    &mut effects,
-                    host_child_slot_assignment_snapshots,
-                );
+            if let Some(change) = input_value_change {
+                change.record(&mut effects, handle, records_enabled);
             }
-            if let Some((shadow_root, prior_name, prior_assigned_nodes)) = prior_shadow_slot_name {
-                self.record_slot_assignment_changes_from_snapshots(
-                    &mut effects,
-                    shadow_slot_assignment_snapshots,
-                );
-                self.record_slot_changes_for_shadow_tree_slot_name_change(
-                    &mut effects,
-                    shadow_root,
-                    handle,
-                    &prior_name,
-                    &prior_assigned_nodes,
-                );
-            }
+            slot_changes.record(self, &mut effects, handle);
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         if records_enabled && prior_value.as_deref() == Some(value) {
@@ -354,6 +436,10 @@ impl DomHost {
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
+        let slot_changes =
+            self.slot_attribute_mutation_snapshots(handle, namespace, local_name, value);
+        let input_value_change =
+            self.input_type_value_attribute_change(handle, namespace, local_name, Some(value));
         let changed = if let Some(units) = units {
             self.dom
                 .set_attribute_ns_utf16_units(handle, namespace, prefix, local_name, value, units)
@@ -386,6 +472,21 @@ impl DomHost {
                 Some(value),
                 records_enabled,
             );
+            if let Some(change) = input_value_change {
+                change.record(&mut effects, handle, records_enabled);
+            }
+            slot_changes.record(self, &mut effects, handle);
+            return DomAttributeMutationOutcome::new(effects, prior_value);
+        }
+        if records_enabled && prior_value.as_deref() == Some(value) {
+            let mut effects = DomMutationEffects::default();
+            effects.queue_attribute_mutation_record(
+                handle,
+                local_name,
+                namespace,
+                prior_value.clone(),
+                Some(value),
+            );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
@@ -410,38 +511,7 @@ impl DomHost {
         if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
-        let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
-            self.node(handle)
-                .and_then(Node::as_element)
-                .map(|_| self.slot_name_for_node(handle))
-        } else {
-            None
-        };
-        let prior_shadow_slot_name = self.shadow_tree_slot_name_change(handle, name);
-        let host_child_slot_assignment_snapshots = if name.eq_ignore_ascii_case("slot") {
-            self.node(handle)
-                .and_then(Node::parent_node)
-                .map(|parent| {
-                    let mut slot_names = Vec::new();
-                    if let Some(prior_name) = prior_slot_name.as_deref() {
-                        slot_names.push(prior_name);
-                    }
-                    slot_names.push("");
-                    self.slot_assignment_snapshots_for_host_child_names(parent, handle, &slot_names)
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let shadow_slot_assignment_snapshots = prior_shadow_slot_name
-            .as_ref()
-            .map(|(shadow_root, prior_name, _prior_assigned_nodes)| {
-                self.slot_assignment_snapshots_for_shadow_slot_names(
-                    *shadow_root,
-                    &[prior_name.as_str(), ""],
-                )
-            })
-            .unwrap_or_default();
+        let slot_changes = self.slot_attribute_mutation_snapshots(handle, None, name, "");
         let removed = self.dom.remove_attribute(handle, name);
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, None, name);
@@ -462,25 +532,7 @@ impl DomHost {
                 None,
                 records_enabled,
             );
-            if name.eq_ignore_ascii_case("slot") {
-                self.record_host_child_slot_changes_from_snapshots(
-                    &mut effects,
-                    host_child_slot_assignment_snapshots,
-                );
-            }
-            if let Some((shadow_root, prior_name, prior_assigned_nodes)) = prior_shadow_slot_name {
-                self.record_slot_assignment_changes_from_snapshots(
-                    &mut effects,
-                    shadow_slot_assignment_snapshots,
-                );
-                self.record_slot_changes_for_shadow_tree_slot_name_change(
-                    &mut effects,
-                    shadow_root,
-                    handle,
-                    &prior_name,
-                    &prior_assigned_nodes,
-                );
-            }
+            slot_changes.record(self, &mut effects, handle);
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
@@ -509,6 +561,8 @@ impl DomHost {
         if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
+        let slot_changes =
+            self.slot_attribute_mutation_snapshots(handle, namespace, local_name, "");
         let removed = self.dom.remove_attribute_ns(handle, namespace, local_name);
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
@@ -534,6 +588,7 @@ impl DomHost {
                 None,
                 records_enabled,
             );
+            slot_changes.record(self, &mut effects, handle);
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
