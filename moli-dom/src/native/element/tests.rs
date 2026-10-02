@@ -506,6 +506,70 @@ fn input_type_change_sanitizes_without_dirtying_default_value() {
 }
 
 #[test]
+fn input_values_preserve_utf16_through_dirty_defaults_cloning_and_sanitization() {
+    use crate::native::DomStringValue;
+
+    let high = DomStringValue::from_utf16(&[0xd800]);
+    let low = DomStringValue::from_utf16(&[0xdc00]);
+    let mut input = Element::new_html("input");
+    assert!(input.set_attribute_ns_utf16_units(
+        "value".to_owned(),
+        String::new(),
+        None,
+        high.as_str_lossy().to_owned(),
+        high.utf16_units().into_owned(),
+    ));
+    assert_eq!(input.input_value_dom_string(), high);
+    assert!(!input.input_value_dirty());
+    assert!(input.set_input_value(&low));
+    assert!(input.input_value_dirty());
+    assert!(input.set_attribute(
+        "value".to_owned(),
+        String::new(),
+        None,
+        "\u{fffd}".to_owned()
+    ));
+    assert_eq!(input.input_value_dom_string(), low);
+    let clone = input.clone();
+    assert_eq!(clone.input_value_dom_string(), low);
+    assert!(clone.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "url".to_owned()));
+    assert!(input.set_input_value(DomStringValue::from_utf16(&[
+        0x20, 0xd800, 0x0d, 0x0a, 0x20
+    ])));
+    assert_eq!(input.input_value_dom_string(), high);
+    let default_value = input.attribute_dom_string("value").unwrap();
+    assert!(input.set_input_value_with_dirty(default_value, false));
+    assert_eq!(
+        input.input_value_dom_string(),
+        DomStringValue::from("\u{fffd}")
+    );
+    assert!(!input.input_value_dirty());
+
+    for input_type in ["number", "date", "month", "time", "week", "datetime-local"] {
+        input.set_attribute(
+            "type".to_owned(),
+            String::new(),
+            None,
+            input_type.to_owned(),
+        );
+        input.set_input_value(&high);
+        assert!(input.input_value_dom_string().is_empty(), "{input_type}");
+    }
+    let mut textarea = Element::new_html("textarea");
+    let raw = DomStringValue::from_utf16(&[0xd800, 0x0d, 0x0a, 0xdc00, 0x0d]);
+    assert!(textarea.set_input_value(&raw));
+    assert_eq!(textarea.input_value_dom_string(), raw);
+    assert_eq!(
+        crate::forms::normalize_textarea_dom_string_value(&raw)
+            .utf16_units()
+            .as_ref(),
+        &[0xd800, 0x0a, 0xdc00, 0x0a],
+    );
+}
+
+#[test]
 fn range_input_value_uses_live_min_max_and_step_attributes() {
     let attribute = |name: &str, value: &str| {
         Attribute::new(name.to_owned(), String::new(), None, value.to_owned())

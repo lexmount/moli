@@ -65,6 +65,39 @@ fn copy_live_script_already_started_to_clone<'s>(
         .set_script_already_started(handle, true);
 }
 
+fn copy_native_text_control_value_to_clone<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    cloned: v8::Local<'s, v8::Object>,
+) {
+    let Ok((source_runtime, source_handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, node)
+    else {
+        return;
+    };
+    let Some(source) = unsafe { &*source_runtime }
+        .dom_host()
+        .node(source_handle)
+        .and_then(moli_dom::native::Node::as_element)
+        .filter(|element| element.is_html_input() || element.is_html_textarea())
+        .cloned()
+    else {
+        return;
+    };
+    let Ok((target_runtime, target_handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, cloned)
+    else {
+        return;
+    };
+    if let Some(target) = unsafe { &mut *target_runtime }
+        .dom_host_mut()
+        .node_mut(target_handle)
+        .and_then(|node| node.data_mut().as_element_mut())
+    {
+        let _ = target.copy_text_control_value_from(&source);
+    }
+}
+
 fn clone_element_attributes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -905,6 +938,7 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?
             };
             clone_element_attributes(scope, node, cloned);
+            copy_native_text_control_value_to_clone(scope, node, cloned);
             copy_live_script_already_started_to_clone(scope, node, cloned);
             if deep {
                 if clone_template_content_if_present(

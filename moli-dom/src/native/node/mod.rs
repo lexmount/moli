@@ -555,6 +555,18 @@ impl Node {
             })
     }
 
+    pub fn direct_text_content_dom_string(&self, dom: &NativeDom) -> super::DomStringValue {
+        let mut units = Vec::new();
+        for child in self.child_ids(dom).filter_map(|id| dom.node(id)) {
+            if (child.is_text() || child.is_cdata_section())
+                && let Some(value) = child.character_data_value()
+            {
+                value.append_utf16_units_to(&mut units);
+            }
+        }
+        super::DomStringValue::from_utf16(&units)
+    }
+
     pub fn metadata(&self) -> LiveDomNodeMetadata {
         match self.data() {
             NodeData::Document(_) => LiveDomNodeMetadata {
