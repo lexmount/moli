@@ -7,10 +7,11 @@ use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::native_bridge::{
     document::{
         detached_element_local_name, detached_element_namespace_uri, detached_form_owner_object,
-        detached_parent_node_object, set_detached_text_replacement_value,
+        detached_parent_node_object,
     },
     element::{html_element_getter_receiver, html_element_setter_receiver},
 };
+use crate::util::v8_string_from_utf16_units;
 
 fn option_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -72,15 +73,17 @@ fn set_option_dom_string_attribute_on_receiver<'s>(
     property: &'static str,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = option_setter_receiver(scope, receiver, property) else {
+    if option_setter_receiver(scope, receiver, property).is_none() {
         return;
-    };
-    let Some(value) =
-        form_dom_string_property_value(scope, value, "HTMLOptionElement", property, false)
-    else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
+    }
+    set_dom_string_attribute_property_on_object(
+        scope,
+        receiver,
+        attribute,
+        value,
+        "HTMLOptionElement",
+        property,
+    );
 }
 
 fn detached_option_form_owner_object<'s>(
@@ -119,7 +122,7 @@ pub(in crate::native_bridge) fn option_value_getter_function<'s>(
         return;
     };
     let value = element_option_value(unsafe { &*runtime_ptr }, handle).unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) else {
         rv.set_null();
         return;
     };
@@ -131,16 +134,7 @@ pub(in crate::native_bridge) fn option_value_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = option_setter_receiver(scope, args.this(), "value") else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLOptionElement", "value", false)
-    else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, "value", &value);
+    set_option_dom_string_attribute_on_receiver(scope, args.this(), "value", "value", args.get(0));
     rv.set_undefined();
 }
 
@@ -158,9 +152,9 @@ pub(in crate::native_bridge) fn option_text_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(|element| element.option_text(runtime.dom_host().dom(), handle))
+        .map(|element| element.option_text_dom_string(runtime.dom_host().dom(), handle))
         .unwrap_or_default();
-    if let Some(value) = v8_string(scope, &value) {
+    if let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) {
         rv.set(value.into());
     } else {
         rv.set_empty_string();
@@ -176,15 +170,15 @@ pub(in crate::native_bridge) fn option_text_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLOptionElement", "text", false)
-    else {
+    let Some(value) = form_dom_string_property_utf16_value(
+        scope,
+        args.get(0),
+        "HTMLOptionElement",
+        "text",
+        false,
+    ) else {
         return;
     };
-    if set_detached_text_replacement_value(scope, args.this(), &value).is_some() {
-        rv.set_undefined();
-        return;
-    }
     let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &value);
     rv.set_undefined();
 }
@@ -293,9 +287,9 @@ pub(in crate::native_bridge) fn option_label_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(|element| element.option_label(runtime.dom_host().dom(), handle))
+        .map(|element| element.option_label_dom_string(runtime.dom_host().dom(), handle))
         .unwrap_or_default();
-    if let Some(label) = v8_string(scope, &label) {
+    if let Some(label) = v8_string_from_utf16_units(scope, &label.utf16_units()) {
         rv.set(label.into());
     } else {
         rv.set_empty_string();

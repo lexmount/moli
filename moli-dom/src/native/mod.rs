@@ -3098,6 +3098,150 @@ mod tests {
     }
 
     #[test]
+    fn option_text_preserves_utf16_and_skips_html_image_descendants() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let option = host.create_element("option");
+        let first = host.create_text_node(DomStringValue::from_utf16(&[0x20, 0x09, 0xd83d]));
+        assert!(host.append_child(option, first));
+        let span = host.create_element("span");
+        let cdata =
+            host.create_cdata_section(DomStringValue::from_utf16(&[0xde00, 0xd800, 0x0b, 0, 0x20]));
+        assert!(host.append_child(span, cdata));
+        assert!(host.append_child(option, span));
+        for (namespace, name) in [
+            ("http://www.w3.org/1999/xhtml", "script"),
+            ("http://www.w3.org/2000/svg", "script"),
+            ("http://www.w3.org/1999/xhtml", "img"),
+        ] {
+            let ignored = host.create_element_ns(Some(namespace), name).unwrap();
+            let text = host.create_text_node("ignored");
+            assert!(host.append_child(ignored, text));
+            assert!(host.append_child(option, ignored));
+        }
+        let tail = host.create_text_node(DomStringValue::from_utf16(&[
+            0x0d, 0x0a, 0x0c, 0xdc00, 0xa0, 0x20,
+        ]));
+        assert!(host.append_child(option, tail));
+        let expected =
+            DomStringValue::from_utf16(&[0xd83d, 0xde00, 0xd800, 0x0b, 0, 0x20, 0xdc00, 0xa0]);
+        for (name, namespace, units) in [
+            ("value", "urn:value", [0xd801]),
+            ("label", "urn:label", [0xdc01]),
+        ] {
+            let value = DomStringValue::from_utf16(&units);
+            assert!(
+                host.set_attribute_ns_utf16_units_mutation_outcome(
+                    option,
+                    Some(namespace),
+                    None,
+                    name,
+                    value.as_str_lossy(),
+                    units.to_vec()
+                )
+                .effects()
+                .did_change()
+            );
+        }
+        let element = host.node(option).and_then(Node::as_element).unwrap();
+        assert_eq!(element.option_text_dom_string(host.dom(), option), expected);
+        assert_eq!(
+            element.option_value_dom_string(host.dom(), option),
+            expected
+        );
+        assert_eq!(
+            element.option_label_dom_string(host.dom(), option),
+            expected
+        );
+        assert_eq!(
+            element.option_value(host.dom(), option),
+            expected.as_str_lossy()
+        );
+        assert_eq!(
+            element.attribute_ns_dom_string("urn:value", "value"),
+            Some(DomStringValue::from_utf16(&[0xd801]))
+        );
+        assert_eq!(
+            element.attribute_ns_dom_string("urn:label", "label"),
+            Some(DomStringValue::from_utf16(&[0xdc01]))
+        );
+        for (name, units) in [("value", [0xd800]), ("label", [0xdc00])] {
+            let value = DomStringValue::from_utf16(&units);
+            assert!(
+                host.set_attribute_ns_utf16_units_mutation_outcome(
+                    option,
+                    None,
+                    None,
+                    name,
+                    value.as_str_lossy(),
+                    units.to_vec()
+                )
+                .effects()
+                .did_change()
+            );
+        }
+        let element = host.node(option).and_then(Node::as_element).unwrap();
+        assert_eq!(
+            element.option_value_dom_string(host.dom(), option),
+            DomStringValue::from_utf16(&[0xd800])
+        );
+        assert_eq!(
+            element.option_label_dom_string(host.dom(), option),
+            DomStringValue::from_utf16(&[0xdc00])
+        );
+        assert_eq!(
+            element.attribute_ns_dom_string("urn:value", "value"),
+            Some(DomStringValue::from_utf16(&[0xd801]))
+        );
+        assert_eq!(
+            element.attribute_ns_dom_string("urn:label", "label"),
+            Some(DomStringValue::from_utf16(&[0xdc01]))
+        );
+    }
+
+    #[test]
+    fn select_value_matches_original_utf16_units_and_only_the_first_duplicate() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let select = host.create_element("select");
+        let values = [[0xd800], [0xdc00], [0xfffd], [0xd800]];
+        let mut options = Vec::new();
+        for (index, units) in values.iter().enumerate() {
+            let option = host.create_element("option");
+            let value = DomStringValue::from_utf16(units);
+            if index < 2 {
+                assert!(host.set_attribute_utf16_units(
+                    option,
+                    "value",
+                    value.as_str_lossy(),
+                    units.to_vec()
+                ));
+            } else {
+                let text = host.create_text_node(value);
+                assert!(host.append_child(option, text));
+            }
+            assert!(host.append_child(select, option));
+            options.push(option);
+        }
+        for units in &values[..3] {
+            let value = DomStringValue::from_utf16(units);
+            host.set_select_value(select, value.clone());
+            let expected_index = values
+                .iter()
+                .position(|candidate| candidate == units)
+                .unwrap();
+            assert_eq!(
+                host.select_selected_option_elements(select),
+                vec![options[expected_index]]
+            );
+            assert_eq!(
+                host.option_value_dom_string(options[expected_index]),
+                Some(value)
+            );
+        }
+        host.set_select_value(select, DomStringValue::from_utf16(&[0xd801]));
+        assert!(host.select_selected_option_elements(select).is_empty());
+    }
+
+    #[test]
     fn option_text_streams_ascii_whitespace_across_descendant_boundaries() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let empty_option = host.create_element("option");
