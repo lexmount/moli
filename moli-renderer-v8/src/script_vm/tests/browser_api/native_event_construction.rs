@@ -149,6 +149,28 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
 
 #[tokio::test]
 async fn native_ui_events_use_target_document_window_and_leave_synthetic_views_unchanged() {
+    let mut vm = native_ui_test_vm().await;
+    assert_eq!(
+        vm.eval(include_str!("native_ui_view.js")).unwrap(),
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__uiEventResults)").unwrap()
+    );
+}
+
+#[tokio::test]
+async fn native_activation_events_follow_target_documents_across_realms_and_adoption() {
+    let mut vm = native_ui_test_vm().await;
+    assert_eq!(
+        vm.eval(include_str!("native_activation_realms.js"))
+            .unwrap(),
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__uiEventResults)").unwrap()
+    );
+}
+
+async fn native_ui_test_vm() -> crate::runtime::PageVmTaskExecutorTestHarness {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://native-ui-target-window.test/",
@@ -177,12 +199,42 @@ async fn native_ui_events_use_target_document_window_and_leave_synthetic_views_u
     vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
         .await
         .unwrap();
-    assert_eq!(
-        vm.eval(include_str!("native_ui_view.js")).unwrap(),
-        "true",
-        "{}",
-        vm.eval("JSON.stringify(__uiEventResults)").unwrap()
-    );
+    vm
+}
+
+#[test]
+fn native_click_projects_target_document_events_into_isolated_listener_worlds() {
+    let mut vm = new_storage_html_test_vm("https://native-click-worlds.test/");
+    vm.eval("document.body.innerHTML='<button id=target>click</button>'; 'ready'")
+        .unwrap();
+    let isolated = vm.create_isolated_world("native-click", false).unwrap();
+    let observe = r#"
+        globalThis.nativeClickRows=[];
+        const Ui=UIEvent, Mouse=MouseEvent, target=document.getElementById('target');
+        target.addEventListener('click',event=>nativeClickRows.push({
+            ui:event instanceof Ui,mouse:event instanceof Mouse,view:event.view===window,
+            target:event.target===target,current:event.currentTarget===target,
+            currentEvent:window.event===event,trusted:event.isTrusted===false}));
+        'ready'
+    "#;
+    vm.eval(observe).unwrap();
+    vm.eval_in_isolated_context(isolated, observe).unwrap();
+    vm.eval("target.click(); 'clicked'").unwrap();
+    vm.eval_in_isolated_context(isolated, "target.click(); 'clicked'")
+        .unwrap();
+    for result in [
+        vm.eval("JSON.stringify(nativeClickRows)").unwrap(),
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(nativeClickRows)")
+            .unwrap(),
+    ] {
+        let rows: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 2, "{rows}");
+        for row in rows.as_array().unwrap() {
+            for (field, value) in row.as_object().unwrap() {
+                assert_eq!(value, true, "{field}: {row}");
+            }
+        }
+    }
 }
 
 #[test]
