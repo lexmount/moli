@@ -413,6 +413,7 @@ pub(super) fn devtools_layout_metrics_error(message: impl Into<String>) -> DevTo
 pub(super) fn renderer_screenshot_request(
     command: &DevToolsCaptureScreenshotCommand,
     base_background_color: [u8; 4],
+    vision_deficiency: moli_core::page::RendererVisionDeficiency,
 ) -> Result<RendererCaptureScreenshotRequest, DevToolsError> {
     let format = match command.format.as_deref() {
         None | Some("png") => RendererScreenshotFormat::Png,
@@ -448,6 +449,7 @@ pub(super) fn renderer_screenshot_request(
     Ok(RendererCaptureScreenshotRequest {
         purpose: RendererScreenshotPurpose::Screenshot,
         base_background_color,
+        vision_deficiency,
         format,
         quality: command.quality.unwrap_or(80),
         region,
@@ -476,8 +478,11 @@ pub(super) async fn execute_devtools_capture_screenshot_command(
             return Err(devtools_capture_screenshot_error(&command));
         }
         let owner = page_command_owner(conn, &command.context)?;
-        let request =
-            renderer_screenshot_request(&command, conn.default_background_color_for_owner(&owner))?;
+        let request = renderer_screenshot_request(
+            &command,
+            conn.default_background_color_for_owner(&owner),
+            conn.vision_deficiency_for_owner(&owner),
+        )?;
         let capture_error =
             |message| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
         let page = conn
@@ -566,18 +571,22 @@ pub(super) fn start_devtools_capture_screenshot_command(
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let base_background_color = conn.default_background_color_for_owner(&owner_scope);
+    let vision_deficiency = conn.vision_deficiency_for_owner(&owner_scope);
     let page = match conn.loaded_page_mut_for_protocol_access(session_id) {
         Ok(page) => page,
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let request = match renderer_screenshot_request(&command, base_background_color) {
-        Ok(request) => request,
-        Err(error) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
-        }
-    };
+    let request =
+        match renderer_screenshot_request(&command, base_background_color, vision_deficiency) {
+            Ok(request) => request,
+            Err(error) => {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+                    error,
+                ));
+            }
+        };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
@@ -632,6 +641,7 @@ pub(super) fn start_devtools_print_to_pdf_command(
     };
     let request = RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
+        vision_deficiency: Default::default(),
         purpose: RendererScreenshotPurpose::Print {
             print_background: command.print_background.unwrap_or(false),
         },

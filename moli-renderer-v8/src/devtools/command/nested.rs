@@ -187,6 +187,7 @@ impl RendererPageCommand {
             | Self::SetNavigatorOverrides(..)
             | Self::SetDocumentActivity(..)
             | Self::SetEmulatedMedia(..)
+            | Self::SetInspectorOverlay { .. }
             | Self::SetViewportSurface(..) => OwnerOnly,
 
             #[cfg(test)]

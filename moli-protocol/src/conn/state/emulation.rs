@@ -89,8 +89,10 @@ impl EmulatedGeolocationOverrideState {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmulatedMediaOverrides {
+    /// CSS environment preference, independent of media query feature overrides.
+    pub preferred_text_scale: Option<f32>,
     pub media: Option<String>,
     pub color_scheme: Option<String>,
     pub reduced_motion: Option<String>,
@@ -102,6 +104,7 @@ pub struct EmulatedMediaOverrides {
 impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
     fn from(value: EmulatedMediaOverrides) -> Self {
         Self {
+            preferred_text_scale: value.preferred_text_scale,
             media: value.media,
             color_scheme: value.color_scheme,
             reduced_motion: value.reduced_motion,
@@ -115,6 +118,7 @@ impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
 impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
     fn from(value: &EmulatedMediaOverrides) -> Self {
         Self {
+            preferred_text_scale: value.preferred_text_scale,
             media: value.media.clone(),
             color_scheme: value.color_scheme.clone(),
             reduced_motion: value.reduced_motion.clone(),
@@ -133,6 +137,7 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct EffectiveTargetEmulationState {
     pub(crate) default_background_color: Option<[u8; 4]>,
+    pub(crate) vision_deficiency: moli_core::page::RendererVisionDeficiency,
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: EmulatedMediaOverrides,
@@ -185,6 +190,7 @@ impl EffectiveTargetEmulationState {
         // target-wide side effect while retaining each handler's raw copy.
         self.emulated_media = EmulatedMediaOverrides::default();
         self.default_background_color = None;
+        self.vision_deficiency = Default::default();
         if raw.emulated_device_metrics.is_some() {
             self.emulated_device_metrics = None;
         }

@@ -429,6 +429,10 @@ fn parse_request_header_arg(raw: &str) -> Result<RequestHeaderArg, String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct ServeArgs {
+    /// Allow CDP Browser.getBrowserCommandLine to expose the process arguments.
+    #[arg(long)]
+    pub enable_automation: bool,
+
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 

@@ -104,7 +104,7 @@ pub use moli_renderer_v8::{
     RendererDomFocusOutcome, RendererDomMutationEvent, RendererDomMutationEventBatch,
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererFrameToken,
-    RendererInputDispatchOutcome, RendererInspectorCommandRoute,
+    RendererInputDispatchOutcome, RendererInspectorCommandRoute, RendererInspectorOverlayCommand,
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
     RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
@@ -131,8 +131,8 @@ pub use moli_renderer_v8::{
     RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
     RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererTextSearchMatch, RendererTouchPoint, RendererVisionDeficiency,
+    RendererVisualStateToken, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

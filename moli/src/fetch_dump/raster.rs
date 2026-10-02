@@ -33,6 +33,7 @@ pub(super) async fn render_pdf(page: &mut Page) -> Result<Vec<u8>> {
         page,
         RendererCaptureScreenshotRequest {
             base_background_color: [255; 4],
+            vision_deficiency: Default::default(),
             purpose: RendererScreenshotPurpose::Print {
                 print_background: false,
             },

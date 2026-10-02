@@ -60,6 +60,7 @@ fn prepare(
             let request = renderer_screenshot_request(
                 &command,
                 conn.default_background_color_for_owner(&owner),
+                conn.vision_deficiency_for_owner(&owner),
             )
             .map_err(CommandOutputPlan::from_devtools_error)?;
             Ok(Operation::new(

@@ -306,7 +306,7 @@ pub(crate) use self::page_context_cancel::{
 pub use self::page_screenshot::{
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotRequest,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
-    RendererScreenshotRegion, RendererVisualStateToken,
+    RendererScreenshotRegion, RendererVisionDeficiency, RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
@@ -806,3 +806,6 @@ pub(super) enum PageVmRuntimeExpressionAwaitAdvance {
 
 #[cfg(test)]
 mod tests;
+
+mod page_overlay;
+pub use page_overlay::RendererInspectorOverlayCommand;

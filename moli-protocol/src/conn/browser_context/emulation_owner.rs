@@ -12,6 +12,14 @@ pub(crate) struct TargetEmulationStateUpdate<'a> {
 }
 
 impl TargetEmulationStateUpdate<'_> {
+    pub(crate) fn set_vision_deficiency(
+        &mut self,
+        vision: moli_core::page::RendererVisionDeficiency,
+    ) {
+        self.raw.vision_deficiency = vision;
+        self.effective.vision_deficiency = vision;
+    }
+
     pub(crate) fn set_default_background_color(&mut self, color: Option<[u8; 4]>) {
         self.raw.default_background_color = color;
         self.effective.default_background_color = color;
@@ -33,8 +41,15 @@ impl TargetEmulationStateUpdate<'_> {
         self.effective.geolocation_override = geolocation_override;
     }
 
-    pub(crate) fn set_emulated_media(&mut self, emulated_media: EmulatedMediaOverrides) {
+    pub(crate) fn set_preferred_text_scale(&mut self, scale: Option<f32>) {
+        self.raw.emulated_media.preferred_text_scale = scale;
+        self.effective.emulated_media.preferred_text_scale = scale;
+    }
+
+    pub(crate) fn set_emulated_media(&mut self, mut emulated_media: EmulatedMediaOverrides) {
+        emulated_media.preferred_text_scale = self.raw.emulated_media.preferred_text_scale;
         self.raw.emulated_media = emulated_media.clone();
+        emulated_media.preferred_text_scale = self.effective.emulated_media.preferred_text_scale;
         self.effective.emulated_media = emulated_media;
     }
 
@@ -145,6 +160,20 @@ impl TargetSessionOwnerRef<'_> {
 }
 
 impl CdpConnection {
+    pub(crate) fn vision_deficiency_for_owner(
+        &self,
+        owner: &crate::conn::CommandOwnerScope,
+    ) -> moli_core::page::RendererVisionDeficiency {
+        self.target_session_owner_ref_for_owner(owner)
+            .and_then(|owner| {
+                owner
+                    .browser_context
+                    .page_target(&owner.target_id)
+                    .map(|target| target.effective_emulation_state.vision_deficiency)
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn default_background_color_for_owner(
         &self,
         owner: &crate::conn::CommandOwnerScope,
