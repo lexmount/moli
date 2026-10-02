@@ -20,6 +20,7 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    ImageBitmapRenderingContext;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
