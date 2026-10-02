@@ -352,8 +352,8 @@ pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
         init.rotation_angle,
         init.force,
     )
-    .bind_into(scope, touch)
-    .expect("Touch declaration should bind into constructed object");
+    .initialize(scope, touch)
+    .expect("Touch declaration should initialize constructed object");
 
     rv.set(touch.into());
 }
@@ -370,12 +370,17 @@ pub(in crate::context_bootstrap) fn build_touch_list<'s>(
         .map(|value| value as u32)
         .unwrap_or(0);
 
-    let list = TouchListObjectDeclaration::new(length)
-        .bind(scope)
-        .expect("TouchList declaration should bind");
+    let prototype = exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "TouchList")
+        .expect("TouchList intrinsic prototype should materialize");
+    let list = v8::Object::new(scope);
+    assert_eq!(list.set_prototype(scope, prototype.into()), Some(true));
+    TouchListObjectDeclaration::new(length)
+        .initialize(scope, list)
+        .expect("TouchList declaration should initialize");
     for index in 0..length {
         if let Some(item) = source.and_then(|source| source.get_index(scope, index)) {
-            let _ = list.set_index(scope, index, item);
+            let key = v8_string(scope, &index.to_string()).expect("TouchList index");
+            let _ = list.create_data_property(scope, key.into(), item);
         }
     }
 

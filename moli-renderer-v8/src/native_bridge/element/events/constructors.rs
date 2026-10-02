@@ -1,7 +1,8 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
-use super::{construct_event, construct_intrinsic_event, event_constructor};
+use super::{construct_event, prepare_native_init};
+use crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -32,7 +33,7 @@ pub(crate) fn construct_clipboard_event<'s>(
     let init = ClipboardEventInitDeclaration::new(true, true, true, data)
         .bind(scope)
         .ok()?;
-    construct_intrinsic_event(scope, "ClipboardEvent", event_type, init)
+    construct_event(scope, "ClipboardEvent", event_type, init)
 }
 
 pub(crate) fn construct_editing_input_event<'s>(
@@ -60,7 +61,7 @@ pub(crate) fn construct_editing_input_event<'s>(
     )
     .bind(scope)
     .ok()?;
-    construct_intrinsic_event(scope, "InputEvent", event_type, init)
+    construct_event(scope, "InputEvent", event_type, init)
 }
 
 #[derive(WebApiObject)]
@@ -744,7 +745,7 @@ pub(crate) fn construct_touch_event_with_points<'s>(
     active_points: &[TouchEventPoint<'s>],
     changed_points: &[TouchEventPoint<'s>],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let touch_ctor = event_constructor(scope, "Touch")?;
+    let touch_ctor = ensure_intrinsic_interface_constructor(scope, "Touch").ok()?;
     let touches = construct_touch_array(scope, touch_ctor, active_points)?;
     let target_touch_points = active_points
         .iter()
@@ -790,6 +791,7 @@ fn construct_touch<'s>(
     )
     .bind(scope)
     .ok()?;
+    prepare_native_init(scope, touch_init)?;
     touch_ctor.new_instance(scope, &[touch_init.into()])
 }
 
@@ -846,12 +848,7 @@ pub(crate) fn construct_focus_event<'s>(
     )
     .bind(scope)
     .ok()?;
-    // Native event initialization must not consult author Object.prototype getters.
-    let null = v8::null(scope);
-    if !init.set_prototype(scope, null.into())? {
-        return None;
-    }
-    construct_intrinsic_event(scope, "FocusEvent", event_type, init)
+    construct_event(scope, "FocusEvent", event_type, init)
 }
 
 pub(crate) fn construct_input_event<'s>(
