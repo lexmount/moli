@@ -1591,7 +1591,7 @@ fn input_file_value_setter_rejects_non_empty_values() {
 }
 
 #[test]
-fn input_type_change_preserves_clean_default_value_source() {
+fn input_type_change_preserves_current_value_and_focus() {
     let mut vm = new_storage_test_vm("https://forms-input-type-clean-value.test/");
 
     let result = vm
@@ -1630,7 +1630,10 @@ fn input_type_change_preserves_clean_default_value_source() {
         )
         .expect("input type clean-value transition should evaluate");
 
-    assert_eq!(result, "#000000::#ffffff:true|#000000::#ffffff:true");
+    assert_eq!(
+        result,
+        "#000000:#000000:#ffffff:true|#000000:#000000:#ffffff:true"
+    );
 }
 
 #[test]
