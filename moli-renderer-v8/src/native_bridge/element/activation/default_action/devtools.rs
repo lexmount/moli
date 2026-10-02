@@ -82,7 +82,7 @@ fn perform_file_input_drop_default_action<'s>(
     if let Some(input) = node_wrapper_from_handle(scope, handle) {
         let _ = cache_input_files_from_selected_files(scope, input, &files);
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, false) {
+    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     if let Some(event) = construct_simple_event(scope, "change", true, false, false) {
