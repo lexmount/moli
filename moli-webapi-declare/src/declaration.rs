@@ -12,6 +12,14 @@ use crate::{__private, BindError, WebApiObject, v8};
 pub trait WebApiFunctionTemplateDeclaration {
     const NAME: &'static str;
 
+    /// Statically named attributes installed on this declaration's prototype.
+    ///
+    /// Derived implementations include accessor and native data properties,
+    /// excluding symbol keys and names computed at template installation time.
+    /// Native wrappers can use this metadata without consulting author-visible
+    /// prototype objects. Inherited declarations are listed separately.
+    const PROTOTYPE_ATTRIBUTE_NAMES: &'static [&'static str] = &[];
+
     fn build<'s>(scope: &mut v8::PinScope<'s, '_, ()>) -> v8::Local<'s, v8::FunctionTemplate>;
 
     fn initialize_template<'s>(
