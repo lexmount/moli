@@ -1,8 +1,8 @@
 use super::{JsContextHost, SelectionDirection, SelectionRecordHandle};
 use crate::document_runtime::DomHandle;
 use crate::dom::forms::InputType;
-use crate::dom::native::{Element, Node};
-use crate::native_bridge::element::text_control_value;
+use crate::dom::native::{DomStringValue, Element, Node};
+use crate::native_bridge::element::text_control_value_dom_string;
 use icu_segmenter::GraphemeClusterSegmenter;
 
 mod mutations;
@@ -47,33 +47,31 @@ pub(super) struct SelectedTextControl {
     selection: TextControlSelection,
     // This is the text underlying the Document's selection. Cached control
     // offsets may change independently while the control is not focused.
-    value: String,
+    value: DomStringValue,
 }
 
 impl SelectedTextControl {
-    fn text(&self, password: bool) -> String {
-        let mut result = String::new();
+    fn text(&self, password: bool) -> DomStringValue {
+        let units = self.value.utf16_units();
+        let mut result = Vec::new();
         let mut previous = 0;
-        let mut offset = 0;
         for boundary in GraphemeClusterSegmenter::new()
-            .segment_str(&self.value)
+            .segment_utf16(&units)
             .skip(1)
         {
-            if offset >= self.selection.end {
+            if previous as u32 >= self.selection.end {
                 break;
             }
-            let cluster = &self.value[previous..boundary];
-            if offset >= self.selection.start {
+            if previous as u32 >= self.selection.start {
                 if password {
-                    result.push('\u{2022}');
+                    result.push(0x2022);
                 } else {
-                    result.push_str(cluster);
+                    result.extend_from_slice(&units[previous..boundary]);
                 }
             }
-            offset += cluster.encode_utf16().count() as u32;
             previous = boundary;
         }
-        result
+        DomStringValue::from_utf16(&result)
     }
 }
 
@@ -164,11 +162,11 @@ impl JsContextHost {
             .get_mut(&document)
             && selected.control == control
         {
-            selected.selection = selection.clamp(selected.value.encode_utf16().count() as u32);
+            selected.selection = selection.clamp(selected.value.utf16_units().len() as u32);
             return;
         }
-        let value = text_control_value(self, control);
-        let selection = selection.clamp(value.encode_utf16().count() as u32);
+        let value = text_control_value_dom_string(self, control);
+        let selection = selection.clamp(value.utf16_units().len() as u32);
         self.selection_record_registry.text_controls.insert(
             document,
             SelectedTextControl {
@@ -242,7 +240,7 @@ impl JsContextHost {
     pub(crate) fn selection_record_text_control_text(
         &self,
         handle: SelectionRecordHandle,
-    ) -> Option<String> {
+    ) -> Option<DomStringValue> {
         let record = self.selection_record_registry.records.get(&handle)?;
         if !record.has_range() {
             return None;
@@ -253,7 +251,7 @@ impl JsContextHost {
     pub(crate) fn document_text_control_selection_text(
         &self,
         document: DomHandle,
-    ) -> Option<String> {
+    ) -> Option<DomStringValue> {
         let selected = self.selected_text_control(document)?;
         let element = self.dom_host().node(selected.control)?.as_element()?;
         let password = element.is_html_input() && element.input_type() == InputType::Password;
@@ -278,7 +276,7 @@ impl JsContextHost {
                 .remove(&document);
             return;
         }
-        let value = text_control_value(self, control);
+        let value = text_control_value_dom_string(self, control);
         let selected = self
             .selection_record_registry
             .text_controls

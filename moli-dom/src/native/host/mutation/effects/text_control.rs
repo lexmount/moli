@@ -23,8 +23,8 @@ impl DomMutationEffects {
     pub(in crate::native::host::mutation) fn record_textarea_value_change(
         &mut self,
         target: DomHandle,
-        before: Option<&str>,
-        after: Option<&str>,
+        before: Option<&crate::native::DomStringValue>,
+        after: Option<&crate::native::DomStringValue>,
     ) {
         if let (Some(before), Some(after)) = (before, after)
             && before != after
@@ -32,7 +32,7 @@ impl DomMutationEffects {
             self.changed = true;
             self.textarea_values.push(DomTextareaValueChange {
                 target,
-                length: after.encode_utf16().count() as u32,
+                length: after.utf16_units().len() as u32,
             });
         }
     }

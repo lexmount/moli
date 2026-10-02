@@ -141,9 +141,12 @@ fn selection_to_string_callback<'s>(
         return;
     };
     let value = selection_text_control_text(scope, args.this())
-        .or_else(|| range_selection_string_contents(scope, range))
+        .or_else(|| {
+            range_selection_string_contents(scope, range)
+                .map(moli_dom::native::DomStringValue::from)
+        })
         .unwrap_or_default();
-    match v8_string(scope, &value) {
+    match crate::util::v8_string_from_utf16_units(scope, &value.utf16_units()) {
         Some(value) => rv.set(value.into()),
         None => rv.set(v8str(scope, "").into()),
     }

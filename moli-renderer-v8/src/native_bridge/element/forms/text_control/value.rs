@@ -1,23 +1,34 @@
 use super::*;
-use crate::native_bridge::document::detached_native_handle_for_runtime;
-use crate::util::utf16_len;
+use crate::dom::forms::normalize_textarea_dom_string_value;
+use crate::dom::native::DomStringValue;
+use crate::util::v8_string_from_utf16_units;
 pub(in crate::native_bridge) use moli_dom::forms::normalize_textarea_api_value;
 
 pub(crate) fn text_control_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+    text_control_value_dom_string(runtime, handle)
+        .as_str_lossy()
+        .to_owned()
+}
+
+pub(crate) fn text_control_value_dom_string(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> DomStringValue {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return String::new();
+        return DomStringValue::default();
     };
     if element.is_html_input() {
-        return element.input_value();
+        return element.input_value_dom_string();
     }
     if element.is_html_textarea() {
         if element.input_value_dirty() {
-            return normalize_textarea_api_value(&element.input_value());
+            return normalize_textarea_dom_string_value(&element.input_value_dom_string());
         }
-        let default_value = node_direct_text_content(runtime, handle).unwrap_or_default();
-        return normalize_textarea_api_value(&default_value);
+        let default_value =
+            node_direct_text_content_dom_string(runtime, handle).unwrap_or_default();
+        return normalize_textarea_dom_string_value(&default_value);
     }
-    String::new()
+    DomStringValue::default()
 }
 
 pub(super) fn clamp_text_control_offset(
@@ -25,7 +36,9 @@ pub(super) fn clamp_text_control_offset(
     handle: DomHandle,
     offset: u32,
 ) -> u32 {
-    let len = utf16_len(&text_control_value(runtime, handle)) as u32;
+    let len = text_control_value_dom_string(runtime, handle)
+        .utf16_units()
+        .len() as u32;
     offset.min(len)
 }
 
@@ -77,35 +90,12 @@ pub(in crate::native_bridge) fn textarea_value_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let value = text_control_value(unsafe { &*runtime_ptr }, handle);
-    let value =
-        detached_textarea_value_attribute_default(scope, runtime_ptr, args.this(), handle, &value)
-            .unwrap_or(value);
-    let Some(value) = v8_string(scope, &value) else {
+    let value = text_control_value_dom_string(unsafe { &*runtime_ptr }, handle);
+    let Some(value) = v8_string_from_utf16_units(scope, &value.utf16_units()) else {
         rv.set_null();
         return;
     };
     rv.set(value.into());
-}
-
-fn detached_textarea_value_attribute_default<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    receiver: v8::Local<'s, v8::Object>,
-    handle: DomHandle,
-    current_value: &str,
-) -> Option<String> {
-    if !current_value.is_empty()
-        || detached_native_handle_for_runtime(scope, runtime_ptr, receiver).is_none()
-    {
-        return None;
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if !element.is_html_textarea() || element.input_value_dirty() {
-        return None;
-    }
-    element.attribute_ns("", "value").map(str::to_owned)
 }
 
 pub(in crate::native_bridge) fn textarea_value_setter_function<'s>(
@@ -117,18 +107,21 @@ pub(in crate::native_bridge) fn textarea_value_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(next_value) =
-        form_dom_string_property_value(scope, args.get(0), "HTMLTextAreaElement", "value", true)
-    else {
+    let Some(next_value) = form_dom_string_property_utf16_value(
+        scope,
+        args.get(0),
+        "HTMLTextAreaElement",
+        "value",
+        true,
+    ) else {
         return;
     };
-    let next_value = normalize_textarea_api_value(&next_value);
-    let previous_value = text_control_value(unsafe { &*runtime_ptr }, handle);
+    let previous_value = text_control_value_dom_string(unsafe { &*runtime_ptr }, handle);
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_input_value(handle, &next_value);
-    let current_value = text_control_value(runtime, handle);
+    let current_value = text_control_value_dom_string(runtime, handle);
     if current_value != previous_value {
-        let end = utf16_len(&current_value) as u32;
+        let end = current_value.utf16_units().len() as u32;
         let selection_changed = runtime.set_text_control_selection(handle, end, end, "none");
         restore_focused_text_control_selection(scope, runtime_ptr, handle);
         if selection_changed || unsafe { &*runtime_ptr }.active_element_handle() == Some(handle) {
