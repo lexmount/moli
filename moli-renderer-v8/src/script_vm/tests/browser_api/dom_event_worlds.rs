@@ -139,6 +139,78 @@ async fn dom_event_worlds_project_child_window_and_document_in_both_directions()
     );
 }
 
+#[tokio::test]
+async fn dom_event_worlds_foreign_window_targets_keep_the_listener_world_and_original_identity() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://event-worlds.test/", &loader);
+    vm.eval(
+        r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        const frame = document.body.appendChild(document.createElement('iframe'));
+        frame.srcdoc = '<p>Foreign Window target</p>';
+        void frame.contentWindow;
+        'ready'
+    "#,
+    )
+    .unwrap();
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader
+        )
+        .await
+        .unwrap()
+    );
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    let child = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .unwrap()
+        .context_id;
+    let isolated = vm
+        .create_isolated_world("foreign-window-listener", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+        globalThis.target = document.querySelector('iframe').contentWindow;
+        const original = new UIEvent('foreign-probe', {view: window});
+        const facts = [];
+        target.addEventListener('foreign-probe', function(event) {
+            facts.push(event instanceof UIEvent, event === original, this === target,
+                event.target === target, event.currentTarget === target,
+                window.event === event, event.view === window);
+        }, {once: true});
+        target.dispatchEvent(original);
+        target.addEventListener('child-probe', function(event) {
+            facts.push(event instanceof UIEvent, this === target, event.target === target,
+                event.currentTarget === target, window.event === event, event.view === target);
+        }, {once: true});
+        globalThis.foreignFacts = facts;
+        JSON.stringify(facts)
+    "#
+        )
+        .unwrap(),
+        "[true,true,true,true,true,true,true]"
+    );
+    vm.eval_in_child_default_context(
+        child,
+        "window.dispatchEvent(new UIEvent('child-probe', {view: window})); 'dispatched'",
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(foreignFacts)")
+            .unwrap(),
+        "[true,true,true,true,true,true,true,true,true,true,true,true,true]"
+    );
+}
+
 #[test]
 fn dom_event_worlds_share_propagation_once_passive_and_handler_cancellation() {
     let mut vm = new_storage_html_test_vm("https://event-worlds.test/");
