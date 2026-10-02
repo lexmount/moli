@@ -675,55 +675,71 @@ fn node_base_uri_getter_function<'s>(
     rv.set(value.into());
 }
 
-fn node_parent_node_getter_function<'s>(
+enum NodeTreeRelation {
+    ParentNode,
+    ParentElement,
+    FirstChild,
+    LastChild,
+    PreviousSibling,
+    NextSibling,
+}
+
+fn node_tree_relation_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
+    relation: NodeTreeRelation,
 ) {
+    let (property, detached_slot) = match relation {
+        NodeTreeRelation::ParentNode => ("parentNode", "__detachedParentNode"),
+        NodeTreeRelation::ParentElement => ("parentElement", "__detachedParentElement"),
+        NodeTreeRelation::FirstChild => ("firstChild", "__detachedFirstChild"),
+        NodeTreeRelation::LastChild => ("lastChild", "__detachedLastChild"),
+        NodeTreeRelation::PreviousSibling => ("previousSibling", "__detachedPreviousSibling"),
+        NodeTreeRelation::NextSibling => ("nextSibling", "__detachedNextSibling"),
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedParentNode")
-        {
+        if let Some(value) = detached_bridge_value_for_this(scope, args.this(), detached_slot) {
             rv.set(value);
             return;
         }
-        throw_incompatible_getter_receiver(scope, "Node", "parentNode");
+        throw_incompatible_getter_receiver(scope, "Node", property);
         rv.set_null();
         return;
     };
-    let parent = unsafe { &*runtime_ptr }
+    let runtime = unsafe { &*runtime_ptr };
+    let related = runtime
         .dom_host()
         .node(handle)
-        .and_then(Node::parent_node);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
+        .and_then(|node| match relation {
+            NodeTreeRelation::ParentNode => node.parent_node(),
+            NodeTreeRelation::ParentElement => node
+                .parent_node()
+                .filter(|parent| node_is_element(runtime, *parent)),
+            NodeTreeRelation::FirstChild => node.first_child(),
+            NodeTreeRelation::LastChild => node.last_child(),
+            NodeTreeRelation::PreviousSibling => node.prev_sibling(),
+            NodeTreeRelation::NextSibling => node.next_sibling(),
+        });
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), related);
+}
+
+fn node_parent_node_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::ParentNode);
 }
 
 fn node_parent_element_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedParentElement")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "parentElement");
-        rv.set_null();
-        return;
-    };
-    let parent = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::parent_node)
-        .filter(|parent| node_is_element(unsafe { &*runtime_ptr }, *parent));
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::ParentElement);
 }
 
 fn node_child_nodes_getter_function<'s>(
@@ -764,101 +780,33 @@ fn node_child_nodes_getter_function<'s>(
 fn node_first_child_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedFirstChild")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "firstChild");
-        rv.set_null();
-        return;
-    };
-    let child = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::first_child);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::FirstChild);
 }
 
 fn node_last_child_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedLastChild")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "lastChild");
-        rv.set_null();
-        return;
-    };
-    let child = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::last_child);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::LastChild);
 }
 
 fn node_previous_sibling_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedPreviousSibling")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "previousSibling");
-        rv.set_null();
-        return;
-    };
-    let sibling = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::prev_sibling);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::PreviousSibling);
 }
 
 fn node_next_sibling_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        if let Some(value) =
-            detached_bridge_value_for_this(scope, args.this(), "__detachedNextSibling")
-        {
-            rv.set(value);
-            return;
-        }
-        throw_incompatible_getter_receiver(scope, "Node", "nextSibling");
-        rv.set_null();
-        return;
-    };
-    let sibling = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::next_sibling);
-    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
+    node_tree_relation_getter(scope, args, rv, NodeTreeRelation::NextSibling);
 }
 
 pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
