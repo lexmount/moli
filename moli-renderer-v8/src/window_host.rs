@@ -65,15 +65,6 @@ pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessag
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct WindowMessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    origin: v8::Local<'scope, v8::String>,
-    ports: v8::Local<'scope, v8::Array>,
-    source: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct WindowDocumentEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,
@@ -1650,14 +1641,6 @@ fn dispatch_window_message_in_current_target_context(
         return WindowMessageDispatchOutcome::Consumed;
     }
 
-    let global = scope.get_current_context().global(scope);
-    let Some(message_ctor) = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        host.retire_transferred_window_message_ports(&message);
-        return WindowMessageDispatchOutcome::Consumed;
-    };
     if window_message_requires_messageerror(&message, target_origin.as_deref()) {
         if moli_trace::window_message_trace_enabled() {
             tracing::info!(
@@ -1674,7 +1657,6 @@ fn dispatch_window_message_in_current_target_context(
             scope,
             host_ptr,
             host,
-            message_ctor,
             target_endpoint,
             source_endpoint,
             "messageerror",
@@ -1722,7 +1704,6 @@ fn dispatch_window_message_in_current_target_context(
             scope,
             host_ptr,
             host,
-            message_ctor,
             target_endpoint,
             source_endpoint,
             "messageerror",
@@ -1748,7 +1729,6 @@ fn dispatch_window_message_in_current_target_context(
         scope,
         host_ptr,
         host,
-        message_ctor,
         target_endpoint,
         source_endpoint,
         "message",
@@ -1807,7 +1787,6 @@ fn dispatch_window_message_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     host: &mut JsContextHost,
-    message_ctor: v8::Local<'s, v8::Function>,
     target: PendingWindowMessageEndpoint,
     source_endpoint: PendingWindowMessageEndpoint,
     event_type: &str,
@@ -1815,9 +1794,6 @@ fn dispatch_window_message_event<'s>(
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
-    let Some(origin) = v8_string(scope, origin) else {
-        return;
-    };
     let source: v8::Local<'_, v8::Value> = match source_endpoint {
         PendingWindowMessageEndpoint::TopWindow => {
             let source_scope = OwnerDispatchScope::Top;
@@ -1836,14 +1812,16 @@ fn dispatch_window_message_event<'s>(
             .map(Into::into)
             .unwrap_or_else(|| v8::null(scope).into()),
     };
-    let init = WindowMessageEventInitDeclaration::new(data, origin, ports, source)
-        .bind(scope)
-        .expect("Window MessageEvent init declaration should bind");
     let event_name = event_type;
-    let Some(event_type) = v8_string(scope, event_name) else {
-        return;
-    };
-    let Some(event) = message_ctor.new_instance(scope, &[event_type.into(), init.into()]) else {
+    let Some(event) = crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
+        data,
+        origin,
+        &[],
+        source,
+        ports,
+    ) else {
         return;
     };
     mark_event_trusted(scope, event);

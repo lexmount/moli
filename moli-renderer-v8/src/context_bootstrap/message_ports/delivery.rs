@@ -3,18 +3,6 @@ use crate::context_bootstrap::dispatch_simple_event_target_event_collecting_erro
 use crate::context_bootstrap::events::mark_event_trusted;
 use crate::types::MessagePortId;
 use crate::worker::worker_message_port_wrapper;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct MessagePortMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    ports: v8::Local<'scope, v8::Array>,
-}
 
 enum MessagePortDispatchTarget<'s> {
     Window {
@@ -395,15 +383,15 @@ fn new_message_event<'s>(
     source: v8::Local<'s, v8::Value>,
     ports: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let message_ctor = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init = MessagePortMessageEventInitDeclaration::new(data, source, ports)
-        .bind(scope)
-        .expect("MessagePort MessageEvent init declaration should bind");
-    let event_type = v8_string(scope, event_type)?;
-    message_ctor.new_instance(scope, &[event_type.into(), init.into()])
+    crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
+        data,
+        "",
+        &[],
+        source,
+        ports,
+    )
 }
 
 fn new_simple_event<'s>(

@@ -214,16 +214,6 @@ struct CapturedMouseEventInitDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct MessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    origin: v8::Local<'scope, v8::String>,
-    last_event_id: v8::Local<'scope, v8::String>,
-    source: v8::Local<'scope, v8::Value>,
-    ports: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct InputEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     input_type: v8::Local<'scope, v8::String>,
@@ -710,27 +700,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_captured_mous
     true
 }
 
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_message_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let data = init
-        .and_then(|object| crate::webidl::property(scope, object, "data"))
-        .unwrap_or_else(|| v8::null(scope).into());
-    let origin = init_string_property(scope, init, "origin", "");
-    let origin_value = v8_string(scope, &origin).unwrap();
-    let last_event_id = init_string_property(scope, init, "lastEventId", "");
-    let last_event_id_value = v8_string(scope, &last_event_id).unwrap();
-    let source =
-        init_value_property(scope, init, "source").unwrap_or_else(|| v8::null(scope).into());
-    let ports = init_value_property(scope, init, "ports");
-    let ports = frozen_message_event_ports(scope, ports);
-    MessageEventInitDeclaration::new(data, origin_value, last_event_id_value, source, ports)
-        .initialize(scope, event)
-        .expect("MessageEvent init declaration should initialize");
-}
-
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -846,30 +815,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<
         .initialize(scope, event);
     set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, source);
     true
-}
-
-fn frozen_message_event_ports<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Value> {
-    let Some(value) = value.filter(|value| value.is_array()) else {
-        let ports = v8::Array::new(scope, 0);
-        let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-        return ports.into();
-    };
-    let Some(source) = v8::Local::<v8::Array>::try_from(value).ok() else {
-        let ports = v8::Array::new(scope, 0);
-        let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-        return ports.into();
-    };
-    let ports = v8::Array::new(scope, source.length() as i32);
-    for index in 0..source.length() {
-        if let Some(port) = source.get_index(scope, index) {
-            let _ = ports.set_index(scope, index, port);
-        }
-    }
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-    ports.into()
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'s>(

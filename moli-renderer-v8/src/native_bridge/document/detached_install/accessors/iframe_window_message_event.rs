@@ -1,15 +1,5 @@
-use crate::util::{v8_string, v8str};
-use moli_webapi_declare::WebApiObject;
+use crate::util::v8str;
 use url::Url;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DetachedWindowMessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    source: v8::Local<'scope, v8::Value>,
-    origin: v8::Local<'scope, v8::String>,
-    ports: v8::Local<'scope, v8::Array>,
-}
 
 pub(super) fn detached_window_origin(
     scope: &mut v8::PinScope<'_, '_>,
@@ -35,14 +25,13 @@ pub(super) fn detached_window_message_event<'s>(
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let message_event_constructor = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let origin = v8_string(scope, origin)?;
-    let init = DetachedWindowMessageEventInitDeclaration::new(data, source, origin, ports)
-        .bind(scope)
-        .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    message_event_constructor.new_instance(scope, &[event_type.into(), init.into()])
+    crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
+        data,
+        origin,
+        &[],
+        source,
+        ports,
+    )
 }

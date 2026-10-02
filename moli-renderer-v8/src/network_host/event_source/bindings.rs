@@ -110,14 +110,6 @@ struct EventSourceAccessorsDeclaration {
     onerror: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct EventSourceMessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::String>,
-    origin: v8::Local<'scope, v8::String>,
-    last_event_id: v8::Local<'scope, v8::String>,
-}
-
 #[derive(Clone, Copy)]
 struct EventSourceEventHandler {
     event_type: &'static str,
@@ -330,13 +322,6 @@ pub(crate) fn dispatch_event_source_message<'s>(
     event_source: v8::Local<'s, v8::Object>,
     message: &EventSourceMessage,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(constructor) = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
     let origin = event_source_response_url(scope, event_source)
         .parse::<url::Url>()
         .ok()
@@ -345,21 +330,18 @@ pub(crate) fn dispatch_event_source_message<'s>(
     let Some(data) = v8_string(scope, &message.data) else {
         return;
     };
-    let Some(origin) = v8_string(scope, &origin) else {
-        return;
-    };
-    let Some(last_event_id) = v8_string(scope, &message.event_id) else {
-        return;
-    };
-    let Ok(init) =
-        EventSourceMessageEventInitDeclaration::new(data, origin, last_event_id).bind(scope)
-    else {
-        return;
-    };
-    let Some(event_type) = v8_string(scope, &message.event_name) else {
-        return;
-    };
-    let Some(event) = constructor.new_instance(scope, &[event_type.into(), init.into()]) else {
+    let last_event_id = message.event_id.encode_utf16().collect::<Vec<_>>();
+    let source = v8::null(scope).into();
+    let ports = v8::Array::new(scope, 0);
+    let Some(event) = crate::context_bootstrap::construct_original_message_event(
+        scope,
+        &message.event_name,
+        data.into(),
+        &origin,
+        &last_event_id,
+        source,
+        ports,
+    ) else {
         return;
     };
     mark_event_trusted(scope, event);

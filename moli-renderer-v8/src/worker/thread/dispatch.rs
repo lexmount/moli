@@ -86,17 +86,6 @@ const MAX_REPORTED_WORKER_PROMISE_REJECTIONS: usize = 1024;
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct WorkerMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    ports: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
 struct WorkerErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -741,36 +730,17 @@ fn new_worker_message_event<'s>(
     source: Option<v8::Local<'s, v8::Value>>,
     ports: v8::Local<'s, v8::Array>,
 ) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(message_ctor) = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let init = WorkerMessageEventInitDeclaration::new(
-            data,
-            source.unwrap_or_else(|| v8::null(scope).into()),
-            ports,
-        )
-        .bind(scope)
-        .expect("worker MessageEvent init declaration should bind");
-        if let Some(event_type) = v8::String::new(scope, event_type)
-            && let Some(event) = message_ctor.new_instance(scope, &[event_type.into(), init.into()])
-        {
-            return event;
-        }
-    }
-
-    let event = new_worker_event_object(scope, event_type);
-    let _ = WorkerMessageEventInitDeclaration::new(
+    let source = source.unwrap_or_else(|| v8::null(scope).into());
+    crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
         data,
-        source.unwrap_or_else(|| v8::null(scope).into()),
+        "",
+        &[],
+        source,
         ports,
     )
-    .initialize(scope, event);
-    web_api_interfaces::MessageEvent::DESCRIPTOR
-        .initialize(scope, event)
-        .expect("worker fallback MessageEvent identity should initialize");
-    event
+    .expect("worker MessageEvent should initialize")
 }
 
 fn new_worker_error_event<'s>(
