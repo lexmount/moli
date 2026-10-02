@@ -1475,11 +1475,18 @@ fn get_computed_style_pseudo_element_argument<'s>(
     moli_selector::get_computed_style_pseudo_element(&value.to_rust_string_lossy(scope))
 }
 
-fn mouse_event_offset_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
+fn mouse_event_offset_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
     horizontal: bool,
 ) -> Option<f64> {
+    if crate::context_bootstrap::event_internal_bool_flag(
+        scope,
+        event,
+        crate::context_bootstrap::EVENT_MOUSE_POSITIONLESS_SLOT,
+    ) {
+        return Some(0.0);
+    }
     let client_x = crate::context_bootstrap::event_attribute(scope, event, "clientX")
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);

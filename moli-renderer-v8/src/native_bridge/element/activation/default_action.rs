@@ -754,6 +754,7 @@ fn dispatch_click_event(
     buttons: i32,
     modifiers: u8,
     trusted: bool,
+    pointer: Option<&crate::runtime::RendererPointerEventProperties>,
 ) -> Option<NodePublicEventDispatchOutcome> {
     let event = construct_click_event_with_detail_and_modifiers(
         scope,
@@ -765,6 +766,7 @@ fn dispatch_click_event(
         button,
         buttons,
         modifiers,
+        pointer,
     )?;
     crate::context_bootstrap::set_event_trusted(scope, event, trusted);
     Some(dispatch_public_event(scope, runtime_ptr, handle, event))
@@ -788,6 +790,7 @@ fn click_handle_internal(
     click_detail: i32,
     modifiers: u8,
     user_initiated: bool,
+    pointer: Option<&crate::runtime::RendererPointerEventProperties>,
     focus_behavior: ClickFocusBehavior,
 ) -> RendererInputDispatchOutcome {
     let runtime = unsafe { &*runtime_ptr };
@@ -842,6 +845,7 @@ fn click_handle_internal(
             buttons,
             modifiers,
             user_initiated,
+            pointer,
         ) && !outcome.allows_default()
         {
             let runtime = unsafe { &mut *runtime_ptr };
@@ -901,6 +905,7 @@ fn click_handle_internal(
             buttons,
             modifiers,
             user_initiated,
+            pointer,
         ) && !outcome.allows_default()
         {
             let runtime = unsafe { &mut *runtime_ptr };
@@ -953,6 +958,7 @@ fn click_handle_internal(
         buttons,
         modifiers,
         user_initiated,
+        pointer,
     ) {
         let _listener_threw = outcome.had_exception();
         if !outcome.allows_default() {
@@ -991,6 +997,7 @@ fn click_handle_internal(
                             0,
                             modifiers,
                             user_initiated,
+                            None,
                             // Label activation focuses its associated control,
                             // even when the initiating script click does not.
                             ClickFocusBehavior::Apply,
@@ -1147,6 +1154,7 @@ pub(crate) fn activate_handle_via_click(
     y: f64,
     button: i32,
     buttons: i32,
+    pointer: &crate::runtime::RendererPointerEventProperties,
 ) -> RendererInputDispatchOutcome {
     click_handle_internal(
         scope,
@@ -1159,6 +1167,7 @@ pub(crate) fn activate_handle_via_click(
         0,
         0,
         true,
+        Some(pointer),
         ClickFocusBehavior::Apply,
     )
 }
@@ -1185,6 +1194,7 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
         click_detail,
         modifiers,
         true,
+        None,
         ClickFocusBehavior::Apply,
     )
 }
@@ -1208,6 +1218,7 @@ pub(crate) fn activate_default_submit_button_via_keyboard(
         0,
         modifiers,
         true,
+        None,
         ClickFocusBehavior::Preserve,
     )
 }
@@ -1222,6 +1233,7 @@ pub(crate) fn activate_handle_after_pointer_release(
     buttons: i32,
     click_detail: i32,
     modifiers: u8,
+    pointer: &crate::runtime::RendererPointerEventProperties,
 ) -> RendererInputDispatchOutcome {
     // Ordinary pointer focus belongs to uncanceled mouse-down default action.
     // Reapplying it here would undo a canceled pointerdown/mousedown. Label
@@ -1237,6 +1249,7 @@ pub(crate) fn activate_handle_after_pointer_release(
         click_detail,
         modifiers,
         true,
+        Some(pointer),
         ClickFocusBehavior::Preserve,
     )
 }
@@ -1261,6 +1274,7 @@ pub(crate) fn activate_handle_via_synthetic_click(
         0,
         0,
         false,
+        None,
         ClickFocusBehavior::Preserve,
     )
 }
@@ -1501,6 +1515,7 @@ fn perform_click_default_action(
             0,
             modifiers,
             user_initiated,
+            None,
             ClickFocusBehavior::Apply,
         );
         return None;
