@@ -23,7 +23,7 @@ interfaces! {
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
-    AnalyserNode;
+    AnalyserNode: AudioNode;
     Animation;
     AnimationEffect;
     AnimationEvent: Event;
@@ -33,15 +33,16 @@ interfaces! {
     Audio;
     AudioBuffer;
     AudioContext: BaseAudioContext;
-    AudioDestinationNode;
+    AudioDestinationNode: AudioNode;
+    AudioNode: EventTarget;
     AudioParam;
     Worklet;
     AudioWorklet: Worklet;
-    AudioWorkletNode;
+    AudioWorkletNode: AudioNode;
     BaseAudioContext: EventTarget;
     BatteryManager;
     BeforeUnloadEvent: Event;
-    BiquadFilterNode;
+    BiquadFilterNode: AudioNode;
     Blob;
     BlobEvent: Event;
     BroadcastChannel: EventTarget;
@@ -138,7 +139,7 @@ interfaces! {
     DocumentTimeline: AnimationTimeline;
     DocumentType: Node;
     DragEvent: MouseEvent;
-    DynamicsCompressorNode;
+    DynamicsCompressorNode: AudioNode;
     Element: Node;
     ElementInternals;
     ErrorEvent: Event;
@@ -334,7 +335,7 @@ interfaces! {
     OffscreenCanvas;
     OffscreenCanvasRenderingContext2D;
     Option;
-    OscillatorNode;
+    OscillatorNode: AudioNode;
     PageTransitionEvent: Event;
     Path2D;
     PaymentResponse: EventTarget;

@@ -2486,7 +2486,7 @@ fn web_audio_declared_objects_keep_brands_and_hidden_properties() {
 }
 
 #[test]
-fn web_audio_declared_fixed_own_methods_keep_descriptors() {
+fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
     let mut vm = new_storage_test_vm("https://audio-declared-own-methods.test/");
 
     let result = vm
@@ -2520,9 +2520,11 @@ fn web_audio_declared_fixed_own_methods_keep_descriptors() {
     analyserKeys: Object.keys(analyser).join(","),
     paramKeys: Object.keys(osc.frequency).join(","),
     ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(ctx, name)),
-    osc: ["connect", "disconnect", "start"].map(name => describe(osc, name)),
-    comp: ["connect", "disconnect"].map(name => describe(comp, name)),
-    analyser: ["connect", "disconnect"].map(name => describe(analyser, name)),
+    graph: ["connect", "disconnect"].map(name => describe(AudioNode.prototype, name)),
+    shared: [ctx.destination, osc, comp, analyser].every(node =>
+      ["connect", "disconnect"].every(name =>
+        !Object.hasOwn(node, name) && node[name] === AudioNode.prototype[name])),
+    oscStart: describe(osc, "start"),
     param: describe(osc.frequency, "setValueAtTime")
   });
 })()
@@ -2532,7 +2534,7 @@ fn web_audio_declared_fixed_own_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"osc":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0","start:false:true:true:function:start:1"],"comp":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0"],"analyser":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0"],"param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
+        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
     );
 }
 
