@@ -1,7 +1,10 @@
 use super::*;
 
-pub(super) fn element_option_value(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
-    runtime.dom_host().dom().option_value(handle)
+pub(super) fn element_option_value(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Option<moli_dom::native::DomStringValue> {
+    runtime.dom_host().option_value_dom_string(handle)
 }
 
 pub(super) fn select_option_handles(runtime: &PageScriptHost, handle: DomHandle) -> Vec<DomHandle> {
