@@ -322,11 +322,13 @@ pub(crate) use events::{
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use events::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use events::{
-    construct_drag_event_with_related_target, construct_drop_input_event,
+    construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
+    construct_mouse_event_with_related_target_for_target,
     construct_wheel_event_for_target,
 };
 #[cfg(feature = "devtools")]
