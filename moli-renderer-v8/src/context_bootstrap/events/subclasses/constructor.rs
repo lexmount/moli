@@ -1,4 +1,4 @@
-use super::super::message;
+use super::super::{message, ui};
 use super::*;
 use crate::web_api_interfaces;
 
@@ -86,14 +86,6 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
-    let message_event_init = if kind == EventSubclassKind::MessageEvent {
-        let Some(init) = message::parse_message_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
     let error_init = if kind == EventSubclassKind::ErrorEvent {
         let Some(init) = error::parse_error_event_init(scope, &args) else {
             return;
@@ -136,25 +128,27 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let ui_event_init = if kind == EventSubclassKind::UiEvent {
+        let Some(init) = ui::parse_ui_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let composition_event_init = if kind == EventSubclassKind::CompositionEvent {
+        let Some(init) = ui::parse_composition_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
         .or_else(|| error_init.as_ref().map(error::ErrorEventInit::event_flags))
-        .or_else(|| {
-            storage_event_init
-                .as_ref()
-                .map(data::StorageEventInitMembers::event_flags)
-        })
-        .or_else(|| {
-            message_event_init
-                .as_ref()
-                .map(message::MessageEventInit::event_flags)
-        })
-        .or_else(|| {
-            clipboard_event_init
-                .as_ref()
-                .map(data::ClipboardEventInitMembers::event_flags)
-        })
+        .or_else(|| clipboard_event_init.as_ref().map(data::ClipboardEventInitMembers::event_flags))
         .or_else(|| {
             clipboard_change_event_init
                 .as_ref()
@@ -180,6 +174,13 @@ fn event_subclass_constructor_callback<'s>(
                 .as_ref()
                 .map(keyboard::KeyboardEventInit::event_flags)
         })
+        .or_else(|| ui_event_init.as_ref().map(ui::UiEventInit::event_flags))
+        .or_else(|| {
+            composition_event_init
+                .as_ref()
+                .map(ui::CompositionEventInit::event_flags)
+        })
+        .or_else(|| storage_event_init.as_ref().map(data::StorageEventInitMembers::event_flags))
         .unwrap_or_else(|| read_event_init(scope, &args));
 
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
@@ -192,9 +193,9 @@ fn event_subclass_constructor_callback<'s>(
 
     match kind {
         EventSubclassKind::UiEvent => {
-            if !basic::initialize_ui_event(scope, event, init) {
-                return;
-            }
+            ui_event_init
+                .expect("UIEvent init should be parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::FocusEvent => {
             if !basic::initialize_focus_event(scope, event, init) {
@@ -207,9 +208,11 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::CompositionEvent => {
-            if !basic::initialize_composition_event(scope, event, init) {
-                return;
-            }
+            ui::initialize_composition_event(
+                scope,
+                event,
+                composition_event_init.expect("CompositionEvent init should be parsed"),
+            );
         }
         EventSubclassKind::CustomEvent => basic::initialize_custom_event(scope, event, init),
         EventSubclassKind::MouseEvent => {
