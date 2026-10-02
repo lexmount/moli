@@ -34,6 +34,7 @@ pub(in crate::context_bootstrap) use value::{
 };
 
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
+pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
@@ -349,7 +350,6 @@ pub(in crate::context_bootstrap) use wrappers::{
 };
 
 pub(in crate::context_bootstrap) use modifiers::event_get_modifier_state_callback;
-pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 pub(crate) use subclasses::construct_original_error_event;
 
