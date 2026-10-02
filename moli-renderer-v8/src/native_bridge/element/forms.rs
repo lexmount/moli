@@ -248,6 +248,7 @@ pub(in crate::native_bridge) use self::text_control::{
 };
 pub(crate) use self::validation::control_has_datalist_ancestor;
 pub(crate) use self::validation::v8_pattern_is_usable;
+pub(crate) use self::validation::control_has_datalist_ancestor;
 pub(in crate::native_bridge) use self::validation::{
     control_check_validity_callback, control_matches_validity_pseudo,
     control_report_validity_callback, control_set_custom_validity_callback,
