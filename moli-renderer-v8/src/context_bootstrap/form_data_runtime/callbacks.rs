@@ -153,12 +153,9 @@ pub(super) fn form_data_constructor_callback<'s>(
                 return;
             }
         }
-        let Some(next_entries) = construct_form_data_entries_for_form(
-            scope,
-            form_runtime_ptr,
-            form_handle,
-            submitter,
-        ) else {
+        let Some(next_entries) =
+            construct_form_data_entries_for_form(scope, form_runtime_ptr, form_handle, submitter)
+        else {
             return;
         };
         entries = next_entries;

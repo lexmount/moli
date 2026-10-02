@@ -154,7 +154,7 @@ pub(super) fn file_object_with_metadata<'s>(
     name: &str,
     last_modified: f64,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let _ = global_constructor_prototype(scope, "File")?;
+    let _ = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
     let last_modified = normalize_file_last_modified(last_modified, unix_epoch_millis());
     FileMetadataDeclaration::new(name.to_owned(), last_modified)
         .bind(scope)
