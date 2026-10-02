@@ -12,6 +12,14 @@ pub(crate) use moli_css_parse::{
     canonical_style_property_name, escape_top_level_semicolons, serialize_style_property_name,
 };
 
+pub(crate) fn parse_css_style_shell_keyword(value: &str) -> Option<&'static str> {
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+    let keyword = style::properties::CSSWideKeyword::parse(&mut parser).ok()?;
+    parser.expect_exhausted().ok()?;
+    Some(keyword.to_str())
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.item")]
 pub(crate) struct CssStyleDeclarationItemArgs {

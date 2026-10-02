@@ -42,6 +42,10 @@ pub(in crate::context_bootstrap::css_runtime::supports) fn css_supports_property
         return false;
     }
 
+    if crate::detached_css_style::css_style_declaration_is_shell_property(&canonical_property) {
+        return crate::css_style::parse_css_style_shell_keyword(value_trimmed).is_some();
+    }
+
     if super::stylo_supports_property_value(&canonical_property, value_trimmed) {
         return true;
     }
