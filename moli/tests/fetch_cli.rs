@@ -1120,6 +1120,75 @@ fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<
 }
 
 #[test]
+fn cli_dump_screenshot_handles_deeply_nested_dom() -> Result<()> {
+    // Layout and paint descend once per DOM depth. Deep nesting previously
+    // overflowed the render thread stack at ~1272 levels; this stays well above
+    // the reported threshold. The fix supports Chrome-parity nesting (5000+
+    // levels); the test depth is kept lower because deep layout is currently
+    // superlinear (see the style-resolution follow-up) and a 5000-level pass
+    // would dominate CI time.
+    const NESTING_LEVELS: usize = 1500;
+    let html = format!(
+        "<!doctype html><style>html,body{{margin:0}}</style>{}x{}",
+        "<div>".repeat(NESTING_LEVELS),
+        "</div>".repeat(NESTING_LEVELS)
+    );
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+    let output = run_fetch_cli_with_dump_and_args(&url, "screenshot", &["--layout"])?;
+    assert!(
+        output.status.success(),
+        "moli fetch failed on {NESTING_LEVELS}-level nesting: stdout_bytes={}\nstderr={}",
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(output.stdout.ends_with(b"IEND\xaeB`\x82"));
+    Ok(())
+}
+
+#[test]
+fn cli_dump_full_screenshot_handles_deeply_nested_dom() -> Result<()> {
+    const NESTING_LEVELS: usize = 1500;
+    let html = format!(
+        "<!doctype html><style>html,body{{margin:0}}</style>{}x{}",
+        "<div>".repeat(NESTING_LEVELS),
+        "</div>".repeat(NESTING_LEVELS)
+    );
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+    let output = run_fetch_cli_with_dump_and_args(&url, "screenshot_full", &["--layout"])?;
+    assert!(
+        output.status.success(),
+        "moli fetch failed on {NESTING_LEVELS}-level full screenshot: stdout_bytes={}\nstderr={}",
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(output.stdout.ends_with(b"IEND\xaeB`\x82"));
+    Ok(())
+}
+
+#[test]
+fn cli_dump_pdf_handles_deeply_nested_dom() -> Result<()> {
+    const NESTING_LEVELS: usize = 1500;
+    let html = format!(
+        "<!doctype html><style>html,body{{margin:0}}</style>{}x{}",
+        "<div>".repeat(NESTING_LEVELS),
+        "</div>".repeat(NESTING_LEVELS)
+    );
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+    let output = run_fetch_cli_with_dump_and_args(&url, "pdf", &["--layout"])?;
+    assert!(
+        output.status.success(),
+        "moli fetch failed on {NESTING_LEVELS}-level pdf: stdout_bytes={}\nstderr={}",
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.starts_with(b"%PDF-1.7\n"));
+    assert!(output.stdout.ends_with(b"%%EOF\n"));
+    Ok(())
+}
+
+#[test]
 fn cli_dump_pdf_writes_pdf_bytes() -> Result<()> {
     let output = run_fetch_cli_with_dump_and_args("about:blank", "pdf", &["--layout"])?;
     assert!(

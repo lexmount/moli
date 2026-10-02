@@ -19,7 +19,15 @@ use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 // Override that spawned-thread default so this thread stays aligned with the
 // larger pthread / Chromium renderer stack budget and preserves enough native
 // headroom for fresh V8 entry points.
-const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+//
+// The layout and paint passes run synchronously on this thread. Both descend
+// once per DOM depth, and the numeric-layout recursion lives inside the vendored
+// Taffy algorithms, so its per-depth stack cost cannot be eliminated from Moli.
+// A deeply nested DOM therefore consumes a large native stack: rendering
+// Chromium-parity nesting (5000+ levels) at roughly 6.7 KiB of stack per level
+// needs on the order of 34 MiB. Budget 64 MiB so the reported 1272-level
+// overflow and the 5000-level target both retain comfortable headroom.
+const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) enum RenderRuntimeEnvelope {
     Command {

@@ -1904,6 +1904,12 @@ where
     normalizer.finish()
 }
 
+/// Flattens one box subtree into the inline normalizer.
+///
+/// Structural inline boxes open a level, recurse into their children, then close
+/// it. The walk is driven by an explicit stack so nested inline trees do not
+/// consume one call frame per level. The `ancestors` chain is maintained across
+/// `Enter`/`Exit` steps exactly as the recursive form pushed and popped it.
 fn collect_box<N>(
     world: &mut LayoutWorld<N>,
     owner: LayoutBoxId,
@@ -1913,93 +1919,120 @@ fn collect_box<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let kind = world.boxes[id.index()].kind;
-    let display = world.boxes[id.index()].style.display();
-    if kind == LayoutBoxKind::PseudoMarker && world.boxes[id.index()].outside_list_marker {
-        return;
-    }
-    world.boxes[id.index()].inline_context_owner = Some(owner);
-
-    if kind == LayoutBoxKind::Text {
-        world.boxes[id.index()].inline_flattened = true;
-        let text = world.boxes[id.index()].text.clone().unwrap_or_default();
-        normalizer.push_text(
-            id,
-            &text,
-            world.boxes[id.index()].style.white_space_collapse(),
-            world.boxes[id.index()].style.text_transform(),
-            ancestors,
-        );
-        return;
-    }
-    if kind == LayoutBoxKind::LineBreak {
-        world.boxes[id.index()].inline_flattened = true;
-        normalizer.hard_break(id, ancestors);
-        return;
+    enum Step {
+        Enter(LayoutBoxId),
+        Exit {
+            id: LayoutBoxId,
+            vertical_align: InlineVerticalAlign,
+            unicode_bidi: InlineUnicodeBidi,
+        },
     }
 
-    if world.boxes[id.index()].style.is_floated() {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::Float,
-            InlineBoxKind::CustomOutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
+    let mut stack = vec![Step::Enter(id)];
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Enter(id) => {
+                let kind = world.boxes[id.index()].kind;
+                let display = world.boxes[id.index()].style.display();
+                if kind == LayoutBoxKind::PseudoMarker
+                    && world.boxes[id.index()].outside_list_marker
+                {
+                    continue;
+                }
+                world.boxes[id.index()].inline_context_owner = Some(owner);
 
-    let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
-    if out_of_flow {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::OutOfFlow,
-            InlineBoxKind::OutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
+                if kind == LayoutBoxKind::Text {
+                    world.boxes[id.index()].inline_flattened = true;
+                    let text = world.boxes[id.index()].text.clone().unwrap_or_default();
+                    normalizer.push_text(
+                        id,
+                        &text,
+                        world.boxes[id.index()].style.white_space_collapse(),
+                        world.boxes[id.index()].style.text_transform(),
+                        ancestors,
+                    );
+                    continue;
+                }
+                if kind == LayoutBoxKind::LineBreak {
+                    world.boxes[id.index()].inline_flattened = true;
+                    normalizer.hard_break(id, ancestors);
+                    continue;
+                }
 
-    let structural_inline = display.is_inline_flow()
-        && !matches!(
-            kind,
-            LayoutBoxKind::Replaced
-                | LayoutBoxKind::FormControl
-                | LayoutBoxKind::InlineTableWrapper
-        );
-    if !structural_inline {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::Atomic,
-            InlineBoxKind::InFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
+                if world.boxes[id.index()].style.is_floated() {
+                    let vertical_align = world.boxes[id.index()].style.vertical_align();
+                    normalizer.push_object(
+                        id,
+                        InlineObjectRole::Float,
+                        InlineBoxKind::CustomOutOfFlow,
+                        ancestors,
+                        vertical_align,
+                    );
+                    continue;
+                }
 
-    world.boxes[id.index()].inline_flattened = true;
-    let vertical_align = world.boxes[id.index()].style.vertical_align();
-    normalizer.open_inline(
-        id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        world.boxes[id.index()].style.direction(),
-        ancestors,
-        vertical_align,
-    );
-    ancestors.push(id);
-    let children = world.boxes[id.index()].children.clone();
-    for child in children {
-        collect_box(world, owner, child, ancestors, normalizer);
+                if world.boxes[id.index()].style.is_out_of_flow() {
+                    let vertical_align = world.boxes[id.index()].style.vertical_align();
+                    normalizer.push_object(
+                        id,
+                        InlineObjectRole::OutOfFlow,
+                        InlineBoxKind::OutOfFlow,
+                        ancestors,
+                        vertical_align,
+                    );
+                    continue;
+                }
+
+                let structural_inline = display.is_inline_flow()
+                    && !matches!(
+                        kind,
+                        LayoutBoxKind::Replaced
+                            | LayoutBoxKind::FormControl
+                            | LayoutBoxKind::InlineTableWrapper
+                    );
+                if !structural_inline {
+                    let vertical_align = world.boxes[id.index()].style.vertical_align();
+                    normalizer.push_object(
+                        id,
+                        InlineObjectRole::Atomic,
+                        InlineBoxKind::InFlow,
+                        ancestors,
+                        vertical_align,
+                    );
+                    continue;
+                }
+
+                world.boxes[id.index()].inline_flattened = true;
+                let vertical_align = world.boxes[id.index()].style.vertical_align();
+                let unicode_bidi = world.boxes[id.index()].style.unicode_bidi();
+                normalizer.open_inline(
+                    id,
+                    unicode_bidi,
+                    world.boxes[id.index()].style.direction(),
+                    ancestors,
+                    vertical_align,
+                );
+                ancestors.push(id);
+                stack.push(Step::Exit {
+                    id,
+                    vertical_align,
+                    unicode_bidi,
+                });
+                let children = world.boxes[id.index()].children.clone();
+                for child in children.into_iter().rev() {
+                    stack.push(Step::Enter(child));
+                }
+            }
+            Step::Exit {
+                id,
+                vertical_align,
+                unicode_bidi,
+            } => {
+                ancestors.pop();
+                normalizer.close_inline(id, unicode_bidi, ancestors, vertical_align);
+            }
+        }
     }
-    ancestors.pop();
-    normalizer.close_inline(
-        id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        ancestors,
-        vertical_align,
-    );
 }
 
 struct PendingWhitespace {

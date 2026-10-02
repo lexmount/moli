@@ -81,6 +81,109 @@ impl AnonymousInlineRunRole {
     }
 }
 
+/// One element on the explicit box-construction stack.
+///
+/// Box construction is a post-order tree walk: a node's children must be fully
+/// built before `attach_children` normalizes and installs them. Recursing once
+/// per DOM level overflowed the render thread stack on deeply nested documents,
+/// so the walk is driven by an explicit stack that carries this per-element
+/// state instead of native call frames.
+struct ElementFrame<S: Copy> {
+    source_node: S,
+    style: ResolvedLayoutStyle,
+    /// Principal box, or `None` for `display: contents` where children lift.
+    principal: Option<LayoutBoxId>,
+    /// Pseudo styles captured before the box was allocated.
+    before: Option<ResolvedLayoutPseudoStyle>,
+    after: Option<ResolvedLayoutPseudoStyle>,
+    /// Whether an inline principal box may split around block-level children.
+    allow_inline_split: bool,
+    /// Ordered flat-child source nodes still awaiting construction.
+    child_sources: Vec<S>,
+    /// Index of the next child source to visit.
+    next_child: usize,
+    /// Child boxes produced so far, in construction order.
+    children: Vec<LayoutBoxId>,
+    /// True once the leading `marker`/`before` pseudos have been emitted.
+    leading_pseudo_done: bool,
+    /// True once the trailing `after` pseudo has been emitted.
+    trailing_pseudo_done: bool,
+    /// Whether this element emits pseudos at all (leaf elements do not).
+    emit_pseudos: bool,
+    /// Leaf elements return their principal box without child normalization.
+    is_leaf: bool,
+}
+
+impl<S: Copy> ElementFrame<S> {
+    fn leaf(source_node: S, style: ResolvedLayoutStyle, principal: LayoutBoxId) -> Self {
+        Self {
+            source_node,
+            style,
+            principal: Some(principal),
+            before: None,
+            after: None,
+            allow_inline_split: false,
+            child_sources: Vec::new(),
+            next_child: 0,
+            children: Vec::new(),
+            leading_pseudo_done: true,
+            trailing_pseudo_done: true,
+            emit_pseudos: false,
+            is_leaf: true,
+        }
+    }
+
+    fn principal(
+        source_node: S,
+        style: ResolvedLayoutStyle,
+        principal: LayoutBoxId,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
+        child_sources: Vec<S>,
+        allow_inline_split: bool,
+    ) -> Self {
+        Self {
+            source_node,
+            style,
+            principal: Some(principal),
+            before,
+            after,
+            allow_inline_split,
+            child_sources,
+            next_child: 0,
+            children: Vec::new(),
+            leading_pseudo_done: false,
+            trailing_pseudo_done: false,
+            emit_pseudos: true,
+            is_leaf: false,
+        }
+    }
+
+    fn contents(
+        source_node: S,
+        style: ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
+        child_sources: Vec<S>,
+    ) -> Self {
+        Self {
+            source_node,
+            style,
+            principal: None,
+            before,
+            after,
+            allow_inline_split: false,
+            child_sources,
+            next_child: 0,
+            children: Vec::new(),
+            leading_pseudo_done: false,
+            trailing_pseudo_done: false,
+            emit_pseudos: true,
+            is_leaf: false,
+        }
+    }
+}
+
 impl<'a, S, R> BoxBuilder<'a, S, R>
 where
     S: LayoutSource,
@@ -205,12 +308,20 @@ where
                 source_label: self.source.label(source_node),
             });
         }
-        let result = (|| {
-            let children =
-                self.build_element_child_stream(world, source_node, style, before, after)?;
-            let _ = self.attach_children(world, root_box, source_node, style, children, false)?;
-            Ok(())
-        })();
+        // Drive the root's children through the same explicit stack used for
+        // every element. The root already has a principal box, and root-level
+        // inline splitting is disabled, matching the previous direct path.
+        let child_sources = self.checked_flat_children(source_node)?;
+        let frame = ElementFrame::principal(
+            source_node,
+            style.clone(),
+            root_box,
+            before,
+            after,
+            child_sources,
+            false,
+        );
+        let result = self.build_element_subtree(world, frame).map(|_| ());
         self.active_sources.remove(&source_node);
         result
     }
@@ -248,7 +359,7 @@ where
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => self.build_element(world, source_node, inherited_style),
         }
     }
 
@@ -256,18 +367,38 @@ where
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let Some(frame) = self.begin_element(world, source_node, inherited_style, true)? else {
+            return Ok(Vec::new());
+        };
+        self.build_element_subtree(world, frame)
+    }
+
+    /// Computes everything about one element that does not depend on its
+    /// already-built children, returning the stack frame that carries it.
+    ///
+    /// `None` means the element produces no box (`display: none`, hidden input,
+    /// or a missing style), so none of its descendants are constructed.
+    fn begin_element(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+        allow_inline_split: bool,
+    ) -> Result<Option<ElementFrame<S::NodeId>>, LayoutError> {
         if !self.active_sources.insert(source_node) {
             return Err(LayoutError::SourceCycle {
                 source_label: self.source.label(source_node),
             });
         }
 
-        let result = (|| {
+        let result = (|| -> Result<Option<ElementFrame<S::NodeId>>, LayoutError> {
+            let _ = inherited_style;
             let semantics =
                 self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
             let Some(styles) = self.styles.element_styles(source_node)? else {
-                return Ok(Vec::new());
+                return Ok(None);
             };
             let (mut style, before, after) = styles.into_parts();
             if self.viewport_body_candidate.is_none()
@@ -297,16 +428,20 @@ where
                 || (style.display() == LayoutDisplay::Contents
                     && semantics.display_contents_is_none())
             {
-                return Ok(Vec::new());
+                return Ok(None);
             }
 
             match style.display() {
-                LayoutDisplay::None => Ok(Vec::new()),
+                LayoutDisplay::None => Ok(None),
                 LayoutDisplay::Contents => {
-                    let children =
-                        self.build_element_child_stream(world, source_node, &style, before, after)?;
-                    world.map_display_contents_source(source_node, &children);
-                    Ok(children)
+                    let child_sources = self.checked_flat_children(source_node)?;
+                    Ok(Some(ElementFrame::contents(
+                        source_node,
+                        style,
+                        before,
+                        after,
+                        child_sources,
+                    )))
                 }
                 _ => {
                     let kind = principal_kind(&semantics, &style);
@@ -322,18 +457,155 @@ where
                     world.map_source(source_node, id);
 
                     if is_leaf_element(&semantics, kind, &style) {
-                        return Ok(vec![id]);
+                        return Ok(Some(ElementFrame::leaf(source_node, style, id)));
                     }
 
-                    let children =
-                        self.build_element_child_stream(world, source_node, &style, before, after)?;
-                    self.attach_children(world, id, source_node, &style, children, true)
+                    let child_sources = self.checked_flat_children(source_node)?;
+                    Ok(Some(ElementFrame::principal(
+                        source_node,
+                        style,
+                        id,
+                        before,
+                        after,
+                        child_sources,
+                        allow_inline_split,
+                    )))
                 }
             }
         })();
 
-        self.active_sources.remove(&source_node);
-        result
+        match result {
+            Ok(Some(frame)) => Ok(Some(frame)),
+            other => {
+                // No frame will be finished, so release the cycle guard now.
+                self.active_sources.remove(&source_node);
+                other
+            }
+        }
+    }
+
+    /// Runs the explicit-stack post-order walk for one element subtree.
+    fn build_element_subtree(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        root_frame: ElementFrame<S::NodeId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let mut stack: Vec<ElementFrame<S::NodeId>> = vec![root_frame];
+        loop {
+            // Emit leading `marker`/`before` pseudos once per element, before
+            // its children, matching `build_element_child_stream` order.
+            let emit_leading = {
+                let frame = stack.last().expect("element frame");
+                frame.emit_pseudos && !frame.leading_pseudo_done
+            };
+            if emit_leading {
+                let (source_node, is_list_item) = {
+                    let frame = stack.last_mut().expect("element frame");
+                    frame.leading_pseudo_done = true;
+                    (frame.source_node, frame.style.display().is_list_item())
+                };
+                let marker = if is_list_item {
+                    let marker_style = self.styles.marker_style(source_node)?;
+                    self.build_pseudo(world, source_node, LayoutPseudo::Marker, marker_style)?
+                } else {
+                    Vec::new()
+                };
+                let before = stack.last_mut().expect("element frame").before.take();
+                let before_boxes =
+                    self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?;
+                let frame = stack.last_mut().expect("element frame");
+                frame.children.extend(marker);
+                frame.children.extend(before_boxes);
+            }
+
+            let next_child = {
+                let frame = stack.last_mut().expect("element frame");
+                if frame.next_child < frame.child_sources.len() {
+                    let child = frame.child_sources[frame.next_child];
+                    frame.next_child += 1;
+                    Some(child)
+                } else {
+                    None
+                }
+            };
+
+            match next_child {
+                Some(child_source) => match self.source.node_kind(child_source) {
+                    LayoutSourceKind::Element => {
+                        let inherited = stack.last().expect("element frame").style.clone();
+                        if let Some(child_frame) =
+                            self.begin_element(world, child_source, &inherited, true)?
+                        {
+                            stack.push(child_frame);
+                        }
+                    }
+                    _ => {
+                        let inherited = stack.last().expect("element frame").style.clone();
+                        let ids = self.build_source_node(world, child_source, &inherited)?;
+                        stack
+                            .last_mut()
+                            .expect("element frame")
+                            .children
+                            .extend(ids);
+                    }
+                },
+                None => {
+                    // Emit trailing `after` pseudo, then finalize this frame.
+                    let emit_trailing = {
+                        let frame = stack.last().expect("element frame");
+                        frame.emit_pseudos && !frame.trailing_pseudo_done
+                    };
+                    if emit_trailing {
+                        let source_node = {
+                            let frame = stack.last_mut().expect("element frame");
+                            frame.trailing_pseudo_done = true;
+                            frame.source_node
+                        };
+                        let after = stack.last_mut().expect("element frame").after.take();
+                        let after_boxes =
+                            self.build_pseudo(world, source_node, LayoutPseudo::After, after)?;
+                        stack
+                            .last_mut()
+                            .expect("element frame")
+                            .children
+                            .extend(after_boxes);
+                    }
+
+                    let frame = stack.pop().expect("element frame");
+                    let ids = self.finish_element(world, frame)?;
+                    match stack.last_mut() {
+                        Some(parent) => parent.children.extend(ids),
+                        None => return Ok(ids),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Completes one element from its built children: normalization/attachment
+    /// for a principal box, or child lifting for `display: contents`.
+    fn finish_element(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        frame: ElementFrame<S::NodeId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let ids = if frame.is_leaf {
+            frame.principal.into_iter().collect()
+        } else if let Some(box_id) = frame.principal {
+            self.attach_children(
+                world,
+                box_id,
+                frame.source_node,
+                &frame.style,
+                frame.children,
+                frame.allow_inline_split,
+            )?
+        } else {
+            world.map_display_contents_source(frame.source_node, &frame.children);
+            frame.children
+        };
+        self.active_sources.remove(&frame.source_node);
+        Ok(ids)
     }
 
     /// Converts the construction-only body candidate into the final viewport
@@ -418,27 +690,6 @@ where
             scroll_offset.y * effective_zoom,
         );
         layout_box
-    }
-
-    fn build_element_child_stream(
-        &mut self,
-        world: &mut LayoutWorld<S::NodeId>,
-        source_node: S::NodeId,
-        style: &ResolvedLayoutStyle,
-        before: Option<ResolvedLayoutPseudoStyle>,
-        after: Option<ResolvedLayoutPseudoStyle>,
-    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let mut children = Vec::new();
-        if style.display().is_list_item() {
-            let marker = self.styles.marker_style(source_node)?;
-            children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Marker, marker)?);
-        }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
-        for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
-        }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
-        Ok(children)
     }
 
     fn build_pseudo(
