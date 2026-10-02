@@ -45,6 +45,21 @@ pub enum InputType {
     Week,
 }
 
+/// The behavior of the `value` IDL attribute for an input type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputValueMode {
+    Value,
+    Default,
+    DefaultOn,
+    Filename,
+}
+
+impl InputValueMode {
+    pub const fn reflects_content_attribute(self) -> bool {
+        matches!(self, Self::Default | Self::DefaultOn)
+    }
+}
+
 impl InputType {
     /// Applies the enumerated-attribute keyword matching and invalid-value
     /// default used by `HTMLInputElement.type`.
@@ -52,6 +67,17 @@ impl InputType {
         value
             .and_then(|value| value.parse().ok())
             .unwrap_or_default()
+    }
+
+    pub const fn value_mode(self) -> InputValueMode {
+        match self {
+            Self::Hidden | Self::Submit | Self::Image | Self::Reset | Self::Button => {
+                InputValueMode::Default
+            }
+            Self::Checkbox | Self::Radio => InputValueMode::DefaultOn,
+            Self::File => InputValueMode::Filename,
+            _ => InputValueMode::Value,
+        }
     }
 
     pub const fn is_checkable(self) -> bool {
