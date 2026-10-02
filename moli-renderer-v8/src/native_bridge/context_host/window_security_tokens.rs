@@ -8,6 +8,9 @@ const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-
 
 impl JsContextHost {
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
+        if self.document_sandbox_policy().forces_opaque_origin {
+            return None;
+        }
         let origin = moli_url::origin_ascii_serialization(self.document_url());
         if self.document_domain_override.is_some() {
             return None;
@@ -33,6 +36,9 @@ impl JsContextHost {
     }
 
     pub(crate) fn main_isolated_world_security_token_key(&self) -> Option<String> {
+        if self.document_sandbox_policy().forces_opaque_origin {
+            return None;
+        }
         window_isolated_world_security_token_key(
             moli_url::origin_ascii_serialization(self.document_url()),
             self.document_domain_override.is_some(),
@@ -240,6 +246,9 @@ impl JsContextHost {
     }
 
     fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
+        if self.document_sandbox_policy().forces_opaque_origin {
+            return None;
+        }
         let serialized_origin = moli_url::origin_ascii_serialization(self.document_url());
         if serialized_origin == "null" {
             return Some(WindowAccessOrigin::opaque(

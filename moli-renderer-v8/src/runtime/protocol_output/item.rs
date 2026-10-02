@@ -83,6 +83,7 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    WebMcp(moli_page_types::RendererWebMcpObservation),
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),

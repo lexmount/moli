@@ -698,7 +698,7 @@ impl JsContextHost {
         let parent_url = self.document_url_for_handle(parent_document);
         let parent_policy = self
             .document_permissions_policy_for_document_handle(parent_document)
-            .unwrap_or_else(|| self.document_policy_container().permissions_policy);
+            .unwrap_or_else(|| self.document_policy_container().permissions_policy.clone());
         let child_url = Self::child_browsing_context_bootstrap_url(bootstrap)
             .unwrap_or_else(|| parent_url.clone());
         let is_iframe = self.dom_host().is_html_element_named(handle, "iframe");

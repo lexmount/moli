@@ -13,10 +13,12 @@ pub(crate) use default_action::{
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
-pub(in crate::native_bridge) use targets::named_iframe_target_handle_for_navigation;
 pub(crate) use targets::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
+};
+pub(in crate::native_bridge) use targets::{
+    form_navigation_target_document, named_iframe_target_handle_for_navigation,
 };
 pub(in crate::native_bridge::element) use targets::{
     queue_deferred_named_iframe_target_navigation_from_document,

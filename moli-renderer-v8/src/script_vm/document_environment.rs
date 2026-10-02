@@ -11,8 +11,38 @@ impl ScriptVm {
         &mut self,
         policy: crate::document_runtime::DocumentPolicyContainer,
     ) {
+        let was_opaque = self
+            .document_runtime
+            .document_sandbox_policy()
+            .forces_opaque_origin;
         self.document_runtime
             .set_main_navigation_policy_container(policy);
+        if was_opaque
+            == self
+                .document_runtime
+                .document_sandbox_policy()
+                .forces_opaque_origin
+        {
+            return;
+        }
+        let (origin, token) = {
+            let host = self._context_host.borrow();
+            let origin = if host.document_sandbox_policy().forces_opaque_origin {
+                "null".into()
+            } else {
+                moli_url::origin_ascii_serialization(host.document_url())
+            };
+            (origin, host.main_default_world_security_token_key())
+        };
+        let _ = self.with_default_context_scope(|scope, _| {
+            let context = scope.get_current_context();
+            crate::native_bridge::set_window_security_token(scope, context, token.as_deref());
+            crate::context_bootstrap::set_window_origin_runtime_state(
+                scope,
+                context.global(scope),
+                &origin,
+            )
+        });
     }
 
     pub(crate) fn document_content_security_policies(&self) -> Vec<String> {
@@ -65,6 +95,11 @@ impl ScriptVm {
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
         let detached = self.page_inspector.detach_session(inspector_session_id);
+        self._context_host
+            .borrow_mut()
+            .native_bridge_mut()
+            .web_mcp
+            .disable_session(&devtools_session);
         let retired_worlds = self.retire_isolated_worlds_for_devtools_session(&devtools_session);
         detached || retired_worlds != 0
     }

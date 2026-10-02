@@ -2111,6 +2111,19 @@ impl JsContextHost {
         changed
     }
 
+    pub(crate) fn set_web_mcp_activity(&mut self, handle: DomHandle, form: bool, submit: bool) {
+        let old_state = self.retained_current_element_state(handle);
+        if unsafe {
+            DocumentRuntime::set_web_mcp_activity(&mut *self.runtime, handle, form, submit)
+        } {
+            self.note_element_state_style_activity_with_old_state(
+                handle,
+                StyloElementState::TOOL_FORM_ACTIVE | StyloElementState::TOOL_SUBMIT_ACTIVE,
+                old_state,
+            );
+        }
+    }
+
     fn note_input_value_state_style_activity(
         &mut self,
         handle: DomHandle,

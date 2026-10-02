@@ -648,6 +648,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         "INT-1".to_owned(),
         None,
         NavigationDispatchState {
+            web_mcp_invocation: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),

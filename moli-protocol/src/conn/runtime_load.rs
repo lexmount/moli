@@ -333,6 +333,9 @@ impl std::fmt::Debug for ResponseCommitReady {
 }
 
 impl ResponseCommitReady {
+    pub(crate) fn response_status(&self) -> u16 {
+        self.response_status
+    }
     pub(crate) fn final_url(&self) -> &Url {
         &self.final_url
     }
@@ -1479,6 +1482,7 @@ impl CdpConnection {
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());
         Ok(PreparedDocumentPageCommitConfiguration {
+            web_mcp_invocation: None,
             document_start_scripts: load_inputs.document_start_scripts,
             runtime_bindings: load_inputs.runtime_bindings,
             runtime_inspector_session_restore_snapshots: load_inputs

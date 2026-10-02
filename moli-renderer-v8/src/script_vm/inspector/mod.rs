@@ -11,6 +11,7 @@ mod v8_backend;
 use self::agent::RendererDevToolsAgent;
 pub(crate) use self::agent::{
     RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
+    RendererInspectorObjectWrapper,
 };
 pub(super) use self::agent_sessions::PageInspectorSessionTarget;
 use self::agent_sessions::inspector_session_key;
@@ -193,6 +194,10 @@ impl DocumentInspectorBinding {
     ) {
         self.agent
             .ensure_frontend(backend, inspector_session_key(inspector_session_id));
+    }
+
+    pub(super) fn object_wrapper(&self) -> RendererInspectorObjectWrapper {
+        self.agent.object_wrapper()
     }
 
     pub(super) fn end_runtime_command_output_for_session(

@@ -272,6 +272,7 @@ impl Page {
 
     pub(super) fn page_reply_kind(reply: &RendererPageReply) -> &'static str {
         match reply {
+            RendererPageReply::WebMcp(_) => "a WebMCP command result",
             RendererPageReply::RuntimeEvaluationResult(_) => "a runtime evaluation result reply",
             RendererPageReply::ElementClickPreparation(_) => "an element click preparation reply",
             RendererPageReply::ElementClickDispatch(_) => "an element click dispatch reply",

@@ -903,6 +903,7 @@ impl RendererOwnerLocalStore {
         macro_rules! apply_configuration {
             ($request:expr) => {{
                 let request = $request;
+                request.web_mcp_invocation = configuration.web_mcp_invocation;
                 request.document_start_scripts = configuration.document_start_scripts;
                 request.runtime_bindings = configuration.runtime_bindings;
                 request.runtime_inspector_session_restore_snapshots =

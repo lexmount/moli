@@ -27,6 +27,7 @@ pub(crate) struct NativeDomBridge {
     pub(super) bindings: NativeBridgeBindings,
     pub(super) identity: BridgeIdentityStore,
     pub(super) abort: abort::AbortStore,
+    pub(crate) web_mcp: crate::context_bootstrap::web_mcp::ModelContextStore,
     pub(super) traversal: traversal::TraversalStore,
 }
 

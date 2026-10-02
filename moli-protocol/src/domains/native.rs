@@ -188,6 +188,7 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
         match cmd.method.split_once('.')?.0 {
             "DOMDebugger" => super::dom_debugger::native::try_start,
             "Autofill" => super::autofill::try_start_native_command,
+            "WebMCP" => super::web_mcp::try_start_native_command,
             "Page" => super::page::native::try_start,
             "DOM" => super::dom::try_start_native_command,
             "DOMSnapshot" => super::dom_snapshot::try_start_native_command,
@@ -229,6 +230,11 @@ pub(crate) fn project_terminal_for_owner(
             continue;
         };
         match update {
+            moli_core::RendererNativeProtocolStateUpdate::WebMcpEnabled(enabled) => {
+                conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                    state.web_mcp_enabled = enabled
+                });
+            }
             moli_core::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
                 let Ok(result) = &response.result else {
                     continue;

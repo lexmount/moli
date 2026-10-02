@@ -697,15 +697,19 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                local_context.detach_global();
                 let host_ptr = (*context_host).as_ptr();
                 let host = unsafe { &mut *host_ptr };
-                if host.child_browsing_context_is_live(context.child_handle)
-                    && !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
-                {
-                    anyhow::bail!("failed to park the live child WindowProxy between realms");
+                if host.child_browsing_context_is_live(context.child_handle) {
+                    let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                    local_context.detach_global();
+                    if !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
+                    {
+                        anyhow::bail!("failed to park the live child WindowProxy between realms");
+                    }
                 }
+                // A removed iframe has no successor WindowProxy to reuse.
+                // Keep its JS global readable by retained same-origin references;
+                // its tasks, native operations and Inspector owner are retired above.
                 Ok(())
             });
         if let Err(error) = detach_result {

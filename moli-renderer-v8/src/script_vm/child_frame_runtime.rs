@@ -489,7 +489,7 @@ impl ScriptVm {
                     pending.request_headers,
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
-                ),
+                ).with_web_mcp_invocation(pending.web_mcp_invocation),
         );
         anyhow::ensure!(
             self._context_host

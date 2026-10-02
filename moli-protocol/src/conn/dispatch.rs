@@ -836,7 +836,7 @@ impl CdpConnection {
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
             "WebMCP" => {
-                let plan = crate::domains::web_mcp::command_output_plan(&cmd);
+                let plan = crate::domains::web_mcp::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
             "Performance" => Some(

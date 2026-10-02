@@ -1,29 +1,41 @@
+use std::sync::Arc;
 use url::Url;
 
 /// Policy-controlled features that currently have observable renderer behavior.
 ///
-/// This intentionally stores the effective policy for one committed Document,
-/// rather than the raw header/container allowlists. Extend the record when a
-/// newly implemented feature needs enforcement at its API boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Keep the declared tools allowlist alongside effective permissions: a
+/// container cannot delegate tools to an origin excluded by its parent header.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentPermissionsPolicy {
     gamepad: bool,
+    tools: bool,
+    tools_allowed_origins: Option<Arc<[url::Origin]>>,
 }
 
 impl Default for DocumentPermissionsPolicy {
     fn default() -> Self {
-        Self { gamepad: true }
+        Self {
+            gamepad: true,
+            tools: true,
+            tools_allowed_origins: None,
+        }
     }
 }
 
 impl DocumentPermissionsPolicy {
-    pub(crate) const fn gamepad_enabled(self) -> bool {
+    pub(crate) const fn gamepad_enabled(&self) -> bool {
         self.gamepad
     }
 
-    pub(crate) const fn intersect(self, other: Self) -> Self {
+    pub(crate) const fn tools_enabled(&self) -> bool {
+        self.tools
+    }
+
+    pub(crate) fn intersect(&self, other: &Self) -> Self {
         Self {
             gamepad: self.gamepad && other.gamepad,
+            tools: self.tools && other.tools,
+            tools_allowed_origins: other.tools_allowed_origins.clone(),
         }
     }
 
@@ -43,13 +55,18 @@ impl DocumentPermissionsPolicy {
                 if feature.trim().eq_ignore_ascii_case("gamepad") {
                     policy.gamepad = response_allowlist_allows_document(allowlist, document_url);
                 }
+                if feature.trim().eq_ignore_ascii_case("tools") {
+                    policy.tools_allowed_origins =
+                        response_tools_allowlist(allowlist, document_url);
+                    policy.tools = policy.tools_allows_origin(&document_url.origin());
+                }
             }
         }
         policy
     }
 
     pub(crate) fn delegated_to_child(
-        self,
+        &self,
         parent_url: &Url,
         child_url: &Url,
         child_inherits_origin: bool,
@@ -64,10 +81,51 @@ impl DocumentPermissionsPolicy {
             same_origin,
         )
         .unwrap_or(true);
+        let tools =
+            iframe_allow_feature(allow_attribute, "tools", parent_url, child_url, same_origin)
+                .unwrap_or(same_origin);
         Self {
             gamepad: self.gamepad && gamepad,
+            // Effective tools already checks the parent's own origin. An
+            // inherited-origin child uses that same origin, including about:blank.
+            tools: self.tools
+                && (child_inherits_origin || self.tools_allows_origin(&child_url.origin()))
+                && tools,
+            tools_allowed_origins: None,
         }
     }
+    fn tools_allows_origin(&self, origin: &url::Origin) -> bool {
+        self.tools_allowed_origins
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(origin))
+    }
+}
+
+fn response_tools_allowlist(value: &str, document_url: &Url) -> Option<Arc<[url::Origin]>> {
+    let value = value.trim();
+    if value == "*" {
+        return None;
+    }
+    let Some(value) = value
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    else {
+        return Some(Arc::from([]));
+    };
+    let mut origins = Vec::new();
+    for token in value.split_ascii_whitespace() {
+        if token == "*" {
+            return None;
+        }
+        if token.eq_ignore_ascii_case("self") {
+            origins.push(document_url.origin());
+        } else if let Ok(url) = Url::parse(token.trim_matches('"'))
+            && matches!(url.origin(), url::Origin::Tuple(..))
+        {
+            origins.push(url.origin());
+        }
+    }
+    Some(origins.into())
 }
 
 fn response_allowlist_allows_document(value: &str, document_url: &Url) -> bool {
@@ -138,6 +196,107 @@ mod tests {
     }
 
     #[test]
+    fn tools_policy_defaults_to_self_and_requires_both_parent_and_container_permission() {
+        let parent = url("https://parent.test/");
+        let same = url("https://parent.test/child");
+        let other = url("https://other.test/");
+        let allowed = DocumentPermissionsPolicy::default();
+        assert!(
+            allowed
+                .delegated_to_child(&parent, &same, false, None)
+                .tools_enabled()
+        );
+        assert!(
+            !allowed
+                .delegated_to_child(&parent, &other, false, None)
+                .tools_enabled()
+        );
+        assert!(
+            allowed
+                .delegated_to_child(&parent, &other, false, Some("tools *"))
+                .tools_enabled()
+        );
+        assert!(
+            !allowed
+                .delegated_to_child(&parent, &same, false, Some("tools 'none'"))
+                .tools_enabled()
+        );
+        let denied = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"tools=()".to_vec())],
+            &parent,
+        );
+        assert!(
+            !denied
+                .delegated_to_child(&parent, &other, false, Some("tools *"))
+                .tools_enabled()
+        );
+        assert!(denied.gamepad_enabled());
+    }
+
+    #[test]
+    fn tools_response_allowlist_bounds_container_delegation() {
+        let parent = url("https://parent.test/");
+        for (header, child, allowed) in [
+            ("tools=(self)", "https://parent.test/child", true),
+            ("tools=(self)", "https://other.test/child", false),
+            ("tools=()", "https://parent.test/child", false),
+            ("tools=*", "https://other.test/child", true),
+            (
+                "tools=(self \"https://allowed.test\")",
+                "https://allowed.test/child",
+                true,
+            ),
+            (
+                "tools=(self \"https://allowed.test\")",
+                "https://other.test/child",
+                false,
+            ),
+            (
+                "tools=(\"https://allowed.test\")",
+                "https://allowed.test/child",
+                false,
+            ),
+        ] {
+            let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
+                &[("Permissions-Policy".into(), header.as_bytes().to_vec())],
+                &parent,
+            );
+            assert_eq!(
+                policy
+                    .delegated_to_child(&parent, &url(child), false, Some("tools *"))
+                    .tools_enabled(),
+                allowed,
+                "{header} -> {child}"
+            );
+        }
+        let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"tools=(self)".to_vec())],
+            &parent,
+        );
+        assert!(
+            policy
+                .delegated_to_child(&parent, &url("about:blank"), true, None)
+                .tools_enabled()
+        );
+        let inherited = DocumentPermissionsPolicy::default().delegated_to_child(
+            &parent,
+            &url("https://child.test/"),
+            false,
+            Some("tools *"),
+        );
+        let child_header = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"tools=(self)".to_vec())],
+            &url("https://child.test/"),
+        );
+        let child = inherited.intersect(&child_header);
+        assert!(
+            !child
+                .delegated_to_child(&url("https://child.test/"), &parent, false, Some("tools *"))
+                .tools_enabled()
+        );
+    }
+
+    #[test]
     fn permissions_policy_header_takes_precedence_over_legacy_feature_policy() {
         let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
             &[
@@ -188,7 +347,10 @@ mod tests {
         );
         assert!(!denied.gamepad_enabled());
 
-        let parent_denied = DocumentPermissionsPolicy { gamepad: false };
+        let parent_denied = DocumentPermissionsPolicy {
+            gamepad: false,
+            ..Default::default()
+        };
         let delegated = parent_denied.delegated_to_child(
             &parent,
             &url("https://other.test/child"),

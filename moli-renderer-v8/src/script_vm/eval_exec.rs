@@ -1254,6 +1254,8 @@ impl ScriptVm {
     ) -> T {
         self.apply_pending_main_document_owner_transitions();
         self.apply_pending_child_document_owner_retirements();
+        self.queue_retired_web_mcp();
+        self.queue_declarative_web_mcp();
         self.settle_retired_history_traversals();
         self.drain_pending_style_invalidations_for_turn_exit(boundary);
         let runtime_continuation_is_ready =

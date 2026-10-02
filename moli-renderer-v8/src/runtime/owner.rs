@@ -106,6 +106,7 @@ use self::lifecycle_decision::PendingLifecycleNavigation;
 
 #[derive(Debug, Clone)]
 pub struct RendererPreparedDocumentCommitConfiguration {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
@@ -131,6 +132,7 @@ pub struct RendererPreparedDocumentCommitConfiguration {
 
 #[derive(Debug)]
 pub struct RendererCreateHtmlPageRequest {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     /// Exact owner-local Page identity reserved before this request is queued.
     ///
     /// Parser/resource output produced while the Page is still being built
@@ -185,6 +187,7 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub(super) document_replacement:
         Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,
     pub root_frame_id: Option<String>,

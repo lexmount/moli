@@ -3148,6 +3148,7 @@ dependencies = [
  "moli-webcrypto",
  "moli-webidl",
  "moli-webidl-callback",
+ "moli-webmcp",
  "moli-websocket",
  "moli-window-features",
  "moli-xpath",

@@ -307,6 +307,7 @@ impl JsContextHost {
         &mut self,
         retired_owner: WindowDocumentOwner,
     ) {
+        self.retire_web_mcp_document(retired_owner);
         let register_count = self.pending_service_worker_registers.len();
         self.pending_service_worker_registers
             .retain(|_, pending| pending.owner.window_document_owner() != retired_owner);
@@ -338,6 +339,7 @@ impl JsContextHost {
         transition: crate::frame_owner_model::MainDocumentOwnerTransition,
     ) {
         let retired_owner = transition.retired_owner();
+        self.retire_web_mcp_document(WindowDocumentOwner::Frame(retired_owner));
         let register_count = self.pending_service_worker_registers.len();
         self.pending_service_worker_registers
             .retain(|_, pending| pending.owner.document_owner() != Some(retired_owner));

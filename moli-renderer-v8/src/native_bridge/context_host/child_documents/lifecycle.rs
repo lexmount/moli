@@ -359,6 +359,7 @@ impl JsContextHost {
         let navigation = self
             .frame_owner_store
             .replace_current_child_navigation_load(child_handle)?;
+        crate::context_bootstrap::web_mcp::cancel_child_navigation(self, child_handle);
         tracing::debug!(
             ?child_handle,
             owner = ?navigation.owner(),
@@ -416,6 +417,7 @@ impl JsContextHost {
             );
             return false;
         };
+        crate::context_bootstrap::web_mcp::cancel_child_navigation(self, child_handle);
         tracing::debug!(
             ?child_handle,
             ?owner,
@@ -711,6 +713,17 @@ impl JsContextHost {
             .apply_current_child_document_domcontentloaded_transition(action)
         {
             return FrameDocumentLifecycleTaskEffect::NotApplied;
+        }
+        if let Some(document) = self
+            .child_browsing_context_document_handles
+            .get(&child_handle)
+            .copied()
+        {
+            crate::context_bootstrap::web_mcp::complete_navigation(
+                self,
+                document,
+                crate::native_bridge::WindowDocumentOwner::Frame(action.owner()),
+            );
         }
         let event_dispatched = self
             .child_browsing_context_document_wrapper(scope, child_handle)

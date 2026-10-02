@@ -103,6 +103,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
+        web_mcp_invocation: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),

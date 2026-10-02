@@ -570,7 +570,7 @@ fn control_suffers_pattern_mismatch(
     })
 }
 
-fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
+pub(crate) fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let pattern = v8_string(&scope, pattern)?;

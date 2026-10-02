@@ -168,6 +168,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
     .await;
     prepared
         .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -292,6 +293,7 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
 
     prepared
         .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -745,6 +747,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
         .expect("prepared body producer should finish");
     prepared
         .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,

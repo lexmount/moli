@@ -75,6 +75,14 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match observation {
+            RendererProtocolObservation::WebMcp(observation) => {
+                crate::domains::web_mcp::append_observation(
+                    conn,
+                    owner,
+                    observation,
+                    &mut prepared,
+                );
+            }
             RendererProtocolObservation::MainDocumentCommit(commit) => {
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
                     commit.clone(),

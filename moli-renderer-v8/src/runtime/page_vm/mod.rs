@@ -1142,6 +1142,7 @@ pub(crate) struct PageVmRuntimeHooks {
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     document_lifecycle_install: PageVmDocumentLifecycleInstall,
+    web_mcp_navigation: Option<moli_page_types::RendererWebMcpNavigation>,
     renderer_document_isolate_allocator: Option<RendererDocumentIsolateAllocator>,
     renderer_page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
     renderer_document_isolate_reservation: Option<RendererDocumentIsolateReservation>,
@@ -1191,6 +1192,13 @@ struct PageVmRendererDocumentIsolateBootstrap {
 }
 
 impl PageVmRuntimeHooks {
+    pub(in crate::runtime) fn with_web_mcp_navigation(
+        mut self,
+        id: Option<moli_page_types::RendererWebMcpNavigation>,
+    ) -> Self {
+        self.web_mcp_navigation = id;
+        self
+    }
     #[cfg(test)]
     fn standalone_base_for_test() -> Self {
         let owner = Rc::new(super::RendererBrowserContextRuntime::new());
@@ -1204,6 +1212,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1279,6 +1288,7 @@ impl PageVmRuntimeHooks {
                 },
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1317,6 +1327,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::ReuseOrCreateInitial,
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -2326,11 +2337,8 @@ impl PageVm {
         &mut self,
         restores: &[RendererInspectorSessionRestoreSnapshot],
     ) -> Result<()> {
-        if restores.is_empty() {
-            return Ok(());
-        }
         debug_assert!(
-            is_on_named_owner_execution_lane_for(&self.local_executor),
+            restores.is_empty() || is_on_named_owner_execution_lane_for(&self.local_executor),
             "runtime inspector session restore must execute on the matching named owner lane"
         );
         for restore in restores {
@@ -2339,6 +2347,11 @@ impl PageVm {
                 &restore.protocol_configuration,
                 &restore.v8_attach,
             )?;
+        }
+        // A committed WebMCP continuation can publish an immediate failure.
+        // Restore the enabled sessions before handing it to the new Document.
+        if let Some(id) = self.runtime_hooks.web_mcp_navigation.take() {
+            self.vm_mut().receive_web_mcp_navigation(id);
         }
         Ok(())
     }

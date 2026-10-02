@@ -349,7 +349,7 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.permissions_policy = self
             .document_policy_container
             .permissions_policy
-            .intersect(policy_container.permissions_policy);
+            .intersect(&policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }
@@ -391,7 +391,7 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.permissions_policy = self
             .document_policy_container
             .permissions_policy
-            .intersect(snapshot.policy_container.permissions_policy);
+            .intersect(&snapshot.policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }
@@ -1220,6 +1220,7 @@ impl JsContextHost {
         form: DomHandle,
         target: DomHandle,
     ) {
+        crate::context_bootstrap::web_mcp::bind_child_navigation(self, form, target);
         let targets = self
             .pending_form_submission_child_targets
             .entry(form)
