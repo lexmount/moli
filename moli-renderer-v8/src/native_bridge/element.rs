@@ -278,10 +278,11 @@ pub(crate) use event_handlers::{
 use event_handlers::{
     HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
+use events::construct_click_event;
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
-    construct_clipboard_event, construct_form_data_event,
+    construct_activation_pointer_event, construct_clipboard_event, construct_form_data_event,
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
     construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
     construct_input_event, construct_interest_event, construct_keyboard_event,
@@ -293,7 +294,6 @@ pub(crate) use events::{
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     dispatch_beforeinput, dispatch_public_event,
 };
-use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
     apply_document_focus_fixup, contenteditable_editing_host, contenteditable_editing_host_in_dom,
     focus_element, focus_live_element_for_inspector, focus_text_control_preserving_selection,

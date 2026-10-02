@@ -349,6 +349,181 @@ fn native_pointer_click_preserves_identity_without_copying_contact_properties() 
 }
 
 #[test]
+fn native_non_primary_releases_dispatch_pointer_activation_events_in_each_world() {
+    let mut vm = new_storage_html_test_vm("https://native-auxiliary-pointer.test/");
+    vm.eval("document.body.innerHTML='<button id=target style=\"position:absolute;left:0;top:0;width:100px;height:100px\">target</button>'; 'ready'").unwrap();
+    let isolated = vm
+        .create_isolated_world("native-auxiliary-pointer", false)
+        .unwrap();
+    let observe = r#"
+        const target=document.getElementById('target'), P=PointerEvent, M=MouseEvent;
+        globalThis.nativeAuxRows=[]; globalThis.nativeAuxSequence=[];
+        globalThis.cancelPointerDown=false;
+        let source;
+        for (const type of ['pointerdown','pointerup','mousedown','mouseup','click','dblclick','auxclick','contextmenu']) {
+          target.addEventListener(type,event=>{
+            nativeAuxSequence.push(type);
+            if (type==='pointerdown') {
+              source=event;
+              if (cancelPointerDown) event.preventDefault();
+            }
+            if (type!=='auxclick' && type!=='contextmenu') return;
+            if (type==='contextmenu') event.preventDefault();
+            nativeAuxRows.push({
+              pointer:event instanceof P, mouse:event instanceof M,
+              prototype:Object.getPrototypeOf(event)===P.prototype,
+              constructor:event.constructor===P, view:event.view===window,
+              target:event.target===target, current:event.currentTarget===target,
+              trusted:event.isTrusted, bubbles:event.bubbles, cancelable:event.cancelable, composed:event.composed,
+              id:event.pointerId===source.pointerId, type:event.pointerType===source.pointerType,
+              pressure:event.pressure===0 && event.tangentialPressure===0,
+              tilt:event.tiltX===0 && event.tiltY===0 && event.twist===0,
+              contact:event.width===1 && event.height===1 && !event.isPrimary,
+              coordinates:event.clientX===20 && event.clientY===30,
+              buttons:event.button===source.button && event.buttons===0,
+              detail:event.detail===(type==='contextmenu'?0:2),
+              modifiers:event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey,
+              sequences:event.getCoalescedEvents().length===0 && event.getPredictedEvents().length===0});
+          });
+        }
+        'ready'
+    "#;
+    vm.eval(observe).unwrap();
+    vm.eval_in_isolated_context(isolated, observe).unwrap();
+    vm.publish_layout_for_test().unwrap();
+    for (pointer_type, pointer_id, button, cancel_down) in [
+        ("mouse", 5, 1, false),
+        ("mouse", 5, 2, false),
+        ("mouse", 5, 3, false),
+        ("mouse", 5, 4, false),
+        ("pen", 17, 1, false),
+        ("pen", 17, 2, false),
+        ("pen", 17, 3, false),
+        ("pen", 17, 4, false),
+        ("pen", 17, 1, true),
+    ] {
+        let reset = format!(
+            "nativeAuxRows=[]; nativeAuxSequence=[]; cancelPointerDown={cancel_down}; 'ready'"
+        );
+        vm.eval(&reset).unwrap();
+        vm.eval_in_isolated_context(isolated, &reset).unwrap();
+        for event_name in ["mousedown", "mouseup"] {
+            let pointer = crate::runtime::RendererPointerEventProperties {
+                pointer_id,
+                pointer_type: pointer_type.to_owned(),
+                pressure: 0.75,
+                tangential_pressure: 0.25,
+                tilt_x: 23.0,
+                tilt_y: -17.0,
+                twist: 31.0,
+            };
+            let buttons = if event_name == "mousedown" {
+                super::super::super::input_helpers::mouse_button_mask(button)
+            } else {
+                0
+            };
+            vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                20.0,
+                30.0,
+                event_name,
+                button,
+                Some(buttons),
+                2,
+                0.0,
+                0.0,
+                pointer,
+                10,
+            )
+            .unwrap();
+        }
+        let mut expected = if cancel_down {
+            vec!["pointerdown", "pointerup"]
+        } else {
+            vec!["pointerdown", "mousedown", "pointerup", "mouseup"]
+        };
+        if button == 2 {
+            expected.push("contextmenu");
+        }
+        expected.push("auxclick");
+        for result in [
+            vm.eval("JSON.stringify({rows:nativeAuxRows,sequence:nativeAuxSequence})")
+                .unwrap(),
+            vm.eval_in_isolated_context(
+                isolated,
+                "JSON.stringify({rows:nativeAuxRows,sequence:nativeAuxSequence})",
+            )
+            .unwrap(),
+        ] {
+            let facts: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(facts["sequence"], serde_json::json!(expected), "{facts}");
+            let rows = facts["rows"].as_array().unwrap();
+            assert_eq!(rows.len(), if button == 2 { 2 } else { 1 }, "{facts}");
+            for row in rows {
+                for (field, value) in row.as_object().unwrap() {
+                    assert_eq!(
+                        value, true,
+                        "{pointer_type} button {button}, {field}: {facts}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(
+        vm.eval("new MouseEvent('auxclick') instanceof P").unwrap(),
+        "false"
+    );
+}
+
+#[test]
+fn native_auxiliary_materialization_preserves_unread_author_pointer_binding() {
+    let mut vm = new_storage_html_test_vm("https://native-auxiliary-lazy.test/");
+    vm.eval(r#"
+        document.body.innerHTML='<button id=target style="position:absolute;left:0;top:0;width:100px;height:100px">target</button>';
+        globalThis.rows=[]; globalThis.reads=0;
+        globalThis.authorPointerGetter=()=>{reads++;throw Error('author PointerEvent');};
+        Object.defineProperty(globalThis,'PointerEvent',{configurable:false,get:authorPointerGetter});
+        for (const type of ['auxclick','contextmenu']) target.addEventListener(type,event=>{
+          rows.push([type,Object.prototype.toString.call(event),event.pointerType,event.pointerId,event.detail]);
+          event.preventDefault();
+        });
+        'ready'
+    "#).unwrap();
+    vm.publish_layout_for_test().unwrap();
+    for button in [1, 2] {
+        for name in ["mousedown", "mouseup"] {
+            vm.dispatch_mouse_event_at_point_with_pointer(
+                20.0,
+                30.0,
+                name,
+                button,
+                None,
+                1,
+                0.0,
+                0.0,
+                crate::runtime::RendererPointerEventProperties {
+                    pointer_id: 17,
+                    pointer_type: "pen".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+    }
+    let facts: serde_json::Value = serde_json::from_str(&vm.eval(r#"
+        JSON.stringify({reads,rows,
+          binding:Object.getOwnPropertyDescriptor(globalThis,'PointerEvent').get===authorPointerGetter,
+          configurable:Object.getOwnPropertyDescriptor(globalThis,'PointerEvent').configurable})
+    "#).unwrap()).unwrap();
+    assert_eq!(
+        facts,
+        serde_json::json!({"reads":0,"binding":true,"configurable":false,"rows":[
+        ["auxclick","[object PointerEvent]","pen",17,1],
+        ["contextmenu","[object PointerEvent]","pen",17,0],
+        ["auxclick","[object PointerEvent]","pen",17,1]]})
+    );
+}
+
+#[test]
 fn native_click_materialization_preserves_unread_author_pointer_binding() {
     let mut vm = new_storage_html_test_vm("https://native-click-lazy.test/");
     assert_eq!(

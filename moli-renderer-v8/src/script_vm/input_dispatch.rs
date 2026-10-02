@@ -24,7 +24,7 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    InputEventCoordinates, TextEditInputType, TouchEventPoint,
+    construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
@@ -1861,28 +1861,45 @@ impl ScriptVm {
                     }
                     return Ok(outcome);
                 }
-                Some(MouseReleaseFollowUp::DispatchEvent {
-                    name: follow_up_event_name,
-                    target,
-                }) => {
-                    if event_name == "mouseup" {
-                        suppress_compat_mouse_events = false;
-                    }
+                Some(MouseReleaseFollowUp::Auxiliary(target)) => {
+                    suppress_compat_mouse_events = false;
                     let had_pending_top_level_navigation_before_event =
                         unsafe { &*runtime_ptr }.has_pending_location_navigation();
                     let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
                         .pending_live_child_browsing_context_navigation_snapshot();
                     let mut pending_download = None;
-                    if let Some(event) = construct_mouse_event_with_modifiers(
+                    // Platforms may show the context menu before or after mouseup.
+                    // Keep our release-time policy; cancellation does not suppress auxclick.
+                    if button == 2
+                        && let Some(event) = construct_activation_pointer_event(
+                            scope,
+                            runtime_ptr,
+                            handle,
+                            "contextmenu",
+                            coordinates,
+                            0,
+                            button,
+                            buttons,
+                            modifiers,
+                            Some(&pointer),
+                        )
+                    {
+                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    }
+                    if let Some(event) = construct_activation_pointer_event(
                         scope,
-                        follow_up_event_name,
+                        runtime_ptr,
+                        target,
+                        "auxclick",
                         coordinates,
+                        click_count.max(1),
                         button,
                         buttons,
                         modifiers,
+                        Some(&pointer),
                     ) {
                         let dispatched = dispatch_public_event(scope, runtime_ptr, target, event);
-                        if follow_up_event_name == "auxclick" && dispatched.allows_default() {
+                        if dispatched.allows_default() {
                             pending_download = perform_auxiliary_link_default_action(
                                 scope,
                                 runtime_ptr,
@@ -1893,17 +1910,15 @@ impl ScriptVm {
                             );
                         }
                     }
-                    if follow_up_event_name == "auxclick" {
-                        return Ok(RendererInputDispatchOutcome {
-                            handled: true,
-                            triggered_top_level_navigation:
-                                !had_pending_top_level_navigation_before_event
-                                    && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
-                            pending_download,
-                            pending_file_chooser: None,
-                            intercepted_drag: None,
-                        });
-                    }
+                    return Ok(RendererInputDispatchOutcome {
+                        handled: true,
+                        triggered_top_level_navigation:
+                            !had_pending_top_level_navigation_before_event
+                                && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
+                        pending_download,
+                        pending_file_chooser: None,
+                        intercepted_drag: None,
+                    });
                 }
                 None => {}
             }

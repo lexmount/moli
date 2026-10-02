@@ -26,7 +26,7 @@ use super::super::forms::{
 use super::super::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     cache_input_files_from_selected_files, closed_details_ancestors_to_reveal,
-    construct_click_event_with_detail_and_modifiers, construct_command_event,
+    construct_activation_pointer_event, construct_command_event,
     construct_drop_input_event, construct_input_event, construct_simple_event,
     contenteditable_editing_host, dispatch_beforeinput, dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
     dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
@@ -745,10 +745,11 @@ fn dispatch_click_event(
     trusted: bool,
     pointer: Option<&crate::runtime::RendererPointerEventProperties>,
 ) -> Option<NodePublicEventDispatchOutcome> {
-    let event = construct_click_event_with_detail_and_modifiers(
+    let event = construct_activation_pointer_event(
         scope,
         runtime_ptr,
         handle,
+        "click",
         coordinates,
         detail,
         button,
