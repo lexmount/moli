@@ -682,3 +682,34 @@ fn document_write_parses_variadic_webidl_strings() {
 
     assert_eq!(result, "value:null|TypeError|value:null");
 }
+
+#[test]
+fn class_name_collections_follow_the_owner_document_quirks_mode() {
+    for (doctype, mode, lowercase_matches) in [
+        ("", "BackCompat", 2),
+        ("<!doctype html>", "CSS1Compat", 1),
+        (
+            r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+            "CSS1Compat",
+            1,
+        ),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://class-name-queries.test/",
+            &format!(
+                "{doctype}<main id='root'><i class='FOO BAR'></i><i class='foo bar'></i><i class='É'></i></main>"
+            ),
+        );
+        assert_eq!(vm.eval(r#"(() => {
+            const root = document.getElementById('root');
+            const live = root.getElementsByClassName('foo bar');
+            const before = live.length;
+            root.firstElementChild.setAttribute('class', 'other');
+            const xml = new DOMParser().parseFromString('<root><item class="FOO BAR"/></root>', 'application/xml');
+            return [document.compatMode, document.getElementsByClassName('foo bar').length,
+                before, live.length, root.getElementsByClassName('é').length,
+                xml.getElementsByClassName('foo bar').length,
+                xml.getElementsByClassName('FOO BAR').length].join('|');
+        })()"#).unwrap(), format!("{mode}|1|{lowercase_matches}|1|0|0|1"), "doctype {doctype}");
+    }
+}
