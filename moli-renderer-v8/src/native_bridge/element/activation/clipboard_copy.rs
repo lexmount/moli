@@ -76,6 +76,7 @@ fn copy_selection_text(
         }
         return runtime
             .document_text_control_selection_text(document)
+            .map(|text| text.as_str_lossy().to_owned())
             .filter(|text| !text.is_empty());
     }
     let selection = runtime.document_selection_snapshot(document)?;

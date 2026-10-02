@@ -1,17 +1,26 @@
 pub fn normalize_textarea_api_value(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
+    normalize_textarea_dom_string_value(&value.into())
+        .as_str_lossy()
+        .to_owned()
+}
+
+pub fn normalize_textarea_dom_string_value(
+    value: &crate::native::DomStringValue,
+) -> crate::native::DomStringValue {
+    let units = value.utf16_units();
+    let mut output = Vec::with_capacity(units.len());
+    let mut iter = units.iter().copied().peekable();
+    while let Some(unit) = iter.next() {
+        if unit == 0x0d {
+            if iter.peek() == Some(&0x0a) {
+                let _ = iter.next();
             }
-            output.push('\n');
+            output.push(0x0a);
         } else {
-            output.push(ch);
+            output.push(unit);
         }
     }
-    output
+    crate::native::DomStringValue::from_utf16(&output)
 }
 
 pub fn normalize_custom_validation_message(message: &str) -> String {
