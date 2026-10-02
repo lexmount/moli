@@ -1472,6 +1472,12 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   assert(!("hreflang" in div), "div should not expose hreflang");
   assert(!("download" in document.createElement("link")), "link should not expose download");
   assert(!("ping" in document.createElement("link")), "link should not expose ping");
+  for (const property of ["hreflang", "type"]) {
+    const area = document.createElement("area");
+    area.setAttribute(property, "retained attribute");
+    assert(!(property in area), `area should not expose ${property}`);
+    assert(area.getAttribute(property) === "retained attribute", `${property} remains an attribute`);
+  }
 
   const parsed = new DOMParser().parseFromString(
     "<html><head><link></head><body><a></a><area></area></body></html>",
