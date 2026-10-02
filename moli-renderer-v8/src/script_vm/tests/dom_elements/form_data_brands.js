@@ -10,10 +10,10 @@
           g.document.implementation.createHTMLDocument('') :
           new g.DOMParser().parseFromString('<!doctype html><body>', 'text/html');
         const form = d.createElement('form'), input = d.createElement('input');
-        input.setAttribute('name', 'input-name'); input.setAttribute('value', 'input-value');
+        input.setAttribute('name', 'input-\uD800'); input.setAttribute('value', 'value-\uDC00');
         form.appendChild(input);
         const select = d.createElement('select'), option = d.createElement('option');
-        select.setAttribute('name', 'select-name'); option.setAttribute('value', 'option-value');
+        select.setAttribute('name', 'select-\uDC00'); option.setAttribute('value', 'option-\uD800');
         select.appendChild(option); form.appendChild(select);
         const button = d.createElement('button');
         button.setAttribute('type', 'submit'); button.setAttribute('name', 'send'); button.setAttribute('value', 'button');
@@ -31,8 +31,8 @@
         });
         const data = new other.FormData(form);
         const checks = {constructorRealm: Object.getPrototypeOf(data) === other.FormData.prototype,
-          input: data.get('input-name') === 'input-value',
-          option: data.get('select-name') === 'option-value',
+          input: data.get('input-\uFFFD') === 'value-\uFFFD',
+          option: data.get('select-\uFFFD') === 'option-\uFFFD',
           event: eventCount === 1 && eventRealm && eventTarget,
           handlerMutation: data.get('from-handler') === 'listener',
           nativeProperties: tagReads === 0 && valueReads === 0,
