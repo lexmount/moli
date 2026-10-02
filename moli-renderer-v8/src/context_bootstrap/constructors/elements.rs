@@ -25,9 +25,10 @@ struct AudioConstructorArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Option")]
 struct OptionConstructorArgs {
-    #[webidl(default = "")]
-    text: String,
-    value: Option<String>,
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    text: webidl::DomString16,
+    #[webidl(converter = "raw")]
+    value: Option<webidl::DomString16>,
     #[webidl(default = false)]
     default_selected: bool,
     #[webidl(default = false)]
@@ -201,14 +202,14 @@ pub(in crate::context_bootstrap) fn option_constructor_callback<'s>(
         return;
     };
 
-    let Some(text) = v8_string(scope, &parsed.text) else {
+    let Some(text) = crate::util::v8_string_from_utf16_units(scope, &parsed.text.0) else {
         rv.set_undefined();
         return;
     };
     let _ = option.set(scope, v8str(scope, "text").into(), text.into());
 
     if let Some(value) = parsed.value {
-        let Some(value) = v8_string(scope, &value) else {
+        let Some(value) = crate::util::v8_string_from_utf16_units(scope, &value.0) else {
             rv.set_undefined();
             return;
         };

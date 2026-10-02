@@ -1,6 +1,6 @@
 use super::*;
 use crate::forms::InputType;
-use crate::native::{CustomElementState, SelectedFile};
+use crate::native::{CustomElementState, DomStringValue, SelectedFile};
 
 impl DomHost {
     // The HTML parser can associate a control with its form-element pointer
@@ -1143,16 +1143,22 @@ impl DomHost {
         }
     }
 
-    pub fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
+    pub fn set_select_value(
+        &mut self,
+        handle: DomHandle,
+        value: impl Into<DomStringValue>,
+    ) -> bool {
         if !self.is_html_element_named(handle, "select") {
             return false;
         }
 
+        let value = value.into();
         let options = self.select_option_elements(handle);
         let mut matched = false;
         let mut did_change = false;
         for option in options {
-            let should_select = !matched && self.option_value(option).as_deref() == Some(value);
+            let should_select =
+                !matched && self.option_value_dom_string(option).as_ref() == Some(&value);
             did_change |= self.set_selected_state(option, should_select);
             if should_select {
                 matched = true;

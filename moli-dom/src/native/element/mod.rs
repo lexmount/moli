@@ -575,6 +575,18 @@ impl Element {
         )
     }
 
+    pub fn attribute_ns_dom_string(
+        &self,
+        namespace: &str,
+        local_name: &str,
+    ) -> Option<DomStringValue> {
+        let value = self.attribute_ns(namespace, local_name)?;
+        Some(
+            self.attribute_ns_utf16_units(namespace, local_name)
+                .map_or_else(|| value.into(), DomStringValue::from_utf16),
+        )
+    }
+
     pub fn input_value_dirty(&self) -> bool {
         self.control_state().input_value_dirty()
     }
@@ -1235,19 +1247,35 @@ impl Element {
     }
 
     pub fn option_value(&self, dom: &NativeDom, handle: NativeNodeId) -> String {
-        self.attribute_ns("", "value")
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.option_text(dom, handle))
+        self.option_value_dom_string(dom, handle)
+            .as_str_lossy()
+            .to_owned()
+    }
+
+    pub fn option_value_dom_string(&self, dom: &NativeDom, handle: NativeNodeId) -> DomStringValue {
+        self.attribute_ns_dom_string("", "value")
+            .unwrap_or_else(|| self.option_text_dom_string(dom, handle))
     }
 
     pub fn option_text(&self, dom: &NativeDom, handle: NativeNodeId) -> String {
+        self.option_text_dom_string(dom, handle)
+            .as_str_lossy()
+            .to_owned()
+    }
+
+    pub fn option_text_dom_string(&self, dom: &NativeDom, handle: NativeNodeId) -> DomStringValue {
         normalized_option_text_content(dom, handle)
     }
 
     pub fn option_label(&self, dom: &NativeDom, handle: NativeNodeId) -> String {
-        self.attribute_ns("", "label")
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.option_text(dom, handle))
+        self.option_label_dom_string(dom, handle)
+            .as_str_lossy()
+            .to_owned()
+    }
+
+    pub fn option_label_dom_string(&self, dom: &NativeDom, handle: NativeNodeId) -> DomStringValue {
+        self.attribute_ns_dom_string("", "label")
+            .unwrap_or_else(|| self.option_text_dom_string(dom, handle))
     }
 
     pub fn select_value(
