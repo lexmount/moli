@@ -74,7 +74,8 @@ pub fn referrer_value(
     }
 
     let policy = referrer_policy
-        .or(document_referrer_policy)
+        .filter(|policy| !policy.is_empty())
+        .or_else(|| document_referrer_policy.filter(|policy| !policy.is_empty()))
         .unwrap_or(DEFAULT_REFERRER_POLICY);
     let same_origin = same_origin(referrer_url, request_url);
     let downgrade = is_downgrade_request(referrer_url, request_url);
@@ -308,5 +309,36 @@ mod tests {
             Some("https://example.com/".to_owned())
         );
         assert_eq!(referrer_header_value(&source, &target, None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod empty_policy_tests {
+    use super::*;
+
+    #[test]
+    fn empty_request_policy_inherits_the_document_policy() {
+        let source = Url::parse("https://origin.test/private?token=value").unwrap();
+        let target = Url::parse("https://destination.test/resource").unwrap();
+        for request_policy in [None, Some("")] {
+            assert_eq!(
+                referrer_value(&source, &target, request_policy, Some("no-referrer")),
+                None
+            );
+            assert_eq!(
+                referrer_value(&source, &target, request_policy, Some("unsafe-url")),
+                Some(source.to_string())
+            );
+        }
+        assert_eq!(
+            referrer_value(&source, &target, Some("origin"), Some("no-referrer")),
+            Some("https://origin.test/".to_owned())
+        );
+        for document_policy in [None, Some("")] {
+            assert_eq!(
+                referrer_value(&source, &target, Some(""), document_policy),
+                Some("https://origin.test/".to_owned())
+            );
+        }
     }
 }
