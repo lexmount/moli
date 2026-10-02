@@ -3,8 +3,8 @@ use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
         composition_event_init_callback, custom_event_init_callback, event_init_event_callback,
-        keyboard_event_init_callback, mouse_event_init_callback, storage_event_init_callback,
-        text_event_init_callback, ui_event_init_callback,
+        mouse_event_init_callback, storage_event_init_callback, text_event_init_callback,
+        ui_event_init_callback,
     },
     events::{
         before_unload_event_return_value_getter_function,
@@ -24,7 +24,7 @@ use super::{
         event_stop_immediate_propagation_callback, event_stop_propagation_callback,
         event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
-        message_event_init_callback, mouse_event_related_target_getter_function,
+        keyboard_event_init_callback, message_event_init_callback, mouse_event_related_target_getter_function,
         pointer_event_get_predicted_events_callback, submit_event_agent_invoked_getter_function,
         submit_event_respond_with_callback, submit_event_submitter_getter_function,
         toggle_event_source_getter_function, track_event_track_getter_function,

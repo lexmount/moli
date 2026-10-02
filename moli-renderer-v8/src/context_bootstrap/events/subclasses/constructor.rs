@@ -128,6 +128,14 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let keyboard_event_init = if kind == EventSubclassKind::KeyboardEvent {
+        let Some(init) = keyboard::parse_keyboard_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
@@ -166,6 +174,11 @@ fn event_subclass_constructor_callback<'s>(
             message_event_init
                 .as_ref()
                 .map(message::MessageEventInit::event_flags)
+        })
+        .or_else(|| {
+            keyboard_event_init
+                .as_ref()
+                .map(keyboard::KeyboardEventInit::event_flags)
         })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
@@ -231,9 +244,11 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::KeyboardEvent => {
-            if !keyboard::initialize_keyboard_event(scope, event, init) {
-                return;
-            }
+            keyboard::initialize_keyboard_event(
+                scope,
+                event,
+                keyboard_event_init.expect("KeyboardEvent init should be parsed"),
+            );
         }
         EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
         EventSubclassKind::WheelEvent => {

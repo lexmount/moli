@@ -31,6 +31,7 @@ pub(in crate::context_bootstrap) use modifiers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 
 const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
