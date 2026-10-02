@@ -8,6 +8,7 @@ mod dom_surface;
 mod focus;
 mod form_data_brands;
 mod live_document;
+mod option_select_values;
 mod text_control_values;
 mod text_controls;
 mod viewport_input;

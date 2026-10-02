@@ -1718,7 +1718,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        value: &str,
+        value: impl Into<DomStringValue>,
     ) -> bool {
         let changed = self.dom_host.set_select_value(handle, value);
         self.sync_selectedcontents_for_select_in_reaction_scope(scope, host_ptr, handle) || changed

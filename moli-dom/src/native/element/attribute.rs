@@ -1,5 +1,5 @@
-use super::super::NativeDom;
 use super::super::node::{NativeNodeId, NodeData};
+use super::super::{DomStringValue, NativeDom};
 use html5ever::{LocalName, Namespace, Prefix};
 
 #[derive(Debug, Clone)]
@@ -83,8 +83,11 @@ impl Attribute {
     }
 }
 
-pub(super) fn normalized_option_text_content(dom: &NativeDom, handle: NativeNodeId) -> String {
-    let mut out = String::new();
+pub(super) fn normalized_option_text_content(
+    dom: &NativeDom,
+    handle: NativeNodeId,
+) -> DomStringValue {
+    let mut out = Vec::new();
     let mut pending_space = false;
     let mut stack = vec![handle];
     while let Some(handle) = stack.pop() {
@@ -93,17 +96,18 @@ pub(super) fn normalized_option_text_content(dom: &NativeDom, handle: NativeNode
         };
         match node.data() {
             NodeData::Text(text) => {
-                append_normalized_option_text(text.data(), &mut out, &mut pending_space)
+                append_normalized_option_text(text.value(), &mut out, &mut pending_space)
             }
             NodeData::CDataSection(cdata) => {
-                append_normalized_option_text(cdata.data(), &mut out, &mut pending_space)
+                append_normalized_option_text(cdata.value(), &mut out, &mut pending_space)
             }
             NodeData::Element(element)
-                if element.local_name() == "script"
+                if (element.local_name() == "script"
                     && matches!(
                         element.namespace(),
                         "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
-                    ) => {}
+                    ))
+                    || element.is_html_element("img") => {}
             NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {
                 stack.extend(dom.child_ids_reversed(handle));
             }
@@ -112,31 +116,25 @@ pub(super) fn normalized_option_text_content(dom: &NativeDom, handle: NativeNode
             | NodeData::DocumentType(_) => {}
         }
     }
-    out
+    DomStringValue::from_utf16(&out)
 }
 
-fn append_normalized_option_text(text: &str, out: &mut String, pending_space: &mut bool) {
-    let mut run_start = 0;
-    for (index, byte) in text.bytes().enumerate() {
-        if !byte.is_ascii_whitespace() {
-            continue;
+fn append_normalized_option_text(
+    text: &DomStringValue,
+    out: &mut Vec<u16>,
+    pending_space: &mut bool,
+) {
+    for &unit in text.utf16_units().iter() {
+        if matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20) {
+            *pending_space = !out.is_empty();
+        } else {
+            if *pending_space {
+                out.push(0x20);
+                *pending_space = false;
+            }
+            out.push(unit);
         }
-        append_option_text_run(&text[run_start..index], out, pending_space);
-        *pending_space = !out.is_empty();
-        run_start = index + 1;
     }
-    append_option_text_run(&text[run_start..], out, pending_space);
-}
-
-fn append_option_text_run(text: &str, out: &mut String, pending_space: &mut bool) {
-    if text.is_empty() {
-        return;
-    }
-    if *pending_space {
-        out.push(' ');
-        *pending_space = false;
-    }
-    out.push_str(text);
 }
 
 pub(super) fn split_class_names(value: &str) -> Vec<&str> {
