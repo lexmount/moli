@@ -8,18 +8,12 @@ fn textarea_string_attribute_getter<'s>(
     receiver: v8::Local<'s, v8::Object>,
     attribute: &str,
     property: &'static str,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = textarea_getter_receiver(scope, receiver, property) else {
-        rv.set_empty_string();
+    if textarea_getter_receiver(scope, receiver, property).is_none() {
         return;
-    };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
-    if let Some(value) = v8_string(scope, &value) {
-        rv.set(value.into());
-    } else {
-        rv.set_empty_string();
     }
+    attribute_property_getter_from_object_or_detached(scope, receiver, attribute, rv);
 }
 
 fn set_textarea_dom_string_attribute_on_receiver<'s>(
@@ -29,15 +23,17 @@ fn set_textarea_dom_string_attribute_on_receiver<'s>(
     value: v8::Local<'s, v8::Value>,
     property: &'static str,
 ) {
-    let Some((runtime_ptr, handle)) = textarea_setter_receiver(scope, receiver, property) else {
+    if textarea_setter_receiver(scope, receiver, property).is_none() {
         return;
-    };
-    let Some(value) =
-        form_dom_string_property_value(scope, value, "HTMLTextAreaElement", property, false)
-    else {
-        return;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
+    }
+    set_dom_string_attribute_property_on_object(
+        scope,
+        receiver,
+        attribute,
+        value,
+        "HTMLTextAreaElement",
+        property,
+    );
 }
 
 fn textarea_boolean_attribute_getter<'s>(

@@ -5,6 +5,7 @@ mod ping_namespaces;
 mod attribute_lookup;
 mod custom_elements;
 mod detached;
+mod dom_string_reflection;
 mod dom_surface;
 mod focus;
 mod form_data_brands;
