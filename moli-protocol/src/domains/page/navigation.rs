@@ -3291,21 +3291,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
 ) {
     let navigation_owner = state.owner.clone();
     let navigation_loader_id = state.loader_id.clone();
-    let navigation = match navigation {
-        network::MaterializedNavigationLoadOutcome::ResponseCommitReady(response)
-            if matches!(response.response_status(), 204 | 205) =>
-        {
-            // A no-content response retains the source Document and cannot
-            // supply a cross-document tool result.
-            drop(response);
-            network::materialize_navigation_failure_preserving_committed_document(
-                conn,
-                &state,
-                "Navigation did not produce a Document".into(),
-            )
-        }
-        navigation => navigation,
-    };
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;

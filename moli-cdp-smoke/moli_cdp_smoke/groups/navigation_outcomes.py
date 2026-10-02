@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
@@ -104,10 +106,33 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
             "An ordinary HTML HTTP error is a successful navigation with status evidence and a DOMContentLoaded Document, not a Page.navigate network error.",
             _http_error_document,
         ),
-        NavigationOutcomeContract(
-            "navigate_no_content_is_not_download",
-            "A 204 response is never inferred to be a download merely because Chromium reports net::ERR_ABORTED.",
-            _no_content,
+        *(
+            NavigationOutcomeContract(
+                name,
+                f"A {status} response reports net::ERR_ABORTED without a download or a new Document, including Fetch interception.",
+                partial(_no_content, status=status, fetch_stage=stage),
+            )
+            for name, status, stage in (
+                ("navigate_no_content_is_not_download", 204, None),
+                ("navigate_reset_content_retains_document", 205, None),
+                ("navigate_fulfilled_no_content_retains_document", 204, "Request"),
+                ("navigate_fulfilled_reset_content_retains_document", 205, "Request"),
+                ("navigate_overridden_no_content_retains_document", 204, "Response"),
+                ("navigate_overridden_reset_content_retains_document", 205, "Response"),
+            )
+        ),
+        *(
+            NavigationOutcomeContract(
+                f"navigate_{name.replace('-', '_')}_attachment_is_download",
+                f"An attachment remains a download even when its response status is {status}.",
+                partial(
+                    _successful_download,
+                    route=f"/navigation-{name}-attachment",
+                    expected_mime="text/plain",
+                    expected_status=status,
+                ),
+            )
+            for name, status in (("no-content", 204), ("reset-content", 205))
         ),
         NavigationOutcomeContract(
             "navigate_transport_failure_is_not_download",
@@ -127,7 +152,9 @@ async def _new_probe(state: SmokeState) -> AsyncIterator[NavigationProbe]:
             "Network.requestWillBeSent",
             "Network.responseReceived",
             "Network.loadingFailed",
+            "Network.loadingFinished",
             "Page.lifecycleEvent",
+            "Runtime.executionContextsCleared",
         ],
     )
     try:
@@ -178,13 +205,14 @@ async def _successful_download(
     *,
     route: str,
     expected_mime: str,
+    expected_status: int = 200,
 ) -> dict[str, Any]:
     async with _new_probe(state) as probe:
         url = f"{state.fixture}{route}"
         result = await probe.cdp.send("Page.navigate", {"url": url})
         _assert_download_result(result, "net::ERR_ABORTED")
         response_event = await _wait_for_document_response(probe, url)
-        _assert_response(response_event, status=200, mime=expected_mime, url=url)
+        _assert_response(response_event, status=expected_status, mime=expected_mime, url=url)
         _assert_request_response_identity(probe.events, response_event, url)
         snapshot = await _active_document_snapshot(probe.cdp)
         _assert_retained_document(snapshot)
@@ -285,25 +313,99 @@ async def _http_error_document(state: SmokeState) -> dict[str, Any]:
         return _compact_observation(result, response_event, snapshot)
 
 
-async def _no_content(state: SmokeState) -> dict[str, Any]:
+async def _no_content(
+    state: SmokeState,
+    *,
+    status: int,
+    fetch_stage: str | None,
+) -> dict[str, Any]:
     async with _new_probe(state) as probe:
-        url = f"{state.fixture}/navigation-no-content"
-        result = await probe.cdp.send("Page.navigate", {"url": url})
-        if result.get("isDownload") is True:
-            raise SmokeError(f"204 response was misreported as a download: {result}")
-        response_event = await _wait_for_document_response(probe, url)
-        _assert_response(response_event, status=204, mime="text/plain", url=url)
-        snapshot = await _active_document_snapshot(probe.cdp)
-        error_text = result.get("errorText")
-        if error_text:
-            assert_equal(error_text, "net::ERR_ABORTED", "204 navigation errorText")
-            _assert_retained_document(snapshot)
-            outcome = "retained-document"
+        route = "/navigation-no-content" if status == 204 else "/navigation-reset-content"
+        if fetch_stage == "Response":
+            route = f"/navigation-empty?no-content-override={status}"
+        url = f"{state.fixture}{route}"
+        await _evaluate_value(
+            probe.cdp,
+            "document.body.innerHTML='<input id=retainedField value=retained>';",
+        )
+        history = await probe.cdp.send("Page.getNavigationHistory")
+        if fetch_stage is None:
+            result = await probe.cdp.send("Page.navigate", {"url": url})
         else:
-            assert_equal(snapshot.get("href"), url, "204 committed Document URL")
-            outcome = "committed-document"
+            paused = asyncio.get_running_loop().create_future()
+            probe.cdp.once("Fetch.requestPaused", lambda params: paused.set_result(params))
+            await probe.cdp.send(
+                "Fetch.enable",
+                {"patterns": [{"urlPattern": url, "requestStage": fetch_stage}]},
+            )
+            navigation = asyncio.create_task(probe.cdp.send("Page.navigate", {"url": url}))
+            try:
+                request = await paused
+                headers = [{"name": "Content-Type", "value": "text/plain; charset=utf-8"}]
+                if fetch_stage == "Request":
+                    await probe.cdp.send(
+                        "Fetch.fulfillRequest",
+                        {
+                            "requestId": request["requestId"],
+                            "responseCode": status,
+                            "responseHeaders": headers,
+                            "body": "",
+                        },
+                    )
+                else:
+                    await probe.cdp.send(
+                        "Fetch.continueResponse",
+                        {
+                            "requestId": request["requestId"],
+                            "responseCode": status,
+                            "responsePhrase": "No Content" if status == 204 else "Reset Content",
+                            "responseHeaders": headers,
+                        },
+                    )
+                result = await navigation
+            finally:
+                if not navigation.done():
+                    navigation.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await navigation
+        assert_equal(result.get("isDownload"), False, f"{status} isDownload")
+        assert_equal(result.get("errorText"), "net::ERR_ABORTED", f"{status} navigation errorText")
+        response_event = await _wait_for_document_response(probe, url)
+        _assert_response(response_event, status=status, mime="text/plain", url=url)
+        _assert_request_response_identity(probe.events, response_event, url)
+        await wait_until(
+            lambda: _loading_failure_for_url(probe.events, url) is not None,
+            f"{status} main-document Network.loadingFailed",
+        )
+        failure = _loading_failure_for_url(probe.events, url)
+        if failure is None:
+            raise SmokeError(f"missing {status} main-document Network.loadingFailed")
+        assert_equal(
+            failure["params"].get("errorText"), "net::ERR_ABORTED", f"{status} Network errorText"
+        )
+        assert_equal(failure["params"].get("canceled"), True, f"{status} canceled navigation")
+        request_id = response_event["params"]["requestId"]
+        terminals = [
+            event
+            for event in probe.events
+            if event["method"] in {"Network.loadingFailed", "Network.loadingFinished"}
+            and event["params"].get("requestId") == request_id
+        ]
+        assert_equal(len(terminals), 1, f"{status} navigation terminal count")
+        snapshot = await _active_document_snapshot(probe.cdp)
+        _assert_retained_document(snapshot)
+        _assert_no_navigation_dcl(probe.events, response_event)
+        if any(event["method"] == "Runtime.executionContextsCleared" for event in probe.events):
+            raise SmokeError(f"{status} cleared the retained Document's Runtime contexts")
+        assert_equal(
+            await _evaluate_value(probe.cdp, "document.querySelector('#retainedField')?.value"),
+            "retained",
+            f"{status} retained form value",
+        )
+        assert_equal(await probe.cdp.send("Page.getNavigationHistory"), history, f"{status} history")
         observed = _compact_observation(result, response_event, snapshot)
-        observed["outcome"] = outcome
+        observed["outcome"] = "retained-document"
+        observed["fetchStage"] = fetch_stage
         return observed
 
 
@@ -445,7 +547,7 @@ def _assert_no_navigation_dcl(
         in {"DOMContentLoaded", "domContentLoaded"}
     ]
     if matching:
-        raise SmokeError(f"download navigation emitted DOMContentLoaded: {matching}")
+        raise SmokeError(f"non-document navigation emitted DOMContentLoaded: {matching}")
 
 
 def _document_request_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

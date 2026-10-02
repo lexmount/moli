@@ -12,6 +12,7 @@ use crate::automation::FrontendProtocol;
 use crate::conn::{CommandOwnerScope, ResponseCommitReady};
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
+    MainDocumentBodyNetworkProgress,
 };
 
 use super::browser_context::BrowserContext;
@@ -223,10 +224,18 @@ pub struct DownloadNavigation {
 }
 
 #[derive(Debug)]
+/// A 204/205 response retains the current Document and aborts the navigation.
+pub struct NoContentNavigation {
+    pub(crate) final_url: Url,
+    pub(crate) network_progress: MainDocumentBodyNetworkProgress,
+}
+
+#[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
     Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
+    NoContent(Box<NoContentNavigation>),
     NetworkFailure(String),
 }
 

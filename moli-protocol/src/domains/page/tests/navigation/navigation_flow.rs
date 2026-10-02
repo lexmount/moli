@@ -1,5 +1,97 @@
 use super::*;
 
+#[tokio::test]
+async fn no_content_navigation_retains_document_and_reports_abort() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for background in [false, true] {
+                for status in [204, 205] {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let address = listener.local_addr().unwrap();
+                    let server = tokio::spawn(async move {
+                        axum::serve(
+                            listener,
+                            axum::Router::new().route(
+                                "/empty",
+                                axum::routing::get(move || async move {
+                                    (
+                                        axum::http::StatusCode::from_u16(status).unwrap(),
+                                        [("content-type", "text/plain")],
+                                        "",
+                                    )
+                                }),
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                    });
+                    let mut ctx = TestContext::new();
+                    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+                    ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
+                    for (id, method, params) in [
+                        (1, "Page.enable", json!({})),
+                        (2, "Network.enable", json!({})),
+                        (3, "Runtime.enable", json!({})),
+                        (4, "Page.setLifecycleEventsEnabled", json!({"enabled":true})),
+                        (5, "Runtime.evaluate", json!({"expression":
+                            "globalThis.retainedMarker=42;document.body.innerHTML='<input id=field value=retained>'"})),
+                        (6, "Page.getNavigationHistory", json!({})),
+                    ] {
+                        ctx.process_async(json!({"id":id,"method":method,"params":params,"sessionId":"SID-1"})).await;
+                        assert!(ctx.sent.iter().find(|message| message["id"] == id).unwrap()["error"].is_null());
+                    }
+                    let history = take_response_by_id(&mut ctx, 6)["result"].clone();
+                    ctx.sent.clear();
+                    if background {
+                        ctx.enable_background_navigation_scheduler_for_test();
+                    }
+                    let url = format!("http://{address}/empty");
+                    ctx.process_and_wait_for_response_async(json!({
+                        "id":7,"method":"Page.navigate","sessionId":"SID-1","params":{"url":url}
+                    })).await;
+                    let reply = take_response_by_id(&mut ctx, 7);
+                    assert!(reply["error"].is_null(), "{reply}");
+                    assert_eq!(reply["result"]["errorText"], "net::ERR_ABORTED");
+                    assert_eq!(reply["result"]["isDownload"], false);
+                    let loader_id = &reply["result"]["loaderId"];
+                    assert!(loader_id.is_string());
+                    wait_until_scheduler_message(&mut ctx, "no-content terminal", |message| {
+                        message["method"] == "Network.loadingFailed"
+                            && message["params"]["requestId"] == *loader_id
+                    }).await;
+                    let response = ctx.sent.iter().find(|message| {
+                        message["method"] == "Network.responseReceived"
+                            && message["params"]["requestId"] == *loader_id
+                    }).unwrap();
+                    assert_eq!(response["params"]["response"]["status"], status);
+                    assert_eq!(response["params"]["response"]["url"], url);
+                    let terminals: Vec<_> = ctx.sent.iter().filter(|message| {
+                        matches!(message["method"].as_str(), Some("Network.loadingFailed" | "Network.loadingFinished"))
+                            && message["params"]["requestId"] == *loader_id
+                    }).collect();
+                    assert_eq!(terminals.len(), 1);
+                    assert_eq!(terminals[0]["params"]["errorText"], "net::ERR_ABORTED");
+                    assert_eq!(terminals[0]["params"]["canceled"], true);
+                    assert!(!ctx.sent.iter().any(|message| {
+                        matches!(message["method"].as_str(), Some("Page.frameNavigated" | "Runtime.executionContextsCleared"))
+                            || message["method"] == "Page.lifecycleEvent"
+                                && message["params"]["loaderId"] == *loader_id
+                                && message["params"]["name"] == "DOMContentLoaded"
+                    }));
+                    ctx.process_async(json!({"id":8,"method":"Runtime.evaluate","sessionId":"SID-1",
+                        "params":{"expression":"[location.href,retainedMarker,document.querySelector('#field').value]","returnByValue":true}})).await;
+                    assert_eq!(take_response_by_id(&mut ctx, 8)["result"]["result"]["value"], json!(["about:blank",42,"retained"]));
+                    ctx.process_async(json!({"id":9,"method":"Page.getNavigationHistory","sessionId":"SID-1"})).await;
+                    assert_eq!(take_response_by_id(&mut ctx, 9)["result"], history);
+                    ctx.process_and_wait_for_response_async(json!({"id":10,"method":"Page.navigate","sessionId":"SID-1",
+                        "params":{"url":"data:text/html,<body>next document"}})).await;
+                    assert!(take_response_by_id(&mut ctx, 10)["result"]["errorText"].is_null());
+                    server.abort();
+                }
+            }
+        }).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn data_url_commit_applies_preloads_worlds_and_bindings_before_author_script() {
     let mut ctx = TestContext::new();

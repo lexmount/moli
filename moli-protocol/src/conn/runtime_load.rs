@@ -32,6 +32,10 @@ use crate::domains::network::{
 const HTTP_RESPONSE_CODE_FAILURE_ERROR_TEXT: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
 const CAPTURED_RAW_REPLAY_CHUNK_SIZE: usize = 64 * 1024;
 
+fn response_status_has_no_content(status: u16) -> bool {
+    matches!(status, 204 | 205)
+}
+
 fn apply_navigation_request_load_policy(
     load_inputs: TargetNavigationLoadInputs,
     policy: NavigationRequestLoadPolicy,
@@ -333,9 +337,6 @@ impl std::fmt::Debug for ResponseCommitReady {
 }
 
 impl ResponseCommitReady {
-    pub(crate) fn response_status(&self) -> u16 {
-        self.response_status
-    }
     pub(crate) fn final_url(&self) -> &Url {
         &self.final_url
     }
@@ -894,6 +895,7 @@ impl BackgroundNavigationLoadJob {
                 response_status_may_use_http_error_page(response.status);
             if !super::downloads::response_headers_indicate_download(&response.headers)
                 && !defer_early_result_for_http_error_body
+                && !response_status_has_no_content(response.status)
                 && let Some(early_result) = early_result.take()
             {
                 early_result_sent = early_result.emit();
@@ -1272,6 +1274,14 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     }
     let body_network_progress_state =
         body_progress_source.body_network_progress_for_completed_events(network_events);
+    if response_status_has_no_content(response_status) {
+        return Ok(NavigationLoadOutcome::NoContent(Box::new(
+            NoContentNavigation {
+                final_url,
+                network_progress: body_network_progress_state,
+            },
+        )));
+    }
     let body_progress_source_for_body_finish = body_progress_source.clone();
     let initial_body_chunk = if response_status_may_use_http_error_page(response_status) {
         match first_nonempty_response_body_chunk(&mut response).await? {
@@ -2008,6 +2018,9 @@ impl CdpConnection {
             NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {
                 Err(anyhow::anyhow!("navigation resolved to a download"))
+            }
+            NavigationLoadOutcome::NoContent(_) => {
+                Err(anyhow::Error::msg(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT))
             }
             NavigationLoadOutcome::NetworkFailure(error_text) => {
                 Err(anyhow::Error::msg(error_text))
@@ -3256,6 +3269,21 @@ impl CdpConnection {
             ));
         }
 
+        if response_status_has_no_content(head.status) {
+            let network_progress = body_progress_source.body_network_progress_for_response_head(
+                &request_method,
+                &request_headers,
+                &head,
+                network_observation_journal,
+            );
+            return Ok(NavigationLoadOutcome::NoContent(Box::new(
+                NoContentNavigation {
+                    final_url: head.final_url,
+                    network_progress,
+                },
+            )));
+        }
+
         if load_inputs.browser_context_id.is_none() {
             let page_reservation = self
                 .standalone_navigation_engine
@@ -3604,53 +3632,20 @@ async fn prepare_captured_document_response_with_engine_async(
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
 ) -> anyhow::Result<ResponseCommitReady> {
-    let network_extra_info_available = !network_observation_journal.is_empty();
-    body_progress_source.emit_response_metadata(
+    let body_network_progress_state = body_progress_source.body_network_progress_for_response_head(
         &request_method,
-        &request_headers.to_byte_strings(),
-        head.request_cookie_report.as_ref(),
-        &head.redirect_chain,
-        &head.final_url,
-        head.status,
-        &head.headers,
-        &head.cookie_set_reports,
-        &network_observation_journal,
-        network_extra_info_available,
-        head.from_cache,
-        head.negotiated_http_version,
+        &request_headers,
+        &head,
+        network_observation_journal,
     );
     let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
         load_inputs.fetch_subresource_interception;
     let response_from_cache = head.from_cache;
-    let negotiated_http_version = head.negotiated_http_version;
     let final_url = head.final_url;
     let response_status = head.status;
     let response_headers = head.headers;
-    let initial_request_cookie_report = head.request_cookie_report;
-    let response_cookie_reports = head.cookie_set_reports;
     let redirected = head.redirected;
-    let redirect_chain = head
-        .redirect_chain
-        .into_iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
-    let body_network_progress_state = body_progress_source
-        .body_network_progress_for_completed_events(
-            CompletedMainDocumentNetworkEvents::new(
-                request_method.clone(),
-                request_headers.to_byte_strings(),
-                initial_request_cookie_report,
-                response_status,
-                response_headers.clone(),
-                response_cookie_reports,
-                redirect_chain.clone(),
-                network_extra_info_available,
-                response_from_cache,
-            )
-            .with_negotiated_http_version(negotiated_http_version)
-            .with_network_observation_journal(network_observation_journal),
-        );
-
+    let redirect_count = head.redirect_chain.len();
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
     let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx);
@@ -3667,7 +3662,7 @@ async fn prepare_captured_document_response_with_engine_async(
             final_url.clone(),
             load_inputs.navigation_initiator_url.clone(),
             redirected,
-            redirect_chain.len(),
+            redirect_count,
             response_status,
             response_headers.clone(),
             raw_body,

@@ -418,6 +418,13 @@ async fn assert_navigation_result(topology: &str, destination: &str) {
     };
     let source_url = format!("http://{address}/source");
     let mut ctx = page_at(&source, url::Url::parse(&source_url).unwrap()).await;
+    command(
+        &mut ctx,
+        2,
+        "Runtime.evaluate",
+        json!({"expression":"globalThis.retainedDocument=document"}),
+    )
+    .await;
     command(&mut ctx, 3, "WebMCP.enable", json!({})).await;
     let added = event(&mut ctx, "WebMCP.toolsAdded").await;
     let frame = added["params"]["tools"][0]["frameId"].as_str().unwrap();
@@ -450,6 +457,20 @@ async fn assert_navigation_result(topology: &str, destination: &str) {
                 "Cannot return tool results after a cross-origin navigation"
             );
         }
+    }
+    if matches!(destination, "empty" | "reset") {
+        let retained = command(&mut ctx, 5, "Runtime.evaluate", json!({
+            "expression": format!("document===retainedDocument && location.href==='{source_url}' && \
+                document.querySelector('form input').value==='unused' && \
+                !document.querySelector('form').matches(':tool-form-active')"),
+            "returnByValue":true
+        })).await;
+        assert_eq!(retained["result"]["result"]["value"], true);
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "WebMCP.toolsRemoved")
+        );
     }
     assert_eq!(
         ctx.sent
@@ -490,8 +511,10 @@ async fn web_mcp_navigation_rejects_replaced_destination_document() {
 
 #[tokio::test]
 async fn web_mcp_navigation_without_destination_document_reports_error() {
-    assert_navigation_result("root", "empty").await;
-    assert_navigation_result("named_child", "empty").await;
+    for destination in ["empty", "reset"] {
+        assert_navigation_result("root", destination).await;
+        assert_navigation_result("named_child", destination).await;
+    }
 }
 
 #[tokio::test]
