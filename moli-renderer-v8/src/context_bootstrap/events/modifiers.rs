@@ -22,7 +22,7 @@ const MODIFIER_KEYS: [&str; 14] = [
 /// EventModifierInit members, in Web IDL dictionary order.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "EventModifierInit")]
-struct EventModifierInitMembers {
+pub(super) struct EventModifierInitMembers {
     #[webidl(default = false)]
     alt_key: bool,
     #[webidl(default = false)]
@@ -63,7 +63,11 @@ struct EventModifierProperties {
 }
 
 impl EventModifierInitMembers {
-    fn initialize<'s>(&self, scope: &mut v8::PinScope<'s, '_>, event: v8::Local<'s, v8::Object>) {
+    pub(super) fn initialize<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
         let event = event_backing(scope, event);
         let values = [
             self.alt_key,
