@@ -249,7 +249,9 @@ Layout is an on-demand snapshot rather than continuously maintained state. The
 first geometry request (a cold start) builds a working layout tree from the
 current DOM/style, freezes its canonical geometry into an immutable,
 DOM-independent `FrozenLayoutTree`, and retains only that latest tree. Ordinary
-geometry reads may reuse it even if the page has changed. Screenshots always
+geometry reads reuse it while layout inputs are unchanged. Input changes mark
+the retained tree dirty without running layout; the next geometry request
+rebuilds it once from the current inputs. Screenshots always
 rebuild and replace the frozen tree. Each screencast subscription remembers
 only an opaque visual-state token: an unchanged token suppresses the poll,
 while a changed token triggers one fresh frame. Paint results are never reused.

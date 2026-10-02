@@ -2563,6 +2563,9 @@ impl RendererOwnerLocalStore {
         // silently writes into the asynchronous Page journal and lets its
         // response overtake the resulting protocol fact.
         let command_turn_output_scope = entry.page_vm_mut().begin_command_turn_output_scope()?;
+        if matches!(&command, RendererPageCommand::StopDocumentLifecycle) {
+            entry.stop_pending_main_document_loading();
+        }
         let replacement_lifecycle_snapshot = entry
             .page_vm()
             .document_replacement_lifecycle_action_snapshot();

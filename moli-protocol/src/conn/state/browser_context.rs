@@ -1189,6 +1189,17 @@ impl BrowserContext {
             })
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.page_target(&token.target_id).is_some_and(|target| {
+            target
+                .runtime_slot()
+                .background_navigation_stop_requested(token)
+        })
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.page_targets
             .iter()

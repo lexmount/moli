@@ -557,14 +557,26 @@ impl BackgroundNavigationLifecycleCompletion {
         self.ready_at.elapsed().as_millis()
     }
 
-    pub(crate) fn materialize(self, conn: &mut CdpConnection) -> MaterializedNavigationCompletion {
+    pub(crate) fn materialize(
+        self,
+        conn: &mut CdpConnection,
+        stop_requested: bool,
+    ) -> MaterializedNavigationCompletion {
         let Self {
             token,
             state,
             navigation,
             ready_at: _,
         } = self;
-        let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
+        let navigation = if stop_requested {
+            network::materialize_navigation_failure_preserving_committed_document(
+                conn,
+                &state,
+                "Navigation stopped".to_owned(),
+            )
+        } else {
+            network::materialize_navigation_load_result(conn, &state, navigation)
+        };
         MaterializedNavigationCompletion::new(token, state, navigation)
     }
 }

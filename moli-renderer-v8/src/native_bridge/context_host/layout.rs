@@ -513,6 +513,13 @@ impl JsContextHost {
             .mark_visual_state_dirty();
     }
 
+    /// Invalidates derived geometry while retaining the published snapshot.
+    /// Only a visual publication replaces that shared snapshot.
+    pub(crate) fn mark_layout_input_dirty(&self) {
+        debug_assert!(!self.layout_pass_active.get());
+        self.clear_layout_rect_cache();
+    }
+
     pub(crate) fn document_web_font_resources_are_current(
         &self,
         generation: crate::style_engine::StylesheetResourceGeneration,

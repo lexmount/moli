@@ -1605,6 +1605,19 @@ impl CdpConnection {
             })
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        let Some(browser_context_id) = self.browser_context_id_for_target(&token.target_id) else {
+            return false;
+        };
+        self.browser_context_by_id(browser_context_id)
+            .is_some_and(|browser_context| {
+                browser_context.background_navigation_stop_requested(token)
+            })
+    }
+
     pub fn has_inflight_background_navigation(&self) -> bool {
         self.browser_contexts()
             .any(BrowserContext::has_inflight_background_navigation)
@@ -2504,19 +2517,22 @@ impl CdpConnection {
     ) -> Vec<BackgroundProtocolEvent> {
         let completion = match completion {
             crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
+                let stop_requested =
+                    self.background_navigation_stop_requested(completion.navigation_token());
                 if !self.settle_background_navigation_completion(completion.navigation_token()) {
                     tracing::debug!(
                         token = ?completion.navigation_token(),
                         "background navigation completion did not match the target-owned request"
                     );
                 }
-                completion
+                (completion, stop_requested)
             }
             crate::domains::page::BackgroundNavigationCompletion::MainDocumentBody(completion) => {
                 completion.record_if_current(self);
                 return command_context.take_protocol_events();
             }
         };
+        let (completion, stop_requested) = completion;
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         if timing_started.is_some() {
             tracing::info!(
@@ -2530,7 +2546,7 @@ impl CdpConnection {
         // Page.navigate response (success or abort-error) for the outstanding
         // command id. The target retains its NavigationEngine independently of
         // this completion, including when the completion is stale.
-        let completion = completion.materialize(self);
+        let completion = completion.materialize(self, stop_requested);
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",

@@ -99,6 +99,7 @@ pub(crate) struct PendingNavigationRequest {
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_work: BackgroundWorkState,
     committed: bool,
+    stop_requested: bool,
 }
 
 impl PendingNavigationRequest {
@@ -109,6 +110,7 @@ impl PendingNavigationRequest {
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_work: BackgroundWorkState::NotStarted,
             committed: false,
+            stop_requested: false,
         }
     }
 
@@ -754,10 +756,28 @@ impl TargetPageSlot {
         true
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|request| request.matches(token) && request.stop_requested)
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
             .is_some_and(|request| request.background_work == BackgroundWorkState::Running)
+    }
+
+    pub(crate) fn cancel_inflight_document_navigation(&mut self) {
+        if let Some(request) = self.pending_navigation_request.as_mut() {
+            // Keep the token installed: the existing completion path owns the
+            // aborted response and must still settle this exact navigation.
+            request.stop_requested = true;
+            request.cancel();
+        }
     }
 
     pub(crate) fn bind_pending_document_navigation_renderer_page(
@@ -1618,6 +1638,31 @@ mod pending_renderer_page_tests {
         assert!(
             slot.bind_pending_document_navigation_renderer_page(&navigation, reserved_page),
             "the navigation binding should accept its already-reserved renderer Page"
+        );
+    }
+
+    #[test]
+    fn navigation_cancellation_preserves_completion_token_and_is_target_local() {
+        let mut slot = TargetPageSlot::default();
+        let token = slot.start_document_navigation("TID-1".to_owned(), "LOADER-1".to_owned());
+        let cancellation = slot
+            .document_navigation_cancellation_handle(&token)
+            .unwrap();
+        let mut peer = TargetPageSlot::default();
+        let peer_token = peer.start_document_navigation("TID-2".to_owned(), "LOADER-2".to_owned());
+        let peer_cancellation = peer
+            .document_navigation_cancellation_handle(&peer_token)
+            .unwrap();
+        slot.cancel_inflight_document_navigation();
+        assert!(cancellation.is_cancelled());
+        assert!(!peer_cancellation.is_cancelled());
+        assert!(slot.accepts_pending_document_navigation_event(&token));
+        let next = slot.start_document_navigation("TID-1".to_owned(), "LOADER-next".to_owned());
+        assert!(
+            !slot
+                .document_navigation_cancellation_handle(&next)
+                .unwrap()
+                .is_cancelled()
         );
     }
 
