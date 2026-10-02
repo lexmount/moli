@@ -20,7 +20,8 @@ use crate::{
 
 use super::super::super::JsContextHost;
 use super::super::forms::{
-    FormAssociatedResetCallbackTiming, normalized_button_command, reset_form_default_action,
+    FormAssociatedResetCallbackTiming, dispatch_form_reset_event, normalized_button_command,
+    reset_form_default_action,
 };
 use super::super::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
@@ -1514,9 +1515,7 @@ fn perform_click_default_action(
     if is_valid_reset_button(runtime, handle)
         && let Some(form_handle) = form_handle
     {
-        if let Some(event) = construct_simple_event(scope, "reset", true, true, false)
-            && dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default()
-        {
+        if dispatch_form_reset_event(scope, runtime_ptr, form_handle).allows_default() {
             let _ = reset_form_default_action(
                 scope,
                 runtime_ptr,
