@@ -386,3 +386,40 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         vec![false, false, false, false, false, true, false, false]
     );
 }
+
+#[test]
+fn source_buffer_interfaces_are_exposed_only_to_window_and_dedicated_workers() {
+    crate::ensure_v8_for_test();
+    for (realm, expected) in [
+        (super::RealmKind::DedicatedWorker, true),
+        (super::RealmKind::SharedWorker, false),
+        (super::RealmKind::ServiceWorker, false),
+    ] {
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+        crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+            scope, global, realm, true,
+        )
+        .expect("worker interfaces");
+        for name in ["MediaSourceHandle", "SourceBuffer", "SourceBufferList"] {
+            assert_eq!(
+                global.has_own_property(scope, v8str(scope, name).into()),
+                Some(expected),
+                "{realm:?}/{name}"
+            );
+            if expected {
+                assert!(
+                    global
+                        .get(scope, v8str(scope, name).into())
+                        .unwrap()
+                        .is_function(),
+                    "{name} materialization"
+                );
+            }
+        }
+    }
+}

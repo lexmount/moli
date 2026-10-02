@@ -19,6 +19,9 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 ];
 
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
+    "MediaSourceHandle",
+    "SourceBuffer",
+    "SourceBufferList",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -118,6 +121,8 @@ const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
     "XMLHttpRequest",
 ];
 const DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &["FileReaderSync"];
+const WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES: &[&str] =
+    &["MediaSourceHandle", "SourceBuffer", "SourceBufferList"];
 
 pub(in crate::context_bootstrap) const INDEXED_DB_INTERFACE_NAMES: &[&str] = &[
     "DOMStringList",
@@ -233,6 +238,7 @@ impl ExposureSet {
     const SERVICE_WORKER: u8 = 1 << 3;
 
     const WINDOW_ONLY: Self = Self(Self::WINDOW);
+    const WINDOW_AND_DEDICATED_WORKER: Self = Self(Self::WINDOW | Self::DEDICATED_WORKER);
     const ALL_REALMS: Self =
         Self(Self::WINDOW | Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
     const WORKERS: Self = Self(Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
@@ -393,6 +399,9 @@ fn exposure_for_name(name: &str) -> ExposureSet {
         "FileSystemSyncAccessHandle" => ExposureSet::DEDICATED_WORKER_ONLY,
         _ if WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_DEDICATED_AND_SHARED_WORKER
+        }
+        _ if WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES.contains(&name) => {
+            ExposureSet::WINDOW_AND_DEDICATED_WORKER
         }
         _ if DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::DEDICATED_AND_SHARED_WORKER

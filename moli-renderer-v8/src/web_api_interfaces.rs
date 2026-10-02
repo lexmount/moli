@@ -20,6 +20,9 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    MediaSourceHandle;
+    SourceBuffer: EventTarget;
+    SourceBufferList: EventTarget;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
