@@ -575,9 +575,15 @@ fn tracks_mouse_hover_for_event(event_name: &str) -> bool {
     matches!(event_name, "mousedown" | "mouseup" | "mousemove")
 }
 
-fn pointer_event_name_for_mouse_event(event_name: &str) -> Option<&'static str> {
+fn pointer_event_name_for_mouse_event(
+    event_name: &str,
+    previous_buttons: i32,
+    buttons: i32,
+) -> Option<&'static str> {
     match event_name {
+        "mousedown" if previous_buttons != 0 => Some("pointermove"),
         "mousedown" => Some("pointerdown"),
+        "mouseup" if buttons != 0 => Some("pointermove"),
         "mouseup" => Some("pointerup"),
         "mousemove" => Some("pointermove"),
         _ => None,
@@ -1110,10 +1116,8 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
         );
-        if is_release {
-            self.suppress_compat_mouse_events = false;
-        }
         if full_release {
+            self.suppress_compat_mouse_events = false;
             self.mouse_routed_frame = None;
             self._context_host.borrow_mut().clear_mouse_press();
         }
@@ -1473,7 +1477,8 @@ impl ScriptVm {
         } else {
             surface_hit.target
         };
-        let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
+        let pointer_event_name =
+            pointer_event_name_for_mouse_event(event_name, prepared.previous_buttons, buttons);
         let tracks_hover = tracks_mouse_hover_for_event(event_name);
         let routed_target = self.mouse_routed_target(hit_handle, position, event_name, &prepared);
         if self.mouse_routed_frame.is_none()
@@ -1790,7 +1795,7 @@ impl ScriptVm {
                 }
                 let dispatched =
                     dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
-                if event_name == "mousedown" && !dispatched.allows_default() {
+                if pointer_event_name == Some("pointerdown") && !dispatched.allows_default() {
                     suppress_compat_mouse_events = true;
                     mouse_down_allows_drag.set(false);
                 }
@@ -1886,9 +1891,9 @@ impl ScriptVm {
                     }
                 }
             }
-            let captured_click_target = if releases_capture {
+            let captured_click_target = if event_name == "mouseup" {
                 let captured = runtime().pointer_capture_target_for_click(pointer_id);
-                if let Some((event, _)) = pointer_event {
+                if releases_capture && let Some((event, _)) = pointer_event {
                     pointer_data.release_capture(scope, runtime_ptr, Some(event));
                 }
                 captured
@@ -2062,7 +2067,6 @@ impl ScriptVm {
                     return Ok(outcome);
                 }
                 Some(MouseReleaseFollowUp::Auxiliary(target)) => {
-                    suppress_compat_mouse_events = false;
                     let had_pending_top_level_navigation_before_event =
                         unsafe { &*runtime_ptr }.has_pending_location_navigation();
                     let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
