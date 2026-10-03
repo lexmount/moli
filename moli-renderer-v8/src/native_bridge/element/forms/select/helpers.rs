@@ -12,7 +12,7 @@ pub(super) fn select_option_handles(runtime: &PageScriptHost, handle: DomHandle)
 }
 
 pub(super) fn select_is_multiple(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    element_has_attribute(runtime, handle, "multiple")
+    has_reflected_attribute(runtime, handle, "multiple")
 }
 
 pub(super) fn effective_option_selected(runtime: &PageScriptHost, handle: DomHandle) -> bool {

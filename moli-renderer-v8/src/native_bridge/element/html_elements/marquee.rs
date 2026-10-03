@@ -3,7 +3,7 @@ use style::attr::{parse_integer, parse_unsigned_integer};
 use crate::{native_bridge::throw_dom_exception, webidl};
 
 use super::super::{
-    element_attribute, html_element_getter_receiver, html_element_setter_receiver,
+    html_element_getter_receiver, html_element_setter_receiver, reflected_attribute,
     set_reflected_attribute,
 };
 
@@ -21,7 +21,7 @@ pub(in crate::native_bridge::element) fn marquee_loop_getter_function<'s>(
     else {
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "loop")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "loop")
         .and_then(|value| parse_integer(value.chars()).ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_LOOP);
@@ -75,7 +75,7 @@ fn marquee_unsigned_long_getter<'s>(
     else {
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute)
         .and_then(|value| parse_unsigned_integer(value.chars()).ok())
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(default_value);

@@ -156,7 +156,7 @@ fn is_viewport_mock_root(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     })
 }
 
-fn element_attribute(runtime: &PageScriptHost, handle: DomHandle, name: &str) -> Option<String> {
+fn reflected_attribute(runtime: &PageScriptHost, handle: DomHandle, name: &str) -> Option<String> {
     runtime.dom_host().get_attribute(handle, name)
 }
 
@@ -210,7 +210,7 @@ fn class_has_fill_available_shell_hints(class: &str) -> bool {
 }
 
 fn element_class(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
-    element_attribute(runtime, handle, "class")
+    reflected_attribute(runtime, handle, "class")
 }
 
 fn has_explicit_viewport_shell_hint(runtime: &PageScriptHost, handle: DomHandle) -> bool {

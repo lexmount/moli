@@ -25,9 +25,9 @@ use super::reflection::{
 };
 use super::{
     attribute_property_getter_from_object_or_detached,
-    boolean_attribute_property_getter_from_object_or_detached, element_attribute,
-    element_has_attribute, form_associated_form_owner, html_element_getter_receiver,
-    html_element_setter_receiver, property_dom_string_value, resolve_url_like_attribute,
+    boolean_attribute_property_getter_from_object_or_detached, form_associated_form_owner,
+    has_reflected_attribute, html_element_getter_receiver, html_element_setter_receiver,
+    property_dom_string_value, reflected_attribute, resolve_url_like_attribute,
     set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object, set_reflected_attribute,
@@ -320,7 +320,7 @@ pub(in crate::native_bridge) fn html_as_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "as");
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "as");
     let Some(value) = v8_string(
         scope,
         crate::link_as::link_as_destination(value.as_deref()).reflected_value(),
@@ -592,7 +592,7 @@ pub(in crate::native_bridge) fn table_cell_scope_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "scope").unwrap_or_default();
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "scope").unwrap_or_default();
     let canonical = canonical_scope_value(&value);
     let Some(out) = v8_string(scope, canonical) else {
         rv.set_null();
@@ -667,7 +667,8 @@ fn html_unsigned_long_attribute_getter_for_receiver<'s, F>(
         rv.set_undefined();
         return;
     }
-    let raw = element_attribute(unsafe { &*runtime_ptr }, handle, content_attr).unwrap_or_default();
+    let raw =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, content_attr).unwrap_or_default();
     let parsed = parse_non_negative_integer(&raw)
         .filter(|value| *value <= i32::MAX as u32)
         .map(coerce)
@@ -1225,7 +1226,7 @@ fn html_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,
@@ -1408,7 +1409,7 @@ pub(in crate::native_bridge) fn pre_width_getter_function<'s>(
         rv.set_int32(0);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "width")
         .and_then(|value| parse_html_integer_prefix(&value))
         .unwrap_or(0);
     rv.set_int32(value);
@@ -1675,7 +1676,8 @@ fn unsigned_long_attribute_getter_from_object_or_detached<'s, F>(
         rv.set_undefined();
         return;
     }
-    let raw = element_attribute(unsafe { &*runtime_ptr }, handle, content_attr).unwrap_or_default();
+    let raw =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, content_attr).unwrap_or_default();
     let parsed = parse_non_negative_integer(&raw)
         .filter(|value| *value <= i32::MAX as u32)
         .map(coerce)
@@ -1808,7 +1810,7 @@ pub(in crate::native_bridge) fn html_fetch_priority_getter_function<'s>(
     ) else {
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, descriptor.attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, descriptor.attribute)
         .unwrap_or_default();
     let Some(value) = v8_string(scope, canonical_fetch_priority_value(&value)) else {
         rv.set_empty_string();
@@ -1833,7 +1835,8 @@ pub(in crate::native_bridge) fn html_decoding_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "decoding").unwrap_or_default();
+    let value =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "decoding").unwrap_or_default();
     let Some(out) = v8_string(scope, canonical_decoding_value(&value)) else {
         rv.set_empty_string();
         return;
@@ -2100,7 +2103,7 @@ pub(in crate::native_bridge) fn node_translate_getter_function<'s>(
 fn element_translate_mode(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = Some(handle);
     while let Some(candidate) = current {
-        if let Some(value) = element_attribute(runtime, candidate, "translate") {
+        if let Some(value) = reflected_attribute(runtime, candidate, "translate") {
             if value.eq_ignore_ascii_case("no") {
                 return false;
             }
@@ -2175,7 +2178,7 @@ pub(in crate::native_bridge) fn node_access_key_label_getter_function<'s>(
         return;
     }
 
-    let access_key = element_attribute(runtime, handle, "accesskey").unwrap_or_default();
+    let access_key = reflected_attribute(runtime, handle, "accesskey").unwrap_or_default();
     if access_key.is_empty() || access_key.encode_utf16().count() != 1 {
         rv.set_empty_string();
         return;
@@ -2249,7 +2252,7 @@ pub(in crate::native_bridge) fn node_spellcheck_getter_function<'s>(
         return;
     }
     rv.set_bool(
-        !element_attribute(unsafe { &*runtime_ptr }, handle, "spellcheck")
+        !reflected_attribute(unsafe { &*runtime_ptr }, handle, "spellcheck")
             .is_some_and(|value| value.eq_ignore_ascii_case("false")),
     );
 }
@@ -2388,7 +2391,7 @@ fn canonical_attribute_getter_from_object<'s>(
         rv.set_undefined();
         return;
     }
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
     let Some(value) = v8_string(scope, canonical(&value)) else {
         rv.set_null();
         return;
@@ -2479,7 +2482,7 @@ pub(in crate::native_bridge) fn node_hidden_getter_function<'s>(
     else {
         return;
     };
-    match element_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
+    match reflected_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
         Some(value) if value.eq_ignore_ascii_case("until-found") => {
             if let Some(value) = v8_string(scope, "until-found") {
                 rv.set(value.into());
@@ -2547,7 +2550,7 @@ pub(in crate::native_bridge) fn node_inert_getter_function<'s>(
         throw_incompatible_getter_receiver(scope, "HTMLElement", "inert");
         return;
     }
-    rv.set_bool(element_has_attribute(runtime, handle, "inert"));
+    rv.set_bool(has_reflected_attribute(runtime, handle, "inert"));
 }
 
 pub(in crate::native_bridge) fn node_inert_setter_function<'s>(

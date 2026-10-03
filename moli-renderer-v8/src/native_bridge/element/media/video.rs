@@ -2,8 +2,8 @@ use crate::util::v8_string;
 use crate::webidl;
 
 use super::super::{
-    element_attribute, html_element_getter_receiver, html_element_setter_receiver,
-    property_usv_string_value, resolve_url_like_attribute, set_reflected_attribute,
+    html_element_getter_receiver, html_element_setter_receiver, property_usv_string_value,
+    reflected_attribute, resolve_url_like_attribute, set_reflected_attribute,
 };
 
 fn video_getter_receiver<'s>(
@@ -130,7 +130,7 @@ fn media_unsigned_long_attribute_getter<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute)
         .and_then(|value| parse_unsigned_long_prefix(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(0);
