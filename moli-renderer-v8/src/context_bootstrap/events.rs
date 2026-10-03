@@ -19,7 +19,6 @@ pub(crate) use moli_webapi::events::subclasses::submit::{
 use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
-pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod wrappers;
 
 pub(in crate::context_bootstrap) use moli_webapi::events::{audio, speech};
@@ -34,6 +33,10 @@ pub(in crate::context_bootstrap) use value::{
 };
 
 use moli_webapi::events::subclasses::{COMMAND_EVENT_SOURCE_SLOT, TOGGLE_EVENT_SOURCE_SLOT};
+pub(in crate::context_bootstrap) use moli_webapi::events::ui::{
+    composition_event_init_callback, ui_event_init_callback,
+};
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use ui::{
