@@ -47,12 +47,8 @@ async function blobResponseHeaderProbe() {
     check(label + '/url', xhr.responseURL === url, true);
     check(label + '/type', xhr.getResponseHeader('Content-Type'), type);
     check(label + '/length', xhr.getResponseHeader('Content-Length'), String(bytes.length));
-    const allHeaders = xhr.getAllResponseHeaders().split('\r\n').filter(Boolean).map(line => {
-      const colon = line.indexOf(':');
-      return [line.slice(0, colon).toLowerCase(), line.slice(colon + 2)];
-    });
-    check(label + '/all-headers', allHeaders,
-      [['content-length', String(bytes.length)], ['content-type', type]]);
+    check(label + '/all-headers', xhr.getAllResponseHeaders(),
+      'content-length: ' + bytes.length + '\r\ncontent-type: ' + type + '\r\n');
     check(label + '/body', buffer ? Array.from(new Uint8Array(xhr.response)) : xhr.responseText,
       buffer ? bytes : new TextDecoder().decode(new Uint8Array(bytes)));
   }
