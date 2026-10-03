@@ -1663,6 +1663,13 @@ impl RuntimeOwner {
             return;
         }
 
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .streaming_mut()
+                .expect("streaming request should use streaming collector")
+                .finish_headers_at_eof()
+        });
+
         if !job.cancel_handle.is_cancelled()
             && easy
                 .get_ref()
@@ -1974,6 +1981,13 @@ impl RuntimeOwner {
             );
             return;
         }
+
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .raw_streaming_mut()
+                .expect("raw streaming request should use raw streaming collector")
+                .finish_headers_at_eof()
+        });
 
         if !job.cancel_handle.is_cancelled()
             && easy
@@ -2288,18 +2302,14 @@ impl RuntimeOwner {
             }
 
             job.cancel_handle.mark_response_terminal();
-            let (started_tx, cookie_set_reports, cache_body_writer) = {
+            let (started_tx, cache_body_writer) = {
                 let streaming = easy
                     .get_mut()
                     .raw_streaming_mut()
                     .expect("raw streaming request should use raw streaming collector");
                 streaming.finish_streaming_body();
                 let (started_tx, _) = streaming.take_response_channels();
-                (
-                    started_tx,
-                    streaming.take_cookie_set_reports(),
-                    streaming.take_cache_body_writer(),
-                )
+                (started_tx, streaming.take_cache_body_writer())
             };
             if let Some(cache_body_writer) = cache_body_writer
                 && let Err(error) = finish_streaming_cached_response(
