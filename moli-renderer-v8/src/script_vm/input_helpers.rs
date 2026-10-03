@@ -4,8 +4,54 @@ use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
 use crate::types::ScriptErrorValue;
 
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy)]
+pub(super) struct MouseFrameCapture {
+    pub(super) frame: DomHandle,
+    // A navigation replaces the Document, but retains this browsing context.
+    // Removing and reattaching the same iframe creates a different lane.
+    pub(super) owner: crate::frame_owner_model::FrameLaneTaskOwner,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn mouse_button_mask(button: i32) -> i32 {
+    match button {
+        0 => 1,
+        1 => 4,
+        2 => 2,
+        3 => 8,
+        4 => 16,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn mouse_button_from_mask(mask: i32) -> Option<i32> {
+    match mask {
+        1 => Some(0),
+        4 => Some(1),
+        2 => Some(2),
+        8 => Some(3),
+        16 => Some(4),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
+    if mask.count_ones() == 1 {
+        mouse_button_from_mask(mask)
+    } else {
+        None
+    }
+}
+
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
+    vm._context_host.borrow_mut().clear_mouse_input_state();
+    #[cfg(feature = "devtools")]
+    vm.mouse_frame_captures.clear();
     vm.hovered_mouse_handle = None;
     vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
     vm._context_host

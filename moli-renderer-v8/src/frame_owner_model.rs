@@ -174,6 +174,8 @@ pub(crate) use navigation_tasks::{
 };
 #[cfg(test)]
 pub(crate) use records::FrameFunctionConstructorSource;
+#[cfg(feature = "devtools")]
+pub(crate) use records::FrameLaneTaskOwner;
 pub(crate) use records::{
     ChildFrameOwnerSnapshot, DocumentContextTransition, DocumentCreationKind, DocumentId,
     DocumentInspectorBindingTransition, DocumentIsolatedWorldTransition, DocumentLoadDelayTokenId,

@@ -474,7 +474,7 @@ pub(crate) use geometry::observable_input_hit_test;
 pub(crate) use geometry::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{
-    InputHit, InputSurfaceHit, apply_scroll_observable_effects, input_surface_hit_test,
+    InputHit, InputSurfaceHit, apply_scroll_observable_effects, captured_frame_input_surface_hit_test, input_surface_hit_test,
     observable_geometry_query, perform_scrollbar_scroll_default_action,
     perform_wheel_scroll_default_action,
 };
