@@ -388,9 +388,14 @@ class NativeInput:
             if button not in pointer.buttons:
                 return
             pointer.buttons.remove(button)
+        dispatch_button = button
+        if event == "mouseMoved" and pointer.kind == "mouse" and pointer.buttons:
+            # Chromium needs the held button as well as the buttons bitmask to
+            # keep mouse capture during a drag. Pen moves use no button change.
+            dispatch_button = pointer.buttons[-1]
         await self.command("Input.dispatchMouseEvent", {
             "type": event, "x": pointer.x, "y": pointer.y,
-            "button": button_names.get(button, "none"),
+            "button": button_names.get(dispatch_button, "none"),
             "buttons": sum(button_bits[b] for b in pointer.buttons),
             "modifiers": self.modifiers(), "pointerType": pointer.kind,
             "clickCount": pointer.click_count if event in {"mousePressed", "mouseReleased"} else 0,
