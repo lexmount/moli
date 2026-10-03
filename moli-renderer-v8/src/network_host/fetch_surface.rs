@@ -838,7 +838,10 @@ fn response_clone_callback<'s>(
         );
         return;
     }
-    let global = scope.get_current_context().global(scope);
+    let Some(realm) = this.get_creation_context(scope) else {
+        return;
+    };
+    let global = realm.global(scope);
     let Some(ctor) = global.get(scope, v8str(scope, "Response").into()) else {
         rv.set_undefined();
         return;
