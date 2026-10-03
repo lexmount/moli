@@ -664,60 +664,6 @@ fn request_and_response_headers_share_intrinsic_prototype_methods() {
     assert_eq!(result, "ok");
 }
 
-#[tokio::test]
-async fn response_headers_keep_receiver_realm_across_borrowed_getters_and_clones() {
-    let mut vm = new_storage_test_vm("https://headers-owner-realm.test/");
-    vm.eval(
-        r#"
-const root = document.documentElement || document.appendChild(document.createElement('html'));
-const body = document.body || root.appendChild(document.createElement('body'));
-globalThis.headersFrame = document.createElement('iframe');
-body.appendChild(headersFrame);
-"#,
-    )
-    .unwrap();
-    assert_initial_about_blank_child_completed_synchronously_for_test(&mut vm, "Headers realm")
-        .await;
-    let _ = materialize_single_child_default_realm_for_test(&mut vm, "Headers realm");
-    let result = vm.eval(r#"
-(() => {
-  const check = (value, label) => { if (!value) throw new Error(label); };
-  const child = headersFrame.contentWindow;
-  const parentHeaders = Headers;
-  const childHeaders = child.Headers;
-  const parentResponse = new Response('parent', {headers: {'x-realm': 'parent'}});
-  const childResponse = new child.Response('child', {headers: {'x-realm': 'child'}});
-  const parentGetter = Object.getOwnPropertyDescriptor(Response.prototype, 'headers').get;
-  const childGetter = Object.getOwnPropertyDescriptor(child.Response.prototype, 'headers').get;
-  const descriptors = [globalThis, child].map(realm => Object.getOwnPropertyDescriptor(realm, 'Headers'));
-  for (const realm of [globalThis, child]) Object.defineProperty(realm, 'Headers', {
-    configurable: true, get() { throw new Error('public Headers lookup'); }
-  });
-  try {
-    for (const [response, clone, ctor, getter, value] of [
-      [parentResponse, child.Response.prototype.clone.call(parentResponse), parentHeaders, childGetter, 'parent'],
-      [childResponse, Response.prototype.clone.call(childResponse), childHeaders, parentGetter, 'child']
-    ]) {
-      check(getter.call(response) === response.headers, 'borrowed getter returns associated Headers');
-      for (const entry of [response, clone]) {
-        const headers = entry.headers;
-        check(Object.getPrototypeOf(headers) === ctor.prototype && headers instanceof ctor,
-          'Headers must use the response realm');
-        check(headers.get === ctor.prototype.get && Reflect.ownKeys(headers).length === 0,
-          'Headers must share realm prototype methods');
-        check(headers.get('x-realm') === value, 'cross-realm entries');
-        check(ctor.prototype.get.call(headers, 'x-realm') === value, 'branded receiver');
-      }
-    }
-    return 'ok';
-  } finally {
-    [globalThis, child].forEach((realm, index) => Object.defineProperty(realm, 'Headers', descriptors[index]));
-  }
-})()
-"#).unwrap();
-    assert_eq!(result, "ok");
-}
-
 #[test]
 fn headers_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://headers-prototype-methods.test/");

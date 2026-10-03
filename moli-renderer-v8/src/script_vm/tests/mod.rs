@@ -2290,6 +2290,7 @@ mod gamepad_interfaces;
 
 mod dom_elements;
 mod dom_exception_proxy_identity;
+mod dom_rect_structured_clone;
 
 mod exception_utf16_arguments;
 
@@ -2297,6 +2298,7 @@ mod dom_xhr;
 
 mod svg_length_list_native_receivers;
 
+mod domrect_receiver_consolidation;
 mod dynamic_inline_scripts;
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
@@ -2483,8 +2485,6 @@ mod report_body_interface_exposure;
 
 mod document_range_factory_realm;
 
-mod dom_rect_structured_clone;
-mod domrect_receiver_consolidation;
 mod resize_observer_entries;
 
 mod encoded_video_chunk;
@@ -2508,6 +2508,7 @@ mod xml_serializer_receivers;
 mod hyperlink_audit_owner;
 mod svg_number_list_native_receivers;
 mod webtransport_stream_interface_exposure;
+
 mod window_promise_method_receivers;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
