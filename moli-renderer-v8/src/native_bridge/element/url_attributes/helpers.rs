@@ -61,7 +61,7 @@ pub(in crate::native_bridge::element) fn should_block_dangling_markup_subresourc
             .any(|byte| matches!(byte, b'\r' | b'\n' | b'\t'))
 }
 
-pub(in crate::native_bridge) fn parse_url_with_document_query_encoding(
+pub(crate) fn parse_url_with_document_query_encoding(
     runtime: &JsContextHost,
     handle: DomHandle,
     base: &Url,
