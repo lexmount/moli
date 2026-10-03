@@ -116,8 +116,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        // Cancellation continuations now use the native Promise API.
-        8,
+        // Pending promise settlement and cancellation continuations use the
+        // native Promise API; the remaining calls run stream algorithms.
+        5,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

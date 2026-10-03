@@ -1,6 +1,7 @@
 use super::*;
 
 mod compression;
+mod intrinsic_promises;
 mod transform_finish;
 
 fn stream_test_vm() -> StandaloneScriptVmHarness {

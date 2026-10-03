@@ -1,7 +1,7 @@
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
-const DELAYED_PENDING_READ_REJECT_SLOT: &str = "__moliReadableStreamDelayedReject";
+const DELAYED_PENDING_READ_ENTRY_SLOT: &str = "__moliReadableStreamDelayedEntry";
 const DELAYED_PENDING_READ_REASON_SLOT: &str = "__moliReadableStreamDelayedReason";
 
 #[derive(WebApiObject)]
@@ -13,38 +13,20 @@ struct StreamIteratorResultDeclaration<'scope> {
     done: bool,
 }
 
-#[derive(Default, WebApiObject)]
-#[webapi(plain)]
-struct PendingReadEntryDeclaration {
-    #[webapi(slot = READABLE_STREAM_PENDING_READ_PROMISE_SLOT, init = "undefined")]
-    promise: (),
-    #[webapi(slot = READABLE_STREAM_PENDING_READ_RESOLVE_SLOT, init = "undefined")]
-    resolve: (),
-    #[webapi(slot = READABLE_STREAM_PENDING_READ_REJECT_SLOT, init = "undefined")]
-    reject: (),
-}
-
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct PendingReadPromiseDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_PENDING_READ_PROMISE_SLOT)]
     promise: v8::Local<'scope, v8::Promise>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct PendingReadResolverDeclaration<'scope> {
-    #[webapi(slot = READABLE_STREAM_PENDING_READ_RESOLVE_SLOT)]
-    resolve: v8::Local<'scope, v8::Value>,
-    #[webapi(slot = READABLE_STREAM_PENDING_READ_REJECT_SLOT)]
-    reject: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = READABLE_STREAM_PENDING_READ_RESOLVER_SLOT)]
+    resolver: v8::Local<'scope, v8::PromiseResolver>,
 }
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct DelayedPendingReadRejectDeclaration<'scope> {
-    #[webapi(slot = DELAYED_PENDING_READ_REJECT_SLOT)]
-    reject: v8::Local<'scope, v8::Function>,
+    #[webapi(slot = DELAYED_PENDING_READ_ENTRY_SLOT)]
+    entry: v8::Local<'scope, v8::Object>,
     #[webapi(slot = DELAYED_PENDING_READ_REASON_SLOT)]
     reason: v8::Local<'scope, v8::Value>,
 }
@@ -169,43 +151,36 @@ pub(in crate::context_bootstrap) fn done_result<'s>(
 pub(in crate::context_bootstrap) fn new_pending_read_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<(v8::Local<'s, v8::Promise>, v8::Local<'s, v8::Object>)> {
-    let entry = PendingReadEntryDeclaration::default()
+    // Internal Streams promises belong to the current realm's intrinsic
+    // Promise. Its public constructor can be absent or replaced by author
+    // code, including while the realm's exposed interfaces are bootstrapping.
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let promise = resolver.get_promise(scope);
+    let entry = PendingReadPromiseDeclaration::new(promise, resolver)
         .bind(scope)
-        .expect("pending read entry declaration should bind");
-    let executor = v8::Function::builder(pending_read_promise_executor_callback)
-        .data(entry.into())
-        .length(2)
-        .build(scope)?;
-    let global = scope.get_current_context().global(scope);
-    let promise_constructor = global
-        .get(scope, v8str(scope, "Promise").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let promise = promise_constructor
-        .new_instance(scope, &[executor.into()])
-        .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())?;
-    PendingReadPromiseDeclaration::new(promise)
-        .initialize(scope, entry)
         .ok()?;
-    get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_RESOLVE_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     Some((promise, entry))
 }
 
-fn pending_read_promise_executor_callback<'s>(
+fn take_pending_read_promise_resolver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(entry) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        rv.set_undefined();
-        return;
-    };
-    PendingReadResolverDeclaration::new(args.get(0), args.get(1))
-        .initialize(scope, entry)
-        .expect("pending read resolver declaration should initialize entry");
-    rv.set_undefined();
+    entry: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+    let resolver = get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_RESOLVER_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    // Claim settlement before resolving a thenable can re-enter author code.
+    // A native resolver only ignores subsequent calls after the promise leaves
+    // Pending; consuming this slot also preserves the resolving functions'
+    // [[AlreadyResolved]] semantics during adoption of a pending promise.
+    set_private_value(
+        scope,
+        entry,
+        READABLE_STREAM_PENDING_READ_RESOLVER_SLOT,
+        v8::undefined(scope).into(),
+    );
+    // Only PendingReadPromiseDeclaration publishes this private slot, and it
+    // always contains the native resolver returned by PromiseResolver::new.
+    Some(unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) })
 }
 
 pub(in crate::context_bootstrap) fn resolve_pending_promise<'s>(
@@ -213,13 +188,10 @@ pub(in crate::context_bootstrap) fn resolve_pending_promise<'s>(
     entry: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let Some(resolve) = get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_RESOLVE_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some(resolver) = take_pending_read_promise_resolver(scope, entry) else {
         return;
     };
-    let undefined = v8::undefined(scope);
-    let _ = resolve.call(scope, undefined.into(), &[value]);
+    let _ = resolver.resolve(scope, value);
 }
 
 pub(in crate::context_bootstrap) fn reject_pending_read<'s>(
@@ -227,13 +199,10 @@ pub(in crate::context_bootstrap) fn reject_pending_read<'s>(
     entry: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
 ) {
-    let Some(reject) = get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some(resolver) = take_pending_read_promise_resolver(scope, entry) else {
         return;
     };
-    let undefined = v8::undefined(scope);
-    let _ = reject.call(scope, undefined.into(), &[reason]);
+    let _ = resolver.reject(scope, reason);
 }
 
 pub(in crate::context_bootstrap::stream_adapter) fn reject_pending_read_after_timeout<'s>(
@@ -241,12 +210,10 @@ pub(in crate::context_bootstrap::stream_adapter) fn reject_pending_read_after_ti
     entry: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
 ) -> bool {
-    let Some(reject) = get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    if get_private_value(scope, entry, READABLE_STREAM_PENDING_READ_RESOLVER_SLOT).is_none() {
         return false;
-    };
-    let data = DelayedPendingReadRejectDeclaration::new(reject, reason)
+    }
+    let data = DelayedPendingReadRejectDeclaration::new(entry, reason)
         .bind(scope)
         .expect("delayed pending read rejection declaration should bind");
     let Some(callback) = v8::Function::builder(delayed_pending_read_reject_callback)
@@ -277,16 +244,15 @@ fn delayed_pending_read_reject_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(reject) = get_private_value(scope, data, DELAYED_PENDING_READ_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Some(entry) = get_private_value(scope, data, DELAYED_PENDING_READ_ENTRY_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
         rv.set_undefined();
         return;
     };
     let reason = get_private_value(scope, data, DELAYED_PENDING_READ_REASON_SLOT)
         .unwrap_or_else(|| v8::undefined(scope).into());
-    let undefined = v8::undefined(scope);
-    let _ = reject.call(scope, undefined.into(), &[reason]);
+    reject_pending_read(scope, entry, reason);
     rv.set_undefined();
 }
 
@@ -479,7 +445,72 @@ pub(in crate::context_bootstrap) fn promise_return_undefined_callback<'s>(
 
 #[cfg(test)]
 mod tests {
-    use super::require_internal_stream_value;
+    use super::*;
+
+    #[test]
+    fn pending_stream_promise_is_intrinsic_before_interface_bootstrap() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+        let constructor = global
+            .get(scope, v8str(scope, "Promise").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .expect("intrinsic Promise constructor");
+        let prototype = constructor
+            .get(scope, v8str(scope, "prototype").into())
+            .expect("intrinsic Promise prototype");
+        assert_eq!(
+            global.delete(scope, v8str(scope, "Promise").into()),
+            Some(true)
+        );
+
+        let (promise, entry) = new_pending_read_promise(scope)
+            .expect("a bare realm must allocate Streams promises without a public Promise");
+        assert_eq!(promise.state(), v8::PromiseState::Pending);
+        assert!(
+            promise
+                .get_prototype(scope)
+                .expect("Streams promise prototype")
+                .strict_equals(prototype)
+        );
+        let value = v8::Object::new(scope);
+        resolve_pending_promise(scope, entry, value.into());
+        let late_reason = v8str(scope, "too late");
+        reject_pending_read(scope, entry, late_reason.into());
+        assert_eq!(promise.state(), v8::PromiseState::Fulfilled);
+        assert!(promise.result(scope).strict_equals(value.into()));
+    }
+
+    #[test]
+    fn pending_stream_promise_keeps_first_settlement_during_promise_adoption() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let (promise, entry) = new_pending_read_promise(scope).expect("Streams promise");
+        let adopted = v8::PromiseResolver::new(scope).expect("adopted promise resolver");
+        let adopted_promise = adopted.get_promise(scope);
+
+        resolve_pending_promise(scope, entry, adopted_promise.into());
+        assert_eq!(promise.state(), v8::PromiseState::Pending);
+        let late_reason = v8str(scope, "too late");
+        reject_pending_read(scope, entry, late_reason.into());
+        let undefined = v8::undefined(scope);
+        resolve_pending_promise(scope, entry, undefined.into());
+        assert_eq!(promise.state(), v8::PromiseState::Pending);
+
+        let value = v8::Object::new(scope);
+        assert_eq!(adopted.resolve(scope, value.into()), Some(true));
+        scope.perform_microtask_checkpoint();
+        assert_eq!(promise.state(), v8::PromiseState::Fulfilled);
+        assert!(promise.result(scope).strict_equals(value.into()));
+    }
 
     #[test]
     fn required_internal_stream_value_returns_available_value() {

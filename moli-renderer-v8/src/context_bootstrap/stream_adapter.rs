@@ -8,8 +8,7 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
 
-const READABLE_STREAM_PENDING_READ_RESOLVE_SLOT: &str = "__moliReadableStreamPendingResolve";
-const READABLE_STREAM_PENDING_READ_REJECT_SLOT: &str = "__moliReadableStreamPendingReject";
+const READABLE_STREAM_PENDING_READ_RESOLVER_SLOT: &str = "__moliReadableStreamPendingResolver";
 pub(in crate::context_bootstrap) const READABLE_STREAM_ALGORITHM_SOURCE_INDEX: u32 = 0;
 pub(in crate::context_bootstrap) const READABLE_STREAM_ALGORITHM_PULL_INDEX: u32 = 1;
 pub(in crate::context_bootstrap) const READABLE_STREAM_ALGORITHM_CANCEL_INDEX: u32 = 2;
