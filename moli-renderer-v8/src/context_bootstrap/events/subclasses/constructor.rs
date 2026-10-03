@@ -20,6 +20,7 @@ enum EventSubclassInit<'s> {
     Message(message::MessageEventInit<'s>),
     Storage(data::StorageEventInitMembers<'s>),
     Error(error::ErrorEventInit<'s>),
+    SecurityPolicy(security_policy::SecurityPolicyViolationEventInit),
     Toggle(interaction::ToggleEventInit<'s>),
     Command(interaction::CommandEventInit<'s>),
     CurrentEntryChange(navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>),
@@ -56,6 +57,9 @@ impl<'s> EventSubclassInit<'s> {
             EventSubclassKind::ErrorEvent => {
                 Self::Error(error::parse_error_event_init(scope, args)?)
             }
+            EventSubclassKind::SecurityPolicyViolationEvent => Self::SecurityPolicy(
+                security_policy::parse_security_policy_violation_event_init(scope, args)?,
+            ),
             EventSubclassKind::ToggleEvent => Self::Toggle(
                 interaction::parse_interaction_event_init(scope, args, "ToggleEvent")?,
             ),
@@ -86,6 +90,7 @@ impl<'s> EventSubclassInit<'s> {
             Self::Message(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
             Self::Error(init) => init.event_flags(),
+            Self::SecurityPolicy(init) => init.event_flags(),
             Self::Toggle(init) => init.event_flags(),
             Self::Command(init) => init.event_flags(),
             Self::CurrentEntryChange(init) => init.event_flags(),
@@ -112,6 +117,7 @@ impl<'s> EventSubclassInit<'s> {
             Self::Message(init) => message::initialize_message_event(scope, event, init),
             Self::Storage(init) => data::initialize_storage_event(scope, event, init),
             Self::Error(init) => init.initialize(scope, event),
+            Self::SecurityPolicy(init) => init.initialize(scope, event),
             Self::Toggle(init) => init.initialize(scope, event),
             Self::Command(init) => init.initialize(scope, event),
             Self::CurrentEntryChange(init) => {
@@ -252,11 +258,6 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::SecurityPolicyViolationEvent => {
-            if !data::initialize_security_policy_violation_event(scope, event, init) {
-                return false;
-            }
-        }
         EventSubclassKind::CloseEvent => data::initialize_close_event(scope, event, init),
         EventSubclassKind::SubmitEvent => {
             if !data::initialize_submit_event(scope, event, init) {
@@ -299,6 +300,7 @@ fn initialize_legacy_event<'s>(
         | EventSubclassKind::MessageEvent
         | EventSubclassKind::NavigateEvent
         | EventSubclassKind::NavigationCurrentEntryChangeEvent
+        | EventSubclassKind::SecurityPolicyViolationEvent
         | EventSubclassKind::StorageEvent
         | EventSubclassKind::ToggleEvent
         | EventSubclassKind::UiEvent => {

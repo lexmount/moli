@@ -63,7 +63,7 @@ fn security_policy_violation_event_constructor_applies_init_defaults() {
 
     assert_eq!(
         result,
-        r#"{"defaults":["","","","","","","enforce","","",0,0,0],"initialized":{"type":"custom","documentURI":"https://example.test/document","referrer":"https://example.test/referrer","blockedURI":"https://example.test/blocked","violatedDirective":"default-src","effectiveDirective":"script-src","originalPolicy":"default-src 'none'","disposition":"report","sourceFile":"https://example.test/source.js","sample":"sample","statusCode":1,"lineNumber":-2,"columnNumber":3,"trusted":false,"instance":true}}"#
+        r#"{"defaults":["","","","","","","enforce","","",0,0,0],"initialized":{"type":"custom","documentURI":"https://example.test/document","referrer":"https://example.test/referrer","blockedURI":"https://example.test/blocked","violatedDirective":"default-src","effectiveDirective":"script-src","originalPolicy":"default-src 'none'","disposition":"report","sourceFile":"https://example.test/source.js","sample":"sample","statusCode":1,"lineNumber":4294967294,"columnNumber":3,"trusted":false,"instance":true}}"#
     );
 }
 #[test]
@@ -439,6 +439,7 @@ fn document_csp_violation_event_survives_mutated_event_globals() {
         .eval(
             r#"
             (() => {
+              const getBlockedURI = Object.getOwnPropertyDescriptor(SecurityPolicyViolationEvent.prototype, "blockedURI").get;
               self.Event = null;
               Object.defineProperty(SecurityPolicyViolationEvent.prototype, "blockedURI", {
                 value: "prototype-blocked-uri",
@@ -455,7 +456,11 @@ fn document_csp_violation_event_survives_mutated_event_globals() {
               self.addEventListener("securitypolicyviolation", event => {
                 events.push({
                   type: event.type,
-                  blockedURI: event.blockedURI,
+                  blockedURI: getBlockedURI.call(event),
+                  publicBlockedURI: event.blockedURI,
+                  bubbles: event.bubbles,
+                  cancelable: event.cancelable,
+                  composed: event.composed,
                   effectiveDirective: event.effectiveDirective,
                   disposition: event.disposition,
                   instance: event instanceof SecurityPolicyViolationEvent
@@ -484,7 +489,7 @@ fn document_csp_violation_event_survives_mutated_event_globals() {
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__mutatedEventCspResult)")
             .expect("queued CSP event should survive mutated event globals"),
-        r#"{"thrown":"CompileError","events":[{"type":"securitypolicyviolation","blockedURI":"wasm-eval","effectiveDirective":"script-src","disposition":"enforce","instance":true}]}"#
+        r#"{"thrown":"CompileError","events":[{"type":"securitypolicyviolation","blockedURI":"wasm-eval","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src","disposition":"enforce","instance":true}]}"#
     );
 }
 #[test]

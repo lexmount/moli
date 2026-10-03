@@ -284,35 +284,6 @@ struct PromiseRejectionEventInitMembers<'s> {
     reason: Option<v8::Local<'s, v8::Value>>,
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SecurityPolicyViolationEventInit")]
-struct SecurityPolicyViolationEventInitMembers {
-    #[webidl(name = "documentURI", default = "")]
-    document_uri: String,
-    #[webidl(default = "")]
-    referrer: String,
-    #[webidl(name = "blockedURI", default = "")]
-    blocked_uri: String,
-    #[webidl(name = "violatedDirective", default = "")]
-    violated_directive: String,
-    #[webidl(name = "effectiveDirective", default = "")]
-    effective_directive: String,
-    #[webidl(name = "originalPolicy", default = "")]
-    original_policy: String,
-    #[webidl(default = "enforce")]
-    disposition: String,
-    #[webidl(name = "sourceFile", default = "")]
-    source_file: String,
-    #[webidl(default = "")]
-    sample: String,
-    #[webidl(name = "statusCode", converter = "unsigned_short", default = 0)]
-    status_code: u16,
-    #[webidl(name = "lineNumber", converter = "long", default = 0)]
-    line_number: i32,
-    #[webidl(name = "columnNumber", converter = "long", default = 0)]
-    column_number: i32,
-}
-
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
@@ -766,71 +737,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejec
         .initialize(scope, event)
         .expect("PromiseRejectionEvent init declaration should initialize");
     true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_security_policy_violation_event<
-    's,
->(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<SecurityPolicyViolationEventInitMembers>(
-                scope, init,
-            ) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => SecurityPolicyViolationEventInitMembers {
-            document_uri: String::new(),
-            referrer: String::new(),
-            blocked_uri: String::new(),
-            violated_directive: String::new(),
-            effective_directive: String::new(),
-            original_policy: String::new(),
-            disposition: "enforce".to_owned(),
-            source_file: String::new(),
-            sample: String::new(),
-            status_code: 0,
-            line_number: 0,
-            column_number: 0,
-        },
-    };
-    let disposition = match parsed.disposition.as_str() {
-        "enforce" => crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
-        "report" => crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
-        _ => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'SecurityPolicyViolationEvent': disposition is not a valid SecurityPolicyViolationEventDisposition.",
-            );
-            return false;
-        }
-    };
-    crate::content_security_policy::initialize_security_policy_violation_event(
-        scope,
-        event,
-        &crate::content_security_policy::ContentSecurityPolicyViolationEventFields {
-            document_uri: &parsed.document_uri,
-            referrer: &parsed.referrer,
-            blocked_uri: &parsed.blocked_uri,
-            effective_directive: &parsed.effective_directive,
-            violated_directive: &parsed.violated_directive,
-            original_policy: &parsed.original_policy,
-            disposition,
-            source_file: &parsed.source_file,
-            sample: &parsed.sample,
-            line_number: parsed.line_number,
-            column_number: parsed.column_number,
-            status_code: i32::from(parsed.status_code),
-        },
-    )
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_navigation_current_entry_change_event<

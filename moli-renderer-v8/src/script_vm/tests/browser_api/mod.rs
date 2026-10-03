@@ -71,6 +71,7 @@ mod promise_rejection;
 mod protocol_handlers;
 mod rtc_error;
 mod security_policy;
+mod security_policy_event_init;
 mod service_worker_drain;
 mod session_description;
 mod simple_event_dispatch;

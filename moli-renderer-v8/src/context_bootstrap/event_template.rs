@@ -320,6 +320,46 @@ struct ErrorEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SecurityPolicyViolationEvent, enumerable, receiver)]
+struct SecurityPolicyViolationEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "documentURI", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "documentURI"))]
+    document_uri: (),
+
+    #[webapi(accessor_property = "referrer", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "referrer"))]
+    referrer: (),
+
+    #[webapi(accessor_property = "blockedURI", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "blockedURI"))]
+    blocked_uri: (),
+
+    #[webapi(accessor_property = "effectiveDirective", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "effectiveDirective"))]
+    effective_directive: (),
+
+    #[webapi(accessor_property = "violatedDirective", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "violatedDirective"))]
+    violated_directive: (),
+
+    #[webapi(accessor_property = "originalPolicy", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "originalPolicy"))]
+    original_policy: (),
+
+    #[webapi(accessor_property = "sourceFile", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "sourceFile"))]
+    source_file: (),
+
+    #[webapi(accessor_property = "sample", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "sample"))]
+    sample: (),
+
+    #[webapi(accessor_property = "disposition", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "disposition"))]
+    disposition: (),
+
+    #[webapi(accessor_property = "statusCode", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "statusCode"))]
+    status_code: (),
+
+    #[webapi(accessor_property = "lineNumber", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "lineNumber"))]
+    line_number: (),
+
+    #[webapi(accessor_property = "columnNumber", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "columnNumber"))]
+    column_number: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
 struct StorageEventTemplateMethodsDeclaration {
     #[webapi(
@@ -527,6 +567,9 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         "CustomEvent" => EventTemplateDeclaration::new::<CustomEventTemplateMethodsDeclaration>(),
         "InputEvent" => EventTemplateDeclaration::new::<InputEventTemplateAccessorsDeclaration>(),
         "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),
+        "SecurityPolicyViolationEvent" => EventTemplateDeclaration::new::<
+            SecurityPolicyViolationEventTemplateAccessorsDeclaration,
+        >(),
         "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "KeyboardEvent" => {
