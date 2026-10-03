@@ -11,6 +11,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-owner-queue = { path = "../moli-owner-queue" }
 moli-page-types = { path = "../moli-page-types" }
 moli-time = { path = "../moli-time" }
+moli-web-mime = { path = "../moli-web-mime" }
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
 url = "2.5.7"
 
