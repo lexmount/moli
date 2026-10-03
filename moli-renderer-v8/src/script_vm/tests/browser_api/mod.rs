@@ -65,6 +65,7 @@ mod message_port_events;
 mod message_port_lifecycle;
 mod midi_events;
 mod misc;
+mod mouse_event_init;
 mod native_event_construction;
 mod navigation;
 mod navigation_event_init;
