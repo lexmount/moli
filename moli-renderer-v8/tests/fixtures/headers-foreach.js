@@ -39,6 +39,9 @@ async function headersForEachProbe() {
         headers.append('e', '5');
       }
     }, [['a', '1'], ['e', '5']]],
+    ['empty-fields', [['a', '1'], ['b', '2'], ['b', ''], ['c', '3']], (headers, key) => {
+      if (key === 'a') headers.append('b', '');
+    }, [['a', '1'], ['b', '2, , '], ['c', '3']]],
     ['append-cookie', [['Set-Cookie', 'a=1'], ['set-cookie', 'b=2'], ['x-tail', 'end']], (headers, key, value) => {
       if (key === 'set-cookie' && value === 'a=1') headers.append('Set-Cookie', 'c=3');
     }, [['set-cookie', 'a=1'], ['set-cookie', 'b=2'], ['set-cookie', 'c=3'], ['x-tail', 'end']]],
