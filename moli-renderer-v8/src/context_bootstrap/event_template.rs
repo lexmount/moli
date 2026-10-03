@@ -11,7 +11,6 @@ use super::{
         clipboard_change_event_types_getter_function,
         clipboard_event_clipboard_data_getter_function, close_event_code_getter_function,
         close_event_reason_getter_function, close_event_was_clean_getter_function,
-        command_event_command_getter_function, command_event_source_getter_function,
         composition_event_init_callback, event_bubbles_getter_function,
         event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
         event_cancelable_getter_function, event_composed_getter_function,
@@ -23,10 +22,10 @@ use super::{
         event_stop_immediate_propagation_callback, event_stop_propagation_callback,
         event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
         event_value_attribute_getter, focus_event_related_target_getter_function,
-        form_data_event_form_data_getter_function, keyboard_event_init_callback,
-        message_event_init_callback, mouse_event_related_target_getter_function,
-        pointer_event_get_predicted_events_callback, submit_event_agent_invoked_getter_function, submit_event_respond_with_callback, submit_event_submitter_getter_function,
-        toggle_event_source_getter_function, track_event_track_getter_function,
+        form_data_event_form_data_getter_function, interaction_event_source_getter,
+        keyboard_event_init_callback, message_event_init_callback,
+        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
+        submit_event_agent_invoked_getter_function, submit_event_respond_with_callback, submit_event_submitter_getter_function, track_event_track_getter_function,
         ui_event_init_callback, ui_event_pseudo_target_getter_function,
         ui_event_which_getter_function,
     },
@@ -206,17 +205,21 @@ struct FormDataEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CommandEvent, enumerable, receiver)]
 struct CommandEventTemplateAccessorsDeclaration {
-    #[webapi(accessor_property, getter = command_event_source_getter_function)]
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
     source: (),
 
-    #[webapi(accessor_property, getter = command_event_command_getter_function)]
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "command"))]
     command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ToggleEvent, enumerable, receiver)]
 struct ToggleEventTemplateAccessorsDeclaration {
-    #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
+    #[webapi(accessor_property = "oldState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldState"))]
+    old_state: (),
+    #[webapi(accessor_property = "newState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newState"))]
+    new_state: (),
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
     source: (),
 }
 

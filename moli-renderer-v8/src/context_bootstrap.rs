@@ -324,6 +324,7 @@ pub(crate) use self::events::{
     submit_event_submitter_value,
     set_event_source_value,
     error_event_handler_arguments,
+    event_source_retargets_on_access,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,

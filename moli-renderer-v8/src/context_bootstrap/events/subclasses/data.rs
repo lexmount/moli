@@ -228,15 +228,6 @@ struct InterestEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain)]
-struct ToggleEventStateDeclaration {
-    #[webapi(data_property = "oldState", readonly, dont_delete)]
-    old_state: String,
-    #[webapi(data_property = "newState", readonly, dont_delete)]
-    new_state: String,
-}
-
-#[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct PopStateEventInitDeclaration<'scope> {
     state: v8::Local<'scope, v8::Value>,
@@ -316,26 +307,6 @@ struct NavigateEventInitDeclaration<'scope> {
     #[webapi(data_property = "hasUAVisualTransition")]
     has_ua_visual_transition: bool,
     source_element: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ToggleEventInit")]
-struct ToggleEventInitMembers<'s> {
-    #[webidl(default = "")]
-    old_state: String,
-    #[webidl(default = "")]
-    new_state: String,
-    #[webidl(converter = "raw")]
-    source: Option<v8::Local<'s, v8::Value>>,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "CommandEventInit")]
-struct CommandEventInitMembers<'s> {
-    #[webidl(default = "")]
-    command: String,
-    #[webidl(converter = "raw")]
-    source: Option<v8::Local<'s, v8::Value>>,
 }
 
 /// Convert inherited EventInit members first, then StorageEventInit members in
@@ -732,34 +703,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_page_transiti
     PageTransitionEventOwnInitDeclaration::new(persisted)
         .initialize(scope, event)
         .expect("PageTransitionEvent init declaration should initialize");
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<ToggleEventInitMembers>(scope, init) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => ToggleEventInitMembers {
-            old_state: String::new(),
-            new_state: String::new(),
-            source: None,
-        },
-    };
-    let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
-    let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state)
-        .initialize(scope, event);
-    set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, source);
-    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejection_event<'s>(
@@ -1502,47 +1445,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_form_data_eve
         FORM_DATA_EVENT_FORM_DATA_SLOT,
         form_data,
     );
-    true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_command_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => match webidl::parse_dictionary_object::<CommandEventInitMembers>(scope, init)
-        {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return false;
-            }
-        },
-        None => CommandEventInitMembers::default(),
-    };
-    let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
-    if !source.is_null() {
-        let Ok(object) = v8::Local::<v8::Object>::try_from(source) else {
-            throw_type_error(
-                scope,
-                "Failed to construct 'CommandEvent': source must be an Element.",
-            );
-            return false;
-        };
-        if !event_init_value_is_element(scope, object) {
-            throw_type_error(
-                scope,
-                "Failed to construct 'CommandEvent': source must be an Element.",
-            );
-            return false;
-        }
-    }
-    let Some(command) = v8_string(scope, &parsed.command) else {
-        return false;
-    };
-    set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, source);
-    set_private_value(scope, event, COMMAND_EVENT_COMMAND_SLOT, command.into());
     true
 }
 

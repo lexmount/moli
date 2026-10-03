@@ -20,6 +20,8 @@ enum EventSubclassInit<'s> {
     Message(message::MessageEventInit<'s>),
     Storage(data::StorageEventInitMembers<'s>),
     Error(error::ErrorEventInit<'s>),
+    Toggle(interaction::ToggleEventInit<'s>),
+    Command(interaction::CommandEventInit<'s>),
     CurrentEntryChange(navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>),
     Navigate(navigation_init::NavigateEventInitMembers<'s>),
     SecurityPolicy(security_policy::SecurityPolicyViolationEventInit),
@@ -55,6 +57,12 @@ impl<'s> EventSubclassInit<'s> {
             EventSubclassKind::ErrorEvent => {
                 Self::Error(error::parse_error_event_init(scope, args)?)
             }
+            EventSubclassKind::ToggleEvent => Self::Toggle(
+                interaction::parse_interaction_event_init(scope, args, "ToggleEvent")?,
+            ),
+            EventSubclassKind::CommandEvent => Self::Command(
+                interaction::parse_interaction_event_init(scope, args, "CommandEvent")?,
+            ),
             EventSubclassKind::NavigationCurrentEntryChangeEvent => Self::CurrentEntryChange(
                 navigation_init::parse_current_entry_change_event_init(scope, args)?,
             ),
@@ -80,6 +88,8 @@ impl<'s> EventSubclassInit<'s> {
             Self::Message(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
             Self::Error(init) => init.event_flags(),
+            Self::Toggle(init) => init.event_flags(),
+            Self::Command(init) => init.event_flags(),
             Self::CurrentEntryChange(init) => init.event_flags(),
             Self::Navigate(init) => init.event_flags(),
             Self::SecurityPolicy(init) => init.event_flags(),
@@ -105,6 +115,8 @@ impl<'s> EventSubclassInit<'s> {
             Self::Message(init) => message::initialize_message_event(scope, event, init),
             Self::Storage(init) => data::initialize_storage_event(scope, event, init),
             Self::Error(init) => init.initialize(scope, event),
+            Self::Toggle(init) => init.initialize(scope, event),
+            Self::Command(init) => init.initialize(scope, event),
             Self::CurrentEntryChange(init) => {
                 data::initialize_navigation_current_entry_change_event(scope, event, init)
             }
@@ -256,16 +268,6 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::CommandEvent => {
-            if !data::initialize_command_event(scope, event, init) {
-                return false;
-            }
-        }
-        EventSubclassKind::ToggleEvent => {
-            if !data::initialize_toggle_event(scope, event, init) {
-                return false;
-            }
-        }
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
         EventSubclassKind::PopStateEvent => {
             if !data::initialize_pop_state_event(scope, event, init) {
@@ -290,6 +292,7 @@ fn initialize_legacy_event<'s>(
         }
         EventSubclassKind::ClipboardChangeEvent
         | EventSubclassKind::ClipboardEvent
+        | EventSubclassKind::CommandEvent
         | EventSubclassKind::CompositionEvent
         | EventSubclassKind::ErrorEvent
         | EventSubclassKind::KeyboardEvent
@@ -297,6 +300,7 @@ fn initialize_legacy_event<'s>(
         | EventSubclassKind::NavigateEvent
         | EventSubclassKind::NavigationCurrentEntryChangeEvent
         | EventSubclassKind::StorageEvent
+        | EventSubclassKind::ToggleEvent
         | EventSubclassKind::UiEvent => {
             unreachable!("typed event initialization must retain its payload")
         }
