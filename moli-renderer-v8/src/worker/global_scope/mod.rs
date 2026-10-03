@@ -45,7 +45,7 @@ use url::Url;
 
 use super::{
     decode_data_url_script_source,
-    handle::{WorkerConsoleMessage, WorkerFetchHandlerType, WorkerToParentMessage},
+    handle::{WorkerConsoleMessage, WorkerFetchHandlerType, WorkerMessage, WorkerToParentMessage},
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
 use crate::context_bootstrap::{
