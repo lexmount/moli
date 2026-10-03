@@ -176,7 +176,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -1663,6 +1662,7 @@ css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -2762,6 +2762,14 @@ css/css-sizing/replaced-element-intrinsic-sizing-keywords.html
 css/css-sizing/replaced-max-width-with-height-fit-content.html
 css/css-sizing/replaced-max-width-with-height-max-content.html
 css/css-sizing/replaced-max-width-with-height-min-content.html
+css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-no-match-element.sub.html
+css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-not-embedded-sized.sub.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-append.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-name-change.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-write.html
+css/css-sizing/responsive-iframe/responsive-iframe-meta-in-body.html
+css/css-sizing/responsive-iframe/responsive-iframe-no-match-element.html
+css/css-sizing/responsive-iframe/responsive-iframe-not-embedded-sized.html
 css/css-sizing/responsive-iframe/responsive-iframe-value.html?value=,300,150
 css/css-sizing/shrink-to-fit-sizing-max-width-min-content.html
 css/css-sizing/stretch/abspos-1.html
@@ -3662,6 +3670,7 @@ custom-elements/reactions/customized-builtins/HTMLInputElement.html
 custom-elements/reactions/customized-builtins/HTMLLIElement.html
 custom-elements/reactions/customized-builtins/HTMLLabelElement.html
 custom-elements/reactions/customized-builtins/HTMLMapElement.html
+custom-elements/reactions/customized-builtins/HTMLMediaElement.html
 custom-elements/reactions/customized-builtins/HTMLMetaElement.html
 custom-elements/reactions/customized-builtins/HTMLMeterElement.html
 custom-elements/reactions/customized-builtins/HTMLModElement.html
@@ -3978,6 +3987,7 @@ dom/nodes/getElementsByClassName-08.htm
 dom/nodes/getElementsByClassName-09.htm
 dom/nodes/getElementsByClassName-12.htm
 dom/nodes/getElementsByClassName-13.htm
+dom/nodes/getElementsByClassName-14.htm
 dom/nodes/getElementsByClassName-15.htm
 dom/nodes/getElementsByClassName-16.htm
 dom/nodes/getElementsByClassName-17.htm
@@ -4599,6 +4609,7 @@ encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?4001-5000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?5001-6000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?6001-7000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?7001-last
+encoding/legacy-mb-japanese/shift_jis/sjis-decode-errors.html
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?1-1000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?1001-2000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?2001-3000
@@ -6187,7 +6198,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -8175,7 +8185,6 @@ selection/textcontrols/selectionchange.html
 selection/toString-ff-bug-001.html
 selection/toString-user-select-none.html
 selection/type.html
-service-workers/cache-storage/cache-api-nested-worker.https.html
 service-workers/cache-storage/credentials.https.html
 service-workers/service-worker/Service-Worker-Allowed-header.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/isSecureContext.https.html
@@ -8810,7 +8819,6 @@ uievents/textInput/api.html
 uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
 url/data-uri-fragment.html
-url/failure.html
 user-timing/clearMarks.html
 user-timing/clearMeasures.html
 user-timing/invoke_with_timing_attributes.html
@@ -9230,7 +9238,6 @@ workers/SharedWorker-constructor.html
 workers/SharedWorker-detach-frame-in-error-event.html
 workers/SharedWorker-exception-propagation.html
 workers/SharedWorker-exception.html
-workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-script-error.html
 workers/SharedWorker-simple.html
 workers/SharedWorkerPerformanceNow.html
@@ -9573,6 +9580,7 @@ xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expir
 xhr/xmlhttprequest-timeout-worker-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?timeout hit before load
+xhr/xmlhttprequest-timeout-worker-synconworker.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-synconworker.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-synconworker.html?timeout hit before load
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with no timeout set, twice

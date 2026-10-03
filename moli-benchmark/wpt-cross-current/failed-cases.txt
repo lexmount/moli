@@ -21,6 +21,7 @@ content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
@@ -499,7 +500,6 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -1860,22 +1860,14 @@ css/css-sizing/replaced-aspect-ratio-stretch-fit-003.html
 css/css-sizing/replaced-element-transferred-size-flex.html
 css/css-sizing/responsive-iframe/parsing/frame-sizing-computed.html
 css/css-sizing/responsive-iframe/parsing/frame-sizing-valid.html
-css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-no-match-element.sub.html
-css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-not-embedded-sized.sub.html
 css/css-sizing/responsive-iframe/responsive-iframe-cross-origin.sub.html
 css/css-sizing/responsive-iframe/responsive-iframe-dom-content-loaded.html
-css/css-sizing/responsive-iframe/responsive-iframe-dynamic-append.html
-css/css-sizing/responsive-iframe/responsive-iframe-dynamic-name-change.html
 css/css-sizing/responsive-iframe/responsive-iframe-dynamic-remove.html
-css/css-sizing/responsive-iframe/responsive-iframe-dynamic-write.html
 css/css-sizing/responsive-iframe/responsive-iframe-icb.html
 css/css-sizing/responsive-iframe/responsive-iframe-meta-after-head.html
-css/css-sizing/responsive-iframe/responsive-iframe-meta-in-body.html
 css/css-sizing/responsive-iframe/responsive-iframe-navigation-unsized.html?origin=cross
 css/css-sizing/responsive-iframe/responsive-iframe-navigation-unsized.html?origin=same
 css/css-sizing/responsive-iframe/responsive-iframe-navigation.html
-css/css-sizing/responsive-iframe/responsive-iframe-no-match-element.html
-css/css-sizing/responsive-iframe/responsive-iframe-not-embedded-sized.html
 css/css-sizing/responsive-iframe/responsive-iframe-request-resize-error.html
 css/css-sizing/responsive-iframe/responsive-iframe-request-resize.html
 css/css-sizing/responsive-iframe/responsive-iframe-value.html?value=content-block-size,300,200
@@ -2527,7 +2519,6 @@ dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
 dom/lists/DOMTokenList-coverage-for-attributes.html
 dom/nodes/ParentNode-querySelector-escapes.html
-dom/nodes/getElementsByClassName-14.htm
 dom/nodes/moveBefore/child-style-preserve.html
 dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html
 dom/nodes/moveBefore/moveBefore-size-query.html
@@ -3025,6 +3016,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -3282,12 +3274,13 @@ magnetometer/Magnetometer-supported-by-permissions-policy.html
 mediacapture-insertable-streams/legacy/MediaStreamTrackGenerator-in-service-worker.https.html
 navigation-api/navigate-event/dangling-navigate-event-after-bfcache-restore.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
-navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
+navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
+navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/sandboxing-back-parent.html
@@ -3390,6 +3383,7 @@ scroll-to-text-fragment/same-document-tests.html
 secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
+service-workers/cache-storage/cache-api-nested-worker.https.html
 service-workers/cache-storage/cache-keys-attributes-for-service-worker.https.html
 service-workers/cache-storage/sandboxed-iframes.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/update.https.html
@@ -3677,6 +3671,7 @@ webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
 workers/SharedWorker-extendedLifetime-blob.html
+workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-extendedLifetime-named-module.html
 workers/SharedWorker-extendedLifetime.html
 workers/WorkerNavigator_platform.htm
@@ -3719,5 +3714,4 @@ xhr/send-response-event-order.htm
 xhr/setrequestheader-content-type.htm
 xhr/status-async.htm
 xhr/status-basic.htm
-xhr/xmlhttprequest-timeout-worker-synconworker.html?load fires normally
 xml/xml-prolog-accepted-versions.html

@@ -51,7 +51,6 @@ css/cssom-view/scrollIntoView-multiple-nested.html
 css/cssom-view/scrollIntoView-multiple.html
 css/cssom-view/smooth-scroll-nonstop.html
 css/cssom-view/smooth-scrollIntoView-with-smooth-fragment-scroll.html
-custom-elements/reactions/customized-builtins/HTMLMediaElement.html
 document-policy/required-policy/required-document-policy-nested.html
 dom/events/EventListener-invoke-legacy.html
 dom/events/scrolling/scrollend-fires-to-text-input.html
@@ -177,11 +176,11 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
-navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
-navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html
 navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange
