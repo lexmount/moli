@@ -529,13 +529,9 @@ fn native_drag_source(
     let mut current = Some(gesture.handle);
     while let Some(handle) = current {
         if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            let attribute = element.attribute_ns("", "draggable");
             let is_image = element.is_html_element("img");
             let is_link = element.is_html_element("a") && element.has_attribute_ns("", "href");
-            let explicitly_draggable =
-                attribute.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-            let disabled = attribute.is_some_and(|value| value.eq_ignore_ascii_case("false"));
-            if !disabled && (explicitly_draggable || is_image || is_link) {
+            if element.is_draggable() {
                 candidate = Some((
                     handle,
                     if is_image {
@@ -1587,8 +1583,11 @@ impl ScriptVm {
             && previous_hover.is_some()
             && self._context_host.borrow().mouse_event_target().is_none();
         let mut next_hover = previous_hover;
+        if event_name == "mousemove" && buttons != 1 {
+            self.pending_drag_gesture = None;
+        }
         let drag_start = if event_name == "mousemove"
-            && buttons & 1 != 0
+            && buttons == 1
             && self.active_drag_session.is_none()
         {
             if self._context_host.borrow().mouse_press_handle().is_none() {
