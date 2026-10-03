@@ -289,6 +289,39 @@ struct KeyboardEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MouseEvent, enumerable)]
 struct MouseEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "screenX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "screenX"))]
+    screen_x: (),
+    #[webapi(accessor_property = "screenY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "screenY"))]
+    screen_y: (),
+    #[webapi(accessor_property = "clientX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "clientX"))]
+    client_x: (),
+    #[webapi(accessor_property = "clientY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "clientY"))]
+    client_y: (),
+    #[webapi(accessor_property = "button", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "button"))]
+    button: (),
+    #[webapi(accessor_property = "buttons", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "buttons"))]
+    buttons: (),
+    #[webapi(accessor_property = "ctrlKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "ctrlKey"))]
+    ctrl_key: (),
+    #[webapi(accessor_property = "altKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "altKey"))]
+    alt_key: (),
+    #[webapi(accessor_property = "shiftKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "shiftKey"))]
+    shift_key: (),
+    #[webapi(accessor_property = "metaKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "metaKey"))]
+    meta_key: (),
+    #[webapi(accessor_property = "movementX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "movementX"))]
+    movement_x: (),
+    #[webapi(accessor_property = "movementY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "movementY"))]
+    movement_y: (),
+    #[webapi(accessor_property = "pageX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pageX"))]
+    page_x: (),
+    #[webapi(accessor_property = "pageY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pageY"))]
+    page_y: (),
+    #[webapi(accessor_property = "x", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "x"))]
+    x: (),
+    #[webapi(accessor_property = "y", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "y"))]
+    y: (),
+
     #[webapi(method = "getModifierState", length = 1, callback = event_get_modifier_state_callback)]
     get_modifier_state: (),
 
