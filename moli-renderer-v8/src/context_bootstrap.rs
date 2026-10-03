@@ -358,6 +358,7 @@ pub(crate) use self::events::{
     submit_event_submitter_value,
     set_event_source_value,
     error_event_handler_arguments,
+    event_source_retargets_on_access,
 };
 #[cfg(test)]
 pub(crate) use self::file_api::drag_data_read_count_for_test;
