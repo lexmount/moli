@@ -797,6 +797,7 @@ fn wpt_fixture_app(runtime_state: WptFixtureRuntimeState) -> Router {
         .route("/common/blank.html", get(wpt_common_blank_html))
         .route("/common/{*path}", get(wpt_root_common_asset))
         .route("/resources/{*path}", get(wpt_root_resources_asset))
+        .route("/webmcp/{*path}", get(wpt_root_webmcp_asset))
         .route("/workers/{*path}", get(wpt_root_workers_asset))
         .route("/wpt/{*path}", get(wpt_fixture_asset))
         .with_state(runtime_state)
@@ -893,6 +894,14 @@ async fn wpt_root_common_asset(
     State(runtime_state): State<WptFixtureRuntimeState>,
 ) -> Response {
     wpt_fixture_asset_response(&format!("upstream/common/{path}"), query, &runtime_state).await
+}
+
+async fn wpt_root_webmcp_asset(
+    Path(path): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    State(runtime_state): State<WptFixtureRuntimeState>,
+) -> Response {
+    wpt_fixture_asset_response(&format!("upstream/webmcp/{path}"), query, &runtime_state).await
 }
 
 async fn wpt_root_workers_asset(
@@ -1486,6 +1495,8 @@ fn wpt_substitution_value(
         _ if token.starts_with("domains[") || token.starts_with("hosts[") => {
             if token.contains("nonexistent") {
                 Some(format!("nonexistent.{WPT_BROWSER_HOST}"))
+            } else if token.contains("alt") && token.contains("www2") {
+                Some("localhost.".to_owned())
             } else if token.contains("www1") || token.contains("alt") {
                 Some(WPT_REMOTE_HOST.to_owned())
             } else {

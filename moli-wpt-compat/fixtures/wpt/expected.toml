@@ -1746,3 +1746,216 @@ status = "pass"
 
 [expectations.testharness-no-handler-crashtest]
 status = "pass"
+
+[expectations.chromium-webmcp-model-context]
+status = "pass"
+
+[expectations.chromium-webmcp-duplicate-tool-registration]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-name-validation]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-no-schema]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-with-schema]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-invalid-json-schema]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-with-empty-annotation]
+status = "pass"
+
+[expectations.chromium-webmcp-get-tools]
+status = "pass"
+
+[expectations.chromium-webmcp-get-tools-imperative-annotations]
+status = "pass"
+
+[expectations.chromium-webmcp-get-tools-imperative-schema]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-title]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-signal]
+status = "pass"
+
+[expectations.chromium-webmcp-register-tool-toolchange]
+status = "pass"
+
+[expectations.chromium-webmcp-object-arguments]
+status = "pass"
+
+[expectations.chromium-webmcp-execute-tool-abort]
+status = "pass"
+
+[expectations.chromium-webmcp-tool-activated-event]
+status = "pass"
+
+[expectations.chromium-webmcp-tool-cancel-event]
+status = "pass"
+
+[expectations.chromium-webmcp-get-tools-declarative-schema]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-duplicate-tool-name]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-toolchange-on-attribute-mutation]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-toolchange-on-control-add-remove]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-toolchange-on-name-change]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-no-frame-documents]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-respond-with-reject]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-respond-with-circular-object]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-invalid-input]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-abort]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-flexible-types]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-no-autosubmit]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-pseudo-classes]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-respond-with]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-change-event]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-submit-from-js]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-form-removal-submit-crash]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-select-multiple-events]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-unregister-during-execute-tool]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-navigation]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-execute-tool-detach-toolactivated]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-opaque-origin-tools]
+status = "pass"
+
+[expectations.chromium-webmcp-declarative-sandboxed-iframe]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-cancel-reentrancy-crash]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-detached-frame-execute-tool]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-detached-frame-get-tools]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-detached-frame-model-context]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-detached-frame-register-tool]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-across-trees]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-caller-navigate-abort]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-detach-toolactivated]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-detach-toolcancel]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-error-window-onerror]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-events]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-invalid-dictionary]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-same-document-navigation-crash]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-signal-cross-origin]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-target-detachment]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-target-navigation]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-unauthorized-origin]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-execute-tool-unregister-resolution-race]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-cross-origin-child]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-defaults-cross-origin]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-defaults-same-origin]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-invalid-origins]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-multiple-children]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-exposed-to-window-open]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-get-tools-filtering]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-initial-about-blank-shared-tool]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-non-secure]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-opaque-origin-tools]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-permissions-policy]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-same-origin-iframe-register-tool-regression]
+status = "pass"
+
+[expectations.chromium-webmcp-imperative-unregister-during-execute-tool]
+status = "pass"
