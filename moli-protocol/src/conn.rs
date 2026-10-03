@@ -582,8 +582,8 @@ pub use state::{
     DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
     EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
     LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
-    RuntimeBindingDefinition, TargetInfo, URL_BASE,
+    NoContentNavigation, PageNavigationHistoryEntry, PageTargetHost,
+    PendingNavigationHistoryUpdate, RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 #[cfg(test)]
 pub(crate) use state::{

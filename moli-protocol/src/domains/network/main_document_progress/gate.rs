@@ -277,7 +277,7 @@ impl MainDocumentProgressQueueHandle {
         self.lock_drain().append_source(source);
     }
 
-    fn mark_output_visible_until(&self, boundary: MainDocumentProgressOutputBoundary) {
+    pub(super) fn mark_output_visible_until(&self, boundary: MainDocumentProgressOutputBoundary) {
         self.lock_drain().mark_output_visible_until(boundary);
     }
 

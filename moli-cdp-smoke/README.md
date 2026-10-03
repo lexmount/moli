@@ -161,14 +161,22 @@ The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
 directly drives `Page.navigate` and correlates the result with the matching
 Document request/response identity. The matrix covers text, renderable HTML,
 empty, redirected, and HTTP-error attachments; unsupported binary MIME; an
-ordinary HTML 502 document; 204 No Content; and a reset before response
+ordinary HTML 502 document; 204 No Content; 205 Reset Content; and a reset before response
 headers. Chromium reports successful attachments as `isDownload=true` plus
 `net::ERR_ABORTED` while retaining the old Document, but a 204 reports the same
 error with `isDownload=false`; the smoke therefore treats `isDownload`, not the
-error string, as authoritative. Moli currently commits binary responses and
-204 responses as external Documents where Chromium retains the old Document;
-those two cases assert internally coherent response/lifecycle evidence and
-record the engine-selected outcome rather than claiming parity. For a 404
+error string, as authoritative. The 204/205 matrix was expanded on 2026-10-02
+against the same executable. Eight raw CDP probes cover ordinary responses,
+attachments, request-stage `Fetch.fulfillRequest`, and response-stage
+`Fetch.continueResponse`. The expanded group was also run unchanged against
+Chromium three times. Ordinary and intercepted 204/205 responses retain the
+Document, realm, form values, and navigation history, emit exactly one matching
+`Network.loadingFailed` with `net::ERR_ABORTED` and `canceled=true`, and never
+emit DOMContentLoaded for the attempted loader. Attachments retain
+`isDownload=true` even with status 204/205. Moli still commits binary responses
+as external Documents where Chromium retains the old Document; that case
+asserts internally coherent response/lifecycle evidence and records the
+engine-selected outcome rather than claiming parity. For a 404
 attachment, both engines preserve `isDownload` and the HTTP response evidence,
 while Chromium commits an error Document with `net::ERR_INVALID_RESPONSE` and
 Moli retains the prior Document with `net::ERR_ABORTED`; that difference is

@@ -71,6 +71,9 @@ async fn commit_navigation_outcome_for_session_test(
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
         }
+        NavigationLoadOutcome::NoContent(_) => {
+            panic!("test navigation should produce a document")
+        }
         NavigationLoadOutcome::NetworkFailure(error_text) => {
             panic!("test navigation should not fail: {error_text}")
         }
