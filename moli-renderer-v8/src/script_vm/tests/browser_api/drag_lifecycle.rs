@@ -168,3 +168,37 @@ fn native_drag_cancels_the_source_when_first_movement_crosses_a_drop_zone() {
     }
     assert_eq!(vm.eval("JSON.stringify(__dragResults.finish().trace.filter(e=>e.type==='dragend').map(e=>[e.target,e.dropEffect]))").unwrap(), "[[\"source\",\"copy\"]]");
 }
+
+#[test]
+fn cancel_drag_command_completes_dragend_microtasks_before_returning() {
+    let mut vm = new_rendered_test_vm(
+        "https://drag-cancel-command.test/",
+        "<html><body></body></html>",
+    );
+    vm.eval(&format!(
+        "{}; globalThis.__dragResults=__installDragLifecycleProbe('drop',false,0);\n\
+        globalThis.cancelReady=false; document.addEventListener('dragend', () => {{\n\
+          Promise.resolve().then(() => {{cancelReady=true;}});\n\
+        }}); 'ready'",
+        include_str!("drag_lifecycle.js")
+    ))
+    .unwrap();
+    vm.publish_layout_for_test().unwrap();
+    for input in [
+        ("hover", "mousemove", 80.0, -1, 0, 0),
+        ("down", "mousedown", 80.0, 0, 1, 0),
+        ("start", "mousemove", 100.0, 0, 1, 0),
+    ] {
+        dispatch_drag_lifecycle_input(&mut vm, "mouse", 17, input);
+    }
+    vm.clear_active_drag_data_transfer().unwrap();
+    // Entering a realm is not a task checkpoint. Read the value directly so an
+    // eval() boundary cannot accidentally run the pending microtask for us.
+    vm.with_default_context_scope(|scope, _| {
+        let key = v8::String::new(scope, "cancelReady").unwrap();
+        let global = scope.get_current_context().global(scope);
+        assert!(global.get(scope, key.into()).unwrap().boolean_value(scope));
+        Ok(())
+    })
+    .unwrap();
+}
