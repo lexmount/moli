@@ -350,16 +350,16 @@ impl ParleyDocumentServices {
             let mut layout = builder.build(&candidate);
             layout.break_all_lines(None);
             let run = layout.lines().next()?.runs().next()?;
-            if primary_font
-                .is_some_and(|identity| identity != (run.font().data.id(), run.font().index))
-            {
+            if primary_font.is_some_and(|identity| {
+                identity != (run.font().font.data.id(), run.font().font.index)
+            }) {
                 return None;
             }
-            let metrics = *run.metrics();
+            let metrics = *run.font_metrics();
             Some(InlineFontMetrics {
                 ascent: metrics.ascent,
                 descent: metrics.descent,
-                line_height: metrics.line_height,
+                line_height: run.line_height(),
                 x_height: resolved_inline_x_height(metrics.ascent, metrics.x_height),
             })
         });
@@ -1199,6 +1199,7 @@ mod tests {
             .next()
             .expect("one shaped run")
             .font()
+            .font
             .data
             .as_ref()
             .to_vec()

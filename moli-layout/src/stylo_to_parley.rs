@@ -30,10 +30,10 @@ use style::{
 
 use crate::{PaintColor, PaintPoint, PaintTextDecorationStyle, style::absolute_paint_color};
 
-// Blink only requests synthetic bold for CSS weights at or above 600. Fontique
-// reports any requested weight above the selected face as embolden-able, which
-// also includes the CSS 500 -> regular 400 match unless we preserve this
-// browser-level threshold at the style bridge.
+// Blink only requests synthetic bold for CSS weights at or above 600. The
+// matched face's synthesis metadata separately records whether its static
+// weight is below the request, including the CSS 500 -> regular 400 match.
+// Keep this browser threshold independent of the library's default policy.
 const SYNTHETIC_BOLD_THRESHOLD: f32 = 600.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -168,6 +168,22 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
     };
 
     TextStyle {
+        line_break: parley::LineBreak::default(),
+        vertical_align: parley::VerticalAlign::default(),
+        white_space_collapse: match computed.clone_white_space_collapse() {
+            style::computed_values::white_space_collapse::T::Collapse => {
+                parley::WhiteSpaceCollapse::Collapse
+            }
+            style::computed_values::white_space_collapse::T::Preserve => {
+                parley::WhiteSpaceCollapse::Preserve
+            }
+            style::computed_values::white_space_collapse::T::PreserveBreaks => {
+                parley::WhiteSpaceCollapse::PreserveBreaks
+            }
+            style::computed_values::white_space_collapse::T::BreakSpaces => {
+                parley::WhiteSpaceCollapse::BreakSpaces
+            }
+        },
         font_family: FontFamily::List(Cow::Owned(families)),
         font_size,
         font_width: font_width(font.font_stretch),

@@ -5,7 +5,7 @@ edition = "2024"
 license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 
 [dependencies]
-fontique = "=0.11.1"
+fontique = "=0.11.0"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 parking_lot = "0.12"

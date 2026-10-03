@@ -246,7 +246,7 @@ impl InlineContentWidthsMemo {
         indent: f32,
         options: parley::IndentOptions,
     ) -> parley::ContentWidths {
-        if !layout.inline_boxes().is_empty() {
+        if layout.inline_boxes().len() != 0 {
             return layout.calculate_content_widths();
         }
 
@@ -275,6 +275,90 @@ impl InlineContentWidthsMemo {
 /// its vector capacity and all shaped runs, clusters, and glyphs.
 pub(crate) fn reset_inline_layout_for_probe(layout: &mut Layout<TextBrush>) {
     drop(layout.break_lines());
+}
+
+/// Place CSS decorations around visual fragments after bidi reordering.
+///
+/// Edge widths still participate in logical line breaking. Their visual slots
+/// follow CSS direction and descendant fragments, independently of the text's
+/// resolved bidi levels. Process descendants first so nested decorations are
+/// included when placing their parent's physical edges.
+pub(crate) fn position_inline_edges<N: Copy + Debug + Eq + Hash>(
+    world: &LayoutWorld<N>,
+    context: &InlineFormattingContext,
+    layout: &mut Layout<TextBrush>,
+) {
+    if !context.objects.iter().any(|object| {
+        matches!(
+            object.role,
+            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+        )
+    }) {
+        return;
+    }
+    for line_index in 0..layout.len() {
+        let line = layout.get(line_index).expect("known line");
+        let mut ancestors = vec![Vec::new(); line.len()];
+        for run in line.runs() {
+            ancestors[run.index()] =
+                overlapping_output_ranges(&context.text_units, &run.text_range())
+                    .iter()
+                    .filter(|unit| !unit.control)
+                    .flat_map(|unit| unit.ancestors.iter().copied())
+                    .collect();
+        }
+        let mut edges = BTreeMap::<usize, Vec<(usize, bool)>>::new();
+        for (slot, inline_box) in line.inline_box_indices() {
+            let Some(object) = context.object(inline_box.id) else {
+                continue;
+            };
+            ancestors[slot] = object.ancestors.clone();
+            if matches!(
+                object.role,
+                InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+            ) {
+                let physical_left = (object.role == InlineObjectRole::StartEdge)
+                    == (world.boxes[object.box_id.index()].style.direction()
+                        == InlineDirection::Ltr);
+                edges
+                    .entry(object.box_id.index())
+                    .or_default()
+                    .push((slot, physical_left));
+            }
+        }
+        let mut edges = edges.into_iter().collect::<Vec<_>>();
+        edges.sort_by_key(|(_, slots)| std::cmp::Reverse(ancestors[slots[0].0].len()));
+        let mut order = (0..line.len()).collect::<Vec<_>>();
+        for (box_index, mut slots) in edges {
+            let original_position = order
+                .iter()
+                .position(|slot| slots.iter().any(|(edge, _)| edge == slot))
+                .expect("edge on this line");
+            order.retain(|slot| !slots.iter().any(|(edge, _)| edge == slot));
+            let box_id = LayoutBoxId::from_index(box_index);
+            let first = order
+                .iter()
+                .position(|slot| ancestors[*slot].contains(&box_id));
+            let last = order
+                .iter()
+                .rposition(|slot| ancestors[*slot].contains(&box_id));
+            slots.sort_by_key(|(_, left)| !left);
+            if let (Some(first), Some(last)) = (first, last) {
+                if let Some((slot, _)) = slots.iter().find(|(_, left)| !left) {
+                    order.insert(last + 1, *slot);
+                }
+                if let Some((slot, _)) = slots.iter().find(|(_, left)| *left) {
+                    order.insert(first, *slot);
+                }
+            } else {
+                let position = original_position.min(order.len());
+                order.splice(position..position, slots.iter().map(|(slot, _)| *slot));
+            }
+        }
+        if order.iter().enumerate().any(|(index, &slot)| index != slot) {
+            layout.reorder_line_items(line_index, &order);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -375,6 +459,17 @@ impl InlineFormattingContext {
             .get(index)
             .copied()
             .unwrap_or(self.root_style)
+    }
+
+    pub(crate) fn style_is_within_box(&self, index: usize, target: LayoutBoxId) -> bool {
+        let mut current = Some(self.style_parent(index));
+        while let Some(box_id) = current {
+            if box_id == target {
+                return true;
+            }
+            current = self.structural_box(box_id).map(|state| state.parent);
+        }
+        false
     }
 
     fn box_includes_used_font_metrics(&self, box_id: LayoutBoxId) -> bool {
@@ -502,14 +597,10 @@ pub(crate) fn build_inline_fragments(
         }
 
         for run in line.runs() {
-            let run_metrics = run.metrics();
+            let run_metrics = run.font_metrics();
             for cluster in run.visual_clusters() {
                 let range = cluster.text_range();
-                let style_index = cluster
-                    .glyphs()
-                    .next()
-                    .map(|glyph| glyph.style_index())
-                    .unwrap_or_default();
+                let style_index = usize::from(cluster.style_index());
                 let vertical_offset = placement.map_or(0.0, |placement| {
                     placement.glyph_offset(run.index(), style_index)
                 });
@@ -740,7 +831,7 @@ pub(crate) fn break_inline_lines(
         .map(|line| {
             let metrics = line.metrics();
             let line_range = line.text_range();
-            metrics.trailing_whitespace > 0.0
+            metrics.hanging_advance > 0.0
                 && metrics.advance > width + tolerance
                 && overlapping_output_ranges(&context.text_units, &line_range)
                     .iter()
@@ -820,12 +911,12 @@ fn line_items_with_content<'a>(
         PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run
             .run()
             .clusters()
-            .filter(|cluster| std::ptr::eq(cluster.first_style(), glyph_run.style()))
+            .filter(|cluster| std::ptr::eq(cluster.style(), glyph_run.style()))
             .map(|cluster| cluster.text_range())
             .reduce(|left, right| left.start.min(right.start)..left.end.max(right.end)),
         PositionedLayoutItem::InlineBox(positioned) => usize::try_from(positioned.id)
             .ok()
-            .and_then(|index| layout.inline_boxes().get(index))
+            .and_then(|index| layout.inline_boxes().nth(index))
             .map(|object| object.index..object.index),
     };
     let mut content_range: Option<Range<usize>> = None;
@@ -862,7 +953,7 @@ fn glyph_run_is_collapsible_whitespace(
     let only_spaces = glyph_run
         .run()
         .clusters()
-        .filter(|cluster| std::ptr::eq(cluster.first_style(), glyph_run.style()))
+        .filter(|cluster| std::ptr::eq(cluster.style(), glyph_run.style()))
         .all(|cluster| {
             found = true;
             let units = overlapping_output_ranges(&context.text_units, &cluster.text_range());
@@ -931,9 +1022,12 @@ fn resolve_inline_lines(
             .map(|(item, contributes_to_line)| match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
                     let run = glyph_run.run();
-                    let run_metrics = run.metrics();
+                    let run_metrics = run.font_metrics();
                     let paint = glyph_run.style().brush.paint;
-                    let style_index = glyph_run.glyphs().next().map(|glyph| glyph.style_index());
+                    let style_index = glyph_run
+                        .glyphs()
+                        .next()
+                        .map(|_| usize::from(glyph_run.style_index()));
                     let structural_parent =
                         style_index.map_or(context.root_style, |index| context.style_parent(index));
                     let primary_strut = style_index
@@ -942,6 +1036,7 @@ fn resolve_inline_lines(
                     let bounds = glyph_line_bounds(
                         primary_strut,
                         run_metrics,
+                        run.line_height(),
                         context.box_includes_used_font_metrics(structural_parent),
                     );
                     InlineItemVerticalGeometry {
@@ -1061,8 +1156,8 @@ fn resolve_inline_lines(
         });
 
         let fallback_root_bounds = InlineVerticalBounds {
-            top: -metrics.ascent - metrics.leading * 0.5,
-            bottom: metrics.descent + metrics.leading * 0.5,
+            top: metrics.block_min_coord - metrics.baseline,
+            bottom: metrics.block_max_coord - metrics.baseline,
         };
         let mut root_bounds = (!phantom && !context.uses_quirks_line_height).then(|| {
             context
@@ -1374,13 +1469,14 @@ fn line_break_metrics(
         let style_index = layout
             .styles()
             .iter()
-            .position(|style| std::ptr::eq(style, cluster.first_style()))?;
+            .position(|style| std::ptr::eq(style, cluster.style()))?;
         let structural_parent = context.style_parent(style_index);
         let primary_strut =
             context.font_metrics[style_index].map(|metrics| inline_strut_metrics(metrics, true));
         let bounds = glyph_line_bounds(
             primary_strut,
-            run.metrics(),
+            run.font_metrics(),
+            run.line_height(),
             context.box_includes_used_font_metrics(structural_parent),
         );
         Some((structural_parent, bounds))
@@ -1468,14 +1564,15 @@ impl InlineVerticalBounds {
 
 fn glyph_line_bounds(
     primary_strut: Option<InlineStrutMetrics>,
-    used_font: &parley::layout::RunMetrics,
+    used_font: &parley::FontMetrics,
+    used_line_height: f32,
     include_used_font_metrics: bool,
 ) -> InlineVerticalBounds {
     let used_strut = inline_strut_metrics(
         InlineFontMetrics {
             ascent: used_font.ascent,
             descent: used_font.descent,
-            line_height: used_font.line_height,
+            line_height: used_line_height,
             x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
         },
         true,
@@ -1518,7 +1615,7 @@ fn build_line_inline_box_states(
             let follows_wrapped_space = || {
                 geometry
                     .object_index
-                    .and_then(|index| layout.inline_boxes().get(index))
+                    .and_then(|index| layout.inline_boxes().nth(index))
                     .filter(|edge| edge.index <= line_range.start)
                     .is_some_and(|edge| {
                         context
@@ -2044,6 +2141,8 @@ impl InlineBuildInput {
                     index: object_anchors[object_id],
                     width: 0.0,
                     height: 0.0,
+                    baseline: None,
+                    vertical_align: parley::VerticalAlign::default(),
                 },
                 object.role.parley_bidi(),
             );
@@ -2831,18 +2930,18 @@ mod tests {
             text_descent: 2.0,
             x_height: 4.0,
         };
-        let fallback = parley::layout::RunMetrics {
+        let fallback = parley::FontMetrics {
             ascent: 18.0,
             descent: 6.0,
-            line_height: 30.0,
-            ..parley::layout::RunMetrics::default()
+            leading: 6.0,
+            ..parley::FontMetrics::fallback(0.0)
         };
 
-        let explicit = glyph_line_bounds(Some(primary), &fallback, false);
+        let explicit = glyph_line_bounds(Some(primary), &fallback, 30.0, false);
         assert_eq!(explicit.top, -8.0);
         assert_eq!(explicit.bottom, 2.0);
 
-        let normal = glyph_line_bounds(Some(primary), &fallback, true);
+        let normal = glyph_line_bounds(Some(primary), &fallback, 30.0, true);
         assert_eq!(normal.top, -21.0);
         assert_eq!(normal.bottom, 9.0);
     }
@@ -2974,6 +3073,8 @@ mod tests {
                         index: anchors[id],
                         width: 1.0,
                         height: 20.0,
+                        baseline: None,
+                        vertical_align: parley::VerticalAlign::default(),
                     },
                     object.role.parley_bidi(),
                 );
@@ -3159,12 +3260,13 @@ mod tests {
             parley::Alignment::Justify,
             parley::AlignmentOptions {
                 align_when_overflowing: false,
+                last_line_alignment: None,
             },
         );
         let justified = reused.calculate_content_widths();
-        assert!(
-            justified.max > expected.max,
-            "the regression fixture must expose justification-mutated cluster advances"
+        assert_eq!(
+            justified.max, expected.max,
+            "Parley keeps line justification separate from intrinsic shaped advances"
         );
 
         reset_inline_layout_for_probe(&mut reused);
@@ -3217,10 +3319,12 @@ mod tests {
             index: 5,
             width: 20.0,
             height: 10.0,
+            baseline: None,
+            vertical_align: parley::VerticalAlign::default(),
         });
         let mut object_layout = object_builder.build(text);
         let object_first = memo.content_widths_for_probe(&object_layout, 12.0, changed_options);
-        object_layout.inline_boxes_mut()[0].width = 60.0;
+        object_layout.inline_boxes_mut().next().unwrap().width = 60.0;
         let object_second = memo.content_widths_for_probe(&object_layout, 12.0, changed_options);
         assert!(object_second.max > object_first.max);
         assert_eq!(memo.hits, 1);

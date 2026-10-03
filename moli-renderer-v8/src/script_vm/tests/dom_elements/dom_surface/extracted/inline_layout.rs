@@ -1,5 +1,54 @@
 use super::*;
 
+// Physical gaps verified in Chromium 145.0.7632.116 before adding assertions.
+#[test]
+fn inline_decorations_follow_visual_edges_of_natural_bidi_text() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        for direction in ["ltr", "rtl"] {
+            for text in ["אב", "xאב", "אבx", "xאבx"] {
+                for (decoration, left, right) in [
+                    ("padding-left:20px", 20.0, 0.0),
+                    ("padding-right:13px", 0.0, 13.0),
+                    ("padding-left:20px;padding-right:13px", 20.0, 13.0),
+                    ("border-left:7px solid;border-right:3px solid", 7.0, 3.0),
+                ] {
+                    let markup = format!(
+                        r#"{doctype}<meta charset=utf-8><style>body{{margin:0}}#line{{direction:ltr;font:20px/30px monospace;width:300px}}</style><div id=line>a<span id=w style="direction:{direction};{decoration}">{text}</span>b</div>"#
+                    );
+                    let mut vm = new_parsed_test_vm("https://visual-inline-edges.test/", &markup);
+                    let query = r#"JSON.stringify((()=>{
+                        const word=document.getElementById('w'),range=document.createRange();
+                        range.selectNodeContents(word);
+                        const box=word.getBoundingClientRect(),text=range.getBoundingClientRect();
+                        return [text.left-box.left,box.right-text.right,
+                            document.getElementById('line').getBoundingClientRect().height,
+                            word.textContent.length];
+                    })())"#;
+                    let first = vm.eval(query).unwrap();
+                    let actual = serde_json::from_str::<[f64; 4]>(&first).unwrap();
+                    let expected = [left, right, 30.0, text.chars().count() as f64];
+                    for (actual, expected) in actual.into_iter().zip(expected) {
+                        assert!(
+                            (actual - expected).abs() < 0.02,
+                            "{doctype}/{direction}/{text}/{decoration}: {first}"
+                        );
+                    }
+                    publish_layout_for_test(&mut vm);
+                    assert_eq!(
+                        vm.eval(query).unwrap(),
+                        first,
+                        "{doctype}/{direction}/{text}/{decoration}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 // Relative geometry measured in Chromium 145.0.7632.116 in all three modes.
 #[test]
 fn atomic_inline_boxes_resolve_bidi_contexts_without_expanding_sibling_fragments() {

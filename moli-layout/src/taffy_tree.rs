@@ -20,8 +20,8 @@ use crate::{
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineObjectRole, break_inline_lines, build_inline_fragments,
-        build_inline_line_placements, measure_inline_lines, relative_atomic_inset_offset,
-        reset_inline_layout_for_probe,
+        build_inline_line_placements, measure_inline_lines, position_inline_edges,
+        relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -2366,7 +2366,7 @@ where
             vec![InlineEdgeContribution::default(); context.objects.len()];
         let mut floats = Vec::new();
 
-        for (inline_box, object) in layout.inline_boxes_mut().iter_mut().zip(&context.objects) {
+        for (inline_box, object) in layout.inline_boxes_mut().zip(&context.objects) {
             match object.role {
                 InlineObjectRole::Atomic => {
                     let margins = self.boxes[object.box_id.index()]
@@ -2652,10 +2652,12 @@ where
         } else {
             break_inline_lines(context, layout, max_advance);
         }
+        position_inline_edges(self, context, layout);
         layout.align(
             alignment,
             AlignmentOptions {
                 align_when_overflowing: false,
+                last_line_alignment: None,
             },
         );
 
@@ -2854,7 +2856,7 @@ where
                     state.set_line_max_advance(slot.width.max(0.0));
                     state.set_line_x(slot.x);
                     state.set_line_y(f64::from(slot.y));
-                    state.append_inline_box_to_line(data.advance, 0.0);
+                    state.append_inline_box_to_line(data.advance, 0.0, 0.0);
                 }
             }
         }

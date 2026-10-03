@@ -1556,6 +1556,55 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_text_clip_membership_survives_visual_edge_reordering() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/bidi-inline-text-clip.html")?,
+        );
+        // Chromium 145.0.7632.116 gives equal, visible ink in all four rows.
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0;background:white}.case{font:32px/40px monospace;height:40px}
+em{font-style:normal}.clip{padding-left:20px;background-image:linear-gradient(90deg,red,blue);background-repeat:no-repeat;background-clip:text;-webkit-text-fill-color:transparent}
+.sibling{-webkit-text-fill-color:transparent}
+</style>`;
+document.body.innerHTML = '<div class=case><span class=clip style="direction:ltr">x</span><span class=sibling>W</span></div><div class=case><span class=clip style="direction:rtl">x</span><span class=sibling>W</span></div><div class=case><span class=clip style="direction:ltr"><em>x</em></span><span class=sibling>W</span></div><div class=case><span class=clip style="direction:rtl"><em>x</em></span><span class=sibling>W</span></div>';
+'installed'
+"#,
+        )?;
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 160, 1.0))?
+            .expect("text clip fixture must retain a layout root");
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let colored_ink = [0, 40, 80, 120].map(|top| {
+            (top..top + 40)
+                .flat_map(|y| (0..image.width).map(move |x| (x, y)))
+                .filter(|(x, y)| {
+                    let offset = ((y * image.width + x) * 4) as usize;
+                    let pixel = &image.rgba[offset..offset + 4];
+                    pixel[3] == 255 && pixel[0].max(pixel[2]).saturating_sub(pixel[1]) > 20
+                })
+                .count()
+        });
+        assert!(colored_ink[0] > 50, "the control must paint visible text ink");
+        assert_eq!(
+            colored_ink,
+            [colored_ink[0]; 4],
+            "CSS direction and nested styles must preserve the text mask's membership"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("bidi text clip test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paints_background_clip_text_with_transparent_webkit_fill() {
     run_page_vm_async_test(async move {
         let loader =
