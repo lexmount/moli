@@ -986,7 +986,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
         .expect("boundary log should evaluate");
     assert_eq!(
         result,
-        "pointerover:a:pen::true|pointerenter:a:pen::false|mouseover:a:::true|mouseenter:a:::true|pointermove:a:pen::true|mousemove:a:::true|pointerout:a:pen:b:true|pointerleave:a:pen:b:false|pointerover:b:pen:a:true|pointerenter:b:pen:a:false|mouseout:a::b:true|mouseleave:a::b:true|mouseover:b::a:true|mouseenter:b::a:true|pointermove:b:pen::true|mousemove:b:::true"
+        "pointerover:a:pen::true|pointerenter:a:pen::false|mouseover:a:::true|mouseenter:a:::false|pointermove:a:pen::true|mousemove:a:::true|pointerout:a:pen:b:true|pointerleave:a:pen:b:false|pointerover:b:pen:a:true|pointerenter:b:pen:a:false|mouseout:a::b:true|mouseleave:a::b:false|mouseover:b::a:true|mouseenter:b::a:false|pointermove:b:pen::true|mousemove:b:::true"
     );
 }
 
