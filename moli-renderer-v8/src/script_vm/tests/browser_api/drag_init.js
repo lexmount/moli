@@ -26,7 +26,10 @@ globalThis.__installDragInitProbe = function(mode) {
     outer.removeAttribute('draggable');outer.innerHTML='<svg id="inner" width="100" height="100" draggable="true"><rect width="100" height="100"/></svg>';inner=outer.firstChild;
   }
   if(mode==='shadow') {
-    outer.removeAttribute('draggable');outer.attachShadow({mode:'open'}).innerHTML='<div id="shadowSource" draggable="true" style="width:140px;height:140px"><slot></slot></div>';expected='shadowSource';
+    outer.removeAttribute('draggable');outer.attachShadow({mode:'open'}).innerHTML='<div id="shadowSource" draggable="true" style="width:140px;height:140px"><slot></slot></div>';expected=null;
+  }
+  if(mode==='shadow-descendant' || mode==='shadow-closed-descendant') {
+    outer.removeAttribute('draggable');outer.attachShadow({mode:mode==='shadow-descendant'?'open':'closed'}).innerHTML='<div id="shadowSource" draggable="true" style="width:140px;height:140px"><div id="shadowInner" style="width:100px;height:100px"></div></div>';expected=mode==='shadow-descendant'?'shadowSource':'outer';
   }
   if(mode==='native-getters') {
     for(const [object,key] of [[outer,'draggable'],[inner,'parentNode'],[inner,'ownerDocument']]) Object.defineProperty(object,key,{get(){reads++;throw new Error('author getter must not run');}});
