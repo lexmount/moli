@@ -1024,7 +1024,7 @@ pub(crate) struct PageScriptHost {
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
     next_text_track_load_sequence_id: u64,
     pending_media_text_track_gates: HashMap<DomHandle, PendingMediaTextTrackGate>,
-    active_pointer_capture_ids: HashSet<i32>,
+    active_pointer_buttons: HashMap<i32, i32>,
     pending_pointer_capture_targets: HashMap<i32, DomHandle>,
     pointer_capture_targets: HashMap<i32, DomHandle>,
     #[cfg(feature = "devtools")]
