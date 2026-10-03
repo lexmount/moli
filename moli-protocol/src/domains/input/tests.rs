@@ -2383,7 +2383,8 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
                       event.type,
                       event instanceof DragEvent,
                       event.dataTransfer.getData('text/plain'),
-                      Array.from(event.dataTransfer.types).join(',')
+                      Array.from(event.dataTransfer.types).join(','),
+                      event.dataTransfer.items[0].kind
                     ].join('|'));
                   });
                 </script>
@@ -2432,7 +2433,7 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
     assert_eq!(messages, vec![json!({ "id": 4107, "result": {} })]);
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__dragPending)").await,
-        r#"["dragenter|true||text/plain"]"#
+        r#"["dragenter|true||text/plain|string"]"#
     );
     assert!(
         evaluate_bool(
