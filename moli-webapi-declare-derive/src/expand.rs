@@ -137,6 +137,18 @@ pub(crate) fn expand_webapi_function_template(
             }
         })
     });
+    let prototype_attribute_names = fields.iter().filter_map(|DeclaredField { attrs, .. }| {
+        if attrs.symbol.is_none()
+            && matches!(
+                attrs.kind,
+                FieldKind::AccessorProperty | FieldKind::NativeDataProperty
+            )
+        {
+            webapi_field_name_literal(attrs.name.as_ref())
+        } else {
+            None
+        }
+    });
     let template_fields = expand_function_template_fields(&fields, &template_name)?;
     let FunctionTemplateFieldExpansions {
         template_methods,
@@ -183,6 +195,7 @@ pub(crate) fn expand_webapi_function_template(
 
         impl #impl_generics ::moli_webapi_declare::WebApiFunctionTemplateDeclaration for #struct_name #ty_generics #where_clause {
             const NAME: &'static str = #template_name;
+            const PROTOTYPE_ATTRIBUTE_NAMES: &'static [&'static str] = &[#(#prototype_attribute_names),*];
 
             fn build<'s>(
                 scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_, ()>,
