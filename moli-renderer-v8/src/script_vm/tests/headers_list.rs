@@ -50,6 +50,6 @@ async fn headers_preserve_internal_lists_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 174, "worker={worker}");
+        assert_eq!(checks.len(), 181, "worker={worker}");
     }
 }

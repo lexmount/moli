@@ -93,6 +93,28 @@ async function headersListProbe(base) {
     }
   }
 
+  const source = new Request(base, {method: 'POST', body: 'A', headers: [['Accept', long], ['accept', 'b']]});
+  const copy = source.clone();
+  const refilled = new Request(copy, {mode: 'no-cors', body: 'replacement'});
+  check('body/clone-refill', refilled.headers.get('accept'), long);
+  check('body/replacement', await refilled.text(), 'replacement');
+  check('body/original', await source.text(), 'A');
 
+  // Cache stores copies of Requests and Responses, including their header lists.
+  {
+    const cacheName = 'headers-list-' + Math.random().toString(36);
+    try {
+      const cache = await caches.open(cacheName);
+      const url = base + '/cached';
+      const request = new Request(url, {headers: [['Accept', long], ['accept', 'b']]});
+      await cache.put(request, new Response('stored', {headers: [['Vary', 'Accept'], ['X-List', 'first'], ['x-list', '']]}));
+      const keys = await cache.keys();
+      check('cache/key-refill', new Request(keys[0], {mode: 'no-cors'}).headers.get('Accept'), long);
+      const match = await cache.match(new Request(url, {headers: {Accept: long + ', b'}}));
+      check('cache/vary-combined-match', await match.text(), 'stored');
+      check('cache/response-fields', match.headers.get('x-list'), 'first, ');
+      check('cache/vary-mismatch', await cache.match(new Request(url, {headers: {Accept: long}})), undefined);
+    } finally { await caches.delete(cacheName); }
+  }
   return {state: checks.every(check => check.pass) ? 'pass' : 'fail', checks};
 }
