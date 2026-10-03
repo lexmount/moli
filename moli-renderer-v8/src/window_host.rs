@@ -2,6 +2,7 @@ use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
     context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
+    context_bootstrap::current_performance_time_origin,
     context_bootstrap::dom_time_since_origin_millis,
     context_bootstrap::event_initialized,
     context_bootstrap::event_is_dispatching,
@@ -62,6 +63,7 @@ const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
 const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
+const IDLE_DEADLINE_TIME_ORIGIN_SLOT: &str = "__moliIdleDeadlineTimeOrigin";
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
 const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
@@ -87,6 +89,8 @@ struct WindowDocumentEventInitDeclaration {
 struct IdleDeadlineDeclaration {
     #[webapi(slot = IDLE_DEADLINE_MS_SLOT)]
     deadline_ms: f64,
+    #[webapi(slot = IDLE_DEADLINE_TIME_ORIGIN_SLOT)]
+    time_origin_ms: f64,
     #[webapi(slot = IDLE_DEADLINE_DID_TIMEOUT_SLOT)]
     did_timeout: bool,
 }
@@ -1867,7 +1871,8 @@ pub(crate) fn build_window_idle_deadline<'s>(
     } else {
         now_ms + IDLE_CALLBACK_BUDGET_MS
     };
-    IdleDeadlineDeclaration::new(deadline_ms, did_timeout)
+    let time_origin_ms = current_performance_time_origin(scope);
+    IdleDeadlineDeclaration::new(deadline_ms, time_origin_ms, did_timeout)
         .bind(scope)
         .ok()
 }
@@ -1915,9 +1920,20 @@ fn window_idle_deadline_time_remaining_callback<'s>(
         return;
     };
     let now_ms = current_time_ms();
+    let time_origin_ms = get_private_value(scope, deadline, IDLE_DEADLINE_TIME_ORIGIN_SLOT)
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
     let remaining_ms = get_private_value(scope, deadline, IDLE_DEADLINE_MS_SLOT)
         .and_then(|value| value.number_value(scope))
-        .map_or(0.0, |deadline_ms| (deadline_ms - now_ms).max(0.0));
+        .map_or(0.0, |deadline_ms| {
+            // Use the captured origin even if timeRemaining is borrowed from
+            // another realm. Both timestamps must match performance.now()'s
+            // relative clock and precision rather than the raw wall clock.
+            moli_time::coarsened_dom_time_remaining_millis(
+                (deadline_ms - time_origin_ms).max(0.0),
+                (now_ms - time_origin_ms).max(0.0),
+            )
+        });
     rv.set(v8::Number::new(scope, remaining_ms).into());
 }
 

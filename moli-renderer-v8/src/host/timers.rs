@@ -22,7 +22,7 @@ use crate::{
         get_private_value, script_nonce_from_host_defined_options,
     },
 };
-use moli_time::{TimerId, TimerReadyAllowance, TimerScheduler};
+use moli_time::{TimerId, TimerScheduler};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -211,7 +211,6 @@ impl ScheduledTimerTask {
     }
 }
 
-const MIN_DELAY_TIMER_READY_EARLY_ALLOWANCE: Duration = Duration::from_millis(1);
 const TIMER_CALLBACK_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Default)]
@@ -469,18 +468,17 @@ impl HostTimeoutScheduler {
         ) else {
             return 0;
         };
-        self.scheduler
-            .schedule_after(
-                ScheduledTimerTask {
-                    callback: ScheduledTimerCallback::WindowWebIdl(callback),
-                    owner,
-                    is_interval,
-                    extra_args,
-                },
-                u64::from(delay_ms),
-                Instant::now(),
-            )
-            .get()
+        let task = ScheduledTimerTask {
+            callback: ScheduledTimerCallback::WindowWebIdl(callback),
+            owner,
+            is_interval,
+            extra_args,
+        };
+        let now = Instant::now();
+        let id = self
+            .scheduler
+            .schedule_after(task, u64::from(delay_ms), now);
+        id.get()
     }
 
     pub(crate) fn queue_source_once_with_receiver<'s>(
@@ -737,11 +735,12 @@ impl HostTimeoutScheduler {
         selection: RendererPageTimerSelection,
     ) -> HostTimeoutRunResult {
         let now_ms = crate::window_host::current_time_ms();
-        let Some(timer) = self.scheduler.take_next_ready_matching(
-            Instant::now(),
-            min_delay_ready_allowance(),
-            |task| task.matches_selection(selection, now_ms),
-        ) else {
+        let Some(timer) = self
+            .scheduler
+            .take_next_ready_matching(Instant::now(), |task| {
+                task.matches_selection(selection, now_ms)
+            })
+        else {
             return HostTimeoutRunResult::Idle;
         };
         self.run_timer(scope, timer)
@@ -749,8 +748,7 @@ impl HostTimeoutScheduler {
 
     #[cfg(test)]
     pub(crate) fn has_ready_timer(&self) -> bool {
-        self.scheduler
-            .has_ready_timer(Instant::now(), min_delay_ready_allowance())
+        self.scheduler.has_ready_timer(Instant::now())
     }
 
     pub(crate) fn next_ready_timer_deadline(
@@ -758,11 +756,10 @@ impl HostTimeoutScheduler {
         selection: RendererPageTimerSelection,
     ) -> Option<Instant> {
         let now_ms = crate::window_host::current_time_ms();
-        self.scheduler.next_ready_deadline_matching(
-            Instant::now(),
-            min_delay_ready_allowance(),
-            |task| task.matches_selection(selection, now_ms),
-        )
+        self.scheduler
+            .next_ready_deadline_matching(Instant::now(), |task| {
+                task.matches_selection(selection, now_ms)
+            })
     }
 
     fn run_timer(
@@ -1074,13 +1071,6 @@ fn timer_callback_relevant_context_is_current(
     context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
         unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
     })
-}
-
-fn min_delay_ready_allowance() -> TimerReadyAllowance {
-    TimerReadyAllowance {
-        max_delay_ms: 1,
-        allowance: MIN_DELAY_TIMER_READY_EARLY_ALLOWANCE,
-    }
 }
 
 fn run_window_timer_callback(

@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod child_context;
+mod document;
 mod helpers;
 mod interceptors;
 mod surface;
@@ -17,9 +18,11 @@ use super::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLO
 const WINDOW_FRAME_ELEMENT_SLOT: &str = "__moliWindowFrameElement";
 
 pub(super) use child_context::{
-    window_credentialless_getter, window_cross_origin_isolated_getter, window_document_getter,
-    window_frame_element_getter, window_length_getter,
+    window_credentialless_getter, window_cross_origin_isolated_getter, window_frame_element_getter,
+    window_length_getter,
 };
+pub(crate) use document::bind_current_child_window_document;
+pub(super) use document::window_document_getter;
 pub(super) use helpers::window_child_context_handle;
 pub(crate) use helpers::{current_window_style_viewport, window_host_ptr};
 pub(super) use interceptors::{

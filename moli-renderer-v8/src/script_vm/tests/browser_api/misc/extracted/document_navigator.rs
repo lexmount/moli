@@ -600,6 +600,220 @@ fn request_relative_urls_follow_live_srcdoc_iframe_base_urls() {
     );
 }
 
+fn assert_retained_request_uses_child_document(vm: &mut ScriptVm, fallback_base: &str) {
+    vm.exec(
+        r#"
+globalThis.retainedChildWindow = requestBaseFrame.contentWindow;
+globalThis.retainedChildDocument = retainedChildWindow.document;
+globalThis.RetainedChildRequest = retainedChildWindow.Request;
+retainedChildDocument.head.innerHTML = '<base href="https://fixture.test/child/">';
+"#,
+        None,
+    )
+    .expect("child Document and constructors should be retained");
+
+    let fallback_base_url = Url::parse(fallback_base).unwrap();
+    let allowed_referrer = fallback_base_url.join("/allowed-referrer").unwrap();
+    let parent_item = fallback_base_url.join("/parent-base/item").unwrap();
+    let assert_base = |vm: &mut ScriptVm, base: &str| {
+        let result = vm
+            .eval(&format!(
+                r#"
+(() => {{
+const controller = new AbortController();
+controller.abort('retained-reason');
+const request = new RetainedChildRequest('item', {{signal: controller.signal}});
+return JSON.stringify({{
+  documentIdentity: retainedChildWindow.document === retainedChildDocument,
+  urls: ['item', '../item?q#f', '?q', '#f'].map(input => new RetainedChildRequest(input).url),
+  referrer: new RetainedChildRequest('item', {{referrer: 'referrer'}}).referrer,
+  allowedReferrer: new RetainedChildRequest('item', {{referrer: {allowed_referrer}}}).referrer,
+  signalAborted: request.signal.aborted,
+  signalReason: request.signal.reason,
+  parent: new Request('item').url
+}});
+}})()
+"#,
+                allowed_referrer = serde_json::to_string(allowed_referrer.as_str()).unwrap(),
+            ))
+            .unwrap_or_else(|error| panic!("retained child Request at base {base}: {error}"));
+        let base = Url::parse(base).unwrap();
+        let relative_referrer = base.join("referrer").unwrap();
+        let expected_referrer = if relative_referrer.origin() == allowed_referrer.origin() {
+            relative_referrer.as_str()
+        } else {
+            "about:client"
+        };
+        let expected_urls =
+            ["item", "../item?q#f", "?q", "#f"].map(|input| base.join(input).unwrap().to_string());
+        let actual: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "documentIdentity": true,
+                "urls": expected_urls,
+                "referrer": expected_referrer,
+                "allowedReferrer": allowed_referrer.as_str(),
+                "signalAborted": true,
+                "signalReason": "retained-reason",
+                "parent": parent_item.as_str(),
+            }),
+            "retained Document base {base}"
+        );
+    };
+
+    assert_base(vm, "https://fixture.test/child/");
+    vm.exec("requestBaseFrame.remove();", None)
+        .expect("iframe should detach");
+    assert_base(vm, "https://fixture.test/child/");
+    assert!(vm.live_child_default_runtime_realm_inventory().is_empty());
+    assert_base(vm, "https://fixture.test/child/");
+
+    vm.exec(
+        "retainedChildDocument.querySelector('base').href = 'https://fixture.test/changed/';",
+        None,
+    )
+    .expect("retained Document base should remain mutable");
+    assert_base(vm, "https://fixture.test/changed/");
+    vm.exec(
+        "retainedChildDocument.querySelector('base').remove();",
+        None,
+    )
+    .expect("retained Document base should be removable");
+    assert_base(vm, fallback_base);
+
+    vm.exec(
+        "requestBaseFrame.removeAttribute('src'); document.body.appendChild(requestBaseFrame);",
+        None,
+    )
+    .expect("the same iframe element should reattach");
+    vm.exec(
+        "requestBaseFrame.contentDocument.head.innerHTML = '<base href=\"https://replacement.test/new/\">';",
+        None,
+    )
+    .expect("replacement child Document should get its own base");
+    assert_eq!(
+        vm.eval("new requestBaseFrame.contentWindow.Request('item').url")
+            .unwrap(),
+        "https://replacement.test/new/item"
+    );
+    assert_base(vm, fallback_base);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const replacement = requestBaseFrame.contentDocument;
+  replacement.body.textContent = 'REPLACEMENT';
+  retainedChildWindow.document.body.textContent = 'WRITTEN VIA OLD WINDOW';
+  return JSON.stringify([
+    retainedChildWindow !== requestBaseFrame.contentWindow,
+    retainedChildDocument !== replacement,
+    retainedChildDocument.body.textContent,
+    replacement.body.textContent
+  ]);
+})()
+"#,
+        )
+        .expect("retained Window writes should remain confined to its original Document"),
+        r#"[true,true,"WRITTEN VIA OLD WINDOW","REPLACEMENT"]"#
+    );
+}
+
+#[test]
+fn request_retains_initial_about_blank_document_after_iframe_removal() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.exec("document.body.appendChild(requestBaseFrame);", None)
+        .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    assert_retained_request_uses_child_document(&mut vm, "https://request-base.test/parent-base/");
+}
+
+#[test]
+fn request_retains_srcdoc_document_after_iframe_removal() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.exec(
+        "requestBaseFrame.srcdoc = '<!doctype html><html><head></head><body></body></html>'; \
+         document.body.appendChild(requestBaseFrame);",
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    assert_retained_request_uses_child_document(&mut vm, "https://request-base.test/parent-base/");
+}
+
+#[test]
+fn request_retains_child_settings_when_iframe_handle_is_reused_before_cleanup() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.exec(
+        r#"
+document.body.appendChild(requestBaseFrame);
+requestBaseFrame.contentDocument.head.innerHTML = '<base href="https://fixture.test/child/">';
+globalThis.RetainedChildRequest = requestBaseFrame.contentWindow.Request;
+requestBaseFrame.remove();
+document.body.appendChild(requestBaseFrame);
+requestBaseFrame.contentDocument.head.innerHTML = '<base href="https://replacement.test/new/">';
+"#,
+        None,
+    )
+    .unwrap();
+    vm.live_child_default_runtime_realm_inventory();
+    assert_eq!(
+        vm.eval("new RetainedChildRequest('item').url + '|' + new requestBaseFrame.contentWindow.Request('item').url")
+            .unwrap(),
+        "https://fixture.test/child/item|https://replacement.test/new/item"
+    );
+}
+
+#[test]
+fn request_retains_child_origin_after_iframe_removal() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.exec(
+        r#"
+document.body.appendChild(requestBaseFrame);
+requestBaseFrame.contentDocument.head.innerHTML = '<base href="https://fixture.test/child/">';
+globalThis.RetainedChildRequest = requestBaseFrame.contentWindow.Request;
+requestBaseFrame.remove();
+"#,
+        None,
+    )
+    .unwrap();
+    assert!(vm.live_child_default_runtime_realm_inventory().is_empty());
+    {
+        // Give the top fixture different settings without changing its URL.
+        // Only the constructor is retained; no child Document/Window reference
+        // or live owner registry is available to supply its original origin.
+        let mut host = vm._context_host.borrow_mut();
+        let loader = host.current_main_document_resource_loader().unwrap();
+        let context = loader.fetch_context();
+        host.retire_document_resource_loader(context.owner())
+            .unwrap();
+        host.register_committed_document_resource_loader(
+            crate::network::context::DocumentFetchContext::new(
+                context.owner(),
+                context.document_url().clone(),
+                context.base_url().clone(),
+                "https://other-origin.test",
+            ),
+            crate::network::context::DocumentResourceAuthoritySource::Inherited(loader),
+        );
+    }
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+new RetainedChildRequest('item').url,
+new RetainedChildRequest('item', {referrer: 'https://request-base.test/allowed'}).referrer,
+new RetainedChildRequest('item', {referrer: 'https://other-origin.test/rejected'}).referrer
+])"#,
+        )
+        .unwrap(),
+        r#"["https://fixture.test/child/item","https://request-base.test/allowed","about:client"]"#
+    );
+}
+
 #[tokio::test]
 async fn request_relative_urls_follow_live_http_iframe_base_urls() {
     let (server_url, server) = spawn_lightweight_popup_response_html_server(
@@ -653,5 +867,6 @@ async fn request_relative_urls_follow_live_http_iframe_base_urls() {
         child_url.as_str(),
         child_url.as_str(),
     );
+    assert_retained_request_uses_child_document(&mut vm, child_url.as_str());
     server.await.expect("iframe response server should finish");
 }

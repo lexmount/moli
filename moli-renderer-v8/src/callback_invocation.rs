@@ -4,7 +4,7 @@ use crate::exception_reporting::{
 };
 use crate::{
     host::WINDOW_EVENT_SLOT,
-    native_bridge::{JsContextHost, WindowExecutionContextIdentity},
+    native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity},
     util::v8str,
 };
 use moli_webidl_callback::{
@@ -208,11 +208,28 @@ impl CallbackInvoker {
             let value: v8::Local<v8::Value> = v8::undefined(scope).into();
             return CallbackInvocationOutcome::Returned(v8::Global::new(scope, value));
         }
-        if let (Some(host_ptr), Some(identity)) =
-            (invocation.host_ptr, invocation.relevant_identity)
-            && !unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
-        {
-            return CallbackInvocationOutcome::Retired;
+        if let Some(host_ptr) = invocation.host_ptr {
+            let host = unsafe { &*host_ptr };
+            // Popup dispatch uses scoped registrations in a shared V8
+            // context. A callback from another live Window can lack that
+            // scoped identity while its own concrete realm is still current.
+            let relevant_identity = invocation.relevant_identity.or_else(|| {
+                host.window_execution_context_identity_for_access_check(invocation.relevant_context)
+            });
+            let is_retired = match relevant_identity {
+                Some(identity) => !host.window_execution_context_identity_is_current(identity),
+                // A retained Window can keep its V8 global attached after its
+                // registry entry is removed. Missing authority is not an
+                // unrestricted callback realm. Worker contexts have no Window
+                // token and continue using their own delivery authority.
+                None => invocation
+                    .relevant_context
+                    .get_slot::<RuntimeObservableContextToken>()
+                    .is_some(),
+            };
+            if is_retired {
+                return CallbackInvocationOutcome::Retired;
+            }
         }
 
         let result = with_webidl_callback_contexts(

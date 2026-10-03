@@ -247,7 +247,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "worker/global_scope/mod.rs",
+        "worker/global_scope/console.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),

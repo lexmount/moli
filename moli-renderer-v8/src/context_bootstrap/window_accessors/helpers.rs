@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_bridge::OwnerDispatchScope;
 use crate::util::get_private_value;
 use crate::webidl;
 
@@ -100,6 +101,19 @@ pub(crate) fn window_host_ptr(
         .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
+pub(super) fn window_current_dispatch_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Option<OwnerDispatchScope> {
+    // The receiver's concrete realm identifies its LocalWindow. An iframe
+    // element's marker survives removal and can belong to a replacement Window.
+    let context = receiver.get_creation_context(scope)?;
+    let identity = host.window_execution_context_identity_for_access_check(context)?;
+    host.window_execution_context_identity_is_current(identity)
+        .then(|| identity.dispatch_scope())
+}
+
 pub(super) fn window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -138,12 +152,6 @@ pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<
     // Container removal disconnects the DOM node before its unload callbacks.
     // The captured LocalWindow remains current until those callbacks finish;
     // checking its identity also keeps reattachment from reviving an old realm.
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return true;
-    };
-    host.window_execution_context_identity_for_access_check(context)
-        .is_none_or(|identity| {
-            identity.dispatch_scope() != crate::native_bridge::OwnerDispatchScope::Child(handle)
-                || !host.window_execution_context_identity_is_current(identity)
-        })
+    window_current_dispatch_scope(scope, receiver, host)
+        .is_none_or(|owner| owner != OwnerDispatchScope::Child(handle))
 }

@@ -224,9 +224,10 @@ pub(crate) use selection_records::{
 };
 use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{
-    DetachedWindowFetchContext, WindowExecutionContextAccessPolicy, WindowExecutionContextBinding,
-    WindowExecutionContextIdentity, WindowExecutionContextOwner, WindowFetchContext,
-    WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
+    DetachedWindowFetchContext, WindowEnvironmentSettings, WindowExecutionContextAccessPolicy,
+    WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    WindowFetchContext, WindowOperationReceiver, WindowOperationReceiverCaptureError,
+    WindowTaskTarget,
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
@@ -236,6 +237,7 @@ use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
 pub(crate) struct PrebootstrappedChildDefaultContext {
+    pub(crate) frame_id: String,
     pub(crate) local_window_id: crate::frame_owner_model::LocalWindowId,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) bridge_ref: JsContextHostBridgeRef,

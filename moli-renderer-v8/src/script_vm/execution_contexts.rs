@@ -417,12 +417,18 @@ impl ScriptVm {
                         context.runtime_observable_context_token,
                     );
                 let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                let reuses_window_proxy = self
+                    ._context_host
+                    .borrow()
+                    .child_window_proxy_frame_is_current(child_handle, &context.frame_id);
                 self.renderer_document_isolate
                     .with_entered_renderer_document_isolate(|isolate| {
                         let scope = pin!(v8::HandleScope::new(isolate));
                         let scope = &mut scope.init();
                         let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                        context.detach_global();
+                        if reuses_window_proxy {
+                            context.detach_global();
+                        }
                         Ok(())
                     })?;
                 // Cancellation can synchronously install a successor realm or
@@ -544,11 +550,11 @@ impl ScriptVm {
             let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
             stale_prebootstrapped_handles
                 .into_iter()
-                .filter_map(|handle| contexts.remove(&handle))
+                .filter_map(|handle| contexts.remove(&handle).map(|context| (handle, context)))
                 .collect::<Vec<_>>()
         };
         if !stale_prebootstrapped_contexts.is_empty() {
-            for context in &stale_prebootstrapped_contexts {
+            for (_, context) in &stale_prebootstrapped_contexts {
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
@@ -557,19 +563,25 @@ impl ScriptVm {
             }
             {
                 let mut host = self._context_host.borrow_mut();
-                for context in &stale_prebootstrapped_contexts {
+                for (_, context) in &stale_prebootstrapped_contexts {
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
                     );
                 }
             }
+            let context_host = self._context_host.clone();
             let _ = self
                 .renderer_document_isolate
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    for context in &stale_prebootstrapped_contexts {
-                        v8::Local::new(scope, &context.context).detach_global();
+                    for (handle, context) in &stale_prebootstrapped_contexts {
+                        if context_host
+                            .borrow()
+                            .child_window_proxy_frame_is_current(*handle, &context.frame_id)
+                        {
+                            v8::Local::new(scope, &context.context).detach_global();
+                        }
                     }
                     Ok(())
                 });
@@ -692,37 +704,45 @@ impl ScriptVm {
             "child default context must retain its document-owned Inspector registration"
         );
         let context_host = self._context_host.clone();
-        let detach_result = self
+        let proxy_cleanup_result = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                local_context.detach_global();
                 let host_ptr = (*context_host).as_ptr();
                 let host = unsafe { &mut *host_ptr };
-                if host.child_browsing_context_is_live(context.child_handle)
-                    && !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
-                {
-                    anyhow::bail!("failed to park the live child WindowProxy between realms");
+                let reuses_window_proxy = host
+                    .child_window_proxy_frame_is_current(context.child_handle, &context.frame_id);
+                // Navigation within the same frame reuses its WindowProxy.
+                // Removal (including remove/reinsert of the same element)
+                // creates a different browsing context. Keep the old proxy
+                // attached to its retained Window so its constructors remain
+                // callable after execution authority has been retired.
+                if reuses_window_proxy {
+                    local_context.detach_global();
+                    if !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
+                    {
+                        anyhow::bail!("failed to park the live child WindowProxy between realms");
+                    }
                 }
-                Ok(())
+                Ok(reuses_window_proxy)
             });
-        if let Err(error) = detach_result {
-            tracing::warn!(
+        match proxy_cleanup_result {
+            Err(error) => tracing::warn!(
                 %error,
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "failed to detach retired child WindowProxy global"
-            );
-        } else {
-            tracing::debug!(
+                "failed to finalize retired child WindowProxy"
+            ),
+            Ok(reuses_window_proxy) => tracing::debug!(
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "detached retired child WindowProxy global for identity reuse"
-            );
+                reuses_window_proxy,
+                "finalized retired child WindowProxy"
+            ),
         }
     }
 

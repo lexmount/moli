@@ -6,7 +6,7 @@ use std::{
 };
 
 mod timers;
-pub use timers::{ReadyTimer, TimerId, TimerReadyAllowance, TimerScheduler};
+pub use timers::{ReadyTimer, TimerId, TimerScheduler};
 
 pub fn unix_epoch_millis() -> f64 {
     SystemTime::now()
@@ -39,12 +39,22 @@ pub fn monotonic_timestamp_micros() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+// High Resolution Time requires the default, non-isolated clock to expose
+// no finer than 100 microseconds. Cross-origin-isolated realms may opt into
+// a finer clock later.
+const DOM_TIME_TICKS_PER_MILLISECOND: f64 = 10.0;
+
 pub fn coarsened_dom_time_millis(millis: f64) -> f64 {
-    // High Resolution Time requires the default, non-isolated clock to expose
-    // no finer than 100 microseconds. Keep the shared clock on that safe
-    // default; cross-origin-isolated realms may opt into a finer clock later.
-    const TEN_TICKS_PER_MILLISECOND: f64 = 10.0;
-    (millis * TEN_TICKS_PER_MILLISECOND).floor() / TEN_TICKS_PER_MILLISECOND
+    (millis * DOM_TIME_TICKS_PER_MILLISECOND).floor() / DOM_TIME_TICKS_PER_MILLISECOND
+}
+
+/// Remaining time between two timestamps on the same relative DOM timeline.
+/// Subtract in ticks so floating-point cancellation cannot expose sub-tick
+/// residuals or change the precision of the remaining duration.
+pub fn coarsened_dom_time_remaining_millis(deadline_millis: f64, now_millis: f64) -> f64 {
+    let deadline_ticks = (deadline_millis * DOM_TIME_TICKS_PER_MILLISECOND).floor();
+    let now_ticks = (now_millis * DOM_TIME_TICKS_PER_MILLISECOND).floor();
+    (deadline_ticks - now_ticks).max(0.0) / DOM_TIME_TICKS_PER_MILLISECOND
 }
 
 pub fn dom_time_since_origin_millis(time_origin: f64) -> f64 {
@@ -115,6 +125,25 @@ mod tests {
             dom_time_since_origin_millis(unix_epoch_millis() + 1000.0),
             0.0
         );
+    }
+
+    #[test]
+    fn remaining_dom_time_uses_the_same_clock_buckets_as_performance_now() {
+        let first =
+            coarsened_dom_time_millis(24.381) + coarsened_dom_time_remaining_millis(74.331, 24.381);
+        let next =
+            coarsened_dom_time_millis(24.393) + coarsened_dom_time_remaining_millis(74.352, 24.393);
+        assert_eq!(first, 74.3);
+        assert_eq!(next, first);
+        assert_eq!(coarsened_dom_time_remaining_millis(74.331, 24.414), 49.9);
+    }
+
+    #[test]
+    fn remaining_dom_time_preserves_resolution_and_clamps_expired_deadlines() {
+        assert_eq!(coarsened_dom_time_remaining_millis(1.3, 1.2), 0.1);
+        assert_eq!(coarsened_dom_time_remaining_millis(1.31, 1.29), 0.1);
+        assert_eq!(coarsened_dom_time_remaining_millis(1.39, 1.399), 0.0);
+        assert_eq!(coarsened_dom_time_remaining_millis(1.3, 1.4), 0.0);
     }
 
     #[test]

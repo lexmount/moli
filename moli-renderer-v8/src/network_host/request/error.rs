@@ -5,6 +5,7 @@ use std::fmt;
 #[derive(Debug)]
 pub(crate) enum RequestUrlError {
     Resolve(ResolveContextUrlError),
+    AssociatedDocumentUnavailable,
     OpaqueWorkerBase { input: String },
 }
 
@@ -18,6 +19,9 @@ impl fmt::Display for RequestUrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resolve(error) => error.fmt(f),
+            Self::AssociatedDocumentUnavailable => {
+                f.write_str("Request settings Document is unavailable")
+            }
             Self::OpaqueWorkerBase { input } => write!(f, "Failed to parse URL from {input}"),
         }
     }
@@ -27,7 +31,7 @@ impl std::error::Error for RequestUrlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Resolve(error) => Some(error),
-            Self::OpaqueWorkerBase { .. } => None,
+            Self::AssociatedDocumentUnavailable | Self::OpaqueWorkerBase { .. } => None,
         }
     }
 }

@@ -1105,6 +1105,88 @@ async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
     );
 }
 #[tokio::test]
+async fn lightweight_popup_load_keeps_live_callback_realms_and_rejects_retired_ones() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popup-callback-realm.test/page.html",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+globalThis.__popupCallbackRealmEvents = [];
+const makeFrame = () => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  return frame;
+};
+globalThis.__popupSourceWindow = makeFrame().contentWindow;
+globalThis.__popupLiveCallbackWindow = makeFrame().contentWindow;
+globalThis.__popupRetiredCallbackFrame = makeFrame();
+globalThis.__popupRetiredCallbackWindow = __popupRetiredCallbackFrame.contentWindow;
+globalThis.__popupRetiredCallback = __popupRetiredCallbackWindow.Function(
+  "parent.__popupCallbackRealmEvents.push('retired');"
+);
+__popupRetiredCallbackFrame.remove();
+"removed"
+"#,
+    )
+    .expect("popup callback realms should be created before retirement");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("removed callback Window should retire through Page tasks");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(document.body || document.documentElement || document).appendChild(__popupRetiredCallbackFrame);
+String(__popupRetiredCallbackWindow !== __popupRetiredCallbackFrame.contentWindow)
+"#,
+        )
+        .expect("reinserted iframe should expose a new Window"),
+        "true"
+    );
+
+    vm.eval(
+        r#"
+const popupURL = URL.createObjectURL(new Blob([
+  "<!doctype html><title>cross-realm callback</title>"
+], { type: "text/html" }));
+globalThis.__popupCallbackRealmWindow = __popupSourceWindow.open(popupURL);
+__popupCallbackRealmWindow.onload = function(event) {
+  __popupCallbackRealmEvents.push([
+    "parent", window === top, this === __popupCallbackRealmWindow, event.target === this
+  ].join(":"));
+};
+__popupCallbackRealmWindow.addEventListener("load", __popupRetiredCallback);
+__popupCallbackRealmWindow.addEventListener("load", __popupLiveCallbackWindow.Function(
+  "event",
+  `parent.__popupCallbackRealmEvents.push([
+    "child", window === parent.__popupLiveCallbackWindow,
+    this === parent.__popupCallbackRealmWindow, event.target === this
+  ].join(":"));`
+));
+"queued"
+"#,
+    )
+    .expect("popup load callbacks should register across Window realms");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupCallbackRealmEvents.includes('child:true:true:true'))",
+        "true",
+        "popup load callback from another live Window realm",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__popupCallbackRealmEvents.join('|')")
+            .expect("popup callback realm events should evaluate"),
+        "parent:true:true:true|child:true:true:true",
+        "live callback realms must run and reinsertion must not revive a retired callback"
+    );
+}
+#[tokio::test]
 async fn lightweight_popup_document_write_during_load_replaces_existing_body() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =

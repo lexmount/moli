@@ -16,6 +16,7 @@ use super::{
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
+    window_accessors::{window_document_getter, window_length_getter},
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
@@ -32,8 +33,8 @@ use crate::{
     network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, create_script_origin_with_base_url, get_private_value,
-        script_base_url_continuation_data, set_private_value, throw_type_error, v8_string, v8str,
+        create_script_origin_with_base_url, get_private_value, script_base_url_continuation_data,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
     webidl_iterator::install_webidl_collection_iterator_intrinsics,
@@ -348,7 +349,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     inner_width: (),
     #[webapi(
         accessor_property,
-        getter = window_length_replaceable_getter,
+        getter = window_length_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.length_name
     )]
@@ -634,24 +635,6 @@ fn window_outer_height_replaceable_getter<'s>(
             |surface| f64::from(surface.outer_height),
         );
     rv.set(v8::Number::new(scope, value).into());
-}
-
-fn window_length_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(host_ptr) = context_host_ptr_from_window_object(scope, args.this())
-        .or_else(|| context_host_ptr_from_global_bridge(scope))
-    else {
-        rv.set(v8::Integer::new(scope, 0).into());
-        return;
-    };
-    let host = unsafe { &mut *host_ptr };
-    let count = child_context_handle_from_owner(scope, args.this())
-        .map(|handle| host.child_browsing_context_child_frame_count(handle))
-        .unwrap_or_else(|| host.child_browsing_context_count());
-    rv.set(v8::Number::new(scope, count as f64).into());
 }
 
 fn window_event_replaceable_getter<'s>(
@@ -1254,36 +1237,6 @@ const WINDOW_SURFACE_REPLACEABLE_NAMES: &[&str] = &[
     "screenY",
 ];
 
-fn legacy_unforgeable_document_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    let Some(host_ptr) = context_host_ptr_from_window_object(scope, receiver)
-        .or_else(|| context_host_ptr_from_global_bridge(scope))
-    else {
-        rv.set_null();
-        return;
-    };
-    if let Some(child_handle) = child_context_handle_from_owner(scope, receiver) {
-        match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, child_handle)
-        {
-            Some(document) => rv.set(document.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    let handle = unsafe { &*host_ptr }.document_handle();
-    match unsafe { &mut *host_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, handle)
-    {
-        Some(document) => rv.set(document.into()),
-        None => rv.set_null(),
-    }
-}
-
 fn child_context_handle_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -1561,7 +1514,7 @@ fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_document_getter)
+    let getter = v8::Function::builder(window_document_getter)
         .build(scope)
         .ok_or_else(|| anyhow!("failed to build document getter"))?;
     getter.set_name(v8str(scope, "get document"));
