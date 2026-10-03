@@ -270,6 +270,21 @@ impl<'s> WebIdlConverter<'s> for EnforceRangeUnsignedLong {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::Short {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        // Both 16-bit integer types truncate and reduce modulo 2^16; signed
+        // short then interprets the high bit as a negative value.
+        number_value(scope, value, context, "short").map(|value| Self(unsigned_short(value) as i16))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for UnsignedShort {
     type Options = ();
 

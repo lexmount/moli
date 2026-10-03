@@ -64,8 +64,8 @@ pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionar
 pub use types::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, DomString, DomString16, Double,
     EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    EventListenerOptions, Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
-    UnsignedLongLong, UnsignedShort, UsvString,
+    EventListenerOptions, Long, Record, Sequence, Short, StringOptions, UnrestrictedDouble,
+    UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.
