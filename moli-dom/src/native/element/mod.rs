@@ -311,6 +311,23 @@ impl Element {
         self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == local_name
     }
 
+    /// The HTML draggable state, shared by the IDL getter and native input.
+    pub fn is_draggable(&self) -> bool {
+        if self.namespace() != "http://www.w3.org/1999/xhtml" {
+            return false;
+        }
+        if let Some(value) = self.attribute_ns("", "draggable") {
+            if value.eq_ignore_ascii_case("true") {
+                return true;
+            }
+            if value.eq_ignore_ascii_case("false") {
+                return false;
+            }
+        }
+        self.is_html_element("img")
+            || (self.is_html_element("a") && self.has_attribute_ns("", "href"))
+    }
+
     pub fn is_svg_element(&self, local_name: &str) -> bool {
         self.namespace() == "http://www.w3.org/2000/svg" && self.local_name() == local_name
     }

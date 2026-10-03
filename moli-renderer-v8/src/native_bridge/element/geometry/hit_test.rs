@@ -1,7 +1,11 @@
+#[cfg(feature = "devtools")]
+use crate::dom::native::Node;
+#[cfg(feature = "devtools")]
+use moli_layout::LayoutFragmentKind;
 use moli_layout::{
-    FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit, LayoutPaintedSurfaceHit,
-    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D,
-    LayoutViewport,
+    FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit,
+    LayoutPaintedSurfaceHit, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
+    LayoutTransform2D, LayoutViewport,
 };
 
 #[cfg(test)]
@@ -62,6 +66,7 @@ struct FrameHitTest {
     viewport: LayoutViewport,
     point: LayoutPoint,
     root_to_frame: LayoutTransform2D,
+    descend_child_frames: bool,
 }
 
 impl FrameHitTest {
@@ -71,6 +76,7 @@ impl FrameHitTest {
             viewport: runtime.layout_viewport_for_document(document),
             point,
             root_to_frame: LayoutTransform2D::IDENTITY,
+            descend_child_frames: true,
         }
     }
 
@@ -98,6 +104,7 @@ impl FrameHitTest {
             ),
             point: frame_to_child.map_point(self.point),
             root_to_frame: frame_to_child.concatenate(self.root_to_frame),
+            descend_child_frames: true,
         })
     }
 }
@@ -151,6 +158,7 @@ pub(crate) fn input_surface_hit_test(
                     viewport: tree.viewport,
                     point,
                     root_to_frame: LayoutTransform2D::IDENTITY,
+                    descend_child_frames: true,
                 },
                 ignore_pointer_events_none,
                 include_scrollbars,
@@ -182,6 +190,43 @@ pub(crate) fn captured_frame_input_surface_hit_test(
     previous_root_to_frame: LayoutTransform2D,
     include_scrollbars: bool,
 ) -> Result<InputSurfaceHit, LayoutError> {
+    frame_input_surface_hit_test(
+        runtime,
+        document,
+        root_point,
+        previous_root_to_frame,
+        include_scrollbars,
+        true,
+    )
+}
+
+/// Resolve a possible drag in its originating Document before delegating
+/// held movement into an embedded browsing context.
+#[cfg(feature = "devtools")]
+pub(crate) fn drag_start_frame_input_surface_hit_test(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    root_point: LayoutPoint,
+    previous_root_to_frame: LayoutTransform2D,
+) -> Result<InputSurfaceHit, LayoutError> {
+    frame_input_surface_hit_test(
+        runtime,
+        document,
+        root_point,
+        previous_root_to_frame,
+        true,
+        false,
+    )
+}
+
+fn frame_input_surface_hit_test(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    root_point: LayoutPoint,
+    previous_root_to_frame: LayoutTransform2D,
+    include_scrollbars: bool,
+    descend_child_frames: bool,
+) -> Result<InputSurfaceHit, LayoutError> {
     let (mut hit, root_to_frame) = if runtime.layout_policy().uses_real_layout() {
         runtime.ensure_initial_layout()?;
         let root_to_frame = published_root_to_frame(runtime, document)?;
@@ -195,6 +240,7 @@ pub(crate) fn captured_frame_input_surface_hit_test(
                         viewport: tree.viewport,
                         point: root_to_frame.map_point(root_point),
                         root_to_frame,
+                        descend_child_frames,
                     },
                     false,
                     include_scrollbars,
@@ -211,6 +257,7 @@ pub(crate) fn captured_frame_input_surface_hit_test(
                 viewport: runtime.layout_viewport_for_document(document),
                 point: previous_root_to_frame.map_point(root_point),
                 root_to_frame: previous_root_to_frame,
+                descend_child_frames,
             },
             false,
             0,
@@ -272,6 +319,63 @@ fn published_root_to_frame(
     Ok(root_to_frame)
 }
 
+/// Resolve the drag origin from the published rendered ancestry, rather than
+/// dispatching at the last mouse-press target. A mousedown handler can move or
+/// replace that node; the geometry and ancestry must come from the same pass.
+#[cfg(feature = "devtools")]
+pub(crate) fn draggable_source_at_point(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    point: LayoutPoint,
+) -> Result<Option<DomHandle>, LayoutError> {
+    let host = runtime.dom_host();
+    let eligible = |handle| {
+        host.is_connected(handle)
+            && host.owner_document_handle(handle) == Some(document)
+            && host
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.is_draggable())
+    };
+    if runtime.layout_policy().uses_real_layout() {
+        runtime.ensure_initial_layout()?;
+        return runtime
+            .with_latest_layout_tree_for_document(document, |tree| {
+                let (hit, _) = live_hit_in_tree(runtime, tree, point, false)?;
+                let mut candidate = hit
+                    .fragment
+                    .and_then(|id| tree.fragments.get(id.index()))
+                    .map(|fragment| match fragment.kind {
+                        LayoutFragmentKind::Box { box_id }
+                        | LayoutFragmentKind::InlineBox { box_id, .. }
+                        | LayoutFragmentKind::Text { box_id, .. } => box_id,
+                        LayoutFragmentKind::Line { owner, .. } => owner,
+                    });
+                while let Some(id) = candidate {
+                    let layout_box = tree.boxes.get(id.index())?;
+                    if let Some(handle) = layout_box.principal_source
+                        && eligible(handle)
+                    {
+                        return Some(handle);
+                    }
+                    candidate = layout_box.structural_parent;
+                }
+                None
+            })
+            .ok_or(LayoutError::NoLayoutSnapshot);
+    }
+    let mut candidate =
+        live_hit_in_frame(runtime, FrameHitTest::root(runtime, document, point), false)?
+            .map(|(_, handle)| handle);
+    while let Some(handle) = candidate {
+        if eligible(handle) {
+            return Ok(Some(handle));
+        }
+        candidate = flat_tree_parent(host, handle);
+    }
+    Ok(None)
+}
+
 fn input_surface_hit_test_in_frame(
     runtime: &PageScriptHost,
     frame: FrameHitTest,
@@ -309,7 +413,7 @@ fn input_surface_hit_test_in_frame(
         handle: target,
         root_to_frame: frame.root_to_frame,
     };
-    if depth >= CHILD_FRAME_DEPTH_LIMIT {
+    if depth >= CHILD_FRAME_DEPTH_LIMIT || !frame.descend_child_frames {
         return Ok(InputSurfaceHit::element(target_hit));
     }
     let Some(child) = frame.child(runtime, target, layout_hit) else {
@@ -395,7 +499,7 @@ fn input_surface_hit_test_in_tree(
         handle: target,
         root_to_frame,
     };
-    if depth >= CHILD_FRAME_DEPTH_LIMIT {
+    if depth >= CHILD_FRAME_DEPTH_LIMIT || !frame.descend_child_frames {
         return Ok(InputSurfaceHit::element(target_hit));
     }
     let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
@@ -432,6 +536,7 @@ fn input_surface_hit_test_in_tree(
             viewport: child_tree.viewport,
             point: frame_to_child.map_point(point),
             root_to_frame: frame_to_child.concatenate(root_to_frame),
+            descend_child_frames: true,
         },
         ignore_pointer_events_none,
         include_scrollbars,

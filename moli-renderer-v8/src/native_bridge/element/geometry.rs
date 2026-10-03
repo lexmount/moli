@@ -16,7 +16,10 @@ pub(crate) use hit_test::observable_input_hit_test;
 #[cfg(test)]
 pub(crate) use hit_test::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
-pub(crate) use hit_test::{InputHit, InputSurfaceHit, captured_frame_input_surface_hit_test, input_surface_hit_test};
+pub(crate) use hit_test::{
+    InputHit, InputSurfaceHit, captured_frame_input_surface_hit_test,
+    drag_start_frame_input_surface_hit_test, draggable_source_at_point, input_surface_hit_test,
+};
 pub(in crate::native_bridge) use metrics::{
     node_client_height_getter_function, node_client_left_getter_function,
     node_client_top_getter_function, node_client_width_getter_function,
@@ -35,10 +38,11 @@ pub(crate) use mock::{
 #[cfg(feature = "devtools")]
 pub(crate) use provider::observable_geometry_query;
 pub(crate) use provider::{
-    element_is_inert_for_hit_testing, observable_bounding_client_rects, observable_caret_position, observable_document_metrics,
-    observable_event_offset, observable_geometry_batch, observable_hit_test,
-    observable_hit_test_all, observable_sources_with_fragments, observable_used_grid_tracks,
-    published_geometry_batch, read_bounding_client_rect, read_client_rects, read_element_metrics,
+    element_is_inert_for_hit_testing, observable_bounding_client_rects, observable_caret_position,
+    observable_document_metrics, observable_event_offset, observable_geometry_batch,
+    observable_hit_test, observable_hit_test_all, observable_sources_with_fragments,
+    observable_used_grid_tracks, published_geometry_batch, read_bounding_client_rect,
+    read_client_rects, read_element_metrics,
 };
 pub(in crate::native_bridge) use rects::{
     node_get_bounding_client_rect_callback, node_get_client_rects_callback,

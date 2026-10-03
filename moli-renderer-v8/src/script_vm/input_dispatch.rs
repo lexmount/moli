@@ -43,8 +43,9 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
-    is_disabled_form_control, observable_input_hit_test, perform_auxiliary_link_default_action,
+    contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
+    draggable_source_at_point, input_surface_hit_test, is_disabled_form_control,
+    observable_input_hit_test, perform_auxiliary_link_default_action,
     perform_clipboard_key_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_text_input,
@@ -487,47 +488,48 @@ fn native_drag_source(
 ) -> Option<(DomHandle, RendererDragData)> {
     let runtime = unsafe { &*runtime_ptr };
     let host = runtime.dom_host();
-    if !host.is_connected(gesture.handle) {
+    let point = moli_layout::LayoutPoint::new(gesture.x as f32, gesture.y as f32);
+    let root_point = gesture.root_to_frame.inverse()?.map_point(point);
+    let hit = drag_start_frame_input_surface_hit_test(
+        runtime,
+        gesture.document,
+        root_point,
+        gesture.root_to_frame,
+    )
+    .ok()?
+    .input?;
+    if host.owner_document_handle(hit.handle) != Some(gesture.document) {
         return None;
     }
-    let mut candidate = None;
-    let mut current = Some(gesture.handle);
-    while let Some(handle) = current {
-        if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            let attribute = element.attribute_ns("", "draggable");
-            let is_image = element.is_html_element("img");
-            let is_link = element.is_html_element("a") && element.has_attribute_ns("", "href");
-            let explicitly_draggable =
-                attribute.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-            let disabled = attribute.is_some_and(|value| value.eq_ignore_ascii_case("false"));
-            if !disabled && (explicitly_draggable || is_image || is_link) {
-                candidate = Some((
-                    handle,
-                    if is_image {
-                        Some("src")
-                    } else if is_link {
-                        Some("href")
-                    } else {
-                        None
-                    },
-                ));
-                break;
-            }
-        }
-        current = host
-            .parent_node(handle)
-            .or_else(|| host.shadow_root_host(handle));
-    }
+    let candidate = draggable_source_at_point(runtime, gesture.document, point)
+        .ok()?
+        .map(|handle| {
+            let source_attribute =
+                host.node(handle)
+                    .and_then(Node::as_element)
+                    .and_then(|element| {
+                        if element.is_html_element("img") {
+                            Some("src")
+                        } else if element.is_html_element("a")
+                            && element.has_attribute_ns("", "href")
+                        {
+                            Some("href")
+                        } else {
+                            None
+                        }
+                    });
+            (handle, source_attribute)
+        });
     if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
         && let Some(data) = super::native_drag_data::selection_drag_data_at_point(
             scope,
             runtime_ptr,
-            gesture.handle,
+            hit.handle,
             gesture.x,
             gesture.y,
         )
     {
-        return Some((gesture.handle, data));
+        return Some((hit.handle, data));
     }
     let (source, _) = candidate?;
     Some((
@@ -1488,33 +1490,34 @@ impl ScriptVm {
         } else {
             hover_transition
         };
-        let drag_start = if event_name == "mousemove"
-            && buttons & 1 != 0
-            && self.active_drag_session.is_none()
-        {
-            if self._context_host.borrow().mouse_press_handle().is_none() {
-                self.pending_drag_gesture = None;
-            }
-            let gesture = self.pending_drag_gesture.filter(|gesture| {
-                let point = gesture.root_to_frame.map_point(root_point);
-                #[cfg(target_os = "macos")]
-                let threshold = 3.0;
-                #[cfg(not(target_os = "macos"))]
-                let threshold = 4.0;
-                (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
-                    || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
-            });
-            if let Some(gesture) = gesture {
-                // The gesture is consumed even if dragstart is canceled. A
-                // held button cannot start another drag until a fresh press.
-                self.pending_drag_gesture = None;
-                Some(gesture)
+        if event_name == "mousemove" && buttons != 1 {
+            self.pending_drag_gesture = None;
+        }
+        let drag_start =
+            if event_name == "mousemove" && buttons == 1 && self.active_drag_session.is_none() {
+                if self._context_host.borrow().mouse_press_handle().is_none() {
+                    self.pending_drag_gesture = None;
+                }
+                let gesture = self.pending_drag_gesture.filter(|gesture| {
+                    let point = gesture.root_to_frame.map_point(root_point);
+                    #[cfg(target_os = "macos")]
+                    let threshold = 3.0;
+                    #[cfg(not(target_os = "macos"))]
+                    let threshold = 4.0;
+                    (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
+                        || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
+                });
+                if let Some(gesture) = gesture {
+                    // The gesture is consumed even if dragstart is canceled. A
+                    // held button cannot start another drag until a fresh press.
+                    self.pending_drag_gesture = None;
+                    Some(gesture)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         if event_name == "mousedown" && button >= 0 {
             let mut host = self._context_host.borrow_mut();
@@ -1913,7 +1916,7 @@ impl ScriptVm {
                     });
                     unsafe { &mut *runtime_ptr }.clear_mouse_press();
                     let cancel_target = unsafe { &*runtime_ptr }
-                        .active_pointer_capture_target(MOUSE_POINTER_ID)
+                        .active_pointer_capture_target(pointer_id)
                         .unwrap_or(pointer_dispatch_handle);
                     let cancel_pointer = RendererPointerEventProperties {
                         pressure: 0.0,
@@ -1933,7 +1936,7 @@ impl ScriptVm {
                     release_pointer_capture_after_pointer_end(
                         scope,
                         runtime_ptr,
-                        MOUSE_POINTER_ID,
+                        pointer_id,
                         coordinates,
                         -1,
                         0,
