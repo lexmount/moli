@@ -247,7 +247,9 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_media_list_from_owner,
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
-pub(crate) use self::dom_rect::build_dom_rect_object;
+pub(crate) use self::dom_rect::{
+    build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
+};
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_attribute, event_backing,
