@@ -439,6 +439,38 @@ struct KeyboardEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MouseEvent, enumerable, receiver)]
 struct MouseEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "screenX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "screenX"))]
+    screen_x: (),
+    #[webapi(accessor_property = "screenY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "screenY"))]
+    screen_y: (),
+    #[webapi(accessor_property = "clientX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "clientX"))]
+    client_x: (),
+    #[webapi(accessor_property = "clientY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "clientY"))]
+    client_y: (),
+    #[webapi(accessor_property = "button", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "button"))]
+    button: (),
+    #[webapi(accessor_property = "buttons", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "buttons"))]
+    buttons: (),
+    #[webapi(accessor_property = "ctrlKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "ctrlKey"))]
+    ctrl_key: (),
+    #[webapi(accessor_property = "altKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "altKey"))]
+    alt_key: (),
+    #[webapi(accessor_property = "shiftKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "shiftKey"))]
+    shift_key: (),
+    #[webapi(accessor_property = "metaKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "metaKey"))]
+    meta_key: (),
+    #[webapi(accessor_property = "movementX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "movementX"))]
+    movement_x: (),
+    #[webapi(accessor_property = "movementY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "movementY"))]
+    movement_y: (),
+    #[webapi(accessor_property = "pageX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pageX"))]
+    page_x: (),
+    #[webapi(accessor_property = "pageY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pageY"))]
+    page_y: (),
+    #[webapi(accessor_property = "x", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "x"))]
+    x: (),
+    #[webapi(accessor_property = "y", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "y"))]
+    y: (),
     #[webapi(
         method = "getModifierState",
         length = 1,
@@ -463,7 +495,7 @@ struct MouseEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WheelEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::WheelEvent, enumerable, receiver)]
 struct WheelEventTemplateConstantsDeclaration {
     #[webapi(constant = "DOM_DELTA_PIXEL", value = 0u32)]
     dom_delta_pixel: (),
@@ -473,11 +505,53 @@ struct WheelEventTemplateConstantsDeclaration {
 
     #[webapi(constant = "DOM_DELTA_PAGE", value = 2u32)]
     dom_delta_page: (),
+
+    #[webapi(accessor_property = "deltaMode", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaMode"))]
+    delta_mode: (),
+    #[webapi(accessor_property = "deltaX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaX"))]
+    delta_x: (),
+    #[webapi(accessor_property = "deltaY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaY"))]
+    delta_y: (),
+    #[webapi(accessor_property = "deltaZ", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaZ"))]
+    delta_z: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::DragEvent, enumerable, receiver)]
+struct DragEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "dataTransfer", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
+    data_transfer: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::PointerEvent, enumerable, receiver)]
 struct PointerEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "pointerId", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pointerId"))]
+    pointer_id: (),
+    #[webapi(accessor_property = "width", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "width"))]
+    width: (),
+    #[webapi(accessor_property = "height", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "height"))]
+    height: (),
+    #[webapi(accessor_property = "pressure", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pressure"))]
+    pressure: (),
+    #[webapi(accessor_property = "tangentialPressure", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tangentialPressure"))]
+    tangential_pressure: (),
+    #[webapi(accessor_property = "tiltX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tiltX"))]
+    tilt_x: (),
+    #[webapi(accessor_property = "tiltY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tiltY"))]
+    tilt_y: (),
+    #[webapi(accessor_property = "twist", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "twist"))]
+    twist: (),
+    #[webapi(accessor_property = "altitudeAngle", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "altitudeAngle"))]
+    altitude_angle: (),
+    #[webapi(accessor_property = "azimuthAngle", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "azimuthAngle"))]
+    azimuth_angle: (),
+    #[webapi(accessor_property = "pointerType", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pointerType"))]
+    pointer_type: (),
+    #[webapi(accessor_property = "isPrimary", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "isPrimary"))]
+    is_primary: (),
+    #[webapi(accessor_property = "persistentDeviceId", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "persistentDeviceId"))]
+    persistent_device_id: (),
     #[webapi(
         method = "getPredictedEvents",
         length = 0,
@@ -576,6 +650,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
             EventTemplateDeclaration::new::<KeyboardEventTemplateMethodsDeclaration>()
         }
         "MouseEvent" => EventTemplateDeclaration::new::<MouseEventTemplateMethodsDeclaration>(),
+        "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "WheelEvent" => EventTemplateDeclaration::new::<WheelEventTemplateConstantsDeclaration>(),
         "PointerEvent" => EventTemplateDeclaration::new::<PointerEventTemplateMethodsDeclaration>(),
         "CloseEvent" => EventTemplateDeclaration::new::<CloseEventTemplateAccessorsDeclaration>(),

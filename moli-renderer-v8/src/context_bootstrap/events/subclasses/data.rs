@@ -136,12 +136,6 @@ struct NavigateEventMethodsDeclaration {
     scroll: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DragEventInitDeclaration<'scope> {
-    data_transfer: v8::Local<'scope, v8::Value>,
-}
-
 /// Web IDL converts inherited `EventInit` members before the derived members,
 /// with each dictionary's members in lexicographic order. Keeping them in one
 /// conversion also ensures each init getter is read only once.
@@ -470,53 +464,6 @@ pub(super) fn parse_clipboard_change_event_init<'s>(
             None
         }
     }
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_drag_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    if !pointer::initialize_mouse_event(scope, event, init) {
-        return false;
-    }
-    let data_transfer = match init {
-        None => v8::null(scope).into(),
-        Some(init) => match webidl::property_result(
-            scope,
-            init,
-            "dataTransfer",
-            webidl::Context::member("DragEventInit", "dataTransfer"),
-        ) {
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return false;
-            }
-            Ok(None) => v8::null(scope).into(),
-            Ok(Some(value)) if value.is_null_or_undefined() => v8::null(scope).into(),
-            Ok(Some(value)) => {
-                let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-                    throw_type_error(
-                        scope,
-                        "Failed to construct 'DragEvent': member dataTransfer is not of type DataTransfer.",
-                    );
-                    return false;
-                };
-                if !is_branded_data_transfer_object(scope, object) {
-                    throw_type_error(
-                        scope,
-                        "Failed to construct 'DragEvent': member dataTransfer is not of type DataTransfer.",
-                    );
-                    return false;
-                }
-                value
-            }
-        },
-    };
-    DragEventInitDeclaration::new(data_transfer)
-        .initialize(scope, event)
-        .expect("DragEvent init declaration should initialize");
-    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_clipboard_event<'s>(

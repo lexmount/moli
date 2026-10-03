@@ -1,6 +1,9 @@
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
+use crate::context_bootstrap::events::{modifiers::EventModifierInitMembers, ui::UiEventInit};
+use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
+use crate::web_api_interfaces;
 use crate::webidl;
 
 const POINTER_EVENT_COALESCED_EVENTS_SLOT: &str = "__moliPointerEventCoalescedEvents";
@@ -18,21 +21,365 @@ impl<'scope> webidl::WebIdlConverter<'scope> for PointerEventReference<'scope> {
         _options: &Self::Options,
     ) -> Result<Self, webidl::WebIdlError> {
         let event = webidl::convert::<v8::Local<'scope, v8::Object>>(scope, value, context)?;
-        if super::super::event_subclass_kind(scope, event) != Some(EventSubclassKind::PointerEvent)
-        {
-            return Err(webidl::WebIdlError::custom_message(
-                "PointerEventInit sequence members must be PointerEvent objects.",
-            ));
+        if !web_api_interfaces::PointerEvent::is_instance(scope, event) {
+            return Err(webidl::WebIdlError::cannot_convert(context, "PointerEvent"));
         }
         Ok(Self(event))
     }
 }
 
+struct EventTargetReference<'s>(v8::Local<'s, v8::Object>);
+
+impl<'s> webidl::WebIdlConverter<'s> for EventTargetReference<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        let target = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
+        if !web_api_interfaces::EventTarget::is_instance(scope, target) {
+            return Err(webidl::WebIdlError::cannot_convert(context, "EventTarget"));
+        }
+        Ok(Self(target))
+    }
+}
+
+/// MouseEventInit includes the CSSOM View and Pointer Lock double members.
+/// Each derived dictionary delegates to this base before reading its own members.
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "MouseEventInit")]
+struct MouseEventInitMembers<'s> {
+    #[webidl(default = 0)]
+    button: i16,
+    #[webidl(default = 0)]
+    buttons: u16,
+    #[webidl(default = 0.0, converter = "double")]
+    client_x: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    client_y: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    movement_x: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    movement_y: f64,
+    #[webidl(nullable, converter = "raw")]
+    related_target: Option<EventTargetReference<'s>>,
+    #[webidl(default = 0.0, converter = "double")]
+    screen_x: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    screen_y: f64,
+}
+
+#[derive(Default)]
+pub(super) struct MouseEventInit<'s> {
+    ui: UiEventInit<'s>,
+    modifiers: EventModifierInitMembers,
+    members: MouseEventInitMembers<'s>,
+}
+
+impl<'s> webidl::WebIdlDictionary<'s> for MouseEventInit<'s> {
+    fn parse_dictionary(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        Ok(Self {
+            ui: webidl::parse_dictionary_object(scope, object)?,
+            modifiers: webidl::parse_dictionary_object(scope, object)?,
+            members: webidl::parse_dictionary_object(scope, object)?,
+        })
+    }
+}
+
+impl<'s> MouseEventInit<'s> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        self.ui.event_flags()
+    }
+
+    pub(super) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.ui.initialize(scope, event);
+        self.modifiers.initialize(scope, event);
+        let members = self.members;
+        MouseEventBaseInitDeclaration::new(
+            members.screen_x,
+            members.screen_y,
+            members.client_x,
+            members.client_y,
+            members.client_x,
+            members.client_y,
+            members.client_x,
+            members.client_y,
+            members.button,
+            members.buttons,
+            members.movement_x,
+            members.movement_y,
+        )
+        .initialize(scope, event)
+        .expect("MouseEvent state should initialize");
+        let related_target = members
+            .related_target
+            .map(|target| target.0.into())
+            .unwrap_or_else(|| v8::null(scope).into());
+        MouseEventRelatedTargetDeclaration::new(related_target)
+            .initialize(scope, event)
+            .expect("MouseEvent relatedTarget should initialize");
+    }
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "WheelEventInit")]
+struct WheelEventInitMembers {
+    #[webidl(default = 0)]
+    delta_mode: u32,
+    #[webidl(default = 0.0, converter = "double")]
+    delta_x: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    delta_y: f64,
+    #[webidl(default = 0.0, converter = "double")]
+    delta_z: f64,
+}
+
+#[derive(Default)]
+pub(super) struct WheelEventInit<'s> {
+    mouse: MouseEventInit<'s>,
+    members: WheelEventInitMembers,
+}
+
+impl<'s> webidl::WebIdlDictionary<'s> for WheelEventInit<'s> {
+    fn parse_dictionary(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        Ok(Self {
+            mouse: webidl::parse_dictionary_object(scope, object)?,
+            members: webidl::parse_dictionary_object(scope, object)?,
+        })
+    }
+}
+
+impl<'s> WheelEventInit<'s> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        self.mouse.event_flags()
+    }
+
+    pub(super) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.mouse.initialize(scope, event);
+        WheelEventDeltaInitDeclaration::new(
+            self.members.delta_x,
+            self.members.delta_y,
+            self.members.delta_z,
+            self.members.delta_mode,
+        )
+        .initialize(scope, event)
+        .expect("WheelEvent state should initialize");
+    }
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PointerEventInit")]
+struct PointerEventInitMembers<'s> {
+    #[webidl(converter = "double")]
+    altitude_angle: Option<f64>,
+    #[webidl(converter = "double")]
+    azimuth_angle: Option<f64>,
+    #[webidl(with = pointer_event_sequence_member)]
+    coalesced_events: Vec<v8::Local<'s, v8::Object>>,
+    #[webidl(default = 1.0, converter = "double")]
+    height: f64,
+    #[webidl(default = false)]
+    is_primary: bool,
+    #[webidl(default = 0)]
+    persistent_device_id: i32,
+    #[webidl(default = 0)]
+    pointer_id: i32,
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    pointer_type: webidl::DomString16,
+    #[webidl(with = pointer_event_sequence_member)]
+    predicted_events: Vec<v8::Local<'s, v8::Object>>,
+    #[webidl(default = 0.0)]
+    pressure: f32,
+    #[webidl(default = 0.0)]
+    tangential_pressure: f32,
+    tilt_x: Option<i32>,
+    tilt_y: Option<i32>,
+    #[webidl(default = 0)]
+    twist: i32,
+    #[webidl(default = 1.0, converter = "double")]
+    width: f64,
+}
+
+impl Default for PointerEventInitMembers<'_> {
+    fn default() -> Self {
+        Self {
+            altitude_angle: None,
+            azimuth_angle: None,
+            coalesced_events: Vec::new(),
+            height: 1.0,
+            is_primary: false,
+            persistent_device_id: 0,
+            pointer_id: 0,
+            pointer_type: webidl::DomString16(Vec::new()),
+            predicted_events: Vec::new(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            tilt_x: None,
+            tilt_y: None,
+            twist: 0,
+            width: 1.0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PointerEventInit<'s> {
+    mouse: MouseEventInit<'s>,
+    members: PointerEventInitMembers<'s>,
+}
+
+impl<'s> webidl::WebIdlDictionary<'s> for PointerEventInit<'s> {
+    fn parse_dictionary(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        Ok(Self {
+            mouse: webidl::parse_dictionary_object(scope, object)?,
+            members: webidl::parse_dictionary_object(scope, object)?,
+        })
+    }
+}
+
+impl<'s> PointerEventInit<'s> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        self.mouse.event_flags()
+    }
+
+    pub(super) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.mouse.initialize(scope, event);
+        let angles = pointer_event_angle_init(&self.members);
+        let members = self.members;
+        PointerEventNumberInitDeclaration::new(
+            members.pointer_id,
+            members.width,
+            members.height,
+            members.pressure,
+            members.tangential_pressure,
+            angles.tilt_x,
+            angles.tilt_y,
+            angles.azimuth_angle,
+            angles.altitude_angle,
+            members.twist,
+            members.persistent_device_id,
+        )
+        .initialize(scope, event)
+        .expect("PointerEvent state should initialize");
+        let pointer_type = crate::util::v8_string_from_utf16_units(scope, &members.pointer_type.0)
+            .expect("PointerEvent pointerType should fit in a V8 string");
+        PointerEventTailInitDeclaration::new(members.is_primary, pointer_type)
+            .initialize(scope, event)
+            .expect("PointerEvent tail should initialize");
+        store_pointer_event_sequence(
+            scope,
+            event,
+            POINTER_EVENT_COALESCED_EVENTS_SLOT,
+            &members.coalesced_events,
+        );
+        store_pointer_event_sequence(
+            scope,
+            event,
+            POINTER_EVENT_PREDICTED_EVENTS_SLOT,
+            &members.predicted_events,
+        );
+    }
+}
+
+struct DataTransferReference<'s>(v8::Local<'s, v8::Object>);
+
+impl<'s> webidl::WebIdlConverter<'s> for DataTransferReference<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        let object = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
+        if !is_branded_data_transfer_object(scope, object) {
+            return Err(webidl::WebIdlError::cannot_convert(context, "DataTransfer"));
+        }
+        Ok(Self(object))
+    }
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "DragEventInit")]
+struct DragEventInitMembers<'s> {
+    #[webidl(nullable, converter = "raw")]
+    data_transfer: Option<DataTransferReference<'s>>,
+}
+
+#[derive(Default)]
+pub(super) struct DragEventInit<'s> {
+    mouse: MouseEventInit<'s>,
+    members: DragEventInitMembers<'s>,
+}
+
+impl<'s> webidl::WebIdlDictionary<'s> for DragEventInit<'s> {
+    fn parse_dictionary(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        Ok(Self {
+            mouse: webidl::parse_dictionary_object(scope, object)?,
+            members: webidl::parse_dictionary_object(scope, object)?,
+        })
+    }
+}
+
+impl<'s> DragEventInit<'s> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        self.mouse.event_flags()
+    }
+
+    pub(super) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.mouse.initialize(scope, event);
+        let data_transfer = self
+            .members
+            .data_transfer
+            .map(|data| data.0.into())
+            .unwrap_or_else(|| v8::null(scope).into());
+        DragEventInitDeclaration::new(data_transfer)
+            .initialize(scope, event)
+            .expect("DragEvent state should initialize");
+    }
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct MouseEventBaseInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    detail: f64,
+struct DragEventInitDeclaration<'s> {
+    data_transfer: v8::Local<'s, v8::Value>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct MouseEventBaseInitDeclaration {
     screen_x: f64,
     screen_y: f64,
     client_x: f64,
@@ -41,8 +388,8 @@ struct MouseEventBaseInitDeclaration<'scope> {
     y: f64,
     page_x: f64,
     page_y: f64,
-    button: f64,
-    buttons: f64,
+    button: i16,
+    buttons: u16,
     movement_x: f64,
     movement_y: f64,
 }
@@ -59,22 +406,23 @@ struct WheelEventDeltaInitDeclaration {
     delta_x: f64,
     delta_y: f64,
     delta_z: f64,
-    delta_mode: f64,
+    delta_mode: u32,
 }
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct PointerEventNumberInitDeclaration {
-    pointer_id: f64,
+    pointer_id: i32,
     width: f64,
     height: f64,
-    pressure: f64,
-    tangential_pressure: f64,
-    tilt_x: f64,
-    tilt_y: f64,
+    pressure: f32,
+    tangential_pressure: f32,
+    tilt_x: i32,
+    tilt_y: i32,
     azimuth_angle: f64,
     altitude_angle: f64,
-    twist: f64,
+    twist: i32,
+    persistent_device_id: i32,
 }
 
 #[derive(WebApiObject)]
@@ -90,17 +438,6 @@ struct PointerEventAngleInit {
     tilt_y: i32,
     azimuth_angle: f64,
     altitude_angle: f64,
-}
-
-impl Default for PointerEventAngleInit {
-    fn default() -> Self {
-        Self {
-            tilt_x: 0,
-            tilt_y: 0,
-            azimuth_angle: 0.0,
-            altitude_angle: std::f64::consts::FRAC_PI_2,
-        }
-    }
 }
 
 fn normalized_tilt_degrees(tilt_degrees: i32) -> i32 {
@@ -217,41 +554,11 @@ fn tilt_y_from_spherical(azimuth_angle: f64, altitude_angle: f64) -> i32 {
     }
 }
 
-fn pointer_event_angle_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> Result<PointerEventAngleInit, webidl::WebIdlError> {
-    let Some(init) = init else {
-        return Ok(PointerEventAngleInit::default());
-    };
-    let tilt_x = webidl::optional_member::<webidl::Long>(
-        scope,
-        init,
-        "tiltX",
-        webidl::Context::member("PointerEventInit", "tiltX"),
-    )?
-    .map(|value| value.0);
-    let tilt_y = webidl::optional_member::<webidl::Long>(
-        scope,
-        init,
-        "tiltY",
-        webidl::Context::member("PointerEventInit", "tiltY"),
-    )?
-    .map(|value| value.0);
-    let azimuth_angle = webidl::optional_member::<webidl::Double>(
-        scope,
-        init,
-        "azimuthAngle",
-        webidl::Context::member("PointerEventInit", "azimuthAngle"),
-    )?
-    .map(|value| value.0);
-    let altitude_angle = webidl::optional_member::<webidl::Double>(
-        scope,
-        init,
-        "altitudeAngle",
-        webidl::Context::member("PointerEventInit", "altitudeAngle"),
-    )?
-    .map(|value| value.0);
+fn pointer_event_angle_init(init: &PointerEventInitMembers<'_>) -> PointerEventAngleInit {
+    let tilt_x = init.tilt_x;
+    let tilt_y = init.tilt_y;
+    let azimuth_angle = init.azimuth_angle;
+    let altitude_angle = init.altitude_angle;
 
     let has_tilt = tilt_x.is_some() || tilt_y.is_some();
     let has_spherical_angles = azimuth_angle.is_some() || altitude_angle.is_some();
@@ -273,17 +580,14 @@ fn pointer_event_angle_init<'s>(
         angles.tilt_x = tilt_x_from_spherical(normalized_azimuth, normalized_altitude);
         angles.tilt_y = tilt_y_from_spherical(normalized_azimuth, normalized_altitude);
     }
-    Ok(angles)
+    angles
 }
 
 fn pointer_event_sequence_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    init: Option<v8::Local<'s, v8::Object>>,
+    init: v8::Local<'s, v8::Object>,
     key: &'static str,
 ) -> Result<Vec<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    let Some(init) = init else {
-        return Ok(Vec::new());
-    };
     webidl::optional_member_or::<webidl::Sequence<PointerEventReference<'s>>>(
         scope,
         init,
@@ -329,17 +633,7 @@ fn pointer_event_sequence_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     slot: &'static str,
-    method: &'static str,
 ) {
-    if super::super::event_subclass_kind(scope, args.this())
-        != Some(EventSubclassKind::PointerEvent)
-    {
-        throw_type_error(
-            scope,
-            &format!("Failed to execute '{method}' on 'PointerEvent': Illegal invocation"),
-        );
-        return;
-    }
     rv.set(pointer_event_sequence_copy(scope, args.this(), slot).into());
 }
 
@@ -348,13 +642,7 @@ pub(in crate::context_bootstrap) fn pointer_event_get_coalesced_events_callback<
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    pointer_event_sequence_callback(
-        scope,
-        args,
-        rv,
-        POINTER_EVENT_COALESCED_EVENTS_SLOT,
-        "getCoalescedEvents",
-    );
+    pointer_event_sequence_callback(scope, args, rv, POINTER_EVENT_COALESCED_EVENTS_SLOT);
 }
 
 pub(in crate::context_bootstrap) fn pointer_event_get_predicted_events_callback<'s>(
@@ -362,162 +650,5 @@ pub(in crate::context_bootstrap) fn pointer_event_get_predicted_events_callback<
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    pointer_event_sequence_callback(
-        scope,
-        args,
-        rv,
-        POINTER_EVENT_PREDICTED_EVENTS_SLOT,
-        "getPredictedEvents",
-    );
-}
-
-fn define_mouse_event_base_fields<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-    constructor_name: &'static str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let Ok(view) = init_window_view_property(scope, init, constructor_name) else {
-        return None;
-    };
-    let detail = init_number_property(scope, init, "detail", 0.0);
-    if !super::super::modifiers::initialize_event_modifiers(scope, event, init) {
-        return None;
-    }
-    let client_x = init_number_property(scope, init, "clientX", 0.0);
-    let client_y = init_number_property(scope, init, "clientY", 0.0);
-    let related_target =
-        init_value_property(scope, init, "relatedTarget").unwrap_or_else(|| v8::null(scope).into());
-
-    MouseEventBaseInitDeclaration::new(
-        view,
-        detail,
-        init_number_property(scope, init, "screenX", 0.0),
-        init_number_property(scope, init, "screenY", 0.0),
-        client_x,
-        client_y,
-        client_x,
-        client_y,
-        client_x,
-        client_y,
-        init_number_property(scope, init, "button", 0.0),
-        init_number_property(scope, init, "buttons", 0.0),
-        init_number_property(scope, init, "movementX", 0.0),
-        init_number_property(scope, init, "movementY", 0.0),
-    )
-    .initialize(scope, event)
-    .expect("MouseEvent base init declaration should initialize");
-    Some(related_target)
-}
-
-fn define_mouse_event_related_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    related_target: v8::Local<'s, v8::Value>,
-) {
-    MouseEventRelatedTargetDeclaration::new(related_target)
-        .initialize(scope, event)
-        .expect("MouseEvent relatedTarget declaration should initialize");
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_mouse_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Some(related_target) = define_mouse_event_base_fields(scope, event, init, "MouseEvent")
-    else {
-        return false;
-    };
-    define_mouse_event_related_target(scope, event, related_target);
-    true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_wheel_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Some(related_target) = define_mouse_event_base_fields(scope, event, init, "WheelEvent")
-    else {
-        return false;
-    };
-    WheelEventDeltaInitDeclaration::new(
-        init_number_property(scope, init, "deltaX", 0.0),
-        init_number_property(scope, init, "deltaY", 0.0),
-        init_number_property(scope, init, "deltaZ", 0.0),
-        init_number_property(scope, init, "deltaMode", 0.0),
-    )
-    .initialize(scope, event)
-    .expect("WheelEvent delta init declaration should initialize");
-    define_mouse_event_related_target(scope, event, related_target);
-    true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_pointer_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let pointer_type = init_string_property(scope, init, "pointerType", "");
-    let pointer_type = v8_string(scope, &pointer_type).expect("PointerEvent pointerType");
-    let coalesced_events = match pointer_event_sequence_member(scope, init, "coalescedEvents") {
-        Ok(events) => events,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return false;
-        }
-    };
-    let predicted_events = match pointer_event_sequence_member(scope, init, "predictedEvents") {
-        Ok(events) => events,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return false;
-        }
-    };
-    let Some(related_target) = define_mouse_event_base_fields(scope, event, init, "PointerEvent")
-    else {
-        return false;
-    };
-    let angles = match pointer_event_angle_init(scope, init) {
-        Ok(angles) => angles,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return false;
-        }
-    };
-    PointerEventNumberInitDeclaration::new(
-        init_number_property(scope, init, "pointerId", 0.0),
-        init_number_property(scope, init, "width", 1.0),
-        init_number_property(scope, init, "height", 1.0),
-        init_number_property(scope, init, "pressure", 0.0),
-        init_number_property(scope, init, "tangentialPressure", 0.0),
-        f64::from(angles.tilt_x),
-        f64::from(angles.tilt_y),
-        angles.azimuth_angle,
-        angles.altitude_angle,
-        init_number_property(scope, init, "twist", 0.0),
-    )
-    .initialize(scope, event)
-    .expect("PointerEvent number init declaration should initialize");
-    PointerEventTailInitDeclaration::new(
-        init_bool_property(scope, init, "isPrimary", false),
-        pointer_type,
-    )
-    .initialize(scope, event)
-    .expect("PointerEvent tail init declaration should initialize");
-    define_mouse_event_related_target(scope, event, related_target);
-    store_pointer_event_sequence(
-        scope,
-        event,
-        POINTER_EVENT_COALESCED_EVENTS_SLOT,
-        &coalesced_events,
-    );
-    store_pointer_event_sequence(
-        scope,
-        event,
-        POINTER_EVENT_PREDICTED_EVENTS_SLOT,
-        &predicted_events,
-    );
-    true
+    pointer_event_sequence_callback(scope, args, rv, POINTER_EVENT_PREDICTED_EVENTS_SLOT);
 }

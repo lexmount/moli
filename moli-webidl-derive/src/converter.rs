@@ -15,6 +15,7 @@ pub(crate) enum ConverterKind {
     CallbackInterface,
     Long,
     EnforceRangeLong,
+    Short,
     UnsignedShort,
     ClampedUnsignedShort,
     UnsignedLong,
@@ -45,6 +46,7 @@ impl ConverterKind {
             "callback_interface" => Ok(Self::CallbackInterface),
             "long" => Ok(Self::Long),
             "enforce_range_long" => Ok(Self::EnforceRangeLong),
+            "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
             "clamped_unsigned_short" => Ok(Self::ClampedUnsignedShort),
             "unsigned_long" => Ok(Self::UnsignedLong),
@@ -74,6 +76,7 @@ impl ConverterKind {
             Self::CallbackInterface => quote!(::moli_webidl::WebIdlCallbackInterface),
             Self::Long => quote!(::moli_webidl::Long),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong),
+            Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
             Self::ClampedUnsignedShort => quote!(::moli_webidl::ClampedUnsignedShort),
             Self::UnsignedLong => quote!(::moli_webidl::UnsignedLong),
@@ -110,6 +113,7 @@ impl ConverterKind {
             Self::CallbackFunction | Self::CallbackInterface => quote!(#expr),
             Self::Long => quote!(::moli_webidl::Long(#expr)),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong(#expr)),
+            Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
             Self::ClampedUnsignedShort => {
                 quote!(::moli_webidl::ClampedUnsignedShort(#expr))
@@ -141,6 +145,7 @@ impl ConverterKind {
             | Self::UsvString
             | Self::Long
             | Self::EnforceRangeLong
+            | Self::Short
             | Self::UnsignedShort
             | Self::ClampedUnsignedShort
             | Self::UnsignedLong
@@ -241,6 +246,9 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     }
     if is_type_ident(ty, "u16") {
         return Some(ConverterKind::UnsignedShort);
+    }
+    if is_type_ident(ty, "i16") {
+        return Some(ConverterKind::Short);
     }
     if is_type_ident(ty, "u64") {
         return Some(ConverterKind::UnsignedLongLong);
