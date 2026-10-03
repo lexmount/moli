@@ -520,6 +520,14 @@ impl JsContextHost {
             .copied()
     }
 
+    pub(crate) fn current_child_frame_lane_task_owner(
+        &self,
+        frame: DomHandle,
+    ) -> Option<crate::frame_owner_model::FrameLaneTaskOwner> {
+        self.frame_owner_store
+            .current_child_frame_lane_task_owner(frame)
+    }
+
     pub(crate) fn child_browsing_context_host_for_document_handle(
         &self,
         document_handle: DomHandle,

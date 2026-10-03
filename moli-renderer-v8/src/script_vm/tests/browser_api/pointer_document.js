@@ -62,7 +62,7 @@ globalThis.__installPointerDocumentProbe = (first, second, realm, mode) => {
           state.moves++;
           const result = outcome(() => set.call(own, state.id));
           record(key + '/valid', {returns:!result.error && result.value === undefined,
-            documentMatchesInput:label === (mode === 'capture' ? 'first' : 'second'),
+            documentMatchesInput:label === (mode === 'capture' || (event.pointerType !== 'touch' && firstDocument !== globalThis.document) ? 'first' : 'second'),
             captureAllowed:event.buttons !== 0 ? has.call(own, state.id) : !has.call(own, state.id),
             otherDocumentFree:!has.call(other, state.id)});
         }
