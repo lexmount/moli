@@ -30,6 +30,7 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
   const withoutError = new ErrorEvent('without');
   const nullError = new ErrorEvent('null', { error: null });
   const withError = new ErrorEvent('with', { error: first });
+  const errorGetter = own(ErrorEvent.prototype, 'error').get;
   // Prototype source accessors must not become cached own fields on wrappers.
   const prototypeSource = [ToggleEvent, CommandEvent].every(ctor => {
     const descriptor = own(ctor.prototype, 'source');
@@ -52,8 +53,10 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
     trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
     errorValues: withoutError.error === undefined && nullError.error === null && withError.error === first &&
-      own(withoutError, 'error').get === own(nullError, 'error').get &&
-      own(withoutError, 'error').get === own(withError, 'error').get,
+      [withoutError, nullError, withError].every(event => !own(event, 'error') &&
+        own(Object.getPrototypeOf(event), 'error').get === errorGetter) &&
+      errorGetter.call(withoutError) === undefined && errorGetter.call(nullError) === null &&
+      errorGetter.call(withError) === first,
     prototypeSource,
     original: derived === derived.original && derived instanceof DerivedEvent,
     illegal

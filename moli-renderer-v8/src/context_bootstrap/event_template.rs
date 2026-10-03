@@ -298,6 +298,25 @@ struct InputEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ErrorEvent, enumerable, receiver)]
+struct ErrorEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "message"))]
+    message: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "filename"))]
+    filename: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "lineno"))]
+    lineno: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "colno"))]
+    colno: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "error"))]
+    error: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
 struct StorageEventTemplateMethodsDeclaration {
     #[webapi(
@@ -504,6 +523,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         }
         "CustomEvent" => EventTemplateDeclaration::new::<CustomEventTemplateMethodsDeclaration>(),
         "InputEvent" => EventTemplateDeclaration::new::<InputEventTemplateAccessorsDeclaration>(),
+        "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),
         "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "KeyboardEvent" => {

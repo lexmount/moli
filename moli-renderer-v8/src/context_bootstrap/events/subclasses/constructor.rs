@@ -9,6 +9,109 @@ fn event_subclass_kind_from_callback_data(
     EventSubclassKind::from_i32(value)
 }
 
+// A converted dictionary retains exactly its payload type. Parsing, base
+// flags and initialization share this dispatch instead of independent Options.
+enum EventSubclassInit<'s> {
+    Ui(ui::UiEventInit<'s>),
+    Composition(ui::CompositionEventInit<'s>),
+    Clipboard(data::ClipboardEventInitMembers<'s>),
+    ClipboardChange(data::ClipboardChangeEventInitMembers<'s>),
+    Keyboard(keyboard::KeyboardEventInit<'s>),
+    Message(message::MessageEventInit<'s>),
+    Storage(data::StorageEventInitMembers<'s>),
+    Error(error::ErrorEventInit<'s>),
+    CurrentEntryChange(navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>),
+    Navigate(navigation_init::NavigateEventInitMembers<'s>),
+    Legacy,
+}
+
+impl<'s> EventSubclassInit<'s> {
+    fn parse(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+        kind: EventSubclassKind,
+    ) -> Option<Self> {
+        Some(match kind {
+            EventSubclassKind::UiEvent => Self::Ui(ui::parse_ui_event_init(scope, args)?),
+            EventSubclassKind::CompositionEvent => {
+                Self::Composition(ui::parse_composition_event_init(scope, args)?)
+            }
+            EventSubclassKind::ClipboardEvent => {
+                Self::Clipboard(data::parse_clipboard_event_init(scope, args)?)
+            }
+            EventSubclassKind::ClipboardChangeEvent => {
+                Self::ClipboardChange(data::parse_clipboard_change_event_init(scope, args)?)
+            }
+            EventSubclassKind::KeyboardEvent => {
+                Self::Keyboard(keyboard::parse_keyboard_event_init(scope, args)?)
+            }
+            EventSubclassKind::MessageEvent => {
+                Self::Message(message::parse_message_event_init(scope, args)?)
+            }
+            EventSubclassKind::StorageEvent => {
+                Self::Storage(data::parse_storage_event_init(scope, args)?)
+            }
+            EventSubclassKind::ErrorEvent => {
+                Self::Error(error::parse_error_event_init(scope, args)?)
+            }
+            EventSubclassKind::NavigationCurrentEntryChangeEvent => Self::CurrentEntryChange(
+                navigation_init::parse_current_entry_change_event_init(scope, args)?,
+            ),
+            EventSubclassKind::NavigateEvent => {
+                Self::Navigate(navigation_init::parse_navigate_event_init(scope, args)?)
+            }
+            _ => Self::Legacy,
+        })
+    }
+
+    fn event_flags(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+    ) -> (bool, bool, bool) {
+        match self {
+            Self::Ui(init) => init.event_flags(),
+            Self::Composition(init) => init.event_flags(),
+            Self::Clipboard(init) => init.event_flags(),
+            Self::ClipboardChange(init) => init.event_flags(),
+            Self::Keyboard(init) => init.event_flags(),
+            Self::Message(init) => init.event_flags(),
+            Self::Storage(init) => init.event_flags(),
+            Self::Error(init) => init.event_flags(),
+            Self::CurrentEntryChange(init) => init.event_flags(),
+            Self::Navigate(init) => init.event_flags(),
+            Self::Legacy => read_event_init(scope, args),
+        }
+    }
+
+    fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+        kind: EventSubclassKind,
+        legacy_init: Option<v8::Local<'s, v8::Object>>,
+    ) -> bool {
+        match self {
+            Self::Ui(init) => init.initialize(scope, event),
+            Self::Composition(init) => ui::initialize_composition_event(scope, event, init),
+            Self::Clipboard(init) => data::initialize_clipboard_event(scope, event, init),
+            Self::ClipboardChange(init) => {
+                return data::initialize_clipboard_change_event(scope, event, init);
+            }
+            Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
+            Self::Message(init) => message::initialize_message_event(scope, event, init),
+            Self::Storage(init) => data::initialize_storage_event(scope, event, init),
+            Self::Error(init) => init.initialize(scope, event),
+            Self::CurrentEntryChange(init) => {
+                data::initialize_navigation_current_entry_change_event(scope, event, init)
+            }
+            Self::Navigate(init) => data::initialize_navigate_event(scope, event, init),
+            Self::Legacy => return initialize_legacy_event(scope, event, kind, legacy_init),
+        }
+        true
+    }
+}
+
 fn event_subclass_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -45,8 +148,6 @@ fn event_subclass_constructor_callback<'s>(
         return;
     }
 
-    let wrapper = args.this();
-    let event = new_event_state(scope);
     let Some(event_type) = event_type_argument(scope, &args, kind.constructor_name()) else {
         return;
     };
@@ -58,121 +159,11 @@ fn event_subclass_constructor_callback<'s>(
             init_arg.to_object(scope)
         }
     };
-    let clipboard_event_init = if kind == EventSubclassKind::ClipboardEvent {
-        let Some(init) = data::parse_clipboard_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
+    let Some(parsed_init) = EventSubclassInit::parse(scope, &args, kind) else {
+        return;
     };
-    let clipboard_change_event_init = if kind == EventSubclassKind::ClipboardChangeEvent {
-        let Some(init) = data::parse_clipboard_change_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let navigate_event_init = if kind == EventSubclassKind::NavigateEvent {
-        let Some(init) = navigation_init::parse_navigate_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let current_entry_change_event_init =
-        if kind == EventSubclassKind::NavigationCurrentEntryChangeEvent {
-            let Some(init) = navigation_init::parse_current_entry_change_event_init(scope, &args)
-            else {
-                return;
-            };
-            Some(init)
-        } else {
-            None
-        };
-    let storage_event_init = if kind == EventSubclassKind::StorageEvent {
-        let Some(init) = data::parse_storage_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let message_event_init = if kind == EventSubclassKind::MessageEvent {
-        let Some(init) = message::parse_message_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let keyboard_event_init = if kind == EventSubclassKind::KeyboardEvent {
-        let Some(init) = keyboard::parse_keyboard_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let ui_event_init = if kind == EventSubclassKind::UiEvent {
-        let Some(init) = ui::parse_ui_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let composition_event_init = if kind == EventSubclassKind::CompositionEvent {
-        let Some(init) = ui::parse_composition_event_init(scope, &args) else {
-            return;
-        };
-        Some(init)
-    } else {
-        None
-    };
-    let (bubbles, cancelable, composed) = clipboard_event_init
-        .as_ref()
-        .map(data::ClipboardEventInitMembers::event_flags)
-        .or_else(|| {
-            clipboard_change_event_init
-                .as_ref()
-                .map(data::ClipboardChangeEventInitMembers::event_flags)
-        })
-        .or_else(|| {
-            navigate_event_init
-                .as_ref()
-                .map(navigation_init::NavigateEventInitMembers::event_flags)
-        })
-        .or_else(|| {
-            current_entry_change_event_init
-                .as_ref()
-                .map(navigation_init::NavigationCurrentEntryChangeEventInitMembers::event_flags)
-        })
-        .or_else(|| {
-            storage_event_init
-                .as_ref()
-                .map(data::StorageEventInitMembers::event_flags)
-        })
-        .or_else(|| {
-            message_event_init
-                .as_ref()
-                .map(message::MessageEventInit::event_flags)
-        })
-        .or_else(|| {
-            keyboard_event_init
-                .as_ref()
-                .map(keyboard::KeyboardEventInit::event_flags)
-        })
-        .or_else(|| ui_event_init.as_ref().map(ui::UiEventInit::event_flags))
-        .or_else(|| {
-            composition_event_init
-                .as_ref()
-                .map(ui::CompositionEventInit::event_flags)
-        })
-        .unwrap_or_else(|| read_event_init(scope, &args));
-
+    let (bubbles, cancelable, composed) = parsed_init.event_flags(scope, &args);
+    let event = new_event_state(scope);
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
         scope,
@@ -180,166 +171,10 @@ fn event_subclass_constructor_callback<'s>(
         "composed",
         v8::Boolean::new(scope, composed).into(),
     );
-
-    match kind {
-        EventSubclassKind::UiEvent => {
-            ui_event_init
-                .expect("UIEvent init should be parsed")
-                .initialize(scope, event);
-        }
-        EventSubclassKind::FocusEvent => {
-            if !basic::initialize_focus_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::TextEvent => {
-            if !basic::initialize_text_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::CompositionEvent => {
-            ui::initialize_composition_event(
-                scope,
-                event,
-                composition_event_init.expect("CompositionEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::CustomEvent => basic::initialize_custom_event(scope, event, init),
-        EventSubclassKind::MouseEvent => {
-            if !pointer::initialize_mouse_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::DragEvent => {
-            if !data::initialize_drag_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::ClipboardEvent => {
-            data::initialize_clipboard_event(
-                scope,
-                event,
-                clipboard_event_init.expect("ClipboardEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::ClipboardChangeEvent => {
-            if !data::initialize_clipboard_change_event(
-                scope,
-                event,
-                clipboard_change_event_init.expect("ClipboardChangeEvent init should be parsed"),
-            ) {
-                return;
-            }
-        }
-        EventSubclassKind::CapturedMouseEvent => {
-            if !data::initialize_captured_mouse_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::KeyboardEvent => {
-            keyboard::initialize_keyboard_event(
-                scope,
-                event,
-                keyboard_event_init.expect("KeyboardEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
-        EventSubclassKind::WheelEvent => {
-            if !pointer::initialize_wheel_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::PointerEvent => {
-            if !pointer::initialize_pointer_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::TouchEvent => {
-            crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
-        }
-        EventSubclassKind::MessageEvent => message::initialize_message_event(
-            scope,
-            event,
-            message_event_init.expect("MessageEvent init should be parsed"),
-        ),
-        EventSubclassKind::StorageEvent => {
-            data::initialize_storage_event(
-                scope,
-                event,
-                storage_event_init.expect("StorageEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::ErrorEvent => data::initialize_error_event(scope, event, init),
-        EventSubclassKind::PromiseRejectionEvent => {
-            if !data::initialize_promise_rejection_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::SecurityPolicyViolationEvent => {
-            if !data::initialize_security_policy_violation_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::NavigationCurrentEntryChangeEvent => {
-            data::initialize_navigation_current_entry_change_event(
-                scope,
-                event,
-                current_entry_change_event_init
-                    .expect("NavigationCurrentEntryChangeEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::NavigateEvent => {
-            data::initialize_navigate_event(
-                scope,
-                event,
-                navigate_event_init.expect("NavigateEvent init should be parsed"),
-            );
-        }
-        EventSubclassKind::CloseEvent => data::initialize_close_event(scope, event, init),
-        EventSubclassKind::SubmitEvent => {
-            if !data::initialize_submit_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::FormDataEvent => {
-            if !data::initialize_form_data_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::CommandEvent => {
-            if !data::initialize_command_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::ToggleEvent => {
-            if !data::initialize_toggle_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
-        EventSubclassKind::PopStateEvent => {
-            if !data::initialize_pop_state_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::HashChangeEvent => {
-            if !data::initialize_hash_change_event(scope, event, init) {
-                return;
-            }
-        }
-        EventSubclassKind::PageTransitionEvent => {
-            data::initialize_page_transition_event(scope, event, init);
-        }
-        EventSubclassKind::TrackEvent => data::initialize_track_event(scope, event, init),
-        EventSubclassKind::FontFaceSetLoadEvent => {
-            if !crate::context_bootstrap::css_fontface_runtime::initialize_font_face_set_load_event(
-                scope, event, init,
-            ) {
-                return;
-            }
-        }
+    if !parsed_init.initialize(scope, event, kind, init) {
+        return;
     }
-
+    let wrapper = args.this();
     web_api_interfaces::initialize(scope, event, kind.constructor_name())
         .expect("event primary interface should initialize");
     set_private_value(
@@ -351,6 +186,122 @@ fn event_subclass_constructor_callback<'s>(
     if initialize_event_wrapper(scope, wrapper, event).is_some() {
         rv.set(wrapper.into());
     }
+}
+
+fn initialize_legacy_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    kind: EventSubclassKind,
+    init: Option<v8::Local<'s, v8::Object>>,
+) -> bool {
+    match kind {
+        EventSubclassKind::FocusEvent => {
+            if !basic::initialize_focus_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::TextEvent => {
+            if !basic::initialize_text_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::CustomEvent => basic::initialize_custom_event(scope, event, init),
+        EventSubclassKind::MouseEvent => {
+            if !pointer::initialize_mouse_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::DragEvent => {
+            if !data::initialize_drag_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::CapturedMouseEvent => {
+            if !data::initialize_captured_mouse_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
+        EventSubclassKind::WheelEvent => {
+            if !pointer::initialize_wheel_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::PointerEvent => {
+            if !pointer::initialize_pointer_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::TouchEvent => {
+            crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
+        }
+        EventSubclassKind::PromiseRejectionEvent => {
+            if !data::initialize_promise_rejection_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::SecurityPolicyViolationEvent => {
+            if !data::initialize_security_policy_violation_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::CloseEvent => data::initialize_close_event(scope, event, init),
+        EventSubclassKind::SubmitEvent => {
+            if !data::initialize_submit_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::FormDataEvent => {
+            if !data::initialize_form_data_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::CommandEvent => {
+            if !data::initialize_command_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::ToggleEvent => {
+            if !data::initialize_toggle_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
+        EventSubclassKind::PopStateEvent => {
+            if !data::initialize_pop_state_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::HashChangeEvent => {
+            if !data::initialize_hash_change_event(scope, event, init) {
+                return false;
+            }
+        }
+        EventSubclassKind::PageTransitionEvent => {
+            data::initialize_page_transition_event(scope, event, init);
+        }
+        EventSubclassKind::TrackEvent => data::initialize_track_event(scope, event, init),
+        EventSubclassKind::FontFaceSetLoadEvent => {
+            if !crate::context_bootstrap::css_fontface_runtime::initialize_font_face_set_load_event(
+                scope, event, init,
+            ) {
+                return false;
+            }
+        }
+        EventSubclassKind::ClipboardChangeEvent
+        | EventSubclassKind::ClipboardEvent
+        | EventSubclassKind::CompositionEvent
+        | EventSubclassKind::ErrorEvent
+        | EventSubclassKind::KeyboardEvent
+        | EventSubclassKind::MessageEvent
+        | EventSubclassKind::NavigateEvent
+        | EventSubclassKind::NavigationCurrentEntryChangeEvent
+        | EventSubclassKind::StorageEvent
+        | EventSubclassKind::UiEvent => {
+            unreachable!("typed event initialization must retain its payload")
+        }
+    }
+    true
 }
 
 pub(in crate::context_bootstrap) fn build_event_subclass_template<'s>(
