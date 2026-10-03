@@ -317,7 +317,7 @@ fn finish_materialized_interface<'s>(
                             metadata.name
                         )
                     })?;
-            set_interface_prototype_constructor(scope, constructor, proxy.into());
+            set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
         _ => constructor.into(),
@@ -332,6 +332,7 @@ fn finish_materialized_interface<'s>(
         constructor_prototype,
         public_interface,
     )?;
+    realm.set_state(id, RealmInterfaceState::Finalizing)?;
     finalize_materialized_interface(scope, metadata.name)?;
     realm.set_state(id, RealmInterfaceState::Ready)?;
     registry.record_materialization(id);

@@ -8,10 +8,10 @@ mod send;
 
 use super::*;
 use crate::context_bootstrap::{
-    install_simple_event_target_ordered_handlers, mark_simple_event_target_slot,
+    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT,
 };
 use crate::native_bridge::throw_dom_exception;
-use crate::util::{get_private_value, set_private_value};
+use crate::util::{get_private_value, private_key};
 use crate::web_api_interfaces;
 use crate::worker::WORKER_STATE_SLOT;
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -96,20 +96,26 @@ pub(crate) fn install_progress_event_template_bindings<'s>(
 pub(crate) fn finalize_xml_http_request_event_target_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_target_prototype: v8::Local<'s, v8::Object>,
-) {
-    mark_simple_event_target_slot(
-        scope,
-        event_target_prototype,
-        XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-    );
-    install_simple_event_target_ordered_handlers(scope, event_target_prototype);
-    let marker = v8::Boolean::new(scope, true);
-    set_private_value(
-        scope,
-        event_target_prototype,
-        XHR_SIMPLE_EVENT_TARGET_MARKER_SLOT,
-        marker.into(),
-    );
+) -> anyhow::Result<()> {
+    let marker: v8::Local<'_, v8::Value> = v8::Boolean::new(scope, true).into();
+    for (slot, value) in [
+        (
+            SIMPLE_EVENT_TARGET_SLOT,
+            v8str(scope, XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT).into(),
+        ),
+        (SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, marker),
+        (XHR_SIMPLE_EVENT_TARGET_MARKER_SLOT, marker),
+    ] {
+        let key = private_key(scope, slot).ok_or_else(|| {
+            anyhow::anyhow!("failed to allocate XMLHttpRequestEventTarget slot `{slot}`")
+        })?;
+        if event_target_prototype.set_private(scope, key, value) != Some(true) {
+            return Err(anyhow::anyhow!(
+                "failed to finalize XMLHttpRequestEventTarget slot `{slot}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn xhr_throw_invalid_state(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {

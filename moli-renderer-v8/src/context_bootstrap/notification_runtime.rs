@@ -276,13 +276,13 @@ pub(in crate::context_bootstrap) fn install_notification_template_bindings<'s>(
     NotificationPrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
-pub(in crate::context_bootstrap) fn install_notification_realm_bindings(
-    scope: &mut v8::PinScope<'_, '_>,
-) {
-    if let Some(constructor) = global_constructor_object(scope, "Notification") {
-        let _ =
-            NotificationConstructorPermissionDeclaration::default().initialize(scope, constructor);
-    }
+pub(in crate::context_bootstrap) fn finalize_notification_realm_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    constructor: v8::Local<'s, v8::Object>,
+) -> anyhow::Result<()> {
+    NotificationConstructorPermissionDeclaration::default()
+        .initialize(scope, constructor)
+        .map_err(|error| anyhow::anyhow!("failed to finalize Notification: {error}"))
 }
 
 fn notification_options<'s>(

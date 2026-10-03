@@ -291,6 +291,16 @@ struct NestedValueRecord {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
+struct DeclaredDataProperties {
+    #[webapi(data_property)]
+    value: Option<u32>,
+
+    #[webapi(data_property, enumerable)]
+    enumerable_value: Option<u32>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
 struct DefaultNameObject<'scope> {
     #[webapi(data_property, enumerable)]
     _visible_label: &'static str,
@@ -578,6 +588,48 @@ struct PrototypeBackedFallbackTagObject {}
     fallback_to_string_tag = "MissingSample",
 )]
 struct MissingPrototypeFallbackTagObject {}
+
+#[test]
+fn declared_data_properties_report_rejected_writes() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    for (name, declaration) in [
+        (
+            "value",
+            DeclaredDataProperties {
+                value: Some(42),
+                enumerable_value: None,
+            },
+        ),
+        (
+            "enumerableValue",
+            DeclaredDataProperties {
+                value: None,
+                enumerable_value: Some(42),
+            },
+        ),
+    ] {
+        let target = v8::Object::new(scope);
+        assert_eq!(
+            target.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+            Some(true)
+        );
+        let error = declaration
+            .initialize(scope, target)
+            .expect_err("rejected property writes must fail initialization");
+        assert_eq!(
+            error.to_string(),
+            format!("failed to define `{name}` value")
+        );
+        let key = v8::String::new(scope, name).unwrap();
+        assert_eq!(target.has_own_property(scope, key.into()), Some(false));
+    }
+}
 
 #[test]
 fn declared_template_and_object_have_expected_surface() {

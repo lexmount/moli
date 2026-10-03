@@ -114,6 +114,8 @@ impl IntrinsicInterfaceRegistry {
     /// Publishes the same intrinsic identities to both registries. Mark the
     /// interface in progress before either store changes, and make any failed
     /// publication terminal even if V8 has retained an immutable partial pair.
+    /// Successful publication stays Materializing: eager capture then marks it
+    /// Ready, while lazy materialization exposes it only when Finalizing starts.
     pub(super) fn register_intrinsic_objects<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -129,8 +131,9 @@ impl IntrinsicInterfaceRegistry {
         }
         self.set_state(id, RealmInterfaceState::Materializing)?;
         let result = (|| {
-            // Validate and retain the Rust objects before writing the immutable
-            // JS entries. Accessors expose them only once publication completes.
+            // Retain the Rust objects before writing the immutable JS entries.
+            // Keep them hidden until the caller starts finalization or
+            // completes eager capture.
             self.register_objects(scope, id, constructor, prototype, public_interface)?;
             match (
                 registered_intrinsic_constructor(scope, global, name),
@@ -156,7 +159,7 @@ impl IntrinsicInterfaceRegistry {
                     ));
                 }
             }
-            self.set_state(id, RealmInterfaceState::Finalizing)
+            Ok(())
         })();
         if result.is_err() {
             self.set_state(id, RealmInterfaceState::Failed)?;

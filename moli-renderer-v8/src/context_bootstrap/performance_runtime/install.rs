@@ -439,10 +439,10 @@ pub(super) fn apply_pending_window_performance_state<'s>(
 pub(crate) fn finalize_performance_observer_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     constructor: v8::Local<'s, v8::Object>,
-) {
+) -> anyhow::Result<()> {
     PerformanceObserverConstructorDeclaration::new(PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES)
         .initialize(scope, constructor)
-        .expect("PerformanceObserver constructor declaration should initialize");
+        .map_err(|error| anyhow::anyhow!("failed to finalize PerformanceObserver: {error}"))
 }
 
 fn performance_navigation_timing_type(navigation_type: &str) -> &'static str {

@@ -262,13 +262,22 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     Ok(())
 }
 
-fn capture_ecmascript_intrinsic<'s>(
+pub(super) fn capture_ecmascript_intrinsic<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> Result<()> {
-    if registered_intrinsic_constructor(scope, global, name).is_some() {
-        return Ok(());
+    match (
+        registered_intrinsic_constructor(scope, global, name),
+        registered_intrinsic_prototype(scope, global, name),
+    ) {
+        (Some(_), Some(_)) => return Ok(()),
+        (None, None) => {}
+        _ => {
+            return Err(anyhow!(
+                "ECMAScript intrinsic `{name}` has partial registry state"
+            ));
+        }
     }
     let constructor = constructor_object(scope, global, name)
         .ok_or_else(|| anyhow!("missing ECMAScript intrinsic constructor `{name}`"))?;

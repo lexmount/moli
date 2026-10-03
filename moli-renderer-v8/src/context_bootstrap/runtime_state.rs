@@ -2046,21 +2046,19 @@ pub(crate) fn finish_context_bootstrap(
 
 pub(crate) fn set_interface_prototype_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    constructor: v8::Local<'s, v8::Function>,
+    prototype: v8::Local<'s, v8::Object>,
     public_constructor: v8::Local<'s, v8::Value>,
-) {
-    let Some(prototype) = constructor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let _ = prototype.define_own_property(
+) -> Result<()> {
+    if prototype.define_own_property(
         scope,
         v8str(scope, "constructor").into(),
         public_constructor,
         v8::PropertyAttribute::DONT_ENUM,
-    );
+    ) != Some(true)
+    {
+        return Err(anyhow!("failed to set intrinsic prototype constructor"));
+    }
+    Ok(())
 }
 
 pub(crate) fn window_realm_secure_context_available<'s>(

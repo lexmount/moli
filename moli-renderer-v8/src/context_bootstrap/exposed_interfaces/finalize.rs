@@ -1,8 +1,15 @@
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 
 use super::materialize::{
     ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
 };
+use crate::context_bootstrap::{
+    crypto::finalize_crypto_realm_bindings, events::finalize_pointer_event_realm_bindings,
+    notification_runtime::finalize_notification_realm_bindings,
+    performance_runtime::finalize_performance_observer_realm_bindings,
+    web_audio_runtime::finalize_base_audio_context_realm_bindings,
+};
+use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
@@ -76,58 +83,52 @@ pub(super) fn finalize_materialized_interface(
     scope: &mut v8::PinScope<'_, '_>,
     interface_name: &str,
 ) -> Result<()> {
-    let prototype = ensure_intrinsic_interface_prototype(scope, interface_name)?;
-
     let Some(finalizer) = realm_dependent_finalizer(interface_name) else {
         return Ok(());
     };
+    let prototype = ensure_intrinsic_interface_prototype(scope, interface_name)?;
     match finalizer {
         RealmDependentFinalizer::NodeMixinUnscopables => {
-            finalize_node_mixin_unscopables(scope, prototype);
+            finalize_node_mixin_unscopables(scope, prototype)
         }
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface => {
-            crate::context_bootstrap::web_audio_runtime::finalize_base_audio_context_realm_bindings(scope, prototype)?;
+            finalize_base_audio_context_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
-            crate::context_bootstrap::crypto::finalize_crypto_realm_bindings(scope, prototype)?;
+            finalize_crypto_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::XmlHttpRequestEventTargetState => {
-            crate::network_host::finalize_xml_http_request_event_target_realm_bindings(
-                scope, prototype,
-            );
+            finalize_xml_http_request_event_target_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::NotificationPermission => {
-            crate::context_bootstrap::notification_runtime::install_notification_realm_bindings(
-                scope,
-            );
+            let constructor = ensure_intrinsic_interface_constructor(scope, "Notification")?;
+            finalize_notification_realm_bindings(scope, constructor.into())
         }
         RealmDependentFinalizer::PointerEventSecureContextSurface => {
-            crate::context_bootstrap::events::finalize_pointer_event_realm_bindings(
-                scope, prototype,
-            )?;
+            finalize_pointer_event_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes => {
             let constructor = ensure_intrinsic_interface_constructor(scope, "PerformanceObserver")?;
-            crate::context_bootstrap::performance_runtime::finalize_performance_observer_realm_bindings(
-                scope,
-                constructor.into(),
-            );
+            finalize_performance_observer_realm_bindings(scope, constructor.into())
         }
     }
-    Ok(())
+    .with_context(|| format!("failed to finalize intrinsic interface `{interface_name}`"))
 }
 
 fn finalize_node_mixin_unscopables(
     scope: &mut v8::PinScope<'_, '_>,
     prototype: v8::Local<'_, v8::Object>,
-) {
-    let Some(unscopables) = prototype
+) -> Result<()> {
+    let unscopables = prototype
         .get(scope, v8::Symbol::get_unscopables(scope).into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let _ = unscopables.set_prototype(scope, v8::null(scope).into());
+        .ok_or_else(|| anyhow!("intrinsic @@unscopables object is unavailable"))?;
+    if unscopables.set_prototype(scope, v8::null(scope).into()) != Some(true) {
+        return Err(anyhow!(
+            "failed to set intrinsic @@unscopables null prototype"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

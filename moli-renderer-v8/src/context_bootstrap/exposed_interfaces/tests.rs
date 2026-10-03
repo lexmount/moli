@@ -5,6 +5,8 @@ use std::pin::pin;
 use crate::context_bootstrap::specs::{ConstructorKind, ConstructorSpec};
 use crate::util::v8str;
 
+mod finalization;
+
 thread_local! {
     static LAZY_GETTER_CALLS: Cell<u32> = const { Cell::new(0) };
 }
@@ -369,6 +371,60 @@ fn uninitialized_dom_string_map_adopts_its_registered_intrinsics() {
         0,
         "recovery must not read the public binding"
     );
+}
+
+#[test]
+fn ecmascript_intrinsic_capture_rejects_partial_registration_on_retry() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    crate::util::initialize_intrinsic_interface_registry(scope, global);
+    let prototypes = crate::util::get_private_object(scope, global, "__moliIntrinsicPrototypes")
+        .expect("private prototype registry");
+    assert_eq!(
+        prototypes.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+        Some(true)
+    );
+
+    super::install::capture_ecmascript_intrinsic(scope, global, "Error")
+        .expect_err("the first capture must report its failed prototype publication");
+    assert!(crate::util::registered_intrinsic_constructor(scope, global, "Error").is_some());
+    assert!(crate::util::registered_intrinsic_prototype(scope, global, "Error").is_none());
+    let error = super::install::capture_ecmascript_intrinsic(scope, global, "Error")
+        .expect_err("retrying a partial Error pair must not report success");
+    assert!(error.to_string().contains("partial registry state"));
+}
+
+#[test]
+fn ecmascript_intrinsic_capture_rejects_prototype_without_constructor() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    crate::util::initialize_intrinsic_interface_registry(scope, global);
+    let prototypes = crate::util::get_private_object(scope, global, "__moliIntrinsicPrototypes")
+        .expect("private prototype registry");
+    let constructor = crate::util::constructor_object(scope, global, "Error")
+        .expect("ECMAScript Error constructor");
+    let prototype = crate::util::constructor_prototype_object(scope, constructor)
+        .expect("ECMAScript Error prototype");
+    assert_eq!(
+        prototypes.set(scope, v8str(scope, "Error").into(), prototype.into()),
+        Some(true)
+    );
+
+    let error = super::install::capture_ecmascript_intrinsic(scope, global, "Error")
+        .expect_err("a prototype-only Error registration must not be completed from the global");
+
+    assert!(error.to_string().contains("partial registry state"));
+    assert!(crate::util::registered_intrinsic_constructor(scope, global, "Error").is_none());
 }
 
 #[test]

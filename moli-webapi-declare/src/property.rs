@@ -94,11 +94,13 @@ pub fn define_declared_data_property<'s, V>(
 where
     V: WebApiValue<'s> + ?Sized,
 {
-    let value = value
-        .to_v8_value(scope)
-        .ok_or_else(|| BindError::new(format!("failed to convert `{name}` value")))?;
-    define_value_property(scope, object, name, value);
-    Ok(())
+    define_declared_data_property_with_attributes(
+        scope,
+        object,
+        name,
+        value,
+        v8::PropertyAttribute::DONT_ENUM,
+    )
 }
 
 pub fn define_declared_enumerable_data_property<'s, V>(
@@ -110,11 +112,13 @@ pub fn define_declared_enumerable_data_property<'s, V>(
 where
     V: WebApiValue<'s> + ?Sized,
 {
-    let value = value
-        .to_v8_value(scope)
-        .ok_or_else(|| BindError::new(format!("failed to convert `{name}` value")))?;
-    define_enumerable_value_property(scope, object, name, value);
-    Ok(())
+    define_declared_data_property_with_attributes(
+        scope,
+        object,
+        name,
+        value,
+        v8::PropertyAttribute::NONE,
+    )
 }
 
 pub fn define_declared_data_property_with_attributes<'s, V>(
