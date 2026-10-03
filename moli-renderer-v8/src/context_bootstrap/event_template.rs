@@ -510,6 +510,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
             EventTemplateDeclaration::new::<KeyboardEventTemplateMethodsDeclaration>()
         }
         "MouseEvent" => EventTemplateDeclaration::new::<MouseEventTemplateMethodsDeclaration>(),
+        "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "WheelEvent" => EventTemplateDeclaration::new::<WheelEventTemplateConstantsDeclaration>(),
         "PointerEvent" => EventTemplateDeclaration::new::<PointerEventTemplateMethodsDeclaration>(),
         "TouchEvent" => EventTemplateDeclaration::new::<TouchEventTemplateMethodsDeclaration>(),
