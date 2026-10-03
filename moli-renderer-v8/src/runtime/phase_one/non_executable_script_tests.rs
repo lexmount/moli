@@ -118,7 +118,7 @@ fn parser_owned_import_map_is_not_registered_when_script_execution_is_disabled()
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
         let env = super::tests::default_test_page_vm_env_config_with(|env| {
-            env.script_execution_disabled = true;
+            env.document_settings.script_execution_disabled = true;
         });
         let mut page_vm = super::tests::parse_phase_one_html_into_page_vm_for_test_with_env(
             r#"<!doctype html><html><head><script type="importmap">{"imports":{"fixture":"/module.mjs"}}</script></head><body></body></html>"#,

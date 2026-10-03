@@ -5,6 +5,7 @@
 //! snapshots that are shared by the facade, renderer, and CDP crates.
 
 mod document_activity;
+mod document_settings;
 mod inspector_identity;
 mod inspector_state;
 mod layout;
@@ -41,12 +42,13 @@ use moli_web_mime::{extract_response_mime_essence, is_json_mime};
 const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
 
 pub use document_activity::DocumentActivity;
+pub use document_settings::DocumentSettings;
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
     RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,
     RendererInspectorResponseDelivery,
 };
-pub use layout::LayoutPolicy;
+pub use layout::{LayoutConfiguration, LayoutPolicy};
 pub use navigator_overrides::{
     GeolocationPositionOverride, NavigatorEmulationSessions, NavigatorOverrides,
     NavigatorQueryOverrides,

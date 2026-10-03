@@ -16,18 +16,22 @@ impl RendererOwnerHandle {
             !scrollbars_hidden || policy.uses_real_layout(),
             "hiding scrollbars requires real layout"
         );
+        let configuration = moli_page_types::LayoutConfiguration {
+            policy,
+            scrollbars_hidden,
+        };
         let mut state = self.state.layout_policy.lock();
-        if let Some((configured_policy, configured_hidden)) = state.configuration {
+        if let Some(configured) = state.configuration {
             ensure!(
-                (configured_policy, configured_hidden) == (policy, scrollbars_hidden),
+                configured == configuration,
                 "renderer owner layout policy is configured as {:?} (scrollbars hidden: {}), cannot change it to {:?} (scrollbars hidden: {})",
-                configured_policy,
-                configured_hidden,
+                configured.policy,
+                configured.scrollbars_hidden,
                 policy,
                 scrollbars_hidden
             );
         } else {
-            state.configuration = Some((policy, scrollbars_hidden));
+            state.configuration = Some(configuration);
         }
         Ok(())
     }
@@ -38,7 +42,7 @@ impl RendererOwnerHandle {
             .lock()
             .configuration
             .unwrap_or_default()
-            .0
+            .policy
     }
 
     pub fn scrollbars_hidden(&self) -> bool {
@@ -47,10 +51,12 @@ impl RendererOwnerHandle {
             .lock()
             .configuration
             .unwrap_or_default()
-            .1
+            .scrollbars_hidden
     }
 
-    pub(super) fn seal_layout_configuration_for_page_creation(&self) -> (LayoutPolicy, bool) {
+    pub(super) fn seal_layout_configuration_for_page_creation(
+        &self,
+    ) -> moli_page_types::LayoutConfiguration {
         let mut state = self.state.layout_policy.lock();
         *state.configuration.get_or_insert_with(Default::default)
     }

@@ -1170,7 +1170,9 @@ impl Browser {
             None,
             stage,
         );
-        create_page_request.script_execution_disabled = self.config.script_execution_disabled();
+        create_page_request
+            .document_settings
+            .script_execution_disabled = self.config.script_execution_disabled();
         create_page_request.wpt_extensions_enabled = self.config.wpt_extensions_enabled();
         create_page_request.reply_boundary = reply_boundary;
         create_page_request.lifecycle_decider = lifecycle_decider;
@@ -1309,7 +1311,10 @@ impl Browser {
                     indexed_db_manager: Some(self.partition.weak_indexed_db_manager()),
                     storage_bucket_store: Some(self.partition.storage_bucket_store()),
                     document_start_scripts,
-                    script_execution_disabled: self.config.script_execution_disabled(),
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled: self.config.script_execution_disabled(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )

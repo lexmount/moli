@@ -18,6 +18,19 @@ impl LayoutPolicy {
     }
 }
 
+/// Immutable browser layout configuration, sealed before its first Page.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LayoutConfiguration {
+    pub policy: LayoutPolicy,
+    pub scrollbars_hidden: bool,
+}
+
+impl LayoutConfiguration {
+    pub const fn scrollbars_hidden_for(self, emulated_hidden: bool) -> bool {
+        self.scrollbars_hidden || emulated_hidden
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

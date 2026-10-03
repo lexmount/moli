@@ -1192,13 +1192,10 @@ impl PageVm {
             },
             document_default_language: None,
             document_last_modified: None,
-            script_execution_disabled: self.script_execution_disabled(),
-            bypass_content_security_policy: self.bypass_content_security_policy,
-            emulated_media: self.emulated_media.clone(),
-            idle_override: self.idle_override,
-            navigator_overrides: self.navigator_overrides.clone(),
-            viewport_surface: self.viewport_surface,
-            document_activity: self.document_activity,
+            document_settings: moli_page_types::DocumentSettings {
+                script_execution_disabled: self.script_execution_disabled(),
+                ..self.document_settings.clone()
+            },
             network_offline: self.network_offline,
             blocked_url_patterns: self.blocked_url_patterns.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),
@@ -1206,9 +1203,7 @@ impl PageVm {
             fetch_subresource_interception_enabled: self.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: self
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.layout_policy,
-            scrollbars_hidden: self.scrollbars_hidden,
-            emulated_scrollbars_hidden: self.emulated_scrollbars_hidden,
+            layout_configuration: self.layout_configuration,
             wpt_extensions_enabled: self.wpt_extensions_enabled,
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
             top_level_storage_key: None,

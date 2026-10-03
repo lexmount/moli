@@ -825,7 +825,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         )
         .expect("commit configuration should resolve the target resource runtime");
     assert_eq!(
-        configuration.idle_override,
+        configuration.document_settings.idle_override,
         Some(moli_core::page::EmulatedIdleOverride {
             is_user_active: false,
             is_screen_unlocked: false,
@@ -839,7 +839,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         )
         .expect("cross-site commit configuration should resolve the target resource runtime");
     assert_eq!(
-        cross_site_configuration.idle_override, None,
+        cross_site_configuration.document_settings.idle_override, None,
         "a cross-site renderer replacement must not inherit frame-host idle state",
     );
     server.abort();

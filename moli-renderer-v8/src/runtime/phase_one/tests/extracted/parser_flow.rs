@@ -17,7 +17,7 @@ fn main_document_parser_derives_scripting_state_from_runtime_and_response_sandbo
                 (false, Some("sandbox allow-scripts"), false),
             ] {
                 let env = default_test_page_vm_env_config_with(|env| {
-                    env.script_execution_disabled = script_execution_disabled;
+                    env.document_settings.script_execution_disabled = script_execution_disabled;
                     env.document_policy_container
                         .response_content_security_policies =
                         policy.into_iter().map(str::to_owned).collect();

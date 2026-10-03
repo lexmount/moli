@@ -150,13 +150,16 @@ impl PageVm {
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
+        self.document_settings.script_execution_disabled = disabled;
         self.vm_mut().set_script_execution_disabled(disabled);
     }
 
     pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> anyhow::Result<()> {
-        let previous = self.scrollbars_hidden || self.emulated_scrollbars_hidden;
-        self.emulated_scrollbars_hidden = hidden;
-        let hidden = self.scrollbars_hidden || hidden;
+        let previous = self
+            .layout_configuration
+            .scrollbars_hidden_for(self.document_settings.scrollbars_hidden);
+        self.document_settings.scrollbars_hidden = hidden;
+        let hidden = self.layout_configuration.scrollbars_hidden_for(hidden);
         if previous == hidden {
             return Ok(());
         }
@@ -167,7 +170,7 @@ impl PageVm {
     }
 
     pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
-        self.bypass_content_security_policy = bypass;
+        self.document_settings.bypass_content_security_policy = bypass;
         self.vm_mut().set_bypass_content_security_policy(bypass);
     }
 
@@ -175,7 +178,7 @@ impl PageVm {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        self.emulated_media = overrides.clone();
+        self.document_settings.emulated_media = overrides.clone();
         self.vm_mut().set_emulated_media(overrides);
     }
 
@@ -185,7 +188,7 @@ impl PageVm {
     ) -> anyhow::Result<()> {
         self.vm_mut()
             .set_idle_override_and_sync_surface(idle_override)?;
-        self.idle_override = idle_override;
+        self.document_settings.idle_override = idle_override;
         Ok(())
     }
 
@@ -194,7 +197,7 @@ impl PageVm {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> anyhow::Result<()> {
         self.vm_mut().set_viewport_surface(viewport_surface)?;
-        self.viewport_surface = viewport_surface;
+        self.document_settings.viewport_surface = viewport_surface;
         Ok(())
     }
 
@@ -204,7 +207,7 @@ impl PageVm {
     ) -> anyhow::Result<()> {
         self.vm_mut()
             .set_navigator_overrides_and_sync_surface(overrides)?;
-        self.navigator_overrides = overrides.clone();
+        self.document_settings.navigator_overrides = overrides.clone();
         Ok(())
     }
 
@@ -213,7 +216,7 @@ impl PageVm {
         activity: moli_page_types::DocumentActivity,
     ) -> anyhow::Result<()> {
         self.vm_mut().set_document_activity(activity)?;
-        self.document_activity = activity;
+        self.document_settings.document_activity = activity;
         Ok(())
     }
 
