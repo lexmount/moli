@@ -174,7 +174,7 @@ fn eval_with_layout_publishes_static_geometry() -> Result<()> {
 }
 
 #[test]
-fn eval_hide_scrollbars_removes_gutters_and_preserves_scrolling() -> Result<()> {
+fn eval_scrollbars_are_hidden_by_default_and_can_be_enabled() -> Result<()> {
     let url = "data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px'><div id=scroller style='width:200px;height:100px;overflow:scroll;scrollbar-width:auto!important;scrollbar-gutter:stable both-edges'><div style='width:400px;height:300px'></div></div></div>";
     let script = r#"(() => {
       const scroller = document.getElementById('scroller');
@@ -191,23 +191,23 @@ fn eval_hide_scrollbars_removes_gutters_and_preserves_scrolling() -> Result<()> 
         css: [getComputedStyle(scroller).scrollbarWidth, getComputedStyle(scroller).scrollbarGutter]
       };
     })()"#;
-    for hidden in [false, true] {
+    for visible in [false, true] {
         let mut args = vec!["--layout"];
-        if hidden {
-            args.push("--hide-scrollbars");
+        if visible {
+            args.push("--scrollbars");
         }
         let output = run_eval(url, script, &args)?;
         assert!(output.status.success(), "{}", clean_output(&output.stderr));
         let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
         let inner = value["inner"].as_u64().expect("viewport width");
-        assert_eq!(value["client"], inner - if hidden { 0 } else { 15 });
+        assert_eq!(value["client"], inner - if visible { 15 } else { 0 });
         assert_eq!(value["scrollWidth"], inner);
         assert_eq!(
             value["elementClient"],
-            serde_json::json!(if hidden {
-                [170, 100, 15]
-            } else {
+            serde_json::json!(if visible {
                 [170, 85, 15]
+            } else {
+                [170, 100, 15]
             })
         );
         assert_eq!(value["elementScroll"], serde_json::json!([400, 300]));

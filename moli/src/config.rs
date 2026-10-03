@@ -90,8 +90,8 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
-    if common.hide_scrollbars && !common.layout {
-        bail!("--hide-scrollbars requires --layout or MOLI_LAYOUT=true");
+    if common.scrollbars && !common.layout {
+        bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
     }
 
     if let Some(log_level) = common.log_level {
@@ -192,7 +192,9 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     } else {
         LayoutPolicy::Mock
     });
-    config.browser.set_scrollbars_hidden(common.hide_scrollbars);
+    config
+        .browser
+        .set_scrollbars_hidden(common.layout && !common.scrollbars);
     config.fetch.cookie_files = common.cookie_file.clone();
     config.browser.fetch_mut().set_network_blocking(
         common.block_private_networks,

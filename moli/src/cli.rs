@@ -581,6 +581,7 @@ pub struct CommonArgs {
     pub disable_subframes: bool,
 
     /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.
     ///
@@ -594,9 +595,14 @@ pub struct CommonArgs {
     )]
     pub layout: bool,
 
-    /// Hide native scrollbars without disabling scrolling. Requires --layout.
-    #[arg(long, requires = "layout")]
-    pub hide_scrollbars: bool,
+    /// Show native scrollbars. Requires --layout.
+    #[arg(
+        long,
+        env = "MOLI_SCROLLBARS",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        requires_if("true", "layout")
+    )]
+    pub scrollbars: bool,
 
     #[arg(short, long = "cookie-file")]
     pub cookie_file: Vec<String>,

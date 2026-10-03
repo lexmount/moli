@@ -711,7 +711,12 @@ async def async_main(argv: list[str] | None = None) -> int:
             port = int(port_env) if port_env else 0
             if port < 0 or port > 65535 or (port == 0 and port_env is not None):
                 raise RuntimeError(f"invalid MOLI_CDP_PORT: {port_env}")
-            serve = await start_moli_serve(port)
+            serve = await start_moli_serve(
+                port,
+                extra_args=("--scrollbars",)
+                if selected_group.name == "classic-scrollbar"
+                else (),
+            )
             endpoint = await wait_for_moli_endpoint(serve)
         if endpoint is None:
             raise RuntimeError("CDP endpoint was not initialized")

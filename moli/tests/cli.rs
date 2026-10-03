@@ -140,7 +140,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 resource: false,
                 disable_subframes: false,
                 layout: false,
-                hide_scrollbars: false,
+                scrollbars: false,
                 cookie_file: Vec::new(),
                 document_start_script: Vec::new(),
                 document_start_script_file: Vec::new(),
@@ -1625,6 +1625,7 @@ fn app_config_defaults_layout_to_mock_for_fetch_and_serve() {
             config.browser.layout_policy(),
             moli_core::LayoutPolicy::Mock
         );
+        assert!(!config.browser.scrollbars_hidden());
     }
 }
 
@@ -1644,19 +1645,19 @@ fn layout_selects_on_demand_policy_for_fetch_and_serve() {
 }
 
 #[test]
-fn hide_scrollbars_is_opt_in_for_fetch_and_serve() {
+fn scrollbars_are_opt_in_for_layout_fetch_and_serve() {
     for command in ["fetch", "serve"] {
-        for hidden in [false, true] {
+        for visible in [false, true] {
             let mut args = vec!["moli", command, "--layout"];
-            if hidden {
-                args.push("--hide-scrollbars");
+            if visible {
+                args.push("--scrollbars");
             }
             if command == "fetch" {
                 args.push("about:blank");
             }
             let cli = Cli::try_parse_from(args).unwrap();
             let config = AppConfig::from_cli(&cli).unwrap();
-            assert_eq!(config.browser.scrollbars_hidden(), hidden);
+            assert_eq!(config.browser.scrollbars_hidden(), !visible);
             assert_eq!(
                 config.browser.layout_policy(),
                 moli_core::LayoutPolicy::OnDemand
@@ -1666,32 +1667,56 @@ fn hide_scrollbars_is_opt_in_for_fetch_and_serve() {
 }
 
 #[test]
-fn hide_scrollbars_requires_enabled_layout_from_cli_or_environment() {
+fn scrollbars_require_enabled_layout_from_cli_or_environment() {
     for command in ["fetch", "serve"] {
-        for (case, env_value, explicit_layout, expected) in [
-            ("missing", None, false, false),
-            ("true", Some("true"), false, true),
-            ("one", Some("1"), false, true),
-            ("false", Some("false"), false, false),
-            ("zero", Some("0"), false, false),
-            ("cli-overrides", Some("false"), true, true),
+        for (case, layout_env, explicit_layout, scrollbars_env, expected) in [
+            ("missing", None, false, None, false),
+            ("true", Some("true"), false, None, true),
+            ("one", Some("1"), false, None, true),
+            ("false", Some("false"), false, None, false),
+            ("zero", Some("0"), false, None, false),
+            ("cli-overrides", Some("false"), true, None, true),
+            ("env-true-without-layout", None, false, Some("true"), false),
+            ("env-one-without-layout", None, false, Some("1"), false),
+            (
+                "env-true-layout-disabled",
+                Some("false"),
+                false,
+                Some("true"),
+                false,
+            ),
+            (
+                "env-one-layout-disabled",
+                Some("0"),
+                false,
+                Some("1"),
+                false,
+            ),
         ] {
             let mut child = Command::new(std::env::current_exe().unwrap());
             child
                 .args([
                     "--exact",
-                    "parse_hide_scrollbars_in_child_process",
+                    "parse_scrollbars_in_child_process",
                     "--nocapture",
                 ])
                 .env_remove("MOLI_LAYOUT")
-                .env("MOLI_TEST_HIDE_SCROLLBARS_COMMAND", command)
+                .env_remove("MOLI_SCROLLBARS")
+                .env("MOLI_TEST_SCROLLBARS_COMMAND", command)
                 .env(
-                    "MOLI_TEST_HIDE_SCROLLBARS_CLI_LAYOUT",
+                    "MOLI_TEST_SCROLLBARS_CLI_FLAG",
+                    scrollbars_env.is_none().to_string(),
+                )
+                .env(
+                    "MOLI_TEST_SCROLLBARS_CLI_LAYOUT",
                     explicit_layout.to_string(),
                 )
-                .env("MOLI_TEST_HIDE_SCROLLBARS_EXPECTED", expected.to_string());
-            if let Some(value) = env_value {
+                .env("MOLI_TEST_SCROLLBARS_EXPECTED", expected.to_string());
+            if let Some(value) = layout_env {
                 child.env("MOLI_LAYOUT", value);
+            }
+            if let Some(value) = scrollbars_env {
+                child.env("MOLI_SCROLLBARS", value);
             }
             let output = child.output().unwrap();
             assert!(
@@ -1705,13 +1730,16 @@ fn hide_scrollbars_requires_enabled_layout_from_cli_or_environment() {
 }
 
 #[test]
-fn parse_hide_scrollbars_in_child_process() {
-    let Ok(command) = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_COMMAND") else {
+fn parse_scrollbars_in_child_process() {
+    let Ok(command) = std::env::var("MOLI_TEST_SCROLLBARS_COMMAND") else {
         return;
     };
-    let explicit_layout = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_CLI_LAYOUT").unwrap() == "true";
-    let expected = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_EXPECTED").unwrap() == "true";
-    let mut args = vec!["moli", command.as_str(), "--hide-scrollbars"];
+    let explicit_layout = std::env::var("MOLI_TEST_SCROLLBARS_CLI_LAYOUT").unwrap() == "true";
+    let expected = std::env::var("MOLI_TEST_SCROLLBARS_EXPECTED").unwrap() == "true";
+    let mut args = vec!["moli", command.as_str()];
+    if std::env::var("MOLI_TEST_SCROLLBARS_CLI_FLAG").unwrap() == "true" {
+        args.push("--scrollbars");
+    }
     if explicit_layout {
         args.push("--layout");
     }
@@ -1723,7 +1751,7 @@ fn parse_hide_scrollbars_in_child_process() {
         .and_then(|cli| AppConfig::from_cli(&cli));
     if expected {
         let config = result.unwrap();
-        assert!(config.browser.scrollbars_hidden());
+        assert!(!config.browser.scrollbars_hidden());
         assert_eq!(
             config.browser.layout_policy(),
             moli_core::LayoutPolicy::OnDemand
@@ -1780,22 +1808,33 @@ fn screencast_interval_defaults_to_one_second() {
 
 #[test]
 fn env_flags_are_fallbacks_and_cli_flags_take_priority() {
-    for (case, env_value, expected) in [
-        ("env-enables", "true", true),
-        ("env-disables", "false", false),
-        ("env-one-enables", "1", true),
-        ("env-zero-disables", "0", false),
-        ("cli-overrides-env", "0", true),
+    for (case, env_value, expected, scrollbars_env, expected_scrollbars) in [
+        ("env-enables", "true", true, Some("true"), true),
+        ("env-disables", "false", false, Some("false"), false),
+        ("env-one-enables", "1", true, Some("1"), true),
+        ("env-zero-disables", "0", false, Some("0"), false),
+        ("cli-overrides-env", "0", true, Some("0"), true),
+        ("scrollbars-hidden", "true", true, Some("false"), false),
+        ("scrollbars-hidden-zero", "true", true, Some("0"), false),
+        ("scrollbars-default", "true", true, None, false),
     ] {
-        let output = Command::new(std::env::current_exe().unwrap())
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
             .args(["--exact", "parse_env_flags_in_child_process", "--nocapture"])
             .env("MOLI_TEST_ENV_FLAG_CASE", case)
             .env("MOLI_TEST_ENV_FLAG_EXPECTED", expected.to_string())
+            .env(
+                "MOLI_TEST_ENV_FLAG_SCROLLBARS_EXPECTED",
+                expected_scrollbars.to_string(),
+            )
             .env("MOLI_LAYOUT", env_value)
             .env("MOLI_RESOURCE", env_value)
             .env("MOLI_BLOCK_PRIVATE_NETWORKS", env_value)
-            .output()
-            .unwrap();
+            .env_remove("MOLI_SCROLLBARS");
+        if let Some(value) = scrollbars_env {
+            child.env("MOLI_SCROLLBARS", value);
+        }
+        let output = child.output().unwrap();
 
         assert!(
             output.status.success(),
@@ -1815,30 +1854,46 @@ fn parse_env_flags_in_child_process() {
         .unwrap()
         .parse::<bool>()
         .unwrap();
+    let expected_scrollbars = std::env::var("MOLI_TEST_ENV_FLAG_SCROLLBARS_EXPECTED")
+        .unwrap()
+        .parse::<bool>()
+        .unwrap();
 
-    let args = if case == "cli-overrides-env" {
-        vec![
-            "moli",
-            "serve",
-            "--layout",
-            "--resource",
-            "--block-private-networks",
-        ]
-    } else {
-        vec!["moli", "serve"]
-    };
-    let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
-    let Commands::Serve(args) = cli.command else {
-        panic!("expected serve command");
-    };
-    assert_eq!(args.common.layout, expected);
-    assert_eq!(args.common.resource, expected);
-    assert_eq!(args.common.block_private_networks, expected);
+    for command in ["fetch", "serve"] {
+        let mut args = vec!["moli", command];
+        if case == "cli-overrides-env" {
+            args.extend([
+                "--layout",
+                "--scrollbars",
+                "--resource",
+                "--block-private-networks",
+            ]);
+        }
+        if command == "fetch" {
+            args.push("about:blank");
+        }
+        let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
+        let config = AppConfig::from_cli(&cli).unwrap();
+        assert_eq!(
+            config.browser.scrollbars_hidden(),
+            expected && !expected_scrollbars
+        );
+        let common = match cli.command {
+            Commands::Fetch(args) => args.common,
+            Commands::Serve(args) => args.common,
+            Commands::Import(_) => panic!("expected fetch or serve command"),
+        };
+        assert_eq!(common.layout, expected);
+        assert_eq!(common.scrollbars, expected_scrollbars);
+        assert_eq!(common.resource, expected);
+        assert_eq!(common.block_private_networks, expected);
+    }
 }
 
 #[test]
 fn removed_long_form_flags_are_rejected() {
     for flag in [
+        "--hide-scrollbars",
         "--cdp-max-connections",
         "--cdp-max-pending-connections",
         "--no-layout",
