@@ -297,10 +297,10 @@ pub(crate) use self::events::{
     clear_event_composed_path, construct_original_message_event, error_event_handler_arguments,
     event_attribute, event_backing, event_bool_attribute, event_initialized,
     event_internal_bool_flag, event_is_dispatching, event_is_error_event, event_is_mouse_event,
-    event_private_value, initialize_event_object, initialize_event_wrapper, mark_event_trusted,
-    new_event_state, new_event_wrapper, set_event_composed_path, set_event_internal_flag,
-    set_event_private_value, set_event_source_value, set_event_trusted,
-    submit_event_submitter_value,
+    event_private_value, event_source_retargets_on_access, initialize_event_object,
+    initialize_event_wrapper, mark_event_trusted, new_event_state, new_event_wrapper,
+    set_event_composed_path, set_event_internal_flag, set_event_private_value,
+    set_event_source_value, set_event_trusted, submit_event_submitter_value,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,

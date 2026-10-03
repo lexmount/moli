@@ -31,6 +31,7 @@ pub(in crate::context_bootstrap) use modifiers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use ui::{
     composition_event_init_callback, ui_event_init_callback, ui_event_which_getter_function,
@@ -46,7 +47,6 @@ const SUBMIT_EVENT_SUBMITTER_SLOT: &str = "__moliSubmitEventSubmitter";
 const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const COMMAND_EVENT_SOURCE_SLOT: &str = "__moliCommandEventSource";
-const COMMAND_EVENT_COMMAND_SLOT: &str = "__moliCommandEventCommand";
 const TOGGLE_EVENT_SOURCE_SLOT: &str = "__moliToggleEventSource";
 const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboardData";
 const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
@@ -403,17 +403,17 @@ pub(crate) fn set_event_source_value<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     let event = event_backing(scope, event);
-    match event_subclass_kind(scope, event) {
-        Some(EventSubclassKind::CommandEvent) => {
-            set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, value);
-        }
-        Some(EventSubclassKind::ToggleEvent) => {
-            set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, value);
-        }
-        _ => {
-            let _ = event.set(scope, v8str(scope, "source").into(), value);
-        }
-    }
+    let _ = event.set(scope, v8str(scope, "source").into(), value);
+}
+
+pub(crate) fn event_source_retargets_on_access<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    matches!(
+        event_subclass_kind(scope, event),
+        Some(EventSubclassKind::CommandEvent | EventSubclassKind::ToggleEvent)
+    )
 }
 
 pub(crate) fn event_is_mouse_event<'s>(
@@ -645,58 +645,6 @@ pub(super) fn submit_event_submitter_getter_function<'s>(
 ) {
     let value =
         submit_event_submitter_value(scope, args.this()).unwrap_or_else(|| v8::null(scope).into());
-    let Some(context) = args.this().get_creation_context(scope) else {
-        return;
-    };
-    if let Some(value) = super::platform_object_worlds::in_realm(scope, value, context) {
-        rv.set(value);
-    }
-}
-
-pub(super) fn command_event_source_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::CommandEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let value = event_private_value(scope, args.this(), COMMAND_EVENT_SOURCE_SLOT)
-        .unwrap_or_else(|| v8::null(scope).into());
-    let Some(context) = args.this().get_creation_context(scope) else {
-        return;
-    };
-    if let Some(value) = super::platform_object_worlds::in_realm(scope, value, context) {
-        rv.set(value);
-    }
-}
-
-pub(super) fn command_event_command_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::CommandEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let value = event_private_value(scope, args.this(), COMMAND_EVENT_COMMAND_SLOT)
-        .unwrap_or_else(|| v8str(scope, "").into());
-    rv.set(value);
-}
-
-pub(super) fn toggle_event_source_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ToggleEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let value = event_private_value(scope, args.this(), TOGGLE_EVENT_SOURCE_SLOT)
-        .unwrap_or_else(|| v8::null(scope).into());
     let Some(context) = args.this().get_creation_context(scope) else {
         return;
     };
