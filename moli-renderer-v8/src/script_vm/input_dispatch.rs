@@ -30,7 +30,7 @@ use crate::native_bridge::element::{
     NodePublicEventDispatchOutcome, construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    captured_frame_input_surface_hit_test, construct_drag_event_with_related_target, construct_keyboard_event,
+    drag_start_frame_input_surface_hit_test, draggable_source_at_point, captured_frame_input_surface_hit_test, construct_drag_event_with_related_target, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -478,47 +478,34 @@ fn native_drag_source(
 ) -> Option<(DomHandle, RendererDragData)> {
     let runtime = unsafe { &*runtime_ptr };
     let host = runtime.dom_host();
-    if !host.is_connected(gesture.handle) {
+    let point = moli_layout::LayoutPoint::new(gesture.x as f32, gesture.y as f32);
+    let root_point = gesture.root_to_frame.inverse()?.map_point(point);
+    let hit = drag_start_frame_input_surface_hit_test(
+        runtime, gesture.document, root_point, gesture.root_to_frame,
+    ).ok()?.input?;
+    if host.owner_document_handle(hit.handle) != Some(gesture.document) {
         return None;
     }
-    let mut candidate = None;
-    let mut current = Some(gesture.handle);
-    while let Some(handle) = current {
-        if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            let attribute = element.attribute_ns("", "draggable");
-            let is_image = element.is_html_element("img");
-            let is_link = element.is_html_element("a") && element.has_attribute_ns("", "href");
-            let explicitly_draggable =
-                attribute.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-            let disabled = attribute.is_some_and(|value| value.eq_ignore_ascii_case("false"));
-            if !disabled && (explicitly_draggable || is_image || is_link) {
-                candidate = Some((
-                    handle,
-                    if is_image {
-                        Some("src")
-                    } else if is_link {
-                        Some("href")
-                    } else {
-                        None
-                    },
-                ));
-                break;
-            }
-        }
-        current = host
-            .parent_node(handle)
-            .or_else(|| host.shadow_root_host(handle));
-    }
+    let candidate = draggable_source_at_point(runtime, gesture.document, point).ok()?
+        .map(|handle| {
+            let source_attribute = host.node(handle).and_then(Node::as_element)
+                .and_then(|element| {
+                    if element.is_html_element("img") { Some("src") }
+                    else if element.is_html_element("a") && element.has_attribute_ns("", "href") { Some("href") }
+                    else { None }
+                });
+            (handle, source_attribute)
+        });
     if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
         && let Some(data) = super::native_drag_data::selection_drag_data_at_point(
             scope,
             runtime_ptr,
-            gesture.handle,
+            hit.handle,
             gesture.x,
             gesture.y,
         )
     {
-        return Some((gesture.handle, data));
+        return Some((hit.handle, data));
     }
     let (source, _) = candidate?;
     Some((
@@ -1481,8 +1468,11 @@ impl ScriptVm {
         } else {
             hover_transition
         };
+        if event_name == "mousemove" && buttons != 1 {
+            self.pending_drag_gesture = None;
+        }
         let drag_start = if event_name == "mousemove"
-            && buttons & 1 != 0
+            && buttons == 1
             && self.active_drag_session.is_none()
         {
             if self._context_host.borrow().mouse_press_handle().is_none() {
@@ -1513,8 +1503,12 @@ impl ScriptVm {
             self._context_host
                 .borrow_mut()
                 .begin_mouse_press(handle, button);
-            if button == 0 {
+            if button == 0 && buttons == 1 && click_count <= 1
+                && let Some(document) = self._context_host.borrow().dom_host()
+                    .owner_document_handle(hit_handle.unwrap_or(handle))
+            {
                 self.pending_drag_gesture = Some(PendingDragGesture {
+                    document,
                     handle: hit_handle.unwrap_or(handle),
                     x: client_x,
                     y: client_y,
@@ -1923,7 +1917,7 @@ impl ScriptVm {
                     });
                     unsafe { &mut *runtime_ptr }.clear_mouse_press();
                     let cancel_target = unsafe { &*runtime_ptr }
-                        .active_pointer_capture_target(MOUSE_POINTER_ID)
+                        .active_pointer_capture_target(pointer_id)
                         .unwrap_or(pointer_dispatch_handle);
                     let cancel_pointer = RendererPointerEventProperties {
                         pressure: 0.0,
@@ -1943,7 +1937,7 @@ impl ScriptVm {
                     release_pointer_capture_after_pointer_end(
                         scope,
                         runtime_ptr,
-                        MOUSE_POINTER_ID,
+                        pointer_id,
                         coordinates,
                         -1,
                         0,
