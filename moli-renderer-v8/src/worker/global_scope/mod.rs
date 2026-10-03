@@ -47,7 +47,7 @@ use url::Url;
 use super::{
     decode_data_url_script_source,
     handle::{
-        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
+        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerMessage, WorkerPendingFetchContinue,
         WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
         WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
     },
@@ -137,8 +137,8 @@ pub(super) use self::service_worker_api::{
     build_service_worker_global_service_worker, dispatch_service_worker_registration_update_found,
 };
 pub(crate) use self::service_worker_api::{
-    install_service_worker_interface_template_bindings,
-    service_worker_runtime_identity, worker_notification_permission_state,
+    install_service_worker_interface_template_bindings, service_worker_runtime_identity,
+    worker_notification_permission_state,
 };
 
 use content_security_policy::*;
@@ -172,9 +172,9 @@ pub(super) use content_security_policy::{
     dispatch_worker_csp_violation_event, dispatch_worker_csp_violation_event_for_state,
 };
 pub(crate) use content_security_policy::{
-    worker_allows_wasm_code_generation_by_csp,
     dispatch_worker_trusted_types_sink_violation_event, worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
+    worker_allows_wasm_code_generation_by_csp,
     worker_trusted_types_for_script_requirements,
 };
 use event_handlers::install_worker_global_event_handler_accessors;
@@ -211,7 +211,8 @@ pub(super) use network_state::{
     PausedWorkerSubresourceResponse, PendingWorkerCspReport, PendingWorkerFetch,
     PendingWorkerFetchNetworkRecord, PendingWorkerXhr, WorkerFetchCompletion, WorkerFetchEvent,
     WorkerFetchResponse, WorkerFetchStreamingChunk, WorkerFetchStreamingFinished,
-    WorkerFetchStreamingStarted, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent, WorkerXhrResponse,
+    WorkerFetchStreamingStarted, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
+    WorkerXhrResponse,
 };
 use network_state::{
     WorkerFetchResponseParts, merge_worker_request_headers, next_fetch_id, next_websocket_id,
@@ -221,7 +222,6 @@ pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
 use performance::monotonic_unix_epoch_millis;
 pub(super) use service_worker_results::{
-    PendingServiceWorkerUpdate, drain_service_worker_update_result,
     PendingServiceWorkerClientFocus, PendingServiceWorkerClientNavigate,
     PendingServiceWorkerClientQuery, PendingServiceWorkerClientQueryType,
     PendingServiceWorkerClientsOpenWindow, PendingServiceWorkerGetNotifications,
@@ -229,16 +229,17 @@ pub(super) use service_worker_results::{
     PendingServiceWorkerPeriodicSyncUnregistration, PendingServiceWorkerPushGetSubscription,
     PendingServiceWorkerPushSubscribe, PendingServiceWorkerPushUnsubscribe,
     PendingServiceWorkerShowNotification, PendingServiceWorkerSyncGetTags,
-    PendingServiceWorkerSyncRegistration, WorkerServiceWorkerRequestIdAllocator,
-    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
-    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
-    drain_service_worker_get_notifications_result,
+    PendingServiceWorkerSyncRegistration, PendingServiceWorkerUpdate,
+    WorkerServiceWorkerRequestIdAllocator, drain_service_worker_client_focus_result,
+    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
+    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
     drain_service_worker_push_get_subscription_result, drain_service_worker_push_subscribe_result,
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
+    drain_service_worker_update_result,
 };
 use state::worker_close_callback;
 pub(crate) use state::{
