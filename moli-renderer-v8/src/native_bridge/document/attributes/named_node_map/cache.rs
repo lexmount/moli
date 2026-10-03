@@ -23,15 +23,15 @@ fn set_live_named_node_map_cache<'s>(
 
 pub(crate) fn live_named_node_map_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
     element: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     if let Some(wrapper) = live_named_node_map_cache(scope, element) {
         refresh_named_node_map_wrapper(scope, wrapper, element);
         return wrapper;
     }
-    let bridge = global_bridge_object(scope).expect("NamedNodeMap requires the native bridge");
-    let runtime_ptr = runtime_ptr_from_object(scope, bridge)
-        .expect("NamedNodeMap bridge must expose its runtime pointer");
+    // The attributes getter already resolved this host from the receiver.
+    // The public bridge can be absent while that host is still installed.
     let template = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
         .named_node_map_wrapper_template();

@@ -996,6 +996,86 @@ fn access_key_label_matches_chromium_single_key_surface() {
     );
 }
 #[test]
+fn named_node_map_uses_receiver_host_when_global_bridge_is_missing() {
+    assert_named_node_map_uses_receiver_host("delete globalThis.__moliNativeBridge");
+}
+
+#[test]
+fn named_node_map_uses_receiver_host_when_global_bridge_is_replaced() {
+    assert_named_node_map_uses_receiver_host("globalThis.__moliNativeBridge = {}; true");
+}
+
+#[test]
+fn named_node_map_uses_receiver_host_without_reading_global_bridge_accessor() {
+    assert_named_node_map_uses_receiver_host(
+        r#"Object.defineProperty(globalThis, '__moliNativeBridge', {
+          configurable: true,
+          get() { throw new Error('the public bridge accessor must not run'); }
+        }); true"#,
+    );
+}
+
+fn assert_named_node_map_uses_receiver_host(bridge_change: &str) {
+    let mut vm = new_storage_test_vm("https://named-node-map-receiver-host.test/");
+    vm.eval(
+        r#"
+globalThis.liveElement = document.createElement('div');
+liveElement.setAttribute('data-real', 'one');
+globalThis.detachedElement = new DOMParser()
+  .parseFromString('<div data-real="one"></div>', 'text/html')
+  .querySelector('div');
+"#,
+    )
+    .expect("live and detached elements should be created before the bridge changes");
+    assert_eq!(
+        vm.eval(bridge_change)
+            .expect("the public bridge should be removable or replaceable"),
+        "true"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = element => {
+    // The first access must construct a wrapper without the public bridge.
+    const attributes = element.attributes;
+    const attribute = attributes.item(0);
+    // Mutate through Attr so detached Element's JS bridge shim is not involved.
+    attribute.value = 'two';
+    return {
+      tag: Object.prototype.toString.call(attributes),
+      prototype: Object.getPrototypeOf(attributes) === NamedNodeMap.prototype,
+      sameWrapper: attributes === element.attributes,
+      sameAttr: attribute === attributes.item(0),
+      length: attributes.length,
+      indexedValue: attributes[0].value,
+      namedValue: attributes.getNamedItem('data-real').value,
+      ownerElement: attribute.ownerElement === element
+    };
+  };
+  return JSON.stringify([probe(liveElement), probe(detachedElement)]);
+})()
+"#,
+        )
+        .expect("NamedNodeMap should use the validated receiver host without the public bridge");
+    let expected = serde_json::json!({
+        "tag": "[object NamedNodeMap]",
+        "prototype": true,
+        "sameWrapper": true,
+        "sameAttr": true,
+        "length": 1,
+        "indexedValue": "two",
+        "namedValue": "two",
+        "ownerElement": true
+    });
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).expect("probe result should be JSON"),
+        serde_json::json!([expected.clone(), expected])
+    );
+}
+
+#[test]
 fn named_node_map_accessor_expandos_remain_writable_through_setters() {
     let mut vm = new_storage_test_vm("https://named-node-map-accessor-expando.test/");
 

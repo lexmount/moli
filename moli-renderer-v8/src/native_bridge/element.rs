@@ -1326,12 +1326,12 @@ fn element_attributes_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((_runtime_ptr, _handle)) = element_getter_receiver(scope, args.this(), "attributes")
+    let Some((runtime_ptr, _handle)) = element_getter_receiver(scope, args.this(), "attributes")
     else {
         rv.set_undefined();
         return;
     };
-    let wrapper = super::document::live_named_node_map_wrapper(scope, args.this());
+    let wrapper = super::document::live_named_node_map_wrapper(scope, runtime_ptr, args.this());
     rv.set(wrapper.into());
 }
 
