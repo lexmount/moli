@@ -210,6 +210,7 @@ content-security-policy/script-src/hash-always-converted-to-utf-8/iso-8859-9.htm
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8-lone-surrogate.html
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8.html
 content-security-policy/script-src/javascript-window-open-blocked.html
+content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/script-src-1_1.html
 content-security-policy/script-src/script-src-1_10_1.html
 content-security-policy/script-src/script-src-1_2.html
@@ -6440,6 +6441,8 @@ html/semantics/forms/the-input-element/radio-input-cancel.html
 html/semantics/forms/the-input-element/radio-morphed.html
 html/semantics/forms/the-input-element/radio-multiple-selected.html
 html/semantics/forms/the-input-element/radio.html
+html/semantics/forms/the-input-element/range-2.html
+html/semantics/forms/the-input-element/range.html
 html/semantics/forms/the-input-element/required_attribute.html
 html/semantics/forms/the-input-element/reset.html
 html/semantics/forms/the-input-element/search_input.html
