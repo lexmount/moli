@@ -1,6 +1,6 @@
 use super::super::init::RequestInitMembers;
 use super::super::input::{
-    normalize_request_method, normalize_request_referrer, request_body_already_used_error,
+    normalize_fetch_request_method, normalize_request_referrer, request_body_already_used_error,
     request_headers_guard_for_mode, request_input_snapshot_for_constructor, request_input_url,
     request_method_allows_body, request_signal_snapshot_from_value,
     try_resolve_request_constructor_url_for_scope,
@@ -137,7 +137,7 @@ pub(super) fn apply_request_init_overrides<'s>(
 
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
-        state.method = normalize_request_method(&method)?;
+        state.method = normalize_fetch_request_method(&method)?;
     }
     let init_body_value = webidl::property_result(
         scope,
