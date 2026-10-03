@@ -2558,15 +2558,15 @@ async fn runtime_fetch_subresource_fulfill_request_resolves_with_synthetic_respo
         Some("SID-1"),
     );
 
-    ctx.process_async(json!({
-        "id": 371,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_synthetic_fetch" }
-    }))
+    evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        371,
+        "globalThis.__lm_synthetic_fetch",
+        &json!("synthetic-body"),
+        "fulfillRequest fetch result",
+    )
     .await;
-    let resolved = take_response_by_id(&mut ctx, 371);
-    assert_eq!(resolved["result"]["result"]["value"], "synthetic-body");
 
     server.abort();
 }
