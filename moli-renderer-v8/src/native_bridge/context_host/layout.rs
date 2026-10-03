@@ -14,6 +14,16 @@ use crate::{
     style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 
+/// Invalidation required by a changed native input. Publication is a separate
+/// owner decision; these changes retain the last frozen layout for readers.
+#[derive(Clone, Copy)]
+pub(crate) enum LayoutInputChange {
+    /// Media and viewport changes invalidate computed styles through Stylo.
+    StyleEnvironment,
+    /// Scrollbar policy and interactions change future geometry/paint output.
+    UsedGeometry,
+}
+
 /// Resets the entry flag on every return path, including unwinding.
 ///
 /// This is a synchronous ownership guard, not a generation or a retry fence.
@@ -57,13 +67,26 @@ impl JsContextHost {
         self.layout_policy
     }
 
-    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) {
-        if self.scrollbars_hidden != hidden {
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> bool {
+        let changed = self.scrollbars_hidden != hidden;
+        if changed {
             self.scrollbars_hidden = hidden;
-            self.clear_layout_rect_cache();
-            self.document_layout_state
-                .get_mut()
-                .mark_visual_state_dirty();
+            self.invalidate_layout_inputs(LayoutInputChange::UsedGeometry);
+        }
+        changed
+    }
+
+    pub(crate) fn invalidate_layout_inputs(&self, change: LayoutInputChange) {
+        match change {
+            LayoutInputChange::StyleEnvironment => self
+                .style_engine
+                .bump_target_context_epoch_for_document(self.document_handle()),
+            LayoutInputChange::UsedGeometry => {
+                self.clear_layout_rect_cache();
+                self.document_layout_state
+                    .borrow_mut()
+                    .mark_visual_state_dirty();
+            }
         }
     }
 
@@ -519,12 +542,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {
-        self.clear_layout_rect_cache();
-        // Interactions dirty future visual publication, while ordinary geometry
-        // and input keep consuming the last published frozen snapshot.
-        self.document_layout_state
-            .borrow_mut()
-            .mark_visual_state_dirty();
+        self.invalidate_layout_inputs(LayoutInputChange::UsedGeometry);
     }
 
     pub(crate) fn document_web_font_resources_are_current(

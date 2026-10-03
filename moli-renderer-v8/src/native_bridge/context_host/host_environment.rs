@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::{
     JsContextHost,
+    layout::LayoutInputChange,
     permissions::{permission_names_match, permission_override_name},
 };
 use crate::{
@@ -793,8 +794,7 @@ impl JsContextHost {
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
         if self.emulated_media != *overrides {
-            self.style_engine
-                .bump_target_context_epoch_for_document(self.document_handle());
+            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.emulated_media = overrides.clone();
     }
@@ -809,8 +809,7 @@ impl JsContextHost {
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
         if changed {
-            self.style_engine
-                .bump_target_context_epoch_for_document(self.document_handle());
+            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.viewport_surface = viewport_surface;
         changed

@@ -12,7 +12,9 @@ pub(crate) enum DocumentSettingsApplication {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DocumentSettingEffect {
+    /// Native values are installed; queued rendering updates publish later.
     Deferred,
+    /// Geometry must be current before a live setting command is acknowledged.
     PublishLayout,
 }
 
@@ -75,7 +77,9 @@ impl ScriptVm {
             DocumentSetting::DocumentActivity(*document_activity),
             DocumentSetting::ScrollbarsHidden(*scrollbars_hidden),
         ] {
-            self.apply_document_setting(setting, layout, DocumentSettingsApplication::Bootstrap)?;
+            let application = DocumentSettingsApplication::Bootstrap;
+            let effect = self.apply_document_setting(setting, layout, application)?;
+            self.complete_document_settings_application(application, effect)?;
         }
         Ok(())
     }
@@ -134,13 +138,27 @@ impl ScriptVm {
             }
             DocumentSetting::ScrollbarsHidden(value) => {
                 let hidden = layout.scrollbars_hidden_for(value);
-                let changed = self._context_host.borrow().scrollbars_hidden() != hidden;
-                self.set_scrollbars_hidden(hidden);
-                if live && changed {
+                if self.set_scrollbars_hidden(hidden) {
                     effect = DocumentSettingEffect::PublishLayout;
                 }
             }
         }
         Ok(effect)
+    }
+
+    /// Initialization never publishes layout or runs rendering notifications.
+    /// Live commands publish only settings that require synchronous geometry.
+    pub(crate) fn complete_document_settings_application(
+        &mut self,
+        application: DocumentSettingsApplication,
+        effect: DocumentSettingEffect,
+    ) -> anyhow::Result<()> {
+        match (application, effect) {
+            (DocumentSettingsApplication::Bootstrap, _)
+            | (DocumentSettingsApplication::Live, DocumentSettingEffect::Deferred) => Ok(()),
+            (DocumentSettingsApplication::Live, DocumentSettingEffect::PublishLayout) => {
+                self.publish_layout()
+            }
+        }
     }
 }

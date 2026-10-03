@@ -4,7 +4,7 @@ use crate::script_vm::{DocumentSetting, DocumentSettingEffect, DocumentSettingsA
 impl PageVm {
     fn apply_document_setting(&mut self, setting: DocumentSetting<'_>) -> anyhow::Result<()> {
         let layout = self.layout_configuration;
-        let effect = self.vm_mut().apply_document_setting(
+        let effect: DocumentSettingEffect = self.vm_mut().apply_document_setting(
             setting,
             layout,
             DocumentSettingsApplication::Live,
@@ -12,10 +12,8 @@ impl PageVm {
         // Retain the target value before publication. Even if publication
         // fails, a followed navigation must inherit the accepted native input.
         setting.retain_in(&mut self.document_settings);
-        if effect == DocumentSettingEffect::PublishLayout {
-            self.vm_mut().publish_layout()?;
-        }
-        Ok(())
+        self.vm_mut()
+            .complete_document_settings_application(DocumentSettingsApplication::Live, effect)
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) -> anyhow::Result<()> {
