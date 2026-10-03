@@ -6008,3 +6008,122 @@ fn disconnected_radio_groups_follow_tree_roots_and_form_owners() {
         "true|true:false|true|true:false|true|true|true:true|false:true"
     );
 }
+
+#[test]
+fn native_form_keywords_resolve_from_owner_for_get_and_post() {
+    for depth in 0usize..=2 {
+        for target in ["_self", "_PARENT", "_top"] {
+            for method in ["get", "post"] {
+                for api in ["submit", "requestSubmit"] {
+                    let mut vm = new_parsed_test_vm(
+                        "https://form-target.test/source",
+                        "<!doctype html><body></body>",
+                    );
+                    vm.eval(&format!(r#"
+                        (() => {{
+                            let source=document;
+                            for(let i=0;i<{depth};i++) {{
+                                const frame=source.createElement('iframe');
+                                (source.body||source.documentElement||source).appendChild(frame);
+                                frame.srcdoc='<body></body>';
+                                source=frame.contentDocument;
+                            }}
+                            const form=source.createElement('form');
+                            form.method={method:?};form.target={target:?};
+                            form.action='https://form-target.test/submitted';
+                            const input=source.createElement('input');input.name='value';input.value='b';
+                            form.appendChild(input);source.body.appendChild(form);
+                            HTMLFormElement.prototype[{api:?}].call(form);
+                        }})()
+                    "#)).expect("cross-realm native form submission");
+                    let expected_depth = match target {
+                        "_top" => 0,
+                        "_PARENT" => depth.saturating_sub(1),
+                        _ => depth,
+                    };
+                    let expected_url = if method == "get" {
+                        "https://form-target.test/submitted?value=b"
+                    } else {
+                        "https://form-target.test/submitted"
+                    };
+                    let description =
+                        format!("depth={depth} target={target} method={method} api={api}");
+                    let root_pending = vm.take_pending_location_navigation_with_seed();
+                    if expected_depth == 0 {
+                        let pending = root_pending.expect(&description);
+                        assert_eq!(pending.url.as_str(), expected_url, "{description}");
+                        assert_eq!(
+                            pending.request_method,
+                            method.to_ascii_uppercase(),
+                            "{description}"
+                        );
+                        assert_eq!(
+                            pending.request_body.as_deref(),
+                            (method == "post").then_some(&b"value=b"[..]),
+                            "{description}"
+                        );
+                    } else {
+                        assert!(
+                            root_pending.is_none(),
+                            "{description}: must retain top document"
+                        );
+                    }
+                    let mut parent_handle = None;
+                    for index in 0..depth {
+                        let host = vm._context_host.borrow();
+                        let handle = parent_handle
+                            .map_or_else(
+                                || host.child_browsing_context_handle_by_index(0),
+                                |parent| {
+                                    host.child_browsing_context_child_frame_handle_by_index(
+                                        parent, 0,
+                                    )
+                                },
+                            )
+                            .expect(&description);
+                        parent_handle = Some(handle);
+                        let pending =
+                            host.child_browsing_context_pending_live_navigation_for_test(handle);
+                        if expected_depth != index + 1 {
+                            assert!(
+                                pending.is_none(),
+                                "{description}: unexpected frame {index} navigation: {pending:?}"
+                            );
+                            continue;
+                        }
+                        use crate::native_bridge::ChildBrowsingContextBootstrap;
+                        match pending.expect(&description) {
+                            ChildBrowsingContextBootstrap::Url(url) if method == "get" => {
+                                assert_eq!(url.as_str(), expected_url, "{description}")
+                            }
+                            ChildBrowsingContextBootstrap::Request(request) => {
+                                assert_eq!(request.url.as_str(), expected_url, "{description}");
+                                assert_eq!(
+                                    request.method,
+                                    method.to_ascii_uppercase(),
+                                    "{description}"
+                                );
+                                assert_eq!(
+                                    request.body.as_deref(),
+                                    (method == "post").then_some(&b"value=b"[..]),
+                                    "{description}"
+                                );
+                                if method == "post" {
+                                    assert_eq!(
+                                        request.request_headers,
+                                        vec![(
+                                            "Content-Type".into(),
+                                            "application/x-www-form-urlencoded".into()
+                                        )],
+                                        "{description}"
+                                    );
+                                }
+                            }
+                            other => panic!("{description}: unexpected request {other:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

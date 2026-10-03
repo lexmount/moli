@@ -37,6 +37,35 @@ impl SpecialBrowsingContextTarget {
     }
 }
 
+// Resolve keywords from the native form Document, independently of the realm
+// from which its submission method was called. Both GET and POST use this.
+pub(in crate::native_bridge) fn form_navigation_target_document(
+    runtime: &JsContextHost,
+    source: crate::document_runtime::DomHandle,
+    target_name: Option<&str>,
+) -> Option<crate::document_runtime::DomHandle> {
+    // Lightweight popups retain their existing navigation routing.
+    if source != runtime.document_handle()
+        && runtime
+            .child_browsing_context_host_for_document_handle(source)
+            .is_none()
+    {
+        return None;
+    }
+    let target = target_name.and_then(SpecialBrowsingContextTarget::parse);
+    match (target_name, target) {
+        (None, _) | (_, Some(SpecialBrowsingContextTarget::Current)) => Some(source),
+        (_, Some(SpecialBrowsingContextTarget::Top)) => Some(runtime.document_handle()),
+        (_, Some(SpecialBrowsingContextTarget::Parent)) => Some(
+            runtime
+                .child_browsing_context_host_for_document_handle(source)
+                .and_then(|child| runtime.dom_host().owner_document_handle(child))
+                .unwrap_or(source),
+        ),
+        _ => None,
+    }
+}
+
 fn navigate_target_window_location(
     scope: &mut v8::PinScope<'_, '_>,
     window: v8::Local<'_, v8::Object>,

@@ -36,9 +36,9 @@ use super::super::{
     update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-    navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
-    navigate_target_browsing_context,
+    SpecialBrowsingContextTarget, form_navigation_target_document,
+    named_iframe_target_handle_for_navigation, navigate_hyperlink_source_browsing_context,
+    navigate_hyperlink_target_browsing_context, navigate_target_browsing_context,
 };
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
@@ -2339,17 +2339,21 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             && !has_noopener
             && (has_opener || special_target != Some(SpecialBrowsingContextTarget::Blank))
     };
-    if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
+    let target_document = {
         let runtime = unsafe { &*runtime_ptr };
-        let document_handle = runtime
+        runtime
             .dom_host()
-            .node(form_handle)
-            .and_then(Node::owner_document);
-        if let Some(document_handle) = document_handle
-            && document_handle != runtime.document_handle()
-            && let Some(child_handle) =
+            .owner_document_handle(form_handle)
+            .and_then(|source| form_navigation_target_document(runtime, source, target_name))
+    };
+    if let Some(document_handle) = target_document {
+        let runtime = unsafe { &*runtime_ptr };
+        if document_handle != runtime.document_handle() {
+            let Some(child_handle) =
                 runtime.child_browsing_context_handle_by_document_handle(scope, document_handle)
-        {
+            else {
+                return false;
+            };
             let runtime = unsafe { &mut *runtime_ptr };
             return runtime.navigate_child_browsing_context_to_url(
                 scope,
