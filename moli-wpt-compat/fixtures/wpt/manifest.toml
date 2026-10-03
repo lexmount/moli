@@ -20647,3 +20647,31 @@ timeout_ms = 5000
 suite = "broad"
 tags = ["testharness", "domexception", "cross-realm"]
 notes = "Local harness canary for implicit and explicit DOMException constructors, cross-realm exceptions, and rejection of incorrect constructors or missing exceptions."
+
+[[test]]
+id = "testharness-load-driven-crashtest"
+upstream = "local load-driven Window crashtest harness regression"
+upstream_commit = "local-regression-2026-10-04"
+local_path = "ported/harness/load-driven-crash.https.html"
+type = "crashtest"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+tags = ["testharness", "crashtest"]
+notes = "Exercise HTTPS fixture selection and load-driven crash reporting independently of browser features."
+
+[[test]]
+id = "testharness-no-handler-crashtest"
+upstream = "local load-driven Window crashtest harness regression"
+upstream_commit = "local-regression-2026-10-04"
+local_path = "ported/harness/no-handler-crash.https.html"
+type = "crashtest"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+tags = ["testharness", "crashtest"]
+notes = "Exercise HTTPS fixture selection and load-driven crash reporting independently of browser features."

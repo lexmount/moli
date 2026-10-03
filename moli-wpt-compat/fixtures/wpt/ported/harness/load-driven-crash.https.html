@@ -1,0 +1,15 @@
+<!doctype html><body>
+<script>
+window.onload = async function() {
+  if (this !== window || location.protocol !== 'https:') throw new Error('load context or HTTPS origin was lost');
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  frame.remove();
+  await Promise.resolve();
+  const checkpoint = new MessageChannel();
+  await new Promise(resolve => {
+    checkpoint.port1.onmessage = resolve;
+    checkpoint.port2.postMessage('author task');
+  });
+  checkpoint.port1.close();checkpoint.port2.close();
+};
+</script>

@@ -45,4 +45,33 @@ test(() => {
   const error = new AssertionError("nested assertion");
   assert_throws_exactly(error, () => assert_throws_dom("AbortError", () => { throw error; }));
 }, "DOM exception assertions reject mismatches and preserve nested assertions");
+
+promise_test(async t => {
+  const error = new DOMException("canceled", "AbortError");
+  await promise_rejects_dom(t, "AbortError", Promise.reject(error));
+  await promise_rejects_dom(t, "AbortError", Promise.reject(error), "implicit constructor");
+  await promise_rejects_dom(t, "AbortError", DOMException, Promise.reject(error));
+}, "DOM promise assertions accept implicit and explicit constructors");
+
+promise_test(async t => {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  t.add_cleanup(() => frame.remove());
+  const ForeignDOMException = frame.contentWindow.DOMException;
+  const error = new ForeignDOMException("canceled", "AbortError");
+  await promise_rejects_dom(t, "AbortError", ForeignDOMException, Promise.reject(error));
+  await promise_rejects_js(t, AssertionError,
+    promise_rejects_dom(t, "AbortError", DOMException, Promise.reject(error)));
+  await promise_rejects_js(t, AssertionError,
+    promise_rejects_dom(t, "AbortError", ForeignDOMException,
+      Promise.reject(new DOMException("canceled", "AbortError"))));
+}, "DOM promise assertions enforce the explicit constructor's realm");
+
+promise_test(async t => {
+  let ready = false;
+  t.step_timeout(() => { ready = true; }, 0);
+  await t.step_wait(() => ready, "a browser task updates the condition", 3000, 0);
+  assert_true(ready);
+}, "step_wait resolves after its condition becomes true");
+
 </script>

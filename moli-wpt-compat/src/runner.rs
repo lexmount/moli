@@ -69,10 +69,19 @@ pub fn collect_wpt_report_snapshot_expression() -> &'static str {
 }
 
 fn validate_supported_manifest_entry(test: &WptManifestTest) -> Result<()> {
-    if !matches!(test.test_type.as_str(), "testharness" | "idlharness") {
+    if !matches!(
+        test.test_type.as_str(),
+        "testharness" | "idlharness" | "crashtest"
+    ) {
         return Err(anyhow!(
             "unsupported WPT test type '{}' for {}",
             test.test_type,
+            test.id
+        ));
+    }
+    if test.test_type == "crashtest" && test.global != "window" {
+        return Err(anyhow!(
+            "load-driven crashtests require the Window global for {}",
             test.id
         ));
     }

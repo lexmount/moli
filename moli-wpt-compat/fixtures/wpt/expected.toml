@@ -1740,3 +1740,9 @@ status = "pass"
 
 [expectations.idlharness-shim-basic]
 status = "pass"
+
+[expectations.testharness-load-driven-crashtest]
+status = "pass"
+
+[expectations.testharness-no-handler-crashtest]
+status = "pass"

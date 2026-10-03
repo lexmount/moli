@@ -233,6 +233,7 @@ fn wpt_tls_acceptor() -> Result<TlsAcceptor> {
 
 pub struct WptFixtureServer {
     addr: std::net::SocketAddr,
+    https_addr: std::net::SocketAddr,
     shutdown_txs: Vec<oneshot::Sender<()>>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -329,6 +330,7 @@ impl WptFixtureServer {
 
         Ok(Self {
             addr,
+            https_addr: primary_https_addr,
             shutdown_txs: vec![
                 primary_shutdown_tx,
                 secondary_shutdown_tx,
@@ -349,13 +351,23 @@ impl WptFixtureServer {
     }
 
     pub fn case_url(&self, test: &WptManifestTest) -> String {
-        wpt_case_url(
-            self.addr,
+        let secure =
+            test.origin == WptManifestOrigin::Trusted && test.local_path.contains(".https.");
+        let mut url = wpt_case_url(
+            if secure { self.https_addr } else { self.addr },
             &test.local_path,
             &test.global,
             &test.query,
             test.origin,
-        )
+        );
+        if test.test_type == "crashtest" {
+            append_raw_query(&mut url, "moli-wpt-crashtest=1");
+        }
+        if secure {
+            url.replacen("http:", "https:", 1)
+        } else {
+            url
+        }
     }
 
     pub fn fixture_url(&self, local_path: &str) -> String {
@@ -366,6 +378,7 @@ impl WptFixtureServer {
     pub(crate) fn for_test_addr(addr: std::net::SocketAddr) -> Self {
         Self {
             addr,
+            https_addr: addr,
             shutdown_txs: Vec::new(),
             tasks: Vec::new(),
         }
@@ -1179,6 +1192,11 @@ async fn read_static_wpt_fixture_body(
     if wpt_fixture_needs_text_processing(fixture_path, content_type) {
         let source = tokio::fs::read_to_string(fs_path).await?;
         let source = apply_wpt_substitutions(fixture_path, source, runtime_state, query);
+        let source = if query.contains_key("moli-wpt-crashtest") {
+            wpt_crashtest_wrapper_html(source)
+        } else {
+            source
+        };
         let mut response = static_text_response(
             adapt_upstream_html_fixture(fixture_path, source),
             content_type,
@@ -1480,6 +1498,31 @@ fn wpt_substitution_value(
 
 fn wpt_fixture_host_port(runtime_state: &WptFixtureRuntimeState) -> String {
     format!("{}:{}", WPT_BROWSER_HOST, runtime_state.primary_addr.port())
+}
+
+// Chromium's load-driven crashtests have no testharness report. Keep their
+// source intact and observe completion of the load handler and a subsequent
+// browser task, so queued cancellation/navigation work runs before teardown.
+fn wpt_crashtest_wrapper_html(mut source: String) -> String {
+    let scripts = r#"<script src="/resources/testharness.js"></script><script src="/resources/testharnessreport.js"></script><script src="/wpt/resources/moli-wpt-adapter.js"></script>"#;
+    let insertion = source.find("<script").unwrap_or(source.len());
+    source.insert_str(insertion, scripts);
+    source.push_str(
+        r#"<script>
+const crashTest = async_test('Load handler and renderer remain live');
+const crashLoad = window.onload;
+window.onload = event => {
+  Promise.resolve().then(() => typeof crashLoad === 'function' ? crashLoad.call(window, event) : undefined).then(() => {
+    const checkpoint = new MessageChannel();
+    checkpoint.port1.onmessage = crashTest.step_func_done(() => {
+      checkpoint.port1.close(); checkpoint.port2.close();
+    });
+    checkpoint.port2.postMessage(null);
+  }, crashTest.step_func(error => { throw error; }));
+};
+</script>"#,
+    );
+    source
 }
 
 fn adapt_upstream_html_fixture(path: &str, source: String) -> String {
@@ -3218,6 +3261,39 @@ fn binary_response(bytes: &'static [u8]) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_case_urls_use_https_port_only_for_trusted_https_cases() {
+        let mut server = WptFixtureServer::for_test_addr("127.0.0.1:12345".parse().unwrap());
+        server.https_addr = "127.0.0.1:23456".parse().unwrap();
+        let mut case = crate::load_manifest_case("testharness-dom-exception-assertions")
+            .unwrap()
+            .unwrap();
+        case.local_path = "upstream/example/sample.https.any.js".into();
+        case.query = "1-10".into();
+        assert_eq!(
+            server.case_url(&case),
+            "https://localhost:23456/wpt/upstream/example/sample.https.any.js?1-10&moli-wpt-window-wrapper=1"
+        );
+        case.origin = WptManifestOrigin::Insecure;
+        assert_eq!(
+            server.case_url(&case),
+            "http://0.0.0.0:12345/wpt/upstream/example/sample.https.any.js?1-10&moli-wpt-window-wrapper=1"
+        );
+        case.origin = WptManifestOrigin::Trusted;
+        case.local_path = "ported/harness/sample.html".into();
+        case.query.clear();
+        assert_eq!(
+            server.case_url(&case),
+            "http://localhost:12345/wpt/ported/harness/sample.html"
+        );
+        case.local_path = "ported/harness/sample.https.html".into();
+        case.test_type = "crashtest".into();
+        assert_eq!(
+            server.case_url(&case),
+            "https://localhost:23456/wpt/ported/harness/sample.https.html?moli-wpt-crashtest=1"
+        );
+    }
 
     #[test]
     fn sanitize_wpt_fixture_path_rejects_escape_components() {
