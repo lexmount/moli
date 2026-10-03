@@ -6,7 +6,7 @@ pub(super) fn class_list_tokens(
     handle: DomHandle,
     kind: DomTokenListKind,
 ) -> Vec<String> {
-    element_attribute(runtime, handle, token_list_attribute_name(kind))
+    reflected_attribute(runtime, handle, token_list_attribute_name(kind))
         .map(|value| {
             value
                 .split_ascii_whitespace()

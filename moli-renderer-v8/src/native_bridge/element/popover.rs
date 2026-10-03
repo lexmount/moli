@@ -15,7 +15,7 @@ use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
 use super::toggle_event::{cancel_element_toggle_event, queue_element_toggle_event};
 use super::{
-    JsContextHost, dispatch_public_event, element_attribute, element_has_attribute,
+    JsContextHost, dispatch_public_event, has_reflected_attribute, reflected_attribute,
     remove_reflected_attribute, set_reflected_attribute,
 };
 
@@ -30,7 +30,7 @@ fn canonical_popover_state(raw: &str) -> &'static str {
 }
 
 fn is_manual_popover(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    element_attribute(runtime, handle, "popover")
+    reflected_attribute(runtime, handle, "popover")
         .as_deref()
         .is_some_and(|value| canonical_popover_state(value) == "manual")
 }
@@ -48,7 +48,7 @@ fn ensure_popover_supported(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    if element_has_attribute(runtime, handle, "popover") {
+    if has_reflected_attribute(runtime, handle, "popover") {
         return true;
     }
     throw_dom_exception(
@@ -503,7 +503,7 @@ pub(in crate::native_bridge) fn node_popover_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(value) = element_attribute(unsafe { &*runtime_ptr }, handle, "popover") else {
+    let Some(value) = reflected_attribute(unsafe { &*runtime_ptr }, handle, "popover") else {
         rv.set_null();
         return;
     };
@@ -626,10 +626,10 @@ pub(crate) fn perform_popover_invoker_default_action(
     invoker: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") else {
+    let Some(target_id) = reflected_attribute(runtime, invoker, "popovertarget") else {
         return false;
     };
-    let action = element_attribute(runtime, invoker, "popovertargetaction")
+    let action = reflected_attribute(runtime, invoker, "popovertargetaction")
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_else(|| "toggle".to_owned());
     if target_id.is_empty() {
@@ -638,7 +638,7 @@ pub(crate) fn perform_popover_invoker_default_action(
     let Some(target) = popover_invoker_target_for_id(runtime, invoker, &target_id) else {
         return false;
     };
-    if !element_has_attribute(runtime, target, "popover") {
+    if !has_reflected_attribute(runtime, target, "popover") {
         return false;
     }
     let open = match action.as_str() {

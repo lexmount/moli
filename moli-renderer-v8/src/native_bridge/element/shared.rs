@@ -25,6 +25,33 @@ pub(in crate::native_bridge) fn element_attribute(
     element.attribute(&normalized_name).map(str::to_owned)
 }
 
+/// Read a reflected content attribute by its local name in the null namespace.
+/// DOM qualified-name methods use `element_attribute` instead.
+pub(in crate::native_bridge) fn reflected_attribute(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    name: &str,
+) -> Option<String> {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)?
+        .attribute_ns("", name)
+        .map(str::to_owned)
+}
+
+pub(super) fn has_reflected_attribute(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    name: &str,
+) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.has_attribute_ns("", name))
+}
+
 pub(super) fn element_has_attribute(
     runtime: &JsContextHost,
     handle: DomHandle,

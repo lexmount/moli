@@ -12,7 +12,7 @@ use super::super::super::node::{
     node_is_document, node_is_element, node_runtime_and_handle_from_object_or_detached,
 };
 use super::super::forms::form_associated_form_owner;
-use super::super::{element_attribute, queue_text_track_load_if_needed};
+use super::super::{queue_text_track_load_if_needed, reflected_attribute};
 use super::shared::compile_event_attribute_handler;
 
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
@@ -407,7 +407,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     }
-    let Some(source) = element_attribute(unsafe { &*runtime_ptr }, handle, &handler_name) else {
+    let Some(source) = reflected_attribute(unsafe { &*runtime_ptr }, handle, &handler_name) else {
         rv.set(v8::null(scope).into());
         return;
     };

@@ -30,7 +30,7 @@ pub(super) fn class_list_value_getter_callback(
         rv.set_null();
         return;
     };
-    let value = element_attribute(
+    let value = reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         token_list_attribute_name(kind),

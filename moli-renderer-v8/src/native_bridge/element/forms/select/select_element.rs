@@ -101,7 +101,7 @@ fn select_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,
@@ -497,7 +497,7 @@ pub(in crate::native_bridge) fn select_multiple_setter_function<'s>(
         return;
     };
     let next = args.get(0).boolean_value(scope);
-    let had_multiple = element_has_attribute(unsafe { &*runtime_ptr }, handle, "multiple");
+    let had_multiple = has_reflected_attribute(unsafe { &*runtime_ptr }, handle, "multiple");
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "multiple", next);
     if had_multiple && !next {
         normalize_single_select_selectedness(scope, runtime_ptr, handle);
@@ -873,7 +873,7 @@ pub(in crate::native_bridge) fn normalize_single_select_selectedness(
     select_handle: DomHandle,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
-    if element_has_attribute(runtime, select_handle, "multiple") {
+    if has_reflected_attribute(runtime, select_handle, "multiple") {
         return;
     }
     let options = runtime.dom_host().select_option_elements(select_handle);
@@ -901,7 +901,7 @@ pub(in crate::native_bridge) fn select_size_getter_function<'s>(
         rv.set_int32(0);
         return;
     };
-    let size = element_attribute(unsafe { &*runtime_ptr }, handle, "size")
+    let size = reflected_attribute(unsafe { &*runtime_ptr }, handle, "size")
         .map(|value| parse_non_negative_integer_prefix(&value))
         .unwrap_or(0);
     rv.set_int32(size);

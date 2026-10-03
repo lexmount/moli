@@ -19,7 +19,7 @@ use super::super::super::{
     throw_dom_exception,
 };
 use super::super::set_reflected_attribute;
-use super::super::{element_attribute, global_attributes::parse_non_negative_integer};
+use super::super::{global_attributes::parse_non_negative_integer, reflected_attribute};
 use super::{DomHandle, JsContextHost};
 
 #[derive(webidl::WebIdlArgs)]
@@ -314,7 +314,7 @@ fn parse_clamped_table_span(
     min: u32,
     max: u32,
 ) -> u32 {
-    let Some(raw) = element_attribute(runtime, handle, attribute) else {
+    let Some(raw) = reflected_attribute(runtime, handle, attribute) else {
         return default;
     };
     parse_non_negative_integer(&raw)

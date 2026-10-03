@@ -15,6 +15,7 @@ use super::super::{
     TrustedAttributeSetter, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
     set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
     trusted_attribute_value_string16, update_iframe_snapshot_navigation,
@@ -293,14 +294,28 @@ pub(in crate::native_bridge) fn node_toggle_attribute_callback<'s>(
     let has_attribute = element_has_attribute(unsafe { &*runtime_ptr }, handle, &parsed.name);
     let next_value = parsed.force.unwrap_or(!has_attribute);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_boolean_attribute_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            &parsed.name,
-            next_value,
-        );
+        if !has_attribute && next_value {
+            let _ = set_live_element_attribute_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                handle,
+                &parsed.name,
+                "",
+            );
+        } else if has_attribute && !next_value {
+            let Some((namespace, local_name)) =
+                attribute_target_for_remove_name(unsafe { &*runtime_ptr }, handle, &parsed.name)
+            else {
+                return;
+            };
+            let _ = remove_live_element_attribute_ns_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                handle,
+                namespace.as_deref(),
+                &local_name,
+            );
+        }
     });
     rv.set_bool(next_value);
 }

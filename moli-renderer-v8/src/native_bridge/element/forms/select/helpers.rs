@@ -12,7 +12,7 @@ pub(super) fn select_option_handles(runtime: &JsContextHost, handle: DomHandle) 
 }
 
 pub(super) fn select_is_multiple(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    element_has_attribute(runtime, handle, "multiple")
+    has_reflected_attribute(runtime, handle, "multiple")
 }
 
 pub(super) fn effective_option_selected(runtime: &JsContextHost, handle: DomHandle) -> bool {

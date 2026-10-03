@@ -5,7 +5,7 @@ use super::super::super::{
     node::node_runtime_and_handle_from_object_or_detached, set_wrapped_handle_or_null_for_receiver,
 };
 use super::super::{
-    element_attribute, property_string_value, set_reflected_attribute,
+    property_string_value, reflected_attribute, set_reflected_attribute,
     set_reflected_boolean_attribute,
 };
 
@@ -30,7 +30,7 @@ fn template_shadow_root_mode_for_object<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "shadowrootmode")
+    let value = reflected_attribute(runtime, handle, "shadowrootmode")
         .as_deref()
         .and_then(template_shadow_root_mode_value)
         .unwrap_or("");
@@ -52,7 +52,7 @@ fn template_shadow_root_slot_assignment_for_object<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "shadowrootslotassignment")
+    let value = reflected_attribute(runtime, handle, "shadowrootslotassignment")
         .filter(|value| value.eq_ignore_ascii_case("manual"))
         .map(|_| "manual")
         .unwrap_or("named");
@@ -75,7 +75,7 @@ fn template_shadow_root_adopted_style_sheets_for_object<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let value =
-        element_attribute(runtime, handle, "shadowrootadoptedstylesheets").unwrap_or_default();
+        reflected_attribute(runtime, handle, "shadowrootadoptedstylesheets").unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_undefined();
         return;
@@ -95,7 +95,7 @@ fn template_shadow_root_custom_element_registry_for_object<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let value =
-        element_attribute(runtime, handle, "shadowrootcustomelementregistry").unwrap_or_default();
+        reflected_attribute(runtime, handle, "shadowrootcustomelementregistry").unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_undefined();
         return;
@@ -114,7 +114,7 @@ fn template_shadow_root_boolean_for_object<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(element_attribute(unsafe { &*runtime_ptr }, handle, name).is_some());
+    rv.set_bool(reflected_attribute(unsafe { &*runtime_ptr }, handle, name).is_some());
 }
 
 fn set_template_shadow_root_string_attribute_for_object<'s>(

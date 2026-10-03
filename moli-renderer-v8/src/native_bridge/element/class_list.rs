@@ -3,7 +3,7 @@ use super::super::{
     node::{node_is_element, node_runtime_and_handle_from_object_or_detached},
     throw_dom_exception, validate_class_list_token, validate_class_list_token_pair,
 };
-use super::{element_attribute, property_dom_string_value, set_reflected_attribute};
+use super::{property_dom_string_value, reflected_attribute, set_reflected_attribute};
 use crate::{document_runtime::DomHandle, util::v8_string};
 
 mod accessors;

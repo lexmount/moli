@@ -150,7 +150,7 @@ fn text_control_length_getter_from_object<'s>(
         rv.set_int32(-1);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute)
         .and_then(|value| parse_non_negative_length_attribute(&value))
         .and_then(|value| i32::try_from(value).ok())
         .unwrap_or(-1);
@@ -212,7 +212,7 @@ fn input_size_getter_from_object<'s>(
         rv.set_uint32(20);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "size")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "size")
         .and_then(|value| parse_positive_integer_prefix(&value))
         .unwrap_or(20);
     rv.set_uint32(value);

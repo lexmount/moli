@@ -45,7 +45,7 @@ fn textarea_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,
@@ -257,7 +257,7 @@ fn textarea_limited_unsigned_getter<'s>(
         rv.set_uint32(default_value);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute)
         .and_then(|value| parse_positive_integer_prefix(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(default_value);

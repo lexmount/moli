@@ -4,7 +4,7 @@ use moli_encoding::{encode_url_query_for_legacy_web, form_output_encoding_for_la
 use url::Url;
 
 use super::super::super::JsContextHost;
-use super::super::element_attribute;
+use super::super::reflected_attribute;
 use super::super::set_reflected_attribute;
 
 pub(in crate::native_bridge::element) fn resolve_url_like_attribute(
@@ -20,7 +20,7 @@ pub(in crate::native_bridge::element) fn resolve_url_like_attribute(
             .is_some_and(|element| element.is_html_element("base"))
     {
         let base = url_base_for_handle(runtime, handle);
-        let Some(value) = element_attribute(runtime, handle, name) else {
+        let Some(value) = reflected_attribute(runtime, handle, name) else {
             return base.to_string();
         };
         return parse_url_with_document_query_encoding(runtime, handle, &base, &value)
@@ -28,7 +28,7 @@ pub(in crate::native_bridge::element) fn resolve_url_like_attribute(
             .unwrap_or(value);
     }
 
-    let Some(value) = element_attribute(runtime, handle, name) else {
+    let Some(value) = reflected_attribute(runtime, handle, name) else {
         return String::new();
     };
     let base = url_base_for_handle(runtime, handle);
@@ -42,7 +42,7 @@ pub(in crate::native_bridge::element) fn parsed_url_like_attribute(
     handle: DomHandle,
     name: &str,
 ) -> Option<Url> {
-    let value = element_attribute(runtime, handle, name)?;
+    let value = reflected_attribute(runtime, handle, name)?;
     let base = url_base_for_handle(runtime, handle);
     parse_url_with_document_query_encoding(runtime, handle, &base, &value).ok()
 }
