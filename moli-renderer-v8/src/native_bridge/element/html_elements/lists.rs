@@ -1,8 +1,8 @@
 use crate::util::v8_string;
 
 use super::super::{
-    element_attribute, element_has_attribute, html_element_getter_receiver,
-    html_element_setter_receiver, property_string_value, set_reflected_attribute,
+    has_reflected_attribute, html_element_getter_receiver, html_element_setter_receiver,
+    property_string_value, reflected_attribute, set_reflected_attribute,
     set_reflected_boolean_attribute,
 };
 use super::parse_i32_attribute_or;
@@ -121,7 +121,7 @@ pub(in crate::native_bridge::element) fn ol_type_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "type").unwrap_or_default();
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "type").unwrap_or_default();
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -263,7 +263,7 @@ fn boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,

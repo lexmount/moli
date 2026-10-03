@@ -11,6 +11,7 @@ mod form_data_native_state;
 mod input_value_modes;
 mod live_document;
 mod option_select_values;
+mod reflection_namespace;
 mod text_control_values;
 mod text_controls;
 mod viewport_input;

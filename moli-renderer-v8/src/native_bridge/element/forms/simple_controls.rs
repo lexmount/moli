@@ -36,7 +36,8 @@ fn button_string_attribute_getter<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
+    let value =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -73,7 +74,7 @@ fn button_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,
@@ -205,7 +206,7 @@ pub(in crate::native_bridge) fn fieldset_disabled_getter_function<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "disabled",
@@ -633,12 +634,12 @@ fn meter_values_for_receiver<'s>(
 }
 
 fn meter_values(runtime: &JsContextHost, handle: DomHandle) -> MeterElementValues {
-    let value = element_attribute(runtime, handle, "value");
-    let min = element_attribute(runtime, handle, "min");
-    let max = element_attribute(runtime, handle, "max");
-    let low = element_attribute(runtime, handle, "low");
-    let high = element_attribute(runtime, handle, "high");
-    let optimum = element_attribute(runtime, handle, "optimum");
+    let value = reflected_attribute(runtime, handle, "value");
+    let min = reflected_attribute(runtime, handle, "min");
+    let max = reflected_attribute(runtime, handle, "max");
+    let low = reflected_attribute(runtime, handle, "low");
+    let high = reflected_attribute(runtime, handle, "high");
+    let optimum = reflected_attribute(runtime, handle, "optimum");
     meter_element_values(
         value.as_deref(),
         min.as_deref(),
@@ -659,8 +660,8 @@ fn progress_values_for_receiver<'s>(
 }
 
 fn progress_values(runtime: &JsContextHost, handle: DomHandle) -> ProgressElementValues {
-    let value = element_attribute(runtime, handle, "value");
-    let max = element_attribute(runtime, handle, "max");
+    let value = reflected_attribute(runtime, handle, "value");
+    let max = reflected_attribute(runtime, handle, "max");
     progress_element_values(value.as_deref(), max.as_deref())
 }
 
@@ -775,7 +776,7 @@ pub(in crate::native_bridge) fn button_form_action_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "formaction")
+    let value = reflected_attribute(runtime, handle, "formaction")
         .filter(|value| !value.is_empty())
         .map(|_| resolve_url_like_attribute(runtime, handle, "formaction"))
         .unwrap_or_else(|| runtime.host_document().url().to_string());
@@ -811,7 +812,7 @@ pub(in crate::native_bridge) fn button_form_enctype_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "formenctype")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "formenctype")
         .map(|value| normalized_form_enctype(&value))
         .unwrap_or("");
     if let Some(value) = v8_string(scope, value) {
@@ -846,7 +847,7 @@ pub(in crate::native_bridge) fn button_form_method_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let method = element_attribute(unsafe { &*runtime_ptr }, handle, "formmethod")
+    let method = reflected_attribute(unsafe { &*runtime_ptr }, handle, "formmethod")
         .map(|value| normalized_form_method(&value))
         .unwrap_or("");
     if let Some(value) = v8_string(scope, method) {
@@ -882,7 +883,7 @@ pub(in crate::native_bridge) fn button_form_target_getter_function<'s>(
         return;
     };
     let value =
-        element_attribute(unsafe { &*runtime_ptr }, handle, "formtarget").unwrap_or_default();
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "formtarget").unwrap_or_default();
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -915,7 +916,7 @@ pub(in crate::native_bridge) fn button_form_no_validate_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "formnovalidate",
@@ -1178,7 +1179,7 @@ pub(in crate::native_bridge) fn button_popover_target_action_getter_function<'s>
         rv.set_null();
         return;
     };
-    let action = canonical_popover_target_action(element_attribute(
+    let action = canonical_popover_target_action(reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "popovertargetaction",
@@ -1254,7 +1255,7 @@ pub(in crate::native_bridge) fn button_command_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let command = normalized_button_command(element_attribute(
+    let command = normalized_button_command(reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "command",
