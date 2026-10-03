@@ -174,7 +174,9 @@ pub async fn run_cli_with_config<W: Write>(
                 storage_partition,
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            server.serve().await.context("protocol server failed")?;
+            serve_until_terminated(&server)
+                .await
+                .context("protocol server failed")?;
         }
         Commands::Import(args) => {
             let summary =
@@ -192,6 +194,50 @@ pub async fn run_cli_with_config<W: Write>(
     }
 
     Ok(())
+}
+
+/// Serves until a browser-level `Browser.close` or a termination signal.
+///
+/// A termination signal triggers the same graceful drain-and-flush path; if the
+/// drain does not complete within `GRACEFUL_SHUTDOWN_BUDGET`, the process is
+/// force-terminated with the conventional `128 + signal` status.
+async fn serve_until_terminated(server: &ProtocolServer) -> Result<()> {
+    const GRACEFUL_SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+    // Install the signal handlers synchronously so a signal delivered right
+    // after the listener is announced still takes the graceful path.
+    let mut termination = moli_process_signal::TerminationStream::install()
+        .context("failed to install termination signal handlers")?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (drained_tx, drained_rx) = tokio::sync::oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let signal = termination.recv().await;
+        tracing::info!(
+            signal,
+            "received termination signal; draining protocol server"
+        );
+        let _ = shutdown_tx.send(());
+        tokio::select! {
+            _ = drained_rx => {}
+            () = tokio::time::sleep(GRACEFUL_SHUTDOWN_BUDGET) => {
+                tracing::warn!(
+                    signal,
+                    "graceful shutdown exceeded its budget; forcing exit"
+                );
+                moli_process_signal::force_exit_for_signal(signal);
+            }
+        }
+    });
+
+    let result = server
+        .serve_with_shutdown(async move {
+            let _ = shutdown_rx.await;
+        })
+        .await;
+    let _ = drained_tx.send(());
+    result
 }
 
 fn reject_multiple_stdin_script_sources(args: &FetchArgs) -> Result<()> {

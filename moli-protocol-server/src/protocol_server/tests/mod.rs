@@ -339,6 +339,30 @@ async fn spawn_test_protocol_server() -> (std::net::SocketAddr, tokio::task::Joi
     .await
 }
 
+/// Serves a test protocol server exactly like `ProtocolServer::serve()`:
+/// `axum::serve(...).with_graceful_shutdown(coordinator)` followed by owner
+/// teardown and a partition flush. Tests exercise the real browser-level
+/// `Browser.close` drain path rather than a parallel harness.
+fn spawn_serving_protocol_server(
+    listener: TcpListener,
+    state: AppState,
+) -> tokio::task::JoinHandle<()> {
+    let cdp_owner_registry = state.cdp_owner_registry.clone();
+    let shutdown_coordinator = state.shutdown_coordinator.clone();
+    let storage_partition = state.storage_partition.clone();
+    let app = build_router(state);
+    tokio::spawn(async move {
+        let graceful_shutdown = async move {
+            shutdown_coordinator.wait().await;
+        };
+        axum::serve(listener, app)
+            .with_graceful_shutdown(graceful_shutdown)
+            .await
+            .expect("test protocol server should serve");
+        cdp_owner_registry.shutdown().await;
+        super::flush_storage_partition(&storage_partition).await;
+    })
+}
 async fn spawn_test_protocol_server_with_owner_registry() -> (
     std::net::SocketAddr,
     tokio::task::JoinHandle<()>,
@@ -354,11 +378,7 @@ async fn spawn_test_protocol_server_with_owner_registry() -> (
         OptionalResourceFetchMask::NONE,
     );
     let owner_registry = state.cdp_owner_registry.clone();
-    let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
-            .await
-            .expect("test protocol server should serve");
-    });
+    let server = spawn_serving_protocol_server(listener, state);
     (addr, server, owner_registry)
 }
 
@@ -439,11 +459,7 @@ async fn spawn_test_protocol_server_with_runtime_config(
         crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
     )
     .expect("test app state should initialize");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
-            .await
-            .expect("test protocol server should serve");
-    });
+    let server = spawn_serving_protocol_server(listener, state);
     (addr, server)
 }
 
@@ -764,11 +780,7 @@ async fn spawn_profiled_test_protocol_server_with_cookie_profile(
         true,
     )
     .expect("profiled app state should initialize");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
-            .await
-            .expect("profiled test protocol server should serve");
-    });
+    let server = spawn_serving_protocol_server(listener, state);
     (addr, server)
 }
 

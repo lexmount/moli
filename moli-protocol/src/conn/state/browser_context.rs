@@ -265,9 +265,14 @@ impl BrowserContextStoragePartitionHandles {
         initial_cookies: impl IntoIterator<Item = StoredCookie>,
         storage_partition: &StoragePartitionState,
     ) -> Self {
-        let cookie_store = new_shared_browser_cookie_store();
-        seed_initial_cookies(&cookie_store, initial_cookies);
         let shared_storage = storage_partition.shared_storage_handles();
+        // Share the partition's canonical cookie store so every cookie source
+        // (navigation `Set-Cookie`, `Network.setCookie`, `document.cookie`) is
+        // visible to the persistence layer without a checkpoint round-trip.
+        // The partition already holds the profile cookies, so the initial
+        // snapshot is only used to seed legacy in-memory partitions.
+        let cookie_store = shared_storage.cookie_store();
+        seed_initial_cookies(&cookie_store, initial_cookies);
         Self::from_initial_storage_partition(
             cookie_store,
             shared_storage.web_storage_store(),
