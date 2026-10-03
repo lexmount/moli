@@ -1,13 +1,12 @@
 use super::super::node::{node_is_element, node_runtime_and_handle_from_args_or_detached};
-use super::super::{throw_dom_exception, webidl_long_from_number};
+use super::super::throw_dom_exception;
+use crate::webidl;
 
-fn pointer_id_arg(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> i32 {
-    let value = args.get(0);
-    let number = value.number_value(scope).unwrap_or(0.0);
-    webidl_long_from_number(number)
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element pointer capture")]
+struct PointerCaptureArgs {
+    #[webidl(required, name = "pointerId")]
+    pointer_id: i32,
 }
 
 pub(super) fn node_set_pointer_capture_callback<'s>(
@@ -19,7 +18,9 @@ pub(super) fn node_set_pointer_capture_callback<'s>(
     else {
         return;
     };
-    let pointer_id = pointer_id_arg(scope, &args);
+    let Some(PointerCaptureArgs { pointer_id }) = webidl::parse_args(scope, &args) else {
+        return;
+    };
     let runtime = unsafe { &mut *runtime_ptr };
     if !node_is_element(runtime, handle) {
         return;
@@ -52,7 +53,9 @@ pub(super) fn node_release_pointer_capture_callback<'s>(
     else {
         return;
     };
-    let pointer_id = pointer_id_arg(scope, &args);
+    let Some(PointerCaptureArgs { pointer_id }) = webidl::parse_args(scope, &args) else {
+        return;
+    };
     let runtime = unsafe { &mut *runtime_ptr };
     if !node_is_element(runtime, handle) {
         return;
@@ -84,14 +87,16 @@ pub(super) fn node_has_pointer_capture_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    let pointer_id = pointer_id_arg(scope, &args);
+    let Some(PointerCaptureArgs { pointer_id }) = webidl::parse_args(scope, &args) else {
+        return;
+    };
     let runtime = unsafe { &*runtime_ptr };
     if !pointer_capture_receiver_has_frame(scope, runtime, runtime_ptr, handle, args.this()) {
         rv.set_bool(false);
         return;
     }
-    let has_capture =
-        node_is_element(runtime, handle) && runtime.has_pointer_capture_target(pointer_id, handle);
+    let has_capture = node_is_element(runtime, handle)
+        && runtime.has_pending_pointer_capture_target(pointer_id, handle);
     rv.set_bool(has_capture);
 }
 

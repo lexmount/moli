@@ -63,6 +63,7 @@ mod nested_frame_access;
 mod performance;
 mod performance_memory;
 mod platform_identity;
+mod pointer_capture;
 mod pointer_lock;
 mod popup_document_open_listeners;
 mod popup_document_open_url;
