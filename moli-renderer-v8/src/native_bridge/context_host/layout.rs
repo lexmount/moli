@@ -58,7 +58,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) {
-        self.scrollbars_hidden = hidden;
+        if self.scrollbars_hidden != hidden {
+            self.scrollbars_hidden = hidden;
+            self.clear_layout_rect_cache();
+            self.document_layout_state
+                .get_mut()
+                .mark_visual_state_dirty();
+        }
     }
 
     pub(crate) const fn scrollbars_hidden(&self) -> bool {

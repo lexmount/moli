@@ -326,6 +326,29 @@ impl Page {
         )
     }
 
+    /// Updates the DevTools hiding override; the browser startup flag remains effective.
+    pub async fn set_scrollbars_hidden_async(&mut self, hidden: bool) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetScrollbarsHidden(hidden),
+            "set scrollbars hidden",
+        )
+        .await
+    }
+
+    pub fn start_set_scrollbars_hidden(&self, hidden: bool) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetScrollbarsHidden(hidden))
+    }
+
+    pub fn finish_set_scrollbars_hidden(&mut self, completion: CompletedPageCommand) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "set scrollbars hidden",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub async fn set_emulated_media_async(
         &mut self,
         overrides: &EmulatedMediaOverrides,

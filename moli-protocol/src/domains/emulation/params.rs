@@ -4,7 +4,8 @@ pub(super) use chromiumoxide_cdp::cdp::browser_protocol::emulation::{
     SetDefaultBackgroundColorOverrideParams, SetEmitTouchEventsForMouseParams,
     SetEmulatedMediaParams, SetFocusEmulationEnabledParams, SetGeolocationOverrideParams,
     SetHardwareConcurrencyOverrideParams, SetIdleOverrideParams, SetLocaleOverrideParams,
-    SetScriptExecutionDisabledParams, SetTimezoneOverrideParams, SetTouchEmulationEnabledParams,
+    SetScriptExecutionDisabledParams, SetScrollbarsHiddenParams, SetTimezoneOverrideParams,
+    SetTouchEmulationEnabledParams,
 };
 
 use chromiumoxide_cdp::cdp::browser_protocol::{

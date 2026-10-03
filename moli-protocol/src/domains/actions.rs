@@ -181,6 +181,7 @@ pub(crate) enum EmulationAction {
     SetAutomationOverride,
     SetEmitTouchEventsForMouse,
     SetScriptExecutionDisabled,
+    SetScrollbarsHidden,
     SetGeolocationOverride,
     ClearGeolocationOverride,
     SetIdleOverride,

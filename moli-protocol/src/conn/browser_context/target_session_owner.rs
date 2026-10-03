@@ -167,6 +167,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) script_execution_disabled: bool,
+    pub(crate) scrollbars_hidden: bool,
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
@@ -321,6 +322,7 @@ impl TargetNavigationLoadInputs {
             script_execution_disabled: page_state
                 .effective_emulation_state
                 .script_execution_disabled,
+            scrollbars_hidden: page_state.effective_emulation_state.scrollbars_hidden,
             bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
             emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
             viewport_surface: emulated_device_metrics
@@ -401,6 +403,7 @@ impl TargetNavigationLoadInputs {
             runtime_inspector_session_restore_snapshots: Vec::new(),
             extra_http_headers: Default::default(),
             script_execution_disabled: false,
+            scrollbars_hidden: false,
             bypass_content_security_policy: false,
             emulated_media: Default::default(),
             viewport_surface: None,

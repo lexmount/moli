@@ -200,6 +200,7 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub permission_overrides: Vec<PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
     pub script_execution_disabled: bool,
+    pub emulated_scrollbars_hidden: bool,
     pub bypass_content_security_policy: bool,
     pub emulated_media: EmulatedMediaOverrides,
     pub idle_override: Option<crate::page::EmulatedIdleOverride>,
@@ -261,6 +262,7 @@ impl PreparedDocumentPage {
                     permission_overrides: configuration.permission_overrides,
                     extra_http_headers: configuration.extra_http_headers,
                     script_execution_disabled: configuration.script_execution_disabled,
+                    emulated_scrollbars_hidden: configuration.emulated_scrollbars_hidden,
                     bypass_content_security_policy: configuration.bypass_content_security_policy,
                     emulated_media: configuration.emulated_media,
                     idle_override: configuration.idle_override,
@@ -434,6 +436,7 @@ pub struct NavigationEngine {
     page_network_policy: PageNetworkPolicy,
     layout_policy: LayoutPolicy,
     scrollbars_hidden: bool,
+    emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
@@ -595,6 +598,7 @@ impl NavigationEngine {
             ),
             layout_policy,
             scrollbars_hidden,
+            emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
@@ -649,6 +653,7 @@ impl NavigationEngine {
             ),
             layout_policy,
             scrollbars_hidden,
+            emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
@@ -676,6 +681,11 @@ impl NavigationEngine {
 
     pub fn set_document_activity(&mut self, activity: moli_page_types::DocumentActivity) {
         self.document_activity = activity;
+    }
+
+    /// Seeds target-local scrollbar emulation before the next Document starts.
+    pub fn set_emulated_scrollbars_hidden(&mut self, hidden: bool) {
+        self.emulated_scrollbars_hidden = hidden;
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -1560,6 +1570,7 @@ impl NavigationEngine {
                 runtime_bindings,
                 extra_http_headers,
                 script_execution_disabled,
+                emulated_scrollbars_hidden: self.emulated_scrollbars_hidden,
                 bypass_content_security_policy,
                 emulated_media,
                 viewport_surface,
@@ -1840,6 +1851,7 @@ impl NavigationEngine {
                     runtime_bindings,
                     extra_http_headers,
                     script_execution_disabled,
+                    emulated_scrollbars_hidden: self.emulated_scrollbars_hidden,
                     bypass_content_security_policy,
                     emulated_media,
                     viewport_surface,
@@ -2093,6 +2105,7 @@ impl NavigationEngine {
                     runtime_bindings: options.runtime_bindings,
                     extra_http_headers: options.extra_http_headers,
                     script_execution_disabled: options.script_execution_disabled,
+                    emulated_scrollbars_hidden: self.emulated_scrollbars_hidden,
                     bypass_content_security_policy: options.bypass_content_security_policy,
                     emulated_media: options.emulated_media,
                     viewport_surface: options.viewport_surface,

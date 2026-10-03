@@ -141,6 +141,7 @@ pub(crate) struct EffectiveTargetEmulationState {
     pub(crate) emit_touch_events_for_mouse: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
+    pub(crate) scrollbars_hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -153,6 +154,7 @@ pub(crate) struct EffectiveTargetEmulationStateDelta {
     pub(crate) navigator_queries: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
+    pub(crate) scrollbars_hidden: bool,
 }
 
 impl EffectiveTargetEmulationStateDelta {
@@ -200,6 +202,9 @@ impl EffectiveTargetEmulationState {
         // Blink also sends the shared renderer an unconditional script
         // execution reset when any Emulation handler is disabled.
         self.script_execution_disabled = false;
+        if raw.scrollbars_hidden {
+            self.scrollbars_hidden = false;
+        }
         EffectiveTargetEmulationStateDelta {
             network_conditions: previous.network_conditions != self.network_conditions,
             geolocation_override: previous.geolocation_override != self.geolocation_override,
@@ -212,6 +217,7 @@ impl EffectiveTargetEmulationState {
                 != self.focus_emulation_enabled,
             script_execution_disabled: previous.script_execution_disabled
                 != self.script_execution_disabled,
+            scrollbars_hidden: previous.scrollbars_hidden != self.scrollbars_hidden,
         }
     }
 }

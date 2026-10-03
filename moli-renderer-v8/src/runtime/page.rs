@@ -34,6 +34,7 @@ pub struct RendererDocumentOptions {
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
     pub script_execution_disabled: bool,
+    pub emulated_scrollbars_hidden: bool,
     pub bypass_content_security_policy: bool,
     pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     pub viewport_surface: Option<crate::protocol_types::ViewportSurface>,

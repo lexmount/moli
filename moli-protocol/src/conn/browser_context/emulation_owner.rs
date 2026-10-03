@@ -65,6 +65,17 @@ impl TargetEmulationStateUpdate<'_> {
         self.raw.script_execution_disabled = disabled;
         self.effective.script_execution_disabled = disabled;
     }
+
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> bool {
+        // Blink ignores a setter that repeats this handler's raw value, even
+        // when another handler has since changed the shared renderer value.
+        if self.raw.scrollbars_hidden == hidden {
+            return false;
+        }
+        self.raw.scrollbars_hidden = hidden;
+        self.effective.scrollbars_hidden = hidden;
+        true
+    }
 }
 
 impl TargetSessionOwnerMut<'_> {

@@ -40,6 +40,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             fetch_subresource_interception_resource_type: None,
             layout_policy: crate::real_layout_test_policy(),
             scrollbars_hidden: false,
+            emulated_scrollbars_hidden: false,
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
             reserved_service_worker_client_id: None,

@@ -153,6 +153,19 @@ impl PageVm {
         self.vm_mut().set_script_execution_disabled(disabled);
     }
 
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> anyhow::Result<()> {
+        let previous = self.scrollbars_hidden || self.emulated_scrollbars_hidden;
+        self.emulated_scrollbars_hidden = hidden;
+        let hidden = self.scrollbars_hidden || hidden;
+        if previous == hidden {
+            return Ok(());
+        }
+        self.vm_mut().set_scrollbars_hidden(hidden);
+        // Emulation changes the published geometry of this live Page. Finish
+        // that update before acknowledging the command to subsequent reads.
+        self.vm_mut().publish_layout()
+    }
+
     pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
         self.bypass_content_security_policy = bypass;
         self.vm_mut().set_bypass_content_security_policy(bypass);

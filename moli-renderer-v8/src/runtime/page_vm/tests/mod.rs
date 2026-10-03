@@ -690,6 +690,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             fetch_subresource_interception_resource_type: None,
             layout_policy: crate::real_layout_test_policy(),
             scrollbars_hidden: false,
+            emulated_scrollbars_hidden: false,
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
             reserved_service_worker_client_id: None,

@@ -1155,6 +1155,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                     fetch_subresource_interception_resource_type: None,
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     scrollbars_hidden: false,
+                    emulated_scrollbars_hidden: false,
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
             reserved_service_worker_client_id: None,

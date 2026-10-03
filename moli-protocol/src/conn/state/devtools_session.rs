@@ -687,6 +687,7 @@ pub(crate) struct DevToolsEmulationSessionState {
     pub(crate) emit_touch_events_for_mouse: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
+    pub(crate) scrollbars_hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

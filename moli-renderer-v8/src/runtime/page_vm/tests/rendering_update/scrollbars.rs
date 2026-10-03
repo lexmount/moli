@@ -1,6 +1,68 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn scrollbar_emulation_republishes_frames_hit_targets_and_screencast_pixels() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/scrollbar-emulation.html")?,
+        );
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width:800,inner_height:600,device_pixel_ratio:1.0,..Default::default()
+        }))?;
+        page.vm_mut().eval(r#"
+document.body.style.margin='0';
+document.body.innerHTML=`<div style='width:100vw;height:2000px;background:lime'></div>
+<div id=scroller style='position:absolute;top:0;width:200px;height:100px;overflow:scroll'>
+<div style='width:400px;height:300px;background:red'></div></div>
+<iframe id=child style='position:absolute;left:0;top:160px;width:300px;height:150px;border:0'></iframe>`;
+const childDoc=document.getElementById('child').contentDocument;
+childDoc.body.style.margin='0';
+childDoc.body.innerHTML='<div style="width:100vw;height:2000px"></div>';
+'installed'
+"#)?;
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(initial) =
+            page.capture_screencast_frame(viewport_screencast_request(None))?
+        else { panic!("initial screencast frame"); };
+        let metrics = "JSON.stringify([document.documentElement.clientWidth,scroller.clientWidth,scroller.clientHeight,document.getElementById('child').contentDocument.documentElement.clientWidth])";
+        assert_eq!(page.vm_mut().eval(metrics)?,"[785,185,85,285]");
+        let initial_pixels = moli_image::decode_png(&initial.image.bytes)?;
+        let edge = ((300 * initial_pixels.width + 795) * 4) as usize;
+        assert_ne!(&initial_pixels.rgba[edge..edge+4],[0,255,0,255]);
+
+        page.set_scrollbars_hidden(true)?;
+        assert_eq!(page.vm_mut().eval(metrics)?,"[800,200,100,300]");
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(hidden) =
+            page.capture_screencast_frame(viewport_screencast_request(Some(initial.visual_state)))?
+        else { panic!("scrollbar visibility must invalidate the screencast token"); };
+        let pixels = moli_image::decode_png(&hidden.image.bytes)?;
+        assert_eq!(&pixels.rgba[edge..edge+4],[0,255,0,255]);
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert!(host.borrow().with_latest_layout_tree_for_document(host.borrow().document_handle(),|tree| {
+            assert!(tree.scrollbar_hit_test(moli_layout::LayoutPoint::new(795.0,300.0)).is_none());
+            assert!(tree.scrollbar_hit_test(moli_layout::LayoutPoint::new(190.0,30.0)).is_none());
+        }).is_some());
+        page.set_scrollbars_hidden(true)?;
+        assert_eq!(
+            page.capture_screencast_frame(viewport_screencast_request(Some(hidden.visual_state.clone())))?,
+            crate::runtime::RendererCaptureScreencastFrameReply::Unchanged,
+        );
+        page.set_scrollbars_hidden(false)?;
+        assert_eq!(page.vm_mut().eval(metrics)?,"[785,185,85,285]");
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(restored) =
+            page.capture_screencast_frame(viewport_screencast_request(Some(hidden.visual_state.clone())))?
+        else { panic!("restoring scrollbars must capture a fresh frame"); };
+        assert_ne!(restored.visual_state,hidden.visual_state);
+        let pixels = moli_image::decode_png(&restored.image.bytes)?;
+        assert_ne!(&pixels.rgba[edge..edge+4],[0,255,0,255]);
+        assert!(host.borrow().with_latest_layout_tree_for_document(host.borrow().document_handle(),|tree| {
+            assert!(tree.scrollbar_hit_test(moli_layout::LayoutPoint::new(795.0,300.0)).is_some());
+        }).is_some());
+        Ok::<_,anyhow::Error>(())
+    }).await.expect("scrollbar emulation updates all visual surfaces");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn hidden_scrollbars_preserve_geometry_scrolling_and_computed_css_in_all_frames() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

@@ -1119,6 +1119,10 @@ impl PageVm {
                 self.set_script_execution_disabled(disabled);
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetScrollbarsHidden(hidden) => {
+                self.set_scrollbars_hidden(hidden)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetBypassContentSecurityPolicy(bypass) => {
                 self.set_bypass_content_security_policy(bypass);
                 Ok(RendererPageReply::Unit)

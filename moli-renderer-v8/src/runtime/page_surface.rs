@@ -5165,6 +5165,7 @@ pub enum RendererPageCommand {
     },
     SetDocumentActivity(moli_page_types::DocumentActivity),
     SetScriptExecutionDisabled(bool),
+    SetScrollbarsHidden(bool),
     SetBypassContentSecurityPolicy(bool),
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),

@@ -189,6 +189,7 @@ impl RendererPageCommand {
             | Self::SetNavigatorAndDocumentActivity { .. }
             | Self::SetDocumentActivity(..)
             | Self::SetEmulatedMedia(..)
+            | Self::SetScrollbarsHidden(..)
             | Self::SetViewportSurface(..) => OwnerOnly,
 
             #[cfg(test)]

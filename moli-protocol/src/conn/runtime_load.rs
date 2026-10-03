@@ -1490,6 +1490,7 @@ impl CdpConnection {
             permission_overrides: load_inputs.permission_overrides,
             extra_http_headers: load_inputs.extra_http_headers,
             script_execution_disabled: load_inputs.script_execution_disabled,
+            emulated_scrollbars_hidden: load_inputs.scrollbars_hidden,
             bypass_content_security_policy: load_inputs.bypass_content_security_policy,
             emulated_media: load_inputs.emulated_media,
             idle_override,
@@ -2377,6 +2378,7 @@ impl CdpConnection {
             .expect("navigation load target must retain its resident NavigationEngine")
             .clone();
         engine.set_document_activity(load_inputs.document_activity);
+        engine.set_emulated_scrollbars_hidden(load_inputs.scrollbars_hidden);
         // The handle may publish lifecycle or resource activity before the
         // DCL-bound navigation result is committed into a target slot.
         self.apply_scheduler_senders_to_navigation_engine(&engine);
@@ -3774,6 +3776,9 @@ async fn apply_navigation_load_input_overrides_async(
             .await
             .context("failed to apply page permission overrides")?;
     }
+    page.set_scrollbars_hidden_async(load_inputs.scrollbars_hidden)
+        .await
+        .context("failed to apply page scrollbar emulation")?;
     if mode == NavigationLoadInputOverrideMode::FreshlyBuiltPage {
         return Ok(());
     }

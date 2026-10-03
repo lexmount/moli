@@ -21,6 +21,7 @@ use tokio::{
 
 mod device_geometry;
 mod native_navigator;
+mod scrollbars;
 
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
     ctx.process_async(json!({

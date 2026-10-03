@@ -911,6 +911,7 @@ impl RendererOwnerLocalStore {
                 request.permission_overrides = configuration.permission_overrides;
                 request.extra_http_headers = configuration.extra_http_headers;
                 request.script_execution_disabled = configuration.script_execution_disabled;
+                request.emulated_scrollbars_hidden = configuration.emulated_scrollbars_hidden;
                 request.bypass_content_security_policy =
                     configuration.bypass_content_security_policy;
                 request.emulated_media = configuration.emulated_media;

@@ -1096,6 +1096,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
     pub(crate) layout_policy: LayoutPolicy,
     pub(crate) scrollbars_hidden: bool,
+    pub(crate) emulated_scrollbars_hidden: bool,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client_id:
@@ -1618,6 +1619,7 @@ pub(crate) struct PageVm {
     pub(super) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
     pub(super) layout_policy: LayoutPolicy,
     pub(super) scrollbars_hidden: bool,
+    pub(super) emulated_scrollbars_hidden: bool,
     pub(super) wpt_extensions_enabled: bool,
     pub(crate) runtime_hooks: PageVmRuntimeHooks,
     pub(super) navigation_response: Option<PageVmNavigationResponse>,
@@ -4296,7 +4298,7 @@ impl PageVm {
         let mut vm = vm_bootstrap.finish()?;
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_policy);
-        vm.set_scrollbars_hidden(env.scrollbars_hidden);
+        vm.set_scrollbars_hidden(env.scrollbars_hidden || env.emulated_scrollbars_hidden);
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
         let dom_agent_state = vm.renderer_dom_agent_state();
@@ -4361,6 +4363,7 @@ impl PageVm {
                 .fetch_subresource_interception_resource_type,
             layout_policy: env.layout_policy,
             scrollbars_hidden: env.scrollbars_hidden,
+            emulated_scrollbars_hidden: env.emulated_scrollbars_hidden,
             wpt_extensions_enabled: env.wpt_extensions_enabled,
             runtime_hooks,
             navigation_response: None,
