@@ -153,7 +153,7 @@ pub(super) fn parse_composition_event_init<'s>(
     parse_ui_dictionary(scope, args, "CompositionEvent")
 }
 
-fn parse_ui_dictionary<'s, T: Default + webidl::WebIdlDictionary<'s>>(
+pub(super) fn parse_ui_dictionary<'s, T: Default + webidl::WebIdlDictionary<'s>>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     constructor: &'static str,

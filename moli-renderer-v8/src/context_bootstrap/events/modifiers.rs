@@ -103,27 +103,6 @@ impl EventModifierInitMembers {
     }
 }
 
-pub(super) fn initialize_event_modifiers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let modifiers = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<EventModifierInitMembers>(scope, init) {
-                Ok(modifiers) => modifiers,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => EventModifierInitMembers::default(),
-    };
-    modifiers.initialize(scope, event);
-    true
-}
-
 pub(in crate::context_bootstrap) fn initialize_legacy_event_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,

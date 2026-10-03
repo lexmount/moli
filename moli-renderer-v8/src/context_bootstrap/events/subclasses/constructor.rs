@@ -17,6 +17,10 @@ enum EventSubclassInit<'s> {
     Clipboard(data::ClipboardEventInitMembers<'s>),
     ClipboardChange(data::ClipboardChangeEventInitMembers<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
+    Mouse(pointer::MouseEventInit<'s>),
+    Wheel(pointer::WheelEventInit<'s>),
+    Pointer(pointer::PointerEventInit<'s>),
+    Drag(pointer::DragEventInit<'s>),
     Message(message::MessageEventInit<'s>),
     Storage(data::StorageEventInitMembers<'s>),
     Error(error::ErrorEventInit<'s>),
@@ -47,6 +51,18 @@ impl<'s> EventSubclassInit<'s> {
             }
             EventSubclassKind::KeyboardEvent => {
                 Self::Keyboard(keyboard::parse_keyboard_event_init(scope, args)?)
+            }
+            EventSubclassKind::MouseEvent => {
+                Self::Mouse(ui::parse_ui_dictionary(scope, args, "MouseEvent")?)
+            }
+            EventSubclassKind::WheelEvent => {
+                Self::Wheel(ui::parse_ui_dictionary(scope, args, "WheelEvent")?)
+            }
+            EventSubclassKind::PointerEvent => {
+                Self::Pointer(ui::parse_ui_dictionary(scope, args, "PointerEvent")?)
+            }
+            EventSubclassKind::DragEvent => {
+                Self::Drag(ui::parse_ui_dictionary(scope, args, "DragEvent")?)
             }
             EventSubclassKind::MessageEvent => {
                 Self::Message(message::parse_message_event_init(scope, args)?)
@@ -87,6 +103,10 @@ impl<'s> EventSubclassInit<'s> {
             Self::Clipboard(init) => init.event_flags(),
             Self::ClipboardChange(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
+            Self::Mouse(init) => init.event_flags(),
+            Self::Wheel(init) => init.event_flags(),
+            Self::Pointer(init) => init.event_flags(),
+            Self::Drag(init) => init.event_flags(),
             Self::Message(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
             Self::Error(init) => init.event_flags(),
@@ -114,6 +134,10 @@ impl<'s> EventSubclassInit<'s> {
                 return data::initialize_clipboard_change_event(scope, event, init);
             }
             Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
+            Self::Mouse(init) => init.initialize(scope, event),
+            Self::Wheel(init) => init.initialize(scope, event),
+            Self::Pointer(init) => init.initialize(scope, event),
+            Self::Drag(init) => init.initialize(scope, event),
             Self::Message(init) => message::initialize_message_event(scope, event, init),
             Self::Storage(init) => data::initialize_storage_event(scope, event, init),
             Self::Error(init) => init.initialize(scope, event),
@@ -224,32 +248,12 @@ fn initialize_legacy_event<'s>(
             }
         }
         EventSubclassKind::CustomEvent => basic::initialize_custom_event(scope, event, init),
-        EventSubclassKind::MouseEvent => {
-            if !pointer::initialize_mouse_event(scope, event, init) {
-                return false;
-            }
-        }
-        EventSubclassKind::DragEvent => {
-            if !data::initialize_drag_event(scope, event, init) {
-                return false;
-            }
-        }
         EventSubclassKind::CapturedMouseEvent => {
             if !data::initialize_captured_mouse_event(scope, event, init) {
                 return false;
             }
         }
         EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
-        EventSubclassKind::WheelEvent => {
-            if !pointer::initialize_wheel_event(scope, event, init) {
-                return false;
-            }
-        }
-        EventSubclassKind::PointerEvent => {
-            if !pointer::initialize_pointer_event(scope, event, init) {
-                return false;
-            }
-        }
         EventSubclassKind::TouchEvent => {
             crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
         }
@@ -297,6 +301,10 @@ fn initialize_legacy_event<'s>(
         | EventSubclassKind::CompositionEvent
         | EventSubclassKind::ErrorEvent
         | EventSubclassKind::KeyboardEvent
+        | EventSubclassKind::MouseEvent
+        | EventSubclassKind::WheelEvent
+        | EventSubclassKind::PointerEvent
+        | EventSubclassKind::DragEvent
         | EventSubclassKind::MessageEvent
         | EventSubclassKind::NavigateEvent
         | EventSubclassKind::NavigationCurrentEntryChangeEvent

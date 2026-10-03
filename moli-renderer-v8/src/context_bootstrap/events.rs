@@ -87,7 +87,7 @@ struct StorageEventStateDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "PointerEvent", enumerable)]
+#[webapi(fragment, prototype = "PointerEvent", enumerable, receiver = crate::web_api_interfaces::PointerEvent::is_instance)]
 struct SecurePointerEventPrototypeRuntimeDeclaration {
     #[webapi(
         method = "getCoalescedEvents",
