@@ -14,10 +14,12 @@ use moli_file_api::data_transfer::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod clipboard;
+mod drag_store;
 pub(crate) use clipboard::{
     build_clipboard_data_transfer, clipboard_data_transfer_contents,
     disable_clipboard_data_transfer,
 };
+pub(crate) use drag_store::DragDataStore;
 
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
@@ -26,14 +28,18 @@ const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
 const DATA_TRANSFER_MODE_SLOT: &str = "__lmDataTransferMode";
 const DATA_TRANSFER_CLIPBOARD_SLOT: &str = "__lmDataTransferClipboard";
+const DATA_TRANSFER_STORE_SLOT: &str = "__lmDataTransferStore";
 const DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT: &str = "__lmDataTransferItemArray";
 const DATA_TRANSFER_ITEM_LIST_OWNER_SLOT: &str = "__lmDataTransferOwner";
+const DATA_TRANSFER_ITEM_LIST_VIEWS_SLOT: &str = "__lmDataTransferItemViews";
 const DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT: &str = "__lmDataTransferItemListIndexedLength";
 const DATA_TRANSFER_ITEM_KIND_SLOT: &str = "__lmDataTransferItemKind";
 const DATA_TRANSFER_ITEM_TYPE_SLOT: &str = "__lmDataTransferItemType";
 const DATA_TRANSFER_ITEM_FILE_SLOT: &str = "__lmDataTransferItemFile";
 const DATA_TRANSFER_ITEM_ENTRY_SLOT: &str = "__lmDataTransferItemEntry";
 const DATA_TRANSFER_ITEM_STRING_SLOT: &str = "__lmDataTransferItemString";
+const DATA_TRANSFER_ITEM_SOURCE_SLOT: &str = "__lmDataTransferItemSource";
+const DATA_TRANSFER_ITEM_OWNER_SLOT: &str = "__lmDataTransferItemOwner";
 const FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT: &str = "__lmFileSystemEntryFilesystem";
 const FILE_SYSTEM_ENTRY_FULL_PATH_SLOT: &str = "__lmFileSystemEntryFullPath";
 const FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT: &str = "__lmFileSystemEntryIsDirectory";
@@ -99,10 +105,18 @@ struct DataTransferShellDeclaration {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 enum DataTransferMode {
-    ReadWrite,
-    ReadOnly,
-    Disabled,
+    ReadWrite = 0,
+    ReadOnly = 1,
+    Disabled = 2,
+    Protected = 3,
+}
+
+impl DataTransferMode {
+    fn can_read(self) -> bool {
+        matches!(self, Self::ReadWrite | Self::ReadOnly)
+    }
 }
 
 fn data_transfer_mode<'s>(
@@ -112,6 +126,7 @@ fn data_transfer_mode<'s>(
     match private_number_property(scope, object, DATA_TRANSFER_MODE_SLOT) {
         Some(1.0) => DataTransferMode::ReadOnly,
         Some(2.0) => DataTransferMode::Disabled,
+        Some(3.0) => DataTransferMode::Protected,
         _ => DataTransferMode::ReadWrite,
     }
 }
@@ -125,7 +140,7 @@ fn item_list_is_writable<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer)]
+#[webapi(interface = web_api_interfaces::DataTransfer, receiver)]
 struct DataTransferPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_files_getter, enumerable)]
     files: (),
@@ -159,6 +174,8 @@ struct DataTransferItemListObjectDeclaration<'s> {
     items: Vec<v8::Local<'s, v8::Value>>,
     #[webapi(slot = DATA_TRANSFER_ITEM_LIST_OWNER_SLOT)]
     owner: v8::Local<'s, v8::Object>,
+    #[webapi(slot = DATA_TRANSFER_ITEM_LIST_VIEWS_SLOT)]
+    views: v8::Local<'s, v8::Map>,
     #[webapi(
         slot = DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT,
         constructor_default = 0.0
@@ -167,7 +184,7 @@ struct DataTransferItemListObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, receiver)]
 struct DataTransferItemListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_list_length_getter, enumerable)]
     length: (),
@@ -208,8 +225,19 @@ struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
     data: &'data str,
 }
 
+// Item payloads belong to the store; each item list publishes its own stable
+// views whose access follows the associated DataTransfer's lifetime and mode.
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
+struct DataTransferItemViewDeclaration<'s> {
+    #[webapi(slot = DATA_TRANSFER_ITEM_SOURCE_SLOT)]
+    source: v8::Local<'s, v8::Object>,
+    #[webapi(slot = DATA_TRANSFER_ITEM_OWNER_SLOT)]
+    owner: v8::Local<'s, v8::Object>,
+}
+
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, receiver)]
 struct DataTransferItemPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_kind_getter, enumerable)]
     kind: (),
@@ -542,6 +570,63 @@ fn item_list_owner<'s>(
     get_private_object(scope, item_list, DATA_TRANSFER_ITEM_LIST_OWNER_SLOT)
 }
 
+fn item_views<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Map>> {
+    get_private_value(scope, item_list, DATA_TRANSFER_ITEM_LIST_VIEWS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+}
+
+fn data_transfer_item_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let views = item_views(scope, item_list)?;
+    if let Some(value) = views.get(scope, source.into())
+        && let Ok(view) = v8::Local::<v8::Object>::try_from(value)
+    {
+        return Some(view);
+    }
+    let owner = item_list_owner(scope, item_list)?;
+    let view = DataTransferItemViewDeclaration::new(source, owner)
+        .bind(scope)
+        .ok()?;
+    views.set(scope, source.into(), view.into())?;
+    Some(view)
+}
+
+fn item_data_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    get_private_object(scope, item, DATA_TRANSFER_ITEM_SOURCE_SLOT).unwrap_or(item)
+}
+
+fn item_is_associated<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+) -> bool {
+    if let Some(owner) = get_private_object(scope, item, DATA_TRANSFER_ITEM_OWNER_SLOT) {
+        data_transfer_mode(scope, owner) != DataTransferMode::Disabled
+            && get_private_object(scope, item, DATA_TRANSFER_ITEM_SOURCE_SLOT).is_some()
+    } else {
+        // Canonical records never escape the store; removed records have empty metadata.
+        private_string_property(scope, item, DATA_TRANSFER_ITEM_KIND_SLOT)
+            .is_some_and(|kind| !kind.is_empty())
+    }
+}
+
+pub(super) fn item_is_readable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+) -> bool {
+    item_is_associated(scope, item)
+        && get_private_object(scope, item, DATA_TRANSFER_ITEM_OWNER_SLOT)
+            .is_none_or(|owner| data_transfer_mode(scope, owner).can_read())
+}
+
 // Every write to the canonical item array runs inside DataTransferItemStore::mutate. The
 // outcome controls the single observer notification and, consequently, the cached `types`
 // identity required by Web IDL's CachedAttribute semantics.
@@ -581,6 +666,21 @@ impl<'s> DataTransferItemStore<'s> {
             DataTransferItemListMutation::Changed(value) => (value, true),
         };
         if changed {
+            // Native event views share the backing item array. Array replacements
+            // must also reach the session before another event opens its view.
+            if let Some(owner) = item_list_owner(scope, self.item_list)
+                && let Some(backing) = get_private_object(scope, owner, DATA_TRANSFER_STORE_SLOT)
+                && let Some(backing_items) = Self::for_owner(scope, backing)
+                && let Some(array) = item_list_array(scope, self.item_list)
+            {
+                set_private_value(
+                    scope,
+                    backing_items.item_list,
+                    DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
+                    array.into(),
+                );
+                data_transfer_item_list_did_change(scope, backing_items.item_list);
+            }
             data_transfer_item_list_did_change(scope, self.item_list);
         }
         Some(value)
@@ -623,14 +723,16 @@ impl<'s> DataTransferItemStore<'s> {
         scope: &mut v8::PinScope<'s, '_>,
         item: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.mutate(scope, |scope, item_array| {
-            if append_item(scope, item_array, item).is_some() {
-                DataTransferItemListMutation::Changed(Some(item))
-            } else {
-                DataTransferItemListMutation::Unchanged(None)
-            }
-        })
-        .flatten()
+        let added = self
+            .mutate(scope, |scope, item_array| {
+                if append_item(scope, item_array, item).is_some() {
+                    DataTransferItemListMutation::Changed(Some(item))
+                } else {
+                    DataTransferItemListMutation::Unchanged(None)
+                }
+            })
+            .flatten()?;
+        data_transfer_item_view(scope, self.item_list, added)
     }
 
     fn set_string_data(self, scope: &mut v8::PinScope<'s, '_>, mime_type: &str, data: &str) {
@@ -751,35 +853,46 @@ pub(super) fn item_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_KIND_SLOT)
+    if !item_is_associated(scope, item) {
+        return Some(String::new());
+    }
+    let source = item_data_object(scope, item);
+    private_string_property(scope, source, DATA_TRANSFER_ITEM_KIND_SLOT)
 }
 
 fn item_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_TYPE_SLOT)
+    if !item_is_associated(scope, item) {
+        return Some(String::new());
+    }
+    let source = item_data_object(scope, item);
+    private_string_property(scope, source, DATA_TRANSFER_ITEM_TYPE_SLOT)
 }
 
 pub(super) fn item_string_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    private_string_property(scope, item, DATA_TRANSFER_ITEM_STRING_SLOT)
+    let source = item_data_object(scope, item);
+    private_string_property(scope, source, DATA_TRANSFER_ITEM_STRING_SLOT)
 }
 
 fn item_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, item, DATA_TRANSFER_ITEM_FILE_SLOT)
+    let source = item_data_object(scope, item);
+    get_private_object(scope, source, DATA_TRANSFER_ITEM_FILE_SLOT)
 }
 
 fn item_entry_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, item, DATA_TRANSFER_ITEM_ENTRY_SLOT)
+    let source = item_data_object(scope, item);
+    get_private_object(scope, source, DATA_TRANSFER_ITEM_ENTRY_SLOT)
 }
 
 fn item_summary<'s>(
@@ -882,7 +995,8 @@ fn build_data_transfer_item_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    DataTransferItemListObjectDeclaration::new(owner)
+    let views = v8::Map::new(scope);
+    DataTransferItemListObjectDeclaration::new(owner, views)
         .bind(scope)
         .ok()
 }
@@ -1078,6 +1192,39 @@ fn data_transfer_item_list_did_change<'s>(
         DATA_TRANSFER_TYPES_SLOT,
         v8::undefined(scope).into(),
     );
+    let mode = data_transfer_mode(scope, owner);
+    // Removed items and retired event views must not retain payload records in
+    // the identity cache. Disassociation never clears the shared store itself.
+    if let Some(views) = item_views(scope, item_list) {
+        let entries = views.as_array(scope);
+        let null = v8::null(scope);
+        for index in (0..entries.length()).step_by(2) {
+            let Some(key) = entries.get_index(scope, index) else {
+                continue;
+            };
+            let Ok(source) = v8::Local::<v8::Object>::try_from(key) else {
+                continue;
+            };
+            if mode != DataTransferMode::Disabled && item_is_associated(scope, source) {
+                continue;
+            }
+            if let Some(value) = entries.get_index(scope, index + 1)
+                && let Ok(view) = v8::Local::<v8::Object>::try_from(value)
+            {
+                set_private_value(scope, view, DATA_TRANSFER_ITEM_SOURCE_SLOT, null.into());
+            }
+            let _ = views.delete(scope, key);
+        }
+    }
+    if mode == DataTransferMode::Disabled {
+        let empty = v8::Array::new(scope, 0);
+        set_private_value(
+            scope,
+            item_list,
+            DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
+            empty.into(),
+        );
+    }
     let Some(item_array) = item_list_array(scope, item_list) else {
         return;
     };
@@ -1099,8 +1246,11 @@ fn data_transfer_item_list_did_change<'s>(
         let Ok(item) = v8::Local::<v8::Object>::try_from(value) else {
             continue;
         };
-        let _ = item_list.set_index(scope, index, item.into());
-        if item_kind(scope, item).as_deref() == Some("file")
+        if let Some(view) = data_transfer_item_view(scope, item_list, item) {
+            let _ = item_list.set_index(scope, index, view.into());
+        }
+        if mode.can_read()
+            && item_kind(scope, item).as_deref() == Some("file")
             && let Some(file) = item_file_object(scope, item)
         {
             files.push(file);
@@ -1198,8 +1348,7 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    if data_transfer_mode(scope, args.this()) != DataTransferMode::Disabled
-        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
+    if !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
         && valid_drop_effect(&value)
     {
         set_private_string(scope, args.this(), DATA_TRANSFER_DROP_EFFECT_SLOT, &value);
@@ -1251,7 +1400,7 @@ fn data_transfer_item_kind_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = private_string_property(scope, args.this(), DATA_TRANSFER_ITEM_KIND_SLOT)
+    let value = item_kind(scope, args.this())
         .and_then(|value| v8_string(scope, &value).map(Into::into))
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
@@ -1262,7 +1411,7 @@ fn data_transfer_item_type_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = private_string_property(scope, args.this(), DATA_TRANSFER_ITEM_TYPE_SLOT)
+    let value = item_type(scope, args.this())
         .and_then(|value| v8_string(scope, &value).map(Into::into))
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
@@ -1340,6 +1489,10 @@ pub(crate) fn data_transfer_get_data_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferGetDataArgs>(scope, &args) else {
         return;
     };
+    if !data_transfer_mode(scope, args.this()).can_read() {
+        rv.set(v8str(scope, "").into());
+        return;
+    }
     let normalized_type = normalize_drag_data_type(&parsed.format);
     let Some(item_list) = get_private_object(scope, args.this(), DATA_TRANSFER_ITEMS_SLOT) else {
         rv.set(v8str(scope, "").into());
@@ -1532,7 +1685,9 @@ pub(crate) fn data_transfer_item_get_as_file_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(file) = item_file_object(scope, args.this()) {
+    if item_is_readable(scope, args.this())
+        && let Some(file) = item_file_object(scope, args.this())
+    {
         rv.set(file.into());
     } else {
         rv.set(v8::null(scope).into());
@@ -1544,6 +1699,10 @@ pub(crate) fn data_transfer_item_webkit_get_as_entry_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !item_is_readable(scope, args.this()) {
+        rv.set(v8::null(scope).into());
+        return;
+    }
     if let Some(entry) = item_entry_object(scope, args.this()) {
         rv.set(entry.into());
         return;

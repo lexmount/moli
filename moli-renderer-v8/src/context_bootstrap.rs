@@ -332,9 +332,10 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
 pub(crate) use self::file_api::{
-    allowed_drag_drop_effect, apply_drag_modifier_drop_effect, build_clipboard_data_transfer,
-    build_data_transfer_object, clipboard_data_transfer_contents, disable_clipboard_data_transfer,
-    initialize_native_drag_data_transfer, prepare_drag_drop_effect, set_drag_drop_effect,
+    DragDataStore, allowed_drag_drop_effect, apply_drag_modifier_drop_effect,
+    build_clipboard_data_transfer, clipboard_data_transfer_contents,
+    disable_clipboard_data_transfer, initialize_native_drag_data_transfer,
+    prepare_drag_drop_effect, set_drag_drop_effect,
 };
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,

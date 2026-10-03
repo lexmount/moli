@@ -47,11 +47,14 @@ const dropped = new Promise(function (resolve) {
 
 promise_test(async function () {
   await dropped;
+  assert_equals(firstDataTransfer.items.length, 0, "saved dragenter view is disabled");
+  assert_equals(firstDataTransfer.types.length, 0, "cancel does not reactivate the old view");
+  assert_equals(firstDataTransfer.getData("text"), "", "old payload stays inaccessible");
   assert_array_equals(
     events,
     [
-      "dragenter:initial:true",
-      "dragover:mutated-before-cancel:true",
+      "dragenter::true",
+      "dragover::false",
       "drop:fresh-after-cancel:false",
     ],
     "dragCancel should clear the active DataTransfer without dispatching a DOM event",

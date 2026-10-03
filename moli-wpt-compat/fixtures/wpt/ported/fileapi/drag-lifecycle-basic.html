@@ -71,16 +71,18 @@ const dropped = new Promise(function (resolve) {
 
 promise_test(async function () {
   await dropped;
+  assert_equals(firstDataTransfer.items.length, 0, "saved event item list is disabled");
+  assert_equals(firstDataTransfer.getData("text"), "", "saved event cannot read the store");
   assert_array_equals(
     events,
     [
-      "dragenter:true:initial-text:copy:copyMove",
-      "dragover-before:true:initial-text",
-      "dragover-after:mutated-in-over:move",
-      "drop:true:mutated-in-over:move:hello world",
-      "input:hello mutated-in-over:21:21",
+      "dragenter:true::copy:copyMove",
+      "dragover-before:false:",
+      "dragover-after::move",
+      "drop:false:initial-text:move:hello world",
+      "input:hello initial-text:18:18",
     ],
-    "drag lifecycle should reuse live DataTransfer and run text drop default action",
+    "drag lifecycle should use temporary protected views and preserve data for the text drop default action",
   );
-}, "Input.dispatchDragEvent drives live DataTransfer reuse and text input default drop");
+}, "Input.dispatchDragEvent protects event views and preserves text input default drop");
 </script>

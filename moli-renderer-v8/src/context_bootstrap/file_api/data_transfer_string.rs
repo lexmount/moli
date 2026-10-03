@@ -20,7 +20,7 @@ use crate::{
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
-use super::data_transfer::{item_kind, item_string_value};
+use super::data_transfer::{item_is_readable, item_kind, item_string_value};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DataTransferItem.getAsString")]
@@ -112,7 +112,9 @@ pub(crate) fn data_transfer_item_get_as_string_callback<'s>(
     let Some(callback) = parsed.callback else {
         return;
     };
-    if item_kind(scope, args.this()).as_deref() != Some("string") {
+    if !item_is_readable(scope, args.this())
+        || item_kind(scope, args.this()).as_deref() != Some("string")
+    {
         return;
     }
     let Some(value) = item_string_value(scope, args.this()) else {

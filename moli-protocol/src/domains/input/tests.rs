@@ -1888,10 +1888,13 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
                 <script>
                   window.__dragPending = [];
                   document.getElementById('target').addEventListener('dragenter', event => {
+                    window.__savedDragTransfer = event.dataTransfer;
                     window.__dragPending.push([
                       event.type,
                       event instanceof DragEvent,
-                      event.dataTransfer.getData('text/plain')
+                      event.dataTransfer.getData('text/plain'),
+                      event.dataTransfer.types.join(','),
+                      event.dataTransfer.items[0].kind
                     ].join('|'));
                   });
                 </script>
@@ -1933,7 +1936,12 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
     assert_eq!(messages, vec![json!({ "id": 4107, "result": {} })]);
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__dragPending)").await,
-        r#"["dragenter|true|drag-pending"]"#
+        r#"["dragenter|true||text/plain|string"]"#
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "JSON.stringify([__savedDragTransfer.items.length,__savedDragTransfer.types.length,__savedDragTransfer.getData('text/plain')])").await,
+        r#"[0,0,""]"#,
+        "the saved event view must be disabled when the protocol command completes"
     );
 }
 

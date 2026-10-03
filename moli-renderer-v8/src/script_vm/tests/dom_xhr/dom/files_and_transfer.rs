@@ -503,6 +503,9 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
   entry.__lmFileSystemEntryIsFile = false;
   entry.__lmFileSystemEntryIsDirectory = true;
 
+  const receiverError = action => {
+    try { action(); return "no error"; } catch (error) { return error.name; }
+  };
   return JSON.stringify({
     ownNamesBefore,
     descriptors,
@@ -521,14 +524,14 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
       entry.isDirectory
     ].join('|'),
     fake: [
-      DataTransfer.prototype.getData.call(fakeDataTransfer, 'text/plain'),
-      fakeDataTransfer.types === undefined ? 'undefined' : fakeDataTransfer.types.join(','),
-      fakeDataTransfer.dropEffect,
-      fakeDataTransfer.effectAllowed,
-      fakeList.length,
-      fakeItem.kind,
-      fakeItem.type,
-      fakeItem.getAsFile(),
+      receiverError(() => DataTransfer.prototype.getData.call(fakeDataTransfer, 'text/plain')),
+      receiverError(() => fakeDataTransfer.types === undefined ? 'undefined' : fakeDataTransfer.types.join(',')),
+      receiverError(() => fakeDataTransfer.dropEffect),
+      receiverError(() => fakeDataTransfer.effectAllowed),
+      receiverError(() => fakeList.length),
+      receiverError(() => fakeItem.kind),
+      receiverError(() => fakeItem.type),
+      receiverError(() => fakeItem.getAsFile()),
       entryNameGetter.call(fakeEntry),
       entryPathGetter.call(fakeEntry)
     ].map(value => value === null ? 'null' : String(value)).join('|')
@@ -540,7 +543,7 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownNamesBefore":{"dataTransfer":[],"itemList":[],"item":[],"entry":[]},"descriptors":{"dataTransfer":["files:function:get files:0:undefined:none:none:true:true","items:function:get items:0:undefined:none:none:true:true","types:function:get types:0:undefined:none:none:true:true","dropEffect:function:get dropEffect:0:function:set dropEffect:1:true:true","effectAllowed:function:get effectAllowed:0:function:set effectAllowed:1:true:true"],"itemList":["length:function:get length:0:undefined:none:none:true:true"],"item":["kind:function:get kind:0:undefined:none:none:true:true","type:function:get type:0:undefined:none:none:true:true"],"entry":["filesystem:function:get filesystem:0:undefined:none:none:true:true","fullPath:function:get fullPath:0:undefined:none:none:true:true","isDirectory:function:get isDirectory:0:undefined:none:none:true:true","isFile:function:get isFile:0:undefined:none:none:true:true","name:function:get name:0:undefined:none:none:true:true"]},"real":"alpha|text/plain,Files|none|none|2|file|text/plain|note.txt|note.txt|/note.txt|true|false","fake":"|undefined|none|uninitialized|0|||null||"}"#
+        r#"{"ownNamesBefore":{"dataTransfer":[],"itemList":[],"item":[],"entry":[]},"descriptors":{"dataTransfer":["files:function:get files:0:undefined:none:none:true:true","items:function:get items:0:undefined:none:none:true:true","types:function:get types:0:undefined:none:none:true:true","dropEffect:function:get dropEffect:0:function:set dropEffect:1:true:true","effectAllowed:function:get effectAllowed:0:function:set effectAllowed:1:true:true"],"itemList":["length:function:get length:0:undefined:none:none:true:true"],"item":["kind:function:get kind:0:undefined:none:none:true:true","type:function:get type:0:undefined:none:none:true:true"],"entry":["filesystem:function:get filesystem:0:undefined:none:none:true:true","fullPath:function:get fullPath:0:undefined:none:none:true:true","isDirectory:function:get isDirectory:0:undefined:none:none:true:true","isFile:function:get isFile:0:undefined:none:none:true:true","name:function:get name:0:undefined:none:none:true:true"]},"real":"alpha|text/plain,Files|none|none|2|file|text/plain|note.txt|note.txt|/note.txt|true|false","fake":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError||"}"#
     );
 }
 

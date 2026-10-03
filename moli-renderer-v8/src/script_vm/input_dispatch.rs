@@ -22,10 +22,10 @@ use crate::native_bridge::element::{
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
     captured_frame_input_surface_hit_test, construct_activation_pointer_event,
-    construct_drag_event, construct_keyboard_event,
-    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
-    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
+    construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
+    construct_mouse_event_with_modifiers, construct_mouse_event_with_related_target_and_modifiers,
+    construct_pointer_event, construct_pointer_event_with_modifiers,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
@@ -1220,26 +1220,24 @@ impl ScriptVm {
                     directories: Vec::new(),
                     drag_operations_mask: 1,
                 };
-                if let Some(data_transfer) =
-                    crate::context_bootstrap::build_data_transfer_object(scope, &empty_drag_data)
+                if let Some(data_store) =
+                    crate::context_bootstrap::DragDataStore::new(scope, &empty_drag_data)
                 {
-                    crate::context_bootstrap::initialize_native_drag_data_transfer(
+                    let backing = data_store.backing_transfer(scope);
+                    crate::context_bootstrap::initialize_native_drag_data_transfer(scope, backing);
+                    if super::input_drag::fire_drag_event(
                         scope,
-                        data_transfer,
-                    );
-                    if let Some(event) = construct_drag_event(
-                        scope,
+                        runtime_ptr,
+                        drag_start_handle,
                         "dragstart",
-                        f64::from(drag_position.x),
-                        f64::from(drag_position.y),
+                        drag_position,
                         buttons,
-                        data_transfer.into(),
                         modifiers,
-                    ) && dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
-                        .allows_default()
-                    {
+                        &data_store,
+                        None,
+                    ) {
                         *active_drag_session = Some(ActiveDragSession {
-                            data_transfer: v8::Global::new(scope, data_transfer),
+                            data_store,
                             drop_allowed: false,
                             native: Some(super::input_drag::NativeDragSource {
                                 handle: drag_start_handle,
@@ -2009,16 +2007,19 @@ impl ScriptVm {
         data: RendererDragData,
         modifiers: u8,
     ) -> Result<RendererInputDispatchOutcome> {
-        let Some(handle) = observable_input_hit_test(
+        let position = moli_layout::LayoutPoint::new(x as f32, y as f32);
+        let Some(hit) = observable_input_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
-            moli_layout::LayoutPoint::new(x as f32, y as f32),
+            position,
         )?
-        .map(|hit| hit.handle) else {
+        else {
             return Ok(input_dispatch_outcome(false));
         };
+        let handle = hit.handle;
 
-        let incoming_drag_data_empty = data.items.is_empty() && data.files.is_empty();
+        let incoming_drag_data_empty =
+            data.items.is_empty() && data.files.is_empty() && data.directories.is_empty();
         let replace_active_drag_data_transfer = event_name == "dragenter"
             && (!incoming_drag_data_empty || self.active_drag_session.is_none());
         let clear_active_drag_data_transfer = event_name == "drop";
@@ -2030,48 +2031,38 @@ impl ScriptVm {
             // remains exclusively borrowed, so the field pointer stays valid for the
             // duration of this callback and is not aliased elsewhere.
             let active_drag_session = unsafe { &mut *active_drag_session };
-            let data_transfer =
-                if replace_active_drag_data_transfer || active_drag_session.is_none() {
-                    let Some(data_transfer) =
-                        crate::context_bootstrap::build_data_transfer_object(scope, &data)
-                    else {
-                        return Ok(input_dispatch_outcome(false));
-                    };
-                    *active_drag_session = Some(ActiveDragSession {
-                        data_transfer: v8::Global::new(scope, data_transfer),
-                        drop_allowed: false,
-                        native: None,
-                        target: None,
-                    });
-                    data_transfer
-                } else {
-                    v8::Local::new(
-                        scope,
-                        &active_drag_session
-                            .as_ref()
-                            .expect("active drag session should exist when reusing DataTransfer")
-                            .data_transfer,
-                    )
+            if replace_active_drag_data_transfer || active_drag_session.is_none() {
+                let Some(data_store) = crate::context_bootstrap::DragDataStore::new(scope, &data)
+                else {
+                    return Ok(input_dispatch_outcome(false));
                 };
+                *active_drag_session = Some(ActiveDragSession {
+                    data_store,
+                    drop_allowed: false,
+                    native: None,
+                    target: None,
+                });
+            }
+            let session = active_drag_session
+                .as_ref()
+                .expect("active drag session exists");
+            let data_transfer = session.data_store.backing_transfer(scope);
             crate::context_bootstrap::apply_drag_modifier_drop_effect(
                 scope,
                 data_transfer,
                 modifiers,
             );
-            let data_transfer_value: v8::Local<'_, v8::Value> = data_transfer.into();
-            let allows_default = if let Some(event) = construct_drag_event(
+            let allows_default = super::input_drag::fire_drag_event(
                 scope,
+                runtime_ptr,
+                handle,
                 event_name,
-                x,
-                y,
+                hit.root_to_frame.map_point(position),
                 buttons,
-                data_transfer_value,
                 modifiers,
-            ) {
-                dispatch_public_event(scope, runtime_ptr, handle, event).allows_default()
-            } else {
-                false
-            };
+                &session.data_store,
+                None,
+            );
             if event_name == "dragover"
                 && let Some(session) = active_drag_session.as_mut()
             {
