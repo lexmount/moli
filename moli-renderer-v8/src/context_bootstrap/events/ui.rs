@@ -1,5 +1,5 @@
+use super::references::WindowReference;
 use super::{event_backing, reinitialize_event_object};
-use crate::context_bootstrap::is_window_receiver;
 use crate::util::v8_string_from_utf16_units;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -22,32 +22,12 @@ pub(in crate::context_bootstrap) fn ui_event_which_getter_function<'s>(
     }
 }
 
-pub(super) struct WindowReference<'s>(v8::Local<'s, v8::Object>);
-
-impl<'s> webidl::WebIdlConverter<'s> for WindowReference<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        if let Ok(window) = v8::Local::<v8::Object>::try_from(value)
-            && is_window_receiver(scope, window)
-        {
-            return Ok(Self(window));
-        }
-        Err(webidl::WebIdlError::cannot_convert(context, "Window"))
-    }
-}
-
 fn nullable_window_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: Option<WindowReference<'s>>,
 ) -> v8::Local<'s, v8::Value> {
     window
-        .map(|window| window.0.into())
+        .map(WindowReference::into_value)
         .unwrap_or_else(|| v8::null(scope).into())
 }
 
@@ -245,7 +225,7 @@ struct LegacyUiEventState<'s> {
     detail: i32,
 }
 
-pub(super) fn initialize_legacy_ui_event<'s>(
+pub(in crate::context_bootstrap) fn initialize_legacy_ui_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     view: Option<WindowReference<'s>>,

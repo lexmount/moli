@@ -1,7 +1,7 @@
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
-use crate::context_bootstrap::events::references::DataTransferReference;
+use crate::context_bootstrap::events::references::{DataTransferReference, EventTargetReference};
 use crate::context_bootstrap::events::{modifiers::EventModifierInitMembers, ui::UiEventInit};
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -25,25 +25,6 @@ impl<'scope> webidl::WebIdlConverter<'scope> for PointerEventReference<'scope> {
             return Err(webidl::WebIdlError::cannot_convert(context, "PointerEvent"));
         }
         Ok(Self(event))
-    }
-}
-
-struct EventTargetReference<'s>(v8::Local<'s, v8::Object>);
-
-impl<'s> webidl::WebIdlConverter<'s> for EventTargetReference<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        let target = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
-        if !web_api_interfaces::EventTarget::is_instance(scope, target) {
-            return Err(webidl::WebIdlError::cannot_convert(context, "EventTarget"));
-        }
-        Ok(Self(target))
     }
 }
 
@@ -123,7 +104,7 @@ impl<'s> MouseEventInit<'s> {
         .expect("MouseEvent state should initialize");
         let related_target = members
             .related_target
-            .map(|target| target.0.into())
+            .map(EventTargetReference::into_value)
             .unwrap_or_else(|| v8::null(scope).into());
         MouseEventRelatedTargetDeclaration::new(related_target)
             .initialize(scope, event)

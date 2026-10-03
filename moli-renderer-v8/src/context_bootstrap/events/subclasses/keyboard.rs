@@ -1,4 +1,5 @@
-use super::super::ui::{UiEventInit, WindowReference, initialize_legacy_ui_event};
+use super::super::references::WindowReference;
+use super::super::ui::{UiEventInit, initialize_legacy_ui_event};
 use super::*;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
