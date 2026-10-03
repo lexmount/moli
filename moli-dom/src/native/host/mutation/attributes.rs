@@ -46,6 +46,45 @@ impl InputValueAttributeChange {
 }
 
 impl DomHost {
+    fn mark_script_attribute_set_trigger(
+        &self,
+        effects: &mut DomMutationEffects,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        previous: Option<&str>,
+        value: &str,
+    ) {
+        if namespace.is_some_and(|namespace| !namespace.is_empty())
+            || !self.is_script_element(handle)
+        {
+            return;
+        }
+        let source_attribute =
+            self.node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| match element.namespace() {
+                    "http://www.w3.org/1999/xhtml" => local_name == "src",
+                    "http://www.w3.org/2000/svg" => {
+                        local_name == "href"
+                            && previous.is_none_or(str::is_empty)
+                            && !value.is_empty()
+                    }
+                    _ => false,
+                });
+        // Every HTML src assignment invokes preparation, including an empty
+        // value. The loader owns the already-started guard.
+        if source_attribute {
+            effects.mark_script_prepare_trigger(
+                handle,
+                ScriptPrepareTriggerKind::SourceAttributeAdded,
+            );
+        } else if local_name == "async" {
+            effects
+                .mark_script_prepare_trigger(handle, ScriptPrepareTriggerKind::AsyncAttributeAdded);
+        }
+    }
+
     fn slot_attribute_mutation_snapshots(
         &self,
         handle: DomHandle,
@@ -295,29 +334,20 @@ impl DomHost {
             }
             let mut effects = self.node_update_effects(handle);
             self.mark_stylesheet_owner_attribute_change(&mut effects, handle, None, name);
-            if self.is_script_element(handle) {
-                let source_attribute = self.node(handle).and_then(Node::as_element).is_some_and(
-                    |element| match element.namespace() {
-                        "http://www.w3.org/1999/xhtml" => name.eq_ignore_ascii_case("src"),
-                        "http://www.w3.org/2000/svg" => {
-                            name.eq_ignore_ascii_case("href")
-                                && prior_value.as_deref().is_none_or(str::is_empty)
-                                && !value.is_empty()
-                        }
-                        _ => false,
-                    },
-                );
-                // Every HTML src assignment invokes preparation, including
-                // an empty value. The loader owns the already-started guard.
-                if source_attribute {
-                    effects.mark_script_prepare_trigger(
+            if let Some(element) = self.node(handle).and_then(Node::as_element) {
+                let normalized_name = element.normalized_attribute_name(name);
+                if let Some(attribute) = element
+                    .attributes()
+                    .iter()
+                    .find(|attribute| attribute.name_matches(&normalized_name))
+                {
+                    self.mark_script_attribute_set_trigger(
+                        &mut effects,
                         handle,
-                        ScriptPrepareTriggerKind::SourceAttributeAdded,
-                    );
-                } else if name.eq_ignore_ascii_case("async") {
-                    effects.mark_script_prepare_trigger(
-                        handle,
-                        ScriptPrepareTriggerKind::AsyncAttributeAdded,
+                        Some(attribute.namespace()),
+                        attribute.local_name(),
+                        prior_value.as_deref(),
+                        value,
                     );
                 }
             }
@@ -359,7 +389,7 @@ impl DomHost {
         if self
             .node(select)
             .and_then(Node::as_element)
-            .is_some_and(|element| element.has_attribute("multiple"))
+            .is_some_and(|element| element.has_attribute_ns("", "multiple"))
         {
             return;
         }
@@ -449,6 +479,9 @@ impl DomHost {
         };
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
+            if namespace.is_none_or(str::is_empty) {
+                self.sync_select_state_after_option_selected_attribute(handle, local_name);
+            }
             // Namespace-aware calls can still target HTML id/name by local name.
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
@@ -463,6 +496,14 @@ impl DomHost {
                 handle,
                 namespace,
                 local_name,
+            );
+            self.mark_script_attribute_set_trigger(
+                &mut effects,
+                handle,
+                namespace,
+                local_name,
+                prior_value.as_deref(),
+                value,
             );
             effects.mark_attribute_change(
                 handle,

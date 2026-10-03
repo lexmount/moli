@@ -206,7 +206,7 @@ impl NativeDom {
         let Some(select) = self.node(select_id).and_then(Node::as_element) else {
             return Vec::new();
         };
-        if select.has_attribute("multiple") {
+        if select.has_attribute_ns("", "multiple") {
             return options
                 .into_iter()
                 .filter(|option_id| {
@@ -360,7 +360,7 @@ impl NativeDom {
 
 fn select_display_size(select: &Element) -> i32 {
     select
-        .attribute("size")
+        .attribute_ns("", "size")
         .map(parse_non_negative_integer_prefix)
         .unwrap_or(0)
         .max(1)

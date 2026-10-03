@@ -647,8 +647,10 @@ use shadow_dom::{
     template_shadow_root_slot_assignment_getter_function,
     template_shadow_root_slot_assignment_setter_function,
 };
-pub(super) use shared::element_attribute;
-use shared::{element_attribute_names, element_has_attribute, style_string};
+pub(super) use shared::{element_attribute, reflected_attribute};
+use shared::{
+    element_attribute_names, element_has_attribute, has_reflected_attribute, style_string,
+};
 pub(super) use state_callbacks::{
     bridge_set_checked_state_callback, bridge_set_indeterminate_state_callback,
     bridge_set_input_value_callback, bridge_set_selected_state_callback,

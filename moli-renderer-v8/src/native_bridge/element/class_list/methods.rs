@@ -177,7 +177,7 @@ pub(super) fn class_list_add_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ClassListAddArgs>(scope, &args) else {
         return;
     };
-    let had_attribute = element_attribute(
+    let had_attribute = reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         token_list_attribute_name(kind),
@@ -215,7 +215,7 @@ pub(super) fn class_list_remove_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ClassListRemoveArgs>(scope, &args) else {
         return;
     };
-    let had_attribute = element_attribute(
+    let had_attribute = reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         token_list_attribute_name(kind),
@@ -373,7 +373,7 @@ pub(super) fn class_list_to_string_callback<'s>(
         rv.set_null();
         return;
     };
-    let value = element_attribute(
+    let value = reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         token_list_attribute_name(kind),

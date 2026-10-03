@@ -61,7 +61,7 @@ fn input_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         attribute,
@@ -105,7 +105,7 @@ fn input_src_getter_from_receiver<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = match element_attribute(runtime, handle, "src") {
+    let value = match reflected_attribute(runtime, handle, "src") {
         None => String::new(),
         // `HTMLInputElement.src` is a reflected URL attribute, so present-but-empty resolves
         // against the document URL while a missing attribute stays the empty string.
@@ -236,7 +236,7 @@ fn input_form_action_getter_from_handle<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "formaction")
+    let value = reflected_attribute(runtime, handle, "formaction")
         .filter(|value| !value.is_empty())
         .map(|_| resolve_url_like_attribute(runtime, handle, "formaction"))
         .unwrap_or_else(|| runtime.host_document().url().to_string());
@@ -281,7 +281,7 @@ fn input_form_enctype_getter_from_handle<'s>(
     handle: DomHandle,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "formenctype")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "formenctype")
         .map(|value| normalized_form_enctype(&value))
         .unwrap_or("");
     if let Some(value) = v8_string(scope, value) {
@@ -325,7 +325,7 @@ fn input_form_method_getter_from_handle<'s>(
     handle: DomHandle,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
-    let method = element_attribute(unsafe { &*runtime_ptr }, handle, "formmethod")
+    let method = reflected_attribute(unsafe { &*runtime_ptr }, handle, "formmethod")
         .map(|value| {
             let normalized = normalized_form_method(&value);
             if normalized == "dialog" {
@@ -368,7 +368,7 @@ pub(in crate::native_bridge) fn input_form_target_getter_function<'s>(
         return;
     };
     let value =
-        element_attribute(unsafe { &*runtime_ptr }, handle, "formtarget").unwrap_or_default();
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "formtarget").unwrap_or_default();
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -402,7 +402,7 @@ fn input_unsigned_long_attribute_getter_from_object<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute)
         .map(|value| parse_non_negative_dimension(Some(value)))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(0);
@@ -547,7 +547,7 @@ pub(in crate::native_bridge) fn input_form_no_validate_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "formnovalidate",

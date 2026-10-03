@@ -16,8 +16,8 @@ use super::{
     resolved_reflected_element_attribute_handle,
 };
 use super::{
-    element_attribute, element_has_attribute, label_control_handle,
-    label_receives_programmatic_focus,
+    has_reflected_attribute, label_control_handle, label_receives_programmatic_focus,
+    reflected_attribute,
 };
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::runtime::RendererDomFocusOutcome;
@@ -528,7 +528,7 @@ pub(super) fn run_dialog_focusing_steps(
 ) {
     let target = {
         let runtime = unsafe { &*runtime_ptr };
-        if element_has_attribute(runtime, dialog, "autofocus") {
+        if has_reflected_attribute(runtime, dialog, "autofocus") {
             dialog
         } else {
             first_dialog_focus_target(runtime, dialog).unwrap_or(dialog)
@@ -1486,7 +1486,7 @@ fn style_integer_property(
 }
 
 fn slot_focus_scope_tab_index(runtime: &JsContextHost, handle: DomHandle) -> Option<i32> {
-    let value = element_attribute(runtime, handle, "tabindex")
+    let value = reflected_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .unwrap_or(0);
     (value >= 0).then_some(value)
@@ -1514,7 +1514,7 @@ fn sequential_tab_index_without_scroll_descendant_check(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> Option<i32> {
-    let value = element_attribute(runtime, handle, "tabindex")
+    let value = reflected_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .unwrap_or_else(|| default_sequential_tab_index(runtime, handle));
     (value >= 0).then_some(value)
@@ -1559,7 +1559,7 @@ fn is_interactive_sequential_focusable_descendant(
         return false;
     }
     let is_interactive_element = has_default_focus_behavior(runtime, handle);
-    let has_non_negative_tab_index = element_attribute(runtime, handle, "tabindex")
+    let has_non_negative_tab_index = reflected_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value >= 0);
     (is_interactive_element || has_non_negative_tab_index)
@@ -1567,7 +1567,7 @@ fn is_interactive_sequential_focusable_descendant(
 }
 
 fn explicit_negative_tab_index(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    element_attribute(runtime, handle, "tabindex")
+    reflected_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value < 0)
 }
@@ -1652,7 +1652,7 @@ fn access_key_target(runtime: &JsContextHost, key: &str) -> Option<DomHandle> {
     stack.reverse();
     while let Some(handle) = stack.pop() {
         if runtime.dom_host().is_connected(handle)
-            && element_attribute(runtime, handle, "accesskey")
+            && reflected_attribute(runtime, handle, "accesskey")
                 .is_some_and(|value| access_key_attribute_matches(&value, &needle))
         {
             return Some(handle);

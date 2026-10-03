@@ -5,9 +5,10 @@ use crate::webidl;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
 use super::{
-    element_attribute, element_has_attribute,
-    remove_live_element_attribute_appending_to_current_reaction_queue,
-    set_live_element_attribute_appending_to_current_reaction_queue,
+    has_reflected_attribute, reflected_attribute,
+    remove_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
 };
 
 macro_rules! impl_reflection_callback_data {
@@ -1203,10 +1204,13 @@ pub(in crate::native_bridge) fn set_reflected_attribute(
     value: &str,
 ) {
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = set_live_element_attribute_appending_to_current_reaction_queue(
+        let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
+            None,
+            None,
+            name,
             name,
             value,
         );
@@ -1251,18 +1255,17 @@ pub(super) fn set_reflected_attribute_utf16(
 ) {
     let value = string_from_utf16_units_lossy(&units);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = unsafe { &mut *runtime_ptr }
-            .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                handle,
-                None,
-                None,
-                name,
-                name,
-                &value,
-                units,
-            );
+        let _ = set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            None,
+            None,
+            name,
+            name,
+            &value,
+            units,
+        );
     });
 }
 
@@ -1273,10 +1276,11 @@ pub(super) fn remove_reflected_attribute(
     name: &str,
 ) {
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = remove_live_element_attribute_appending_to_current_reaction_queue(
+        let _ = remove_live_element_attribute_ns_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
+            None,
             name,
         );
     });
@@ -1402,7 +1406,7 @@ pub(super) fn usv_string_attribute_property_getter_from_object_or_detached<'s>(
     let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
         return;
@@ -1528,7 +1532,7 @@ pub(super) fn boolean_attribute_property_getter_from_object_or_detached<'s>(
         rv.set_undefined();
         return;
     }
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         name,

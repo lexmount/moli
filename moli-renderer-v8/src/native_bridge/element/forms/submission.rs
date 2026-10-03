@@ -320,9 +320,9 @@ fn form_submission_skips_constraint_validation(
     form_handle: DomHandle,
     submitter_handle: Option<DomHandle>,
 ) -> bool {
-    element_has_attribute(runtime, form_handle, "novalidate")
+    has_reflected_attribute(runtime, form_handle, "novalidate")
         || submitter_handle
-            .is_some_and(|submitter| element_has_attribute(runtime, submitter, "formnovalidate"))
+            .is_some_and(|submitter| has_reflected_attribute(runtime, submitter, "formnovalidate"))
 }
 
 pub(in crate::native_bridge) fn form_request_submit_callback<'s>(
@@ -591,10 +591,11 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     let (target_name, action, source_document) = {
         let runtime = unsafe { &*runtime_ptr };
         let target_name = submitter
-            .and_then(|handle| element_attribute(runtime, handle, "formtarget"))
+            .and_then(|handle| reflected_attribute(runtime, handle, "formtarget"))
             .filter(|value| !value.is_empty())
             .or_else(|| {
-                element_attribute(runtime, form_handle, "target").filter(|value| !value.is_empty())
+                reflected_attribute(runtime, form_handle, "target")
+                    .filter(|value| !value.is_empty())
             });
         let source_document = runtime.dom_host().owner_document_handle(form_handle);
         (
@@ -1020,7 +1021,7 @@ fn selected_form_submission_encoding(
     form_handle: DomHandle,
 ) -> &'static encoding_rs::Encoding {
     form_submission_encoding(
-        element_attribute(runtime, form_handle, "accept-charset").as_deref(),
+        reflected_attribute(runtime, form_handle, "accept-charset").as_deref(),
         runtime.document_character_set(),
     )
 }
@@ -1032,12 +1033,12 @@ fn resolve_form_submission_action(
 ) -> String {
     submitter
         .and_then(|handle| {
-            element_attribute(runtime, handle, "formaction")
+            reflected_attribute(runtime, handle, "formaction")
                 .filter(|value| !value.is_empty())
                 .map(|_| resolve_url_like_attribute(runtime, handle, "formaction"))
         })
         .or_else(|| {
-            element_attribute(runtime, form_handle, "action")
+            reflected_attribute(runtime, form_handle, "action")
                 .filter(|value| !value.is_empty())
                 .map(|_| resolve_url_like_attribute(runtime, form_handle, "action"))
         })
@@ -1065,8 +1066,8 @@ fn resolve_form_submission_method(
     submitter: Option<DomHandle>,
 ) -> &'static str {
     submitter
-        .and_then(|handle| element_attribute(runtime, handle, "formmethod"))
-        .or_else(|| element_attribute(runtime, form_handle, "method"))
+        .and_then(|handle| reflected_attribute(runtime, handle, "formmethod"))
+        .or_else(|| reflected_attribute(runtime, form_handle, "method"))
         .as_deref()
         .map(normalized_form_method)
         .unwrap_or("get")
@@ -1078,8 +1079,8 @@ fn resolve_form_submission_enctype(
     submitter: Option<DomHandle>,
 ) -> &'static str {
     submitter
-        .and_then(|handle| element_attribute(runtime, handle, "formenctype"))
-        .or_else(|| element_attribute(runtime, form_handle, "enctype"))
+        .and_then(|handle| reflected_attribute(runtime, handle, "formenctype"))
+        .or_else(|| reflected_attribute(runtime, form_handle, "enctype"))
         .as_deref()
         .map(normalized_form_enctype)
         .unwrap_or("application/x-www-form-urlencoded")
