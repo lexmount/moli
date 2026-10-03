@@ -362,7 +362,7 @@ pub(crate) use self::events::{
     clear_event_composed_path, construct_original_error_event, construct_original_message_event,
     error_event_handler_arguments, event_attribute, event_backing, event_bool_attribute,
     event_callback_values, event_initialized, event_internal_bool_flag, event_is_dispatching,
-    event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
+    event_is_error_event, event_is_mouse_event, event_private_value, event_source_retargets_on_access, initialize_event_object,
     initialize_native_security_policy_violation_event, mark_agent_submit_event, mark_event_trusted,
     new_event_state, new_event_wrapper, node_event_callback_values, set_event_composed_path,
     set_event_internal_flag, set_event_private_value, set_event_source_value, set_event_trusted,

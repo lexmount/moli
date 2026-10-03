@@ -19,8 +19,7 @@ use super::{
         input_event_get_target_ranges_callback, keyboard_event_init_callback,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
         submit_event_submitter_getter_function, ui_event_pseudo_target_getter_function,
-        command_event_command_getter_function, command_event_source_getter_function,
-        toggle_event_source_getter_function,
+        interaction_event_source_getter,
         ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
@@ -156,17 +155,21 @@ struct DragEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
 struct CommandEventTemplateAccessorsDeclaration {
-    #[webapi(accessor_property, getter = command_event_source_getter_function)]
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
     source: (),
 
-    #[webapi(accessor_property, getter = command_event_command_getter_function)]
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "command"))]
     command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
 struct ToggleEventTemplateAccessorsDeclaration {
-    #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
+    #[webapi(accessor_property = "oldState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldState"))]
+    old_state: (),
+    #[webapi(accessor_property = "newState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newState"))]
+    new_state: (),
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
     source: (),
 }
 
@@ -408,14 +411,26 @@ struct DocumentEventTemplateMethodsDeclaration {
 // Installation and wrapper placement share the same native declarations. Public
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
+    // Native source accessors retarget against currentTarget and project into
+    // the receiver's world. Keep those declarations when the shared value
+    // bindings also supply source accessors for renderer-independent embedders.
+    match interface {
+        "ToggleEvent" => {
+            return Some(EventTemplateDeclaration::new::<
+                ToggleEventTemplateAccessorsDeclaration,
+            >());
+        }
+        "CommandEvent" => {
+            return Some(EventTemplateDeclaration::new::<
+                CommandEventTemplateAccessorsDeclaration,
+            >());
+        }
+        _ => {}
+    }
     if let Some(declaration) = moli_webapi::events::subclasses::template_declaration(interface) {
         return Some(declaration);
     }
     Some(match interface {
-        "ToggleEvent" => EventTemplateDeclaration::new::<ToggleEventTemplateAccessorsDeclaration>(),
-        "CommandEvent" => {
-            EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>()
-        }
         "Event" => EventTemplateDeclaration::new::<EventBaseTemplateMethodsDeclaration>(),
         "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "UIEvent" => EventTemplateDeclaration::new::<UiEventTemplateMethodsDeclaration>(),
