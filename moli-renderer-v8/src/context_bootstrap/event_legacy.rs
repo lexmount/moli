@@ -134,9 +134,7 @@ struct LegacyTextEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct LegacyMouseEventBaseInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    detail: i32,
+struct LegacyMouseEventBaseInitDeclaration {
     screen_x: i32,
     screen_y: i32,
     client_x: i32,
@@ -164,14 +162,6 @@ struct LegacyMouseEventTailInitDeclaration<'scope> {
 #[webapi(plain, data_properties, enumerable)]
 struct LegacyCustomEventInitDeclaration<'scope> {
     detail: v8::Local<'scope, v8::Value>,
-}
-
-fn legacy_event_view_or_global<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    view: Option<v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Value> {
-    view.filter(|value| !value.is_null_or_undefined())
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
 }
 
 fn legacy_text_event_view_or_null<'s>(
@@ -269,9 +259,8 @@ pub(super) fn mouse_event_init_callback<'s>(
     ) {
         return;
     }
+    super::events::initialize_legacy_ui_event(scope, event, parsed.view, parsed.detail);
     LegacyMouseEventBaseInitDeclaration::new(
-        view,
-        parsed.detail,
         parsed.screen_x,
         parsed.screen_y,
         parsed.client_x,
