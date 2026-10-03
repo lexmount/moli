@@ -210,7 +210,13 @@ impl CallbackInvoker {
         }
         if let Some(host_ptr) = invocation.host_ptr {
             let host = unsafe { &*host_ptr };
-            let is_retired = match invocation.relevant_identity {
+            // Popup dispatch uses scoped registrations in a shared V8
+            // context. A callback from another live Window can lack that
+            // scoped identity while its own concrete realm is still current.
+            let relevant_identity = invocation.relevant_identity.or_else(|| {
+                host.window_execution_context_identity_for_access_check(invocation.relevant_context)
+            });
+            let is_retired = match relevant_identity {
                 Some(identity) => !host.window_execution_context_identity_is_current(identity),
                 // A retained Window can keep its V8 global attached after its
                 // registry entry is removed. Missing authority is not an
