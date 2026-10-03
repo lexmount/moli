@@ -5373,7 +5373,7 @@ async fn module_wasm_js_cycle_reports_guard_without_crashing() -> Result<()> {
         .await?;
     assert_eq!(
         diagnostic_global(&page, "moduleWasmJsCycleConstructor"),
-        Some(&JsValueSnapshot::String("Error".to_owned())),
+        Some(&JsValueSnapshot::String("TypeError".to_owned())),
         "message: {:?}",
         diagnostic_global(&page, "moduleWasmJsCycleMessage")
     );

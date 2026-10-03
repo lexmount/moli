@@ -1104,6 +1104,7 @@ fn script_error_constructor_kind_from_value(
     let prototype = object.get_prototype(scope)?;
     for candidate in [
         ScriptErrorConstructorKind::SyntaxError,
+        ScriptErrorConstructorKind::TypeError,
         ScriptErrorConstructorKind::WebAssemblyCompileError,
         ScriptErrorConstructorKind::WebAssemblyLinkError,
         ScriptErrorConstructorKind::Error,

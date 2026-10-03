@@ -28,6 +28,7 @@ use crate::network::ResourceRequestClient;
 use crate::script_vm::{ScriptVm, ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness};
 use crate::types::{
     ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
+    ScriptErrorConstructorKind,
 };
 use crate::util::v8str;
 use moli_fetch::FetchConfig;
@@ -1658,5 +1659,26 @@ fn wasm_compile_with_options_does_not_use_page_webassembly_constructor() {
     assert!(
         !message.contains("patched WebAssembly.Module should not be used"),
         "{message}"
+    );
+}
+
+#[test]
+fn native_module_errors_classify_caught_v8_type_errors() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let try_catch = pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    let source = v8str(&scope, "null.missing");
+    let script = v8::Script::compile(&scope, source, None).expect("valid script");
+    assert!(crate::script_execution::execute_compiled_script(&mut scope, script).is_none());
+    let exception = scope.exception().expect("V8 should throw a TypeError");
+    let caught_constructor = super::script_error_constructor_kind_from_value(&mut scope, exception);
+    assert_eq!(
+        caught_constructor,
+        Some(ScriptErrorConstructorKind::TypeError)
     );
 }
