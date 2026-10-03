@@ -24,9 +24,11 @@ pub(crate) struct WorkerGlobalState {
     /// Timer id counter.
     pub(in crate::worker) next_timer_id: u32,
     /// Browser font tasks use a separate queue and cannot be canceled by timer IDs.
-    pub(in crate::worker) font_tasks: std::collections::VecDeque<super::super::timer_callback::WorkerTimerCallback>,
+    pub(in crate::worker) font_tasks:
+        std::collections::VecDeque<super::super::timer_callback::WorkerTimerCallback>,
     /// Networking completions are browser tasks, outside the author timer ID space.
-    pub(in crate::worker) networking_tasks: super::super::networking_tasks::WorkerNetworkingTaskQueue,
+    pub(in crate::worker) networking_tasks:
+        super::super::networking_tasks::WorkerNetworkingTaskQueue,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.
@@ -39,8 +41,10 @@ pub(crate) struct WorkerGlobalState {
     /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(in crate::worker) current_script_url: Option<Url>,
     /// Version-specific classic ServiceWorker script resources.
-    pub(in crate::worker) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
-    pub(in crate::worker) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
+    pub(in crate::worker) service_worker_script_resources:
+        HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(in crate::worker) service_worker_updated_script_resources:
+        crate::worker::WorkerScriptUpdateResources,
     pub(in crate::worker) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
@@ -48,7 +52,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) module_static_import_content_security_policies: Vec<String>,
     /// Enforce CSP policies parsed from the top-level worker script response.
     pub(in crate::worker) content_security_policies: Vec<String>,
-    pub(in crate::worker) content_security_policy_snapshot: Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
+    pub(in crate::worker) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     /// Report-only CSP policies parsed from the top-level worker script response.
     pub(in crate::worker) content_security_report_only_policies: Vec<String>,
     /// Reporting API endpoints parsed from the top-level worker script response.
@@ -157,9 +162,10 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `clients.openWindow()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_clients_open_windows:
         HashMap<u64, PendingServiceWorkerClientsOpenWindow>,
-    /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
+    /// In-flight Service Worker `registration.update()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_updates: HashMap<u64, PendingServiceWorkerUpdate>,
     pub(in crate::worker) service_worker_update_request_ids: WorkerServiceWorkerRequestIdAllocator,
+    /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_show_notifications:
         HashMap<u64, PendingServiceWorkerShowNotification>,
     /// In-flight Service Worker `registration.getNotifications()` requests keyed by request id.
@@ -341,379 +347,6 @@ pub(super) fn worker_close_callback(
     if let Some(state) = get_worker_state(scope) {
         state.borrow_mut().closed = true;
         close_worker_owned_broadcast_channels(&state);
-    }
-}
-
-impl WorkerGlobalState {
-    /// Register a pending worker WebCrypto task and return the routing tuple the
-    /// blocking task needs to report completion. Runs synchronously inside the
-    /// V8 callback before control returns to the worker event loop.
-    pub(super) fn register_pending_webcrypto_task(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> (u64, mpsc::UnboundedSender<WorkerWebCryptoCompletion>) {
-        let task_id = self.next_webcrypto_task_id;
-        self.next_webcrypto_task_id = task_id
-            .checked_add(1)
-            .expect("worker WebCrypto task id exhausted");
-        self.pending_webcrypto
-            .insert(task_id, PendingWorkerWebCryptoTask { resolver });
-        (task_id, self.webcrypto_completion_tx.clone())
-    }
-
-    pub(super) fn take_pending_webcrypto_task(
-        &mut self,
-        task_id: u64,
-    ) -> Option<PendingWorkerWebCryptoTask> {
-        self.pending_webcrypto.remove(&task_id)
-    }
-
-    pub(super) fn register_pending_opfs_task(
-        &mut self,
-        locator: moli_storage_service::StorageBucketLocator,
-        handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
-        settlement: crate::opfs_owner_tasks::OpfsTaskSettlement,
-    ) -> (u64, mpsc::UnboundedSender<WorkerOpfsCompletion>) {
-        let state = self
-            .opfs_owner_state
-            .get_or_insert_with(WorkerOpfsOwnerState::default);
-        let task_id = state.next_task_id;
-        state.next_task_id = task_id
-            .checked_add(1)
-            .expect("worker OPFS task id exhausted");
-        state.pending_tasks.insert(
-            task_id,
-            PendingWorkerOpfsTask {
-                locator,
-                handle_access,
-                settlement,
-            },
-        );
-        (task_id, self.opfs_completion_tx.clone())
-    }
-
-    pub(super) fn take_pending_opfs_task(&mut self, task_id: u64) -> Option<PendingWorkerOpfsTask> {
-        self.opfs_owner_state
-            .as_mut()?
-            .pending_tasks
-            .remove(&task_id)
-    }
-
-    pub(super) fn register_pending_service_worker_client_query(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-        query_type: PendingServiceWorkerClientQueryType,
-    ) -> u64 {
-        let request_id = self.service_worker_client_query_request_ids.allocate();
-        self.pending_service_worker_client_queries.insert(
-            request_id,
-            PendingServiceWorkerClientQuery {
-                resolver,
-                query_type,
-            },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_client_query(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerClientQuery> {
-        self.pending_service_worker_client_queries
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_client_navigate(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_client_navigate_request_ids.allocate();
-        self.pending_service_worker_client_navigates
-            .insert(request_id, PendingServiceWorkerClientNavigate { resolver });
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_client_navigate(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerClientNavigate> {
-        self.pending_service_worker_client_navigates
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_client_focus(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_client_focus_request_ids.allocate();
-        self.pending_service_worker_client_focuses
-            .insert(request_id, PendingServiceWorkerClientFocus { resolver });
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_client_focus(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerClientFocus> {
-        self.pending_service_worker_client_focuses
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_clients_open_window(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_clients_open_window_request_ids
-            .allocate();
-        self.pending_service_worker_clients_open_windows.insert(
-            request_id,
-            PendingServiceWorkerClientsOpenWindow { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_clients_open_window(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerClientsOpenWindow> {
-        self.pending_service_worker_clients_open_windows
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_show_notification(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_show_notification_request_ids.allocate();
-        self.pending_service_worker_show_notifications.insert(
-            request_id,
-            PendingServiceWorkerShowNotification { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_show_notification(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerShowNotification> {
-        self.pending_service_worker_show_notifications
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_get_notifications(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_get_notifications_request_ids.allocate();
-        self.pending_service_worker_get_notifications.insert(
-            request_id,
-            PendingServiceWorkerGetNotifications { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_get_notifications(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerGetNotifications> {
-        self.pending_service_worker_get_notifications
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_sync_registration(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_sync_registration_request_ids.allocate();
-        self.pending_service_worker_sync_registrations.insert(
-            request_id,
-            PendingServiceWorkerSyncRegistration { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_sync_registration(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerSyncRegistration> {
-        self.pending_service_worker_sync_registrations
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_sync_get_tags(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_sync_get_tags_request_ids.allocate();
-        self.pending_service_worker_sync_get_tags
-            .insert(request_id, PendingServiceWorkerSyncGetTags { resolver });
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_sync_get_tags(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerSyncGetTags> {
-        self.pending_service_worker_sync_get_tags
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_periodic_sync_registration(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_periodic_sync_registration_request_ids
-            .allocate();
-        self.pending_service_worker_periodic_sync_registrations
-            .insert(
-                request_id,
-                PendingServiceWorkerPeriodicSyncRegistration { resolver },
-            );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_periodic_sync_registration(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPeriodicSyncRegistration> {
-        self.pending_service_worker_periodic_sync_registrations
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_periodic_sync_get_tags(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_periodic_sync_get_tags_request_ids
-            .allocate();
-        self.pending_service_worker_periodic_sync_get_tags.insert(
-            request_id,
-            PendingServiceWorkerPeriodicSyncGetTags { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_periodic_sync_get_tags(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPeriodicSyncGetTags> {
-        self.pending_service_worker_periodic_sync_get_tags
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_periodic_sync_unregistration(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_periodic_sync_unregistration_request_ids
-            .allocate();
-        self.pending_service_worker_periodic_sync_unregistrations
-            .insert(
-                request_id,
-                PendingServiceWorkerPeriodicSyncUnregistration { resolver },
-            );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_periodic_sync_unregistration(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPeriodicSyncUnregistration> {
-        self.pending_service_worker_periodic_sync_unregistrations
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_push_subscribe(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self.service_worker_push_subscription_request_ids.allocate();
-        self.pending_service_worker_push_subscriptions
-            .insert(request_id, PendingServiceWorkerPushSubscribe { resolver });
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_push_subscribe(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPushSubscribe> {
-        self.pending_service_worker_push_subscriptions
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_push_get_subscription(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_push_get_subscription_request_ids
-            .allocate();
-        self.pending_service_worker_push_get_subscriptions.insert(
-            request_id,
-            PendingServiceWorkerPushGetSubscription { resolver },
-        );
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_push_get_subscription(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPushGetSubscription> {
-        self.pending_service_worker_push_get_subscriptions
-            .remove(&request_id)
-    }
-
-    pub(super) fn register_pending_service_worker_push_unsubscribe(
-        &mut self,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> u64 {
-        let request_id = self
-            .service_worker_push_unsubscription_request_ids
-            .allocate();
-        self.pending_service_worker_push_unsubscriptions
-            .insert(request_id, PendingServiceWorkerPushUnsubscribe { resolver });
-        request_id
-    }
-
-    pub(super) fn take_pending_service_worker_push_unsubscribe(
-        &mut self,
-        request_id: u64,
-    ) -> Option<PendingServiceWorkerPushUnsubscribe> {
-        self.pending_service_worker_push_unsubscriptions
-            .remove(&request_id)
-    }
-
-    pub(super) fn consume_service_worker_window_interaction(&mut self) -> bool {
-        if self.service_worker_window_interaction_allowed_count == 0 {
-            return false;
-        }
-
-        self.service_worker_window_interaction_allowed_count = self
-            .service_worker_window_interaction_allowed_count
-            .saturating_sub(1);
-
-        if let Some((_, pending)) = self
-            .pending_service_worker_message_events
-            .iter_mut()
-            .find(|(_, pending)| pending.window_interaction_allowed)
-        {
-            pending.window_interaction_allowed = false;
-            return true;
-        }
-
-        if let Some((_, pending)) = self
-            .pending_service_worker_notification_events
-            .iter_mut()
-            .find(|(_, pending)| pending.window_interaction_allowed)
-        {
-            pending.window_interaction_allowed = false;
-        }
-
-        true
     }
 }
 

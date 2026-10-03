@@ -1288,6 +1288,8 @@ String(__popupRetiredCallbackWindow !== __popupRetiredCallbackFrame.contentWindo
         "true"
     );
 
+    // Window load uses HTML's legacy target override: target is the Document,
+    // while currentTarget and the callback receiver are the popup Window.
     vm.eval(
         r#"
 const popupURL = URL.createObjectURL(new Blob([
@@ -1296,7 +1298,7 @@ const popupURL = URL.createObjectURL(new Blob([
 globalThis.__popupCallbackRealmWindow = __popupSourceWindow.open(popupURL);
 __popupCallbackRealmWindow.onload = function(event) {
   __popupCallbackRealmEvents.push([
-    "parent", window === top, this === __popupCallbackRealmWindow, event.target === this
+    "parent", window === top, this === __popupCallbackRealmWindow, event.target === this.document, event.currentTarget === this
   ].join(":"));
 };
 __popupCallbackRealmWindow.addEventListener("load", __popupRetiredCallback);
@@ -1304,7 +1306,7 @@ __popupCallbackRealmWindow.addEventListener("load", __popupLiveCallbackWindow.Fu
   "event",
   `parent.__popupCallbackRealmEvents.push([
     "child", window === parent.__popupLiveCallbackWindow,
-    this === parent.__popupCallbackRealmWindow, event.target === this
+    this === parent.__popupCallbackRealmWindow, event.target === this.document, event.currentTarget === this
   ].join(":"));`
 ));
 "queued"
@@ -1315,7 +1317,7 @@ __popupCallbackRealmWindow.addEventListener("load", __popupLiveCallbackWindow.Fu
     advance_page_task_executor_until_eval_equals(
         &mut vm,
         &loader,
-        "String(__popupCallbackRealmEvents.includes('child:true:true:true'))",
+        "String(__popupCallbackRealmEvents.includes('child:true:true:true:true'))",
         "true",
         "popup load callback from another live Window realm",
     )
@@ -1323,7 +1325,7 @@ __popupCallbackRealmWindow.addEventListener("load", __popupLiveCallbackWindow.Fu
     assert_eq!(
         vm.eval("__popupCallbackRealmEvents.join('|')")
             .expect("popup callback realm events should evaluate"),
-        "parent:true:true:true|child:true:true:true",
+        "parent:true:true:true:true|child:true:true:true:true",
         "live callback realms must run and reinsertion must not revive a retired callback"
     );
 }

@@ -290,14 +290,10 @@ pub(super) fn service_worker_registration_update_callback<'s>(
         let Some(document_url) = state.current_script_url.clone() else {
             return;
         };
-        let request_id = state.service_worker_update_request_ids.allocate();
-        state.pending_service_worker_updates.insert(
-            request_id,
-            PendingServiceWorkerUpdate {
-                resolver: v8::Global::new(scope, resolver),
-                registration: v8::Global::new(scope, args.this()),
-            },
-        );
+        let request_id = state.register_pending_service_worker_update(PendingServiceWorkerUpdate {
+            resolver: v8::Global::new(scope, resolver),
+            registration: v8::Global::new(scope, args.this()),
+        });
         crate::service_worker_runtime::ServiceWorkerRegistrationUpdate {
             registration_id,
             caller_version_id,
@@ -2243,4 +2239,3 @@ struct BackgroundSyncOptions {
 const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobalRegistration";
 
 const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
-

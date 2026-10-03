@@ -604,7 +604,6 @@ impl WorkerImportScriptError {
     }
 }
 
-
 fn annotate_worker_exception_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Value>,
@@ -667,7 +666,7 @@ pub(super) fn worker_import_scripts_callback<'s>(
     let Some(state) = get_worker_state(scope) else {
         return;
     };
-    if state.borrow().script_kind == super::thread::WorkerScriptKind::Module {
+    if state.borrow().script_kind == crate::worker::thread::WorkerScriptKind::Module {
         throw_type_error(scope, "Module scripts don't support importScripts().");
         return;
     }
@@ -722,4 +721,3 @@ pub(super) fn worker_import_scripts_callback<'s>(
         }
     }
 }
-

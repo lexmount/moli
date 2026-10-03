@@ -401,6 +401,14 @@ impl JsContextHost {
         if !std::ptr::eq(host_ptr, self) {
             return None;
         }
+        // Child realms bind their associated Document through native settings.
+        // The entered realm, rather than the borrowed method's callee realm,
+        // selects the entry Document even after the iframe route changes.
+        if let Some(settings) =
+            context.get_slot::<crate::native_bridge::WindowEnvironmentSettings>()
+        {
+            return Some(settings.document_handle());
+        }
         let window = context.global(scope);
         if let Some(document) = crate::util::get_private_value(
             scope,

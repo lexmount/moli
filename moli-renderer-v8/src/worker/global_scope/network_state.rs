@@ -31,7 +31,9 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
-    ContentSecurityPolicyViolation(Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>),
+    ContentSecurityPolicyViolation(
+        Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    ),
     Completion(Box<WorkerFetchCompletion>),
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),

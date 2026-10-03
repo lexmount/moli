@@ -880,7 +880,7 @@ impl HostTimeoutScheduler {
     #[cfg(test)]
     pub(crate) fn has_ready_callback_timer(&self) -> bool {
         self.scheduler
-            .next_ready_deadline_matching(Instant::now(), min_delay_ready_allowance(), |task| {
+            .next_ready_deadline_matching(Instant::now(), |task| {
                 !matches!(
                     task.callback,
                     ScheduledTimerCallback::AnimationFrameWake { .. }

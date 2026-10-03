@@ -1294,3 +1294,11 @@ pub(crate) fn worker_allows_wasm_code_generation_by_csp(
         None,
     )
 }
+
+impl WorkerGlobalState {
+    pub(in crate::worker) fn content_security_policy_snapshot_for_inheritance(
+        &self,
+    ) -> crate::content_security_policy::InheritedContentSecurityPolicy {
+        worker_policy_snapshot(self)
+    }
+}
