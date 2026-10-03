@@ -311,6 +311,15 @@ struct MouseEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::WheelEvent, enumerable)]
 struct WheelEventTemplateConstantsDeclaration {
+    #[webapi(accessor_property = "deltaMode", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaMode"))]
+    delta_mode: (),
+    #[webapi(accessor_property = "deltaX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaX"))]
+    delta_x: (),
+    #[webapi(accessor_property = "deltaY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaY"))]
+    delta_y: (),
+    #[webapi(accessor_property = "deltaZ", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "deltaZ"))]
+    delta_z: (),
+
     #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "wheelDeltaX"))]
     wheel_delta_x: (),
     #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "wheelDeltaY"))]
