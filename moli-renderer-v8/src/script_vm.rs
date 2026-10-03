@@ -1206,6 +1206,7 @@ pub(super) struct ActiveDragSession {
 
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
+    pub document: DomHandle,
     pub handle: DomHandle,
     pub x: f64,
     pub y: f64,
