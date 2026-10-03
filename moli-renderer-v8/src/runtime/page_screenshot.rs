@@ -207,7 +207,7 @@ impl PageVm {
             let previous = self.document_settings.emulated_media.clone();
             let mut print = previous.clone();
             print.media = Some("print".to_owned());
-            self.set_emulated_media(&print);
+            self.set_emulated_media(&print)?;
             Some(previous)
         } else {
             None
@@ -223,7 +223,7 @@ impl PageVm {
             },
         );
         if let Some(previous) = restore_media {
-            self.set_emulated_media(&previous);
+            self.set_emulated_media(&previous)?;
         }
         result.map(RendererImageCaptureOutcome::into_screenshot_reply)
     }

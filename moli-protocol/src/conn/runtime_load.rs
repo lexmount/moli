@@ -1465,6 +1465,7 @@ impl CdpConnection {
     ) -> anyhow::Result<PreparedDocumentPageCommitConfiguration> {
         let idle_override = self.idle_override_for_navigation(owner, final_url);
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
+        let document_settings = load_inputs.document_settings_snapshot(idle_override);
         // The renderer runtime is shared by the BrowserContext, but each Page
         // target owns its NavigationEngine and may have a different transport
         // identity. Resolve through that target's engine at the commit
@@ -1489,16 +1490,7 @@ impl CdpConnection {
             runtime_isolated_worlds: Vec::new(),
             permission_overrides: load_inputs.permission_overrides,
             extra_http_headers: load_inputs.extra_http_headers,
-            document_settings: moli_page_types::DocumentSettings {
-                script_execution_disabled: load_inputs.script_execution_disabled,
-                scrollbars_hidden: load_inputs.scrollbars_hidden,
-                bypass_content_security_policy: load_inputs.bypass_content_security_policy,
-                emulated_media: load_inputs.emulated_media,
-                idle_override,
-                navigator_overrides: load_inputs.navigator_overrides,
-                viewport_surface: load_inputs.viewport_surface,
-                document_activity: load_inputs.document_activity,
-            },
+            document_settings,
             browser_resource_runtime,
             navigator_identity,
             network_offline: load_inputs.network_offline,

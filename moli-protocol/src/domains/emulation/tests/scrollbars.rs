@@ -127,6 +127,22 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
     bc.set_target_url("about:blank".to_owned());
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    expect_session_command_result(
+        &mut ctx,
+        88502,
+        "SID-1",
+        "Emulation.setEmulatedMedia",
+        json!({"features":[{"name":"prefers-color-scheme","value":"dark"}]}),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        88503,
+        "SID-1",
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width":900,"height":500,"deviceScaleFactor":1,"mobile":false}),
+    )
+    .await;
     set_hidden(&mut ctx, "SID-1", true).await;
     // Materialize the staged about:blank Page first, then navigate to a new
     // Document. Both direct HTML creation and prepared commit must inherit.
@@ -152,7 +168,7 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
     for hidden in [true, false, true] {
         set_hidden(&mut ctx, "SID-1", hidden).await;
         let html = format!(
-            "{HTML}<script>globalThis.__initial = [innerWidth,document.documentElement.clientWidth,scroller.clientWidth];</script>"
+            "{HTML}<script>globalThis.__initial = [innerWidth,document.documentElement.clientWidth,scroller.clientWidth,matchMedia('(prefers-color-scheme: dark)').matches];</script>"
         );
         ctx.install_buffered_navigation_fixture_for_session_owner(
             url::Url::parse("https://scrollbars.example/next").unwrap(),
@@ -168,6 +184,8 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
             evaluate(&mut ctx, "__initial[2]").await,
             json!(if hidden { 200 } else { 185 })
         );
+        assert_eq!(evaluate(&mut ctx, "__initial[0]").await, json!(900));
+        assert_eq!(evaluate(&mut ctx, "__initial[3]").await, json!(true));
     }
 }
 

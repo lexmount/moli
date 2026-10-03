@@ -186,6 +186,22 @@ pub(crate) struct TargetNavigationLoadInputs {
 }
 
 impl TargetNavigationLoadInputs {
+    pub(crate) fn document_settings_snapshot(
+        &self,
+        idle_override: Option<moli_page_types::EmulatedIdleOverride>,
+    ) -> moli_page_types::DocumentSettings {
+        moli_page_types::DocumentSettings {
+            script_execution_disabled: self.script_execution_disabled,
+            scrollbars_hidden: self.scrollbars_hidden,
+            bypass_content_security_policy: self.bypass_content_security_policy,
+            emulated_media: self.emulated_media.clone(),
+            idle_override,
+            navigator_overrides: self.navigator_overrides.clone(),
+            viewport_surface: self.viewport_surface,
+            document_activity: self.document_activity,
+        }
+    }
+
     pub(crate) fn with_main_document_commit_seed(
         mut self,
         seed: RendererMainDocumentCommitSeed,

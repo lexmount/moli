@@ -753,6 +753,10 @@ pub(crate) use post_parse_lifecycle::RuntimeOwnedModuleFailureBodySettlement;
 mod browsing_contexts;
 mod child_frame_runtime;
 mod document_environment;
+mod document_settings;
+pub(crate) use document_settings::{
+    DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
+};
 mod execution_contexts;
 mod layout;
 mod prepared_scripts;

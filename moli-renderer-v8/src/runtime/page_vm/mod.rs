@@ -4369,7 +4369,8 @@ impl PageVm {
         page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
         page_vm
             .vm_mut()
-            .set_script_execution_disabled(env.document_settings.script_execution_disabled);
+            .initialize_document_settings(&env.document_settings, env.layout_configuration)
+            .map_err(|error| Box::new((error, page_vm.vm().document_runtime.dom_host().clone())))?;
         page_vm
             .vm_mut()
             .set_permission_overrides(&env.permission_overrides);
@@ -4393,21 +4394,6 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
-            .set_emulated_media_for_bootstrap(&env.document_settings.emulated_media);
-        page_vm
-            .vm_mut()
-            .set_idle_override(env.document_settings.idle_override);
-        page_vm
-            .vm_mut()
-            .set_navigator_overrides(&env.document_settings.navigator_overrides);
-        page_vm
-            .vm_mut()
-            .set_viewport_surface_for_bootstrap(env.document_settings.viewport_surface);
-        page_vm
-            .vm_mut()
-            .set_document_activity_for_bootstrap(env.document_settings.document_activity);
         page_vm.vm_mut().set_network_offline(env.network_offline);
         page_vm
             .vm_mut()
