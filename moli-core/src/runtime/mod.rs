@@ -283,7 +283,7 @@ impl Browser {
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(config.layout_policy())?;
+            .configure_layout(config.layout_policy(), config.scrollbars_hidden())?;
         let lifetime_owner = Rc::new(BrowserLifetimeOwner {
             js_runtime: Some(js_runtime.clone()),
             browser_context_owner,

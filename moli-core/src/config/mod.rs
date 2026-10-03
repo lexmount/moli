@@ -9,6 +9,7 @@ pub struct BrowserConfig {
     fetch: FetchConfig,
     profile_dir: Option<PathBuf>,
     layout_policy: LayoutPolicy,
+    scrollbars_hidden: bool,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
@@ -23,6 +24,7 @@ impl Default for BrowserConfig {
             fetch: FetchConfig::default(),
             profile_dir: None,
             layout_policy: LayoutPolicy::default(),
+            scrollbars_hidden: false,
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
@@ -72,6 +74,19 @@ impl BrowserConfig {
 
     pub fn with_layout_policy(mut self, policy: LayoutPolicy) -> Self {
         self.set_layout_policy(policy);
+        self
+    }
+
+    pub fn scrollbars_hidden(&self) -> bool {
+        self.scrollbars_hidden
+    }
+
+    pub fn set_scrollbars_hidden(&mut self, hidden: bool) {
+        self.scrollbars_hidden = hidden;
+    }
+
+    pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
+        self.set_scrollbars_hidden(hidden);
         self
     }
 

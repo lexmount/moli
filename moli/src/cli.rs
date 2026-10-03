@@ -594,6 +594,10 @@ pub struct CommonArgs {
     )]
     pub layout: bool,
 
+    /// Hide native scrollbars without disabling scrolling. Requires --layout.
+    #[arg(long, requires = "layout")]
+    pub hide_scrollbars: bool,
+
     #[arg(short, long = "cookie-file")]
     pub cookie_file: Vec<String>,
 

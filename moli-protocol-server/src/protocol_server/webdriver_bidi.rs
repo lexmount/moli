@@ -76,7 +76,8 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
         state.optional_resource_fetch_mask,
         state.subframe_loading_enabled,
         state.layout_policy,
-    );
+    )
+    .with_scrollbars_hidden(state.scrollbars_hidden);
     ws.on_upgrade(move |socket| {
         handle_bidi_session_socket(
             socket,

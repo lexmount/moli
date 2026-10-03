@@ -7,27 +7,52 @@ impl RendererOwnerHandle {
     /// is constructed. Page construction seals the value so a shared renderer
     /// owner can never host Pages with conflicting browser-level policies.
     pub fn configure_layout_policy(&self, policy: LayoutPolicy) -> Result<()> {
+        self.configure_layout(policy, false)
+    }
+
+    /// Fixes both layout policy and scrollbar visibility before Page creation.
+    pub fn configure_layout(&self, policy: LayoutPolicy, scrollbars_hidden: bool) -> Result<()> {
+        ensure!(
+            !scrollbars_hidden || policy.uses_real_layout(),
+            "hiding scrollbars requires real layout"
+        );
         let mut state = self.state.layout_policy.lock();
-        if let Some(configured) = state.policy {
+        if let Some((configured_policy, configured_hidden)) = state.configuration {
             ensure!(
-                configured == policy,
-                "renderer owner layout policy is configured as {:?}, cannot change it to {:?}",
-                configured,
-                policy
+                (configured_policy, configured_hidden) == (policy, scrollbars_hidden),
+                "renderer owner layout policy is configured as {:?} (scrollbars hidden: {}), cannot change it to {:?} (scrollbars hidden: {})",
+                configured_policy,
+                configured_hidden,
+                policy,
+                scrollbars_hidden
             );
         } else {
-            state.policy = Some(policy);
+            state.configuration = Some((policy, scrollbars_hidden));
         }
         Ok(())
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.state.layout_policy.lock().policy.unwrap_or_default()
+        self.state
+            .layout_policy
+            .lock()
+            .configuration
+            .unwrap_or_default()
+            .0
     }
 
-    pub(super) fn seal_layout_policy_for_page_creation(&self) -> LayoutPolicy {
+    pub fn scrollbars_hidden(&self) -> bool {
+        self.state
+            .layout_policy
+            .lock()
+            .configuration
+            .unwrap_or_default()
+            .1
+    }
+
+    pub(super) fn seal_layout_configuration_for_page_creation(&self) -> (LayoutPolicy, bool) {
         let mut state = self.state.layout_policy.lock();
-        *state.policy.get_or_insert_with(LayoutPolicy::default)
+        *state.configuration.get_or_insert_with(Default::default)
     }
 
     pub(crate) fn new(

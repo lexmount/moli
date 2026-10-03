@@ -1207,6 +1207,7 @@ impl PageVm {
             fetch_subresource_interception_resource_type: self
                 .fetch_subresource_interception_resource_type,
             layout_policy: self.layout_policy,
+            scrollbars_hidden: self.scrollbars_hidden,
             wpt_extensions_enabled: self.wpt_extensions_enabled,
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
             top_level_storage_key: None,

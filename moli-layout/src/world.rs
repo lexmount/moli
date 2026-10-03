@@ -320,6 +320,7 @@ pub(crate) struct ViewportScrollPolicy {
     scrollbar_style: ViewportScrollbarStyle,
     embedder_allows_user_scroll: bool,
     embedder_allows_scrollbar_controls: bool,
+    scrollbars_hidden: bool,
     revealed_scrollbar_x: bool,
     revealed_scrollbar_y: bool,
 }
@@ -370,9 +371,15 @@ impl ViewportScrollPolicy {
             },
             embedder_allows_user_scroll: !user_scrolling_disabled,
             embedder_allows_scrollbar_controls: !user_scrolling_disabled,
+            scrollbars_hidden: false,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
+    }
+
+    pub(crate) const fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
+        self.scrollbars_hidden = hidden;
+        self
     }
 
     pub(crate) const fn defining_body(self) -> Option<LayoutBoxId> {
@@ -461,7 +468,8 @@ impl ViewportScrollPolicy {
     }
 
     const fn allows_scrollbar_controls(self) -> bool {
-        self.embedder_allows_scrollbar_controls
+        !self.scrollbars_hidden
+            && self.embedder_allows_scrollbar_controls
             && !matches!(self.scrollbar_style.width, LayoutScrollbarWidth::None)
     }
 

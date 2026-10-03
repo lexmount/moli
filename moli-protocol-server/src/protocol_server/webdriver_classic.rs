@@ -1669,7 +1669,8 @@ pub(super) async fn webdriver_classic_new_session(
             state.optional_resource_fetch_mask,
             state.subframe_loading_enabled,
             state.layout_policy,
-        ),
+        )
+        .with_scrollbars_hidden(state.scrollbars_hidden),
     );
     let create_context = ClassicDevToolsCommandContext::new(session.session_id.as_str());
     let target_id = match runtime

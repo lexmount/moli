@@ -198,6 +198,12 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_layout_policy(policy);
     }
 
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) {
+        self._context_host
+            .borrow_mut()
+            .set_scrollbars_hidden(hidden);
+    }
+
     pub(super) fn sync_document_fonts_for_environment(&mut self) {
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {

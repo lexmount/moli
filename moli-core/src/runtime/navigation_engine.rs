@@ -356,6 +356,7 @@ pub struct NavigationRuntimeConfig {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     layout_policy: LayoutPolicy,
+    scrollbars_hidden: bool,
 }
 
 impl NavigationRuntimeConfig {
@@ -370,6 +371,7 @@ impl NavigationRuntimeConfig {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_policy,
+            scrollbars_hidden: false,
         }
     }
 
@@ -392,6 +394,15 @@ impl NavigationRuntimeConfig {
     pub fn layout_policy(&self) -> LayoutPolicy {
         self.layout_policy
     }
+
+    pub fn scrollbars_hidden(&self) -> bool {
+        self.scrollbars_hidden
+    }
+
+    pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
+        self.scrollbars_hidden = hidden;
+        self
+    }
 }
 
 impl Default for NavigationRuntimeConfig {
@@ -413,6 +424,7 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
             config.subframe_loading_enabled(),
             config.layout_policy(),
         )
+        .with_scrollbars_hidden(config.scrollbars_hidden())
     }
 }
 
@@ -421,6 +433,7 @@ pub struct NavigationEngine {
     fetch_config: FetchConfig,
     page_network_policy: PageNetworkPolicy,
     layout_policy: LayoutPolicy,
+    scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
@@ -557,6 +570,7 @@ impl NavigationEngine {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_policy,
+            scrollbars_hidden,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
@@ -565,7 +579,7 @@ impl NavigationEngine {
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout(layout_policy, scrollbars_hidden)?;
         let standalone_lifetime_owner = standalone_browser_context_owner.map(|owner| {
             Rc::new(NavigationEngineLifetimeOwner {
                 js_runtime: Some(js_runtime.clone()),
@@ -580,6 +594,7 @@ impl NavigationEngine {
                 false,
             ),
             layout_policy,
+            scrollbars_hidden,
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
@@ -600,7 +615,8 @@ impl NavigationEngine {
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
                 renderer_owner_source.layout_policy,
-            ),
+            )
+            .with_scrollbars_hidden(renderer_owner_source.scrollbars_hidden),
             renderer_owner_source,
         )
     }
@@ -614,11 +630,12 @@ impl NavigationEngine {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_policy,
+            scrollbars_hidden,
         } = config;
         renderer_owner_source
             .js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout(layout_policy, scrollbars_hidden)?;
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
@@ -631,6 +648,7 @@ impl NavigationEngine {
                 false,
             ),
             layout_policy,
+            scrollbars_hidden,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
@@ -698,6 +716,7 @@ impl NavigationEngine {
             self.subframe_loading_enabled(),
             self.layout_policy,
         )
+        .with_scrollbars_hidden(self.scrollbars_hidden)
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
@@ -2529,6 +2548,58 @@ mod tests {
             browser.js_runtime.renderer_owner_handle().layout_policy(),
             LayoutPolicy::Mock
         );
+    }
+
+    #[test]
+    fn hidden_scrollbars_follow_browser_and_shared_navigation_configuration() {
+        let browser_config = BrowserConfig::default()
+            .with_layout_policy(LayoutPolicy::OnDemand)
+            .with_scrollbars_hidden(true);
+        let browser = Browser::new(browser_config.clone()).expect("hidden scrollbar browser");
+        assert!(
+            browser
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+
+        let source = NavigationEngine::new_with_runtime_config((&browser_config).into());
+        assert!(source.runtime_config().scrollbars_hidden());
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+        let shared = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
+            FetchConfig::default(),
+            &source,
+            OptionalResourceFetchMask::NONE,
+            true,
+        )
+        .expect("matching owner configuration");
+        assert!(shared.runtime_config().scrollbars_hidden());
+        assert!(shared.shares_renderer_owner_with(&source));
+
+        let conflicting = source.runtime_config().with_scrollbars_hidden(false);
+        assert!(
+            NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
+                conflicting,
+                &source
+            )
+            .is_err()
+        );
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+    }
+
+    #[test]
+    fn hidden_scrollbars_require_real_layout_for_rust_callers() {
+        assert!(Browser::new(BrowserConfig::default().with_scrollbars_hidden(true)).is_err());
     }
 
     #[test]

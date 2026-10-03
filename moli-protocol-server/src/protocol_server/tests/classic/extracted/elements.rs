@@ -1,6 +1,36 @@
 use super::*;
 
 #[tokio::test]
+async fn webdriver_classic_hidden_scrollbars_preserve_server_configuration() {
+    let state = AppState::new_with_storage_partition_and_runtime_config(
+        "127.0.0.1:9222".parse().unwrap(),
+        Arc::new(StoragePartitionState::open(None).unwrap()),
+        protocol_server_test_runtime_config(
+            protocol_server_test_fetch_config(FetchConfig::default()),
+            OptionalResourceFetchMask::NONE,
+        )
+        .with_scrollbars_hidden(true),
+        crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+    )
+    .unwrap();
+    let app = build_router(state);
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let id = session["value"]["sessionId"].as_str().expect("session id");
+    let navigated = classic_request_json_with_body(app.clone(),Method::POST,&format!("/session/{id}/url"),json!({
+        "url":"data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px'></div>"
+    })).await;
+    assert_eq!(navigated, json!({"value":null}));
+    classic_capture_layout(app.clone(), id).await;
+    let metrics = classic_request_json_with_body(app.clone(),Method::POST,&format!("/session/{id}/execute/sync"),json!({
+        "script":"return [innerWidth - document.documentElement.clientWidth,document.documentElement.scrollWidth - innerWidth];",
+        "args":[]
+    })).await;
+    assert_eq!(metrics, json!({"value":[0,0]}));
+    let deleted = classic_request_json(app, Method::DELETE, &format!("/session/{id}")).await;
+    assert_eq!(deleted, json!({"value":null}));
+}
+
+#[tokio::test]
 async fn webdriver_classic_element_equality_cases_ported_from_selenium() {
     // Ported from Selenium's Python element_equality_tests.py:
     // same element found through different locator strategies should compare equal,

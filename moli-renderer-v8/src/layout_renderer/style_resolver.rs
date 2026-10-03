@@ -14,6 +14,7 @@ pub(super) struct NativeLayoutStyleResolver<'a> {
     runtime: &'a JsContextHost,
     reads: StyleObservation<'a>,
     scripting_enabled: bool,
+    scrollbars_hidden: bool,
     profile: Option<NativeLayoutStyleResolverProfile>,
 }
 
@@ -46,6 +47,7 @@ impl<'a> NativeLayoutStyleResolver<'a> {
             runtime,
             reads,
             scripting_enabled: runtime.document_scripting_enabled(document),
+            scrollbars_hidden: runtime.scrollbars_hidden(),
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
         }
@@ -138,8 +140,14 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             );
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        let before = before.map(ResolvedLayoutStyle::from_stylo);
-        let after = after.map(ResolvedLayoutStyle::from_stylo);
+        let mut before = before.map(ResolvedLayoutStyle::from_stylo);
+        let mut after = after.map(ResolvedLayoutStyle::from_stylo);
+        if self.scrollbars_hidden {
+            resolved.suppress_scrollbars();
+            for pseudo in before.iter_mut().chain(after.iter_mut()) {
+                pseudo.suppress_scrollbars();
+            }
+        }
         if let Some(profile) = self.profile.as_mut() {
             profile.eager_pseudo_count = profile
                 .eager_pseudo_count
@@ -200,7 +208,11 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let resolved = computed.map(|computed| {
-            ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
+            let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
+            if self.scrollbars_hidden {
+                resolved.suppress_scrollbars();
+            }
+            ResolvedLayoutPseudoStyle::new(resolved)
         });
         if let Some(profile) = self.profile.as_mut() {
             profile.marker_projection_ns = profile.marker_projection_ns.saturating_add(
@@ -246,6 +258,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
         resolved.force_layout_display(display);
+        if self.scrollbars_hidden {
+            resolved.suppress_scrollbars();
+        }
         if let Some(profile) = self.profile.as_mut() {
             profile.anonymous_projection_ns = profile.anonymous_projection_ns.saturating_add(
                 phase_started

@@ -57,6 +57,14 @@ impl JsContextHost {
         self.layout_policy
     }
 
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) {
+        self.scrollbars_hidden = hidden;
+    }
+
+    pub(crate) const fn scrollbars_hidden(&self) -> bool {
+        self.scrollbars_hidden
+    }
+
     pub(crate) fn active_layout_document_handles(&self) -> Vec<DomHandle> {
         let mut documents = vec![self.document_handle()];
         documents.extend(

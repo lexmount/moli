@@ -171,6 +171,7 @@ pub struct RendererCreateHtmlPageRequest {
     pub fetch_subresource_interception_enabled: bool,
     pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
     pub layout_policy: LayoutPolicy,
+    pub scrollbars_hidden: bool,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,
     pub reply_boundary: crate::RendererReplyBoundary,
@@ -221,6 +222,7 @@ pub struct RendererCreateStreamingRawPageRequest {
     pub fetch_subresource_interception_enabled: bool,
     pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
     pub layout_policy: LayoutPolicy,
+    pub scrollbars_hidden: bool,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,
     pub reply_boundary: crate::RendererReplyBoundary,
@@ -1034,7 +1036,7 @@ pub(super) struct RendererOwnerState {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct RendererOwnerLayoutPolicyState {
-    policy: Option<LayoutPolicy>,
+    configuration: Option<(LayoutPolicy, bool)>,
 }
 
 #[cfg(test)]

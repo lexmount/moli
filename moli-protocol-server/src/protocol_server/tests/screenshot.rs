@@ -157,6 +157,97 @@ fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_hidden_scrollbars_follow_targets_navigation_and_resize() {
+    let config = protocol_server_test_runtime_config(
+        protocol_server_test_fetch_config(FetchConfig::default()),
+        OptionalResourceFetchMask::NONE,
+    )
+    .with_scrollbars_hidden(true);
+    let (addr, server) = spawn_test_protocol_server_with_runtime_config(config).await;
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("CDP socket");
+    let url = "data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px;background:rgb(0,255,0)'></div>";
+    for _ in 0..2 {
+        let target = open_screenshot_target(&mut socket, url).await;
+        for width in [1280, 1000] {
+            assert_cdp_success(
+                &send_cdp_command(
+                    &mut socket,
+                    20,
+                    "Emulation.setDeviceMetricsOverride",
+                    Some(&target.session_id),
+                    json!({"width":width,"height":720,"deviceScaleFactor":1,"mobile":false}),
+                )
+                .await,
+                20,
+            );
+            let png = capture_png(&mut socket, &target.session_id, 21).await;
+            let (image_width, _, pixels) = decode_png(&png);
+            assert_eq!(image_width, width);
+            assert_eq!(pixel(&pixels, width, width - 8, 300), [0, 255, 0, 255]);
+            let result = send_cdp_command(
+                &mut socket, 22, "Runtime.evaluate", Some(&target.session_id),
+                json!({"expression":"JSON.stringify([innerWidth,document.documentElement.clientWidth,document.documentElement.scrollWidth])","returnByValue":true})
+            ).await;
+            assert_cdp_success(&result, 22);
+            assert_eq!(
+                response_by_id(&result, 22)["result"]["result"]["value"],
+                json!(format!("[{width},{width},{width}]"))
+            );
+        }
+        assert_cdp_success(
+            &send_cdp_command(
+                &mut socket,
+                23,
+                "Input.dispatchMouseEvent",
+                Some(&target.session_id),
+                json!({"type":"mouseWheel","x":100,"y":300,"deltaX":0,"deltaY":100}),
+            )
+            .await,
+            23,
+        );
+        let scroll = send_cdp_command(
+            &mut socket,
+            24,
+            "Runtime.evaluate",
+            Some(&target.session_id),
+            json!({"expression":"scrollY > 0","returnByValue":true}),
+        )
+        .await;
+        assert_cdp_success(&scroll, 24);
+        assert_eq!(
+            response_by_id(&scroll, 24)["result"]["result"]["value"],
+            true
+        );
+        assert_cdp_success(
+            &cdp_navigate_and_wait_for_load(&mut socket, 25, &target.session_id, url).await,
+            25,
+        );
+        capture_png(&mut socket, &target.session_id, 26).await;
+        let result = send_cdp_command(
+            &mut socket, 27, "Runtime.evaluate", Some(&target.session_id),
+            json!({"expression":"innerWidth === document.documentElement.clientWidth","returnByValue":true})
+        ).await;
+        assert_cdp_success(&result, 27);
+        assert_eq!(
+            response_by_id(&result, 27)["result"]["result"]["value"],
+            true
+        );
+        send_cdp_command(
+            &mut socket,
+            28,
+            "Target.closeTarget",
+            None,
+            json!({"targetId":target.target_id}),
+        )
+        .await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
     let (fixture_addr, _fixture_server) =
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "layout-screenshot");

@@ -1,6 +1,47 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_hidden_scrollbars_preserve_server_configuration() {
+    let config = protocol_server_test_runtime_config(
+        protocol_server_test_fetch_config(FetchConfig::default()),
+        OptionalResourceFetchMask::NONE,
+    )
+    .with_scrollbars_hidden(true);
+    let (addr, server) = spawn_test_protocol_server_with_runtime_config(config).await;
+    let (mut socket, context) = bidi_session_with_context(addr).await;
+    let viewport = send_bidi_command(
+        &mut socket,
+        3,
+        "browsingContext.setViewport",
+        json!({
+            "context":context,"viewport":{"width":1280,"height":720}
+        }),
+    )
+    .await;
+    assert_eq!(viewport["type"], "success", "{viewport}");
+    let navigated = send_bidi_command(&mut socket,4,"browsingContext.navigate",json!({
+        "context":context,"url":"data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px'></div>","wait":"complete"
+    })).await;
+    assert_eq!(navigated["type"], "success", "{navigated}");
+    let captured = send_bidi_command(
+        &mut socket,
+        5,
+        "browsingContext.captureScreenshot",
+        json!({"context":context}),
+    )
+    .await;
+    assert_eq!(captured["type"], "success", "{captured}");
+    let metrics = send_bidi_command(&mut socket,6,"script.evaluate",json!({
+        "target":{"context":context},"awaitPromise":false,
+        "expression":"JSON.stringify([innerWidth,document.documentElement.clientWidth,document.documentElement.scrollWidth])"
+    })).await;
+    assert_eq!(metrics["type"], "success", "{metrics}");
+    assert_eq!(metrics["result"]["result"]["value"], "[1280,1280,1280]");
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn websocket_bidi_page_and_box_screenshot_publish_real_png() {
     // Ported from Chromium/WPT
     // webdriver/tests/bidi/browsing_context/capture_screenshot/capture_screenshot.py and

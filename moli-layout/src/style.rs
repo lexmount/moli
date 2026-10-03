@@ -507,6 +507,7 @@ pub struct ResolvedLayoutStyle {
     overflow_x: LayoutOverflowMode,
     overflow_y: LayoutOverflowMode,
     scrollbar_width: LayoutScrollbarWidth,
+    scrollbars_hidden: bool,
     scrollbar_gutter: LayoutScrollbarGutter,
     scrollbar_colors: Option<LayoutScrollbarColors>,
     revealed_scrollbar_x: bool,
@@ -888,6 +889,7 @@ impl ResolvedLayoutStyle {
             overflow_x,
             overflow_y,
             scrollbar_width,
+            scrollbars_hidden: false,
             scrollbar_gutter,
             scrollbar_colors,
             revealed_scrollbar_x: false,
@@ -965,6 +967,7 @@ impl ResolvedLayoutStyle {
             overflow_x,
             overflow_y,
             scrollbar_width: LayoutScrollbarWidth::Auto,
+            scrollbars_hidden: false,
             scrollbar_gutter: LayoutScrollbarGutter::Auto,
             scrollbar_colors: None,
             revealed_scrollbar_x: false,
@@ -1040,6 +1043,11 @@ impl ResolvedLayoutStyle {
         self.scrollbar_width = width;
         self.scrollbar_gutter = gutter;
         self.scrollbar_colors = colors;
+    }
+
+    /// Hides scrollbar UI and automatic gutters, preserving explicit stable gutters.
+    pub fn suppress_scrollbars(&mut self) {
+        self.scrollbars_hidden = true;
     }
 
     /// Overrides the alignment keyword for a synthetic inline style.
@@ -1726,6 +1734,10 @@ impl ResolvedLayoutStyle {
         self.scrollbar_width
     }
 
+    pub(crate) const fn viewport_scrollbars_hidden(&self) -> bool {
+        self.scrollbars_hidden
+    }
+
     pub(crate) const fn viewport_scrollbar_gutter(&self) -> LayoutScrollbarGutter {
         self.scrollbar_gutter
     }
@@ -1754,8 +1766,10 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool) {
-        self.revealed_scrollbar_x = self.overflow_x == LayoutOverflowMode::Scroll;
-        self.revealed_scrollbar_y = self.overflow_y == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_x =
+            !self.scrollbars_hidden && self.overflow_x == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_y =
+            !self.scrollbars_hidden && self.overflow_y == LayoutOverflowMode::Scroll;
         // Moli resolves CSS scrollbar policy to physical edge insets through
         // `LayoutPartialTree::get_scrollbar_insets`. Keep Taffy's legacy
         // scalar disabled so no algorithm reserves the same gutter twice.
@@ -1806,7 +1820,10 @@ impl ResolvedLayoutStyle {
         is_root: bool,
         overflowing: bool,
     ) -> bool {
-        if !overflowing || self.scrollbar_width == LayoutScrollbarWidth::None {
+        if !overflowing
+            || self.scrollbars_hidden
+            || self.scrollbar_width == LayoutScrollbarWidth::None
+        {
             return false;
         }
         let mode = self.overflow_mode(axis);
@@ -1842,7 +1859,7 @@ impl ResolvedLayoutStyle {
         is_root: bool,
         overflowing: bool,
     ) -> bool {
-        if self.scrollbar_width == LayoutScrollbarWidth::None {
+        if self.scrollbars_hidden || self.scrollbar_width == LayoutScrollbarWidth::None {
             return false;
         }
         match self.overflow_mode(axis) {
@@ -1867,7 +1884,11 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn scrollbar_control_thickness(&self) -> f32 {
-        self.scrollbar_width.thickness()
+        if self.scrollbars_hidden {
+            0.0
+        } else {
+            self.scrollbar_width.thickness()
+        }
     }
 
     pub(crate) fn scrollbar_gutter_thickness(&self, axis: LayoutScrollbarAxis) -> f32 {
@@ -1985,6 +2006,7 @@ impl ResolvedLayoutStyle {
             overflow_x: LayoutOverflowMode::Visible,
             overflow_y: LayoutOverflowMode::Visible,
             scrollbar_width: parent.scrollbar_width,
+            scrollbars_hidden: parent.scrollbars_hidden,
             scrollbar_gutter: LayoutScrollbarGutter::Auto,
             scrollbar_colors: parent.scrollbar_colors,
             revealed_scrollbar_x: false,
@@ -2053,6 +2075,7 @@ impl ResolvedLayoutStyle {
             overflow_x: LayoutOverflowMode::Visible,
             overflow_y: LayoutOverflowMode::Visible,
             scrollbar_width: parent.scrollbar_width,
+            scrollbars_hidden: parent.scrollbars_hidden,
             scrollbar_gutter: LayoutScrollbarGutter::Auto,
             scrollbar_colors: parent.scrollbar_colors,
             revealed_scrollbar_x: false,

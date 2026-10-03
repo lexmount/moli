@@ -751,6 +751,7 @@ struct AppState {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     layout_policy: LayoutPolicy,
+    scrollbars_hidden: bool,
 }
 
 impl AppState {
@@ -826,6 +827,7 @@ impl AppState {
             optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
             subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
             layout_policy: navigation_runtime_config.layout_policy(),
+            scrollbars_hidden: navigation_runtime_config.scrollbars_hidden(),
         }
     }
 

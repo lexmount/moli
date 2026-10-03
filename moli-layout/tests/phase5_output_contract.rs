@@ -1161,6 +1161,77 @@ fn thin_and_hidden_scrollbars_match_chromium_client_geometry() {
 }
 
 #[test]
+fn hidden_scrollbar_policy_preserves_explicit_stable_gutters_without_controls() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", Vec::new()),
+    ]);
+    // Chromium --hide-scrollbars removes automatic gutters, but stable gutters
+    // still use the authored auto/thin width even though no UI is painted.
+    for (width, thickness) in [
+        (LayoutScrollbarWidth::Auto, 15.0),
+        (LayoutScrollbarWidth::Thin, 10.0),
+        (LayoutScrollbarWidth::None, 0.0),
+    ] {
+        for (gutter, edges) in [
+            (LayoutScrollbarGutter::Auto, 0.0),
+            (LayoutScrollbarGutter::Stable, 1.0),
+            (LayoutScrollbarGutter::StableBothEdges, 2.0),
+        ] {
+            let mut styles = Styles::default();
+            styles
+                .0
+                .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+            let mut scroller = resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(100.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Scroll,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            );
+            scroller.set_scrollbar_style(width, gutter, None);
+            scroller.suppress_scrollbars();
+            styles.0.insert(1, scroller);
+            styles
+                .0
+                .insert(2, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+            let output = build(&source, &mut styles);
+            let metrics = output.element_metrics_for_source(1).unwrap();
+            assert_eq!(
+                metrics.client_size,
+                moli_layout::LayoutSize::new(200.0 - edges * thickness, 100.0)
+            );
+            assert_eq!(
+                metrics.client_border.x,
+                if edges == 2.0 { thickness } else { 0.0 }
+            );
+            assert_eq!(
+                metrics.scroll_size,
+                moli_layout::LayoutSize::new(400.0, 300.0)
+            );
+            let box_id = output.source_output(1).unwrap().principal_box.unwrap();
+            let extent = output.scroll_extent(box_id).unwrap();
+            assert!(extent.horizontal_scrollbar.is_none());
+            assert!(extent.vertical_scrollbar.is_none());
+            assert!(extent.scrollbar_corner.is_none());
+            assert!(
+                output
+                    .scrollbar_hit_test(LayoutPoint::new(190.0, 30.0))
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
 fn stable_both_edges_reserves_and_offsets_both_chromium_gutters() {
     let source = Source(vec![
         Node::element("root", vec![1]),

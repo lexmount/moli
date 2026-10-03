@@ -805,6 +805,7 @@ pub(crate) struct JsContextHost {
         super::history_traversal::PendingHistoryTraversalAdmissions,
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
+    scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,

@@ -657,6 +657,7 @@ impl RendererOwnerHandle {
         stage: PageVmInitStage,
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateHtmlPageRequest {
+        let (layout_policy, scrollbars_hidden) = self.seal_layout_configuration_for_page_creation();
         RendererCreateHtmlPageRequest {
             page_reservation,
             root_frame_id: options.root_frame_id,
@@ -694,7 +695,8 @@ impl RendererOwnerHandle {
             fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: options
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.seal_layout_policy_for_page_creation(),
+            layout_policy,
+            scrollbars_hidden,
             wpt_extensions_enabled: false,
             stage,
             reply_boundary: crate::RendererReplyBoundary::Stage,
@@ -721,6 +723,7 @@ impl RendererOwnerHandle {
         stage: PageVmInitStage,
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
+        let (layout_policy, scrollbars_hidden) = self.seal_layout_configuration_for_page_creation();
         RendererCreateStreamingRawPageRequest {
             document_replacement: None,
             root_frame_id: options.root_frame_id,
@@ -758,7 +761,8 @@ impl RendererOwnerHandle {
             fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: options
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.seal_layout_policy_for_page_creation(),
+            layout_policy,
+            scrollbars_hidden,
             wpt_extensions_enabled: false,
             stage,
             reply_boundary: crate::RendererReplyBoundary::Stage,
@@ -832,6 +836,7 @@ impl RendererOwnerHandle {
             fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type,
             layout_policy,
+            scrollbars_hidden,
             wpt_extensions_enabled,
             stage,
             reply_boundary,
@@ -921,6 +926,7 @@ impl RendererOwnerHandle {
                     fetch_subresource_interception_enabled,
                     fetch_subresource_interception_resource_type,
                     layout_policy,
+                    scrollbars_hidden,
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
@@ -1144,6 +1150,7 @@ impl RendererOwnerHandle {
             fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type,
             layout_policy,
+            scrollbars_hidden,
             wpt_extensions_enabled,
             stage,
             reply_boundary,
@@ -1221,6 +1228,7 @@ impl RendererOwnerHandle {
                     fetch_subresource_interception_enabled,
                     fetch_subresource_interception_resource_type,
                     layout_policy,
+                    scrollbars_hidden,
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
