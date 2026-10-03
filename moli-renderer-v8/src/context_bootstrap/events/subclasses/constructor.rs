@@ -14,6 +14,7 @@ fn event_subclass_kind_from_callback_data(
 enum EventSubclassInit<'s> {
     Ui(ui::UiEventInit<'s>),
     Composition(ui::CompositionEventInit<'s>),
+    Input(input::InputEventInit<'s>),
     Clipboard(data::ClipboardEventInitMembers<'s>),
     ClipboardChange(data::ClipboardChangeEventInitMembers<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
@@ -42,6 +43,9 @@ impl<'s> EventSubclassInit<'s> {
             EventSubclassKind::UiEvent => Self::Ui(ui::parse_ui_event_init(scope, args)?),
             EventSubclassKind::CompositionEvent => {
                 Self::Composition(ui::parse_composition_event_init(scope, args)?)
+            }
+            EventSubclassKind::InputEvent => {
+                Self::Input(ui::parse_ui_dictionary(scope, args, "InputEvent")?)
             }
             EventSubclassKind::ClipboardEvent => {
                 Self::Clipboard(data::parse_clipboard_event_init(scope, args)?)
@@ -100,6 +104,7 @@ impl<'s> EventSubclassInit<'s> {
         match self {
             Self::Ui(init) => init.event_flags(),
             Self::Composition(init) => init.event_flags(),
+            Self::Input(init) => init.event_flags(),
             Self::Clipboard(init) => init.event_flags(),
             Self::ClipboardChange(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
@@ -129,6 +134,7 @@ impl<'s> EventSubclassInit<'s> {
         match self {
             Self::Ui(init) => init.initialize(scope, event),
             Self::Composition(init) => ui::initialize_composition_event(scope, event, init),
+            Self::Input(init) => return init.initialize(scope, event),
             Self::Clipboard(init) => data::initialize_clipboard_event(scope, event, init),
             Self::ClipboardChange(init) => {
                 return data::initialize_clipboard_change_event(scope, event, init);
@@ -253,7 +259,6 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
         EventSubclassKind::TouchEvent => {
             crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
         }
@@ -299,6 +304,7 @@ fn initialize_legacy_event<'s>(
         | EventSubclassKind::ClipboardEvent
         | EventSubclassKind::CommandEvent
         | EventSubclassKind::CompositionEvent
+        | EventSubclassKind::InputEvent
         | EventSubclassKind::ErrorEvent
         | EventSubclassKind::KeyboardEvent
         | EventSubclassKind::MouseEvent

@@ -1,32 +1,13 @@
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
-use crate::context_bootstrap::events::{modifiers::EventModifierInitMembers, ui::UiEventInit};
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
+use crate::context_bootstrap::events::{modifiers::EventModifierInitMembers, ui::UiEventInit};
 use crate::web_api_interfaces;
 use crate::webidl;
 
 const POINTER_EVENT_COALESCED_EVENTS_SLOT: &str = "__moliPointerEventCoalescedEvents";
 const POINTER_EVENT_PREDICTED_EVENTS_SLOT: &str = "__moliPointerEventPredictedEvents";
-
-struct EventTargetReference<'s>(v8::Local<'s, v8::Object>);
-
-impl<'s> webidl::WebIdlConverter<'s> for EventTargetReference<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        let target = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
-        if !web_api_interfaces::EventTarget::is_instance(scope, target) {
-            return Err(webidl::WebIdlError::cannot_convert(context, "EventTarget"));
-        }
-        Ok(Self(target))
-    }
-}
 
 /// MouseEventInit includes the CSSOM View and Pointer Lock double members.
 /// Each derived dictionary delegates to this base before reading its own members.
@@ -45,8 +26,8 @@ struct MouseEventInitMembers<'s> {
     movement_x: f64,
     #[webidl(default = 0.0, converter = "double")]
     movement_y: f64,
-    #[webidl(nullable, converter = "raw")]
-    related_target: Option<EventTargetReference<'s>>,
+    #[webidl(nullable, interface = web_api_interfaces::EventTarget)]
+    related_target: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = 0.0, converter = "double")]
     screen_x: f64,
     #[webidl(default = 0.0, converter = "double")]
@@ -104,7 +85,7 @@ impl<'s> MouseEventInit<'s> {
         .expect("MouseEvent state should initialize");
         let related_target = members
             .related_target
-            .map(|target| target.0.into())
+            .map(|target| target.into())
             .unwrap_or_else(|| v8::null(scope).into());
         MouseEventRelatedTargetDeclaration::new(related_target)
             .initialize(scope, event)
@@ -286,30 +267,11 @@ impl<'s> PointerEventInit<'s> {
     }
 }
 
-struct DataTransferReference<'s>(v8::Local<'s, v8::Object>);
-
-impl<'s> webidl::WebIdlConverter<'s> for DataTransferReference<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        let object = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
-        if !is_branded_data_transfer_object(scope, object) {
-            return Err(webidl::WebIdlError::cannot_convert(context, "DataTransfer"));
-        }
-        Ok(Self(object))
-    }
-}
-
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DragEventInit")]
 struct DragEventInitMembers<'s> {
-    #[webidl(nullable, converter = "raw")]
-    data_transfer: Option<DataTransferReference<'s>>,
+    #[webidl(nullable, interface = web_api_interfaces::DataTransfer, brand_check = is_branded_data_transfer_object)]
+    data_transfer: Option<v8::Local<'s, v8::Object>>,
 }
 
 #[derive(Default)]
@@ -344,7 +306,7 @@ impl<'s> DragEventInit<'s> {
         let data_transfer = self
             .members
             .data_transfer
-            .map(|data| data.0.into())
+            .map(|data| data.into())
             .unwrap_or_else(|| v8::null(scope).into());
         DragEventInitDeclaration::new(data_transfer)
             .initialize(scope, event)

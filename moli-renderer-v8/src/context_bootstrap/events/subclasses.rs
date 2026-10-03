@@ -10,6 +10,7 @@ mod basic;
 mod constructor;
 mod data;
 mod error;
+mod input;
 mod interaction;
 mod keyboard;
 mod navigation_init;
@@ -21,6 +22,7 @@ pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
 pub(in crate::context_bootstrap) use data::{
     navigation_precommit_controller_for_event, run_navigate_event_precommit_handlers,
 };
+pub(in crate::context_bootstrap) use input::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use interaction::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use pointer::{
