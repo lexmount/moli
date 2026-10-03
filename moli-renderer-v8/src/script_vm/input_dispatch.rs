@@ -2090,7 +2090,8 @@ impl ScriptVm {
 
     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
         if self.has_native_drag_session() {
-            return self.cancel_native_drag(0);
+            let result = self.cancel_native_drag(0);
+            return self.finish_input_event_dispatch_turn(result);
         }
         self.active_drag_session.take();
         Ok(())
