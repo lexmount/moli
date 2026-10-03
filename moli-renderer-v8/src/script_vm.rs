@@ -1100,6 +1100,7 @@ pub(super) struct ScriptVm {
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
+    mouse_frame_captures: BTreeMap<i32, MouseFrameCapture>,
     hovered_mouse_handle: Option<DomHandle>,
     /// Root-frame to local-frame transform for `hovered_mouse_handle`. Blink
     /// keeps this conversion on LocalFrameView; retaining the last affine map
@@ -2654,6 +2655,7 @@ impl ScriptVmDefaultWorldBootstrap {
             script_execution_memory: ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
+            mouse_frame_captures: BTreeMap::new(),
             hovered_mouse_handle: None,
             hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
             active_touch_pointer_handle: None,

@@ -178,7 +178,7 @@ pub(crate) use records::{
     FrameDocumentDescendantLoadCompletion, FrameDocumentDescendantLoadParent,
     FrameDocumentLoadDispatchFinish, FrameDocumentLocalWindowTransition,
     FrameDocumentNavigationLoadBinding, FrameDocumentOwner, FrameDocumentOwnerTransition,
-    FrameDocumentTaskOwner, FrameDocumentTaskRealmCurrentness, FrameId,
+    FrameDocumentTaskOwner, FrameDocumentTaskRealmCurrentness, FrameId, FrameLaneTaskOwner,
     FrameLocalWindowOwnerTransition, FrameOwnerDocumentTarget, FrameRealmId,
     FrameRealmMaterializationRequest, FrameRequestId, FrameRequestKind, FrameSchedulerLaneId,
     FrameScriptJob, FrameScriptJobKind, FrameScriptSource, LocalWindowId,

@@ -4,13 +4,16 @@ use moli_file_api::data_transfer::{
     preferred_drop_effect_from_mask,
 };
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 mod drag_source;
 use drag_source::dispatch_drag_source_event;
 
 use super::input_dispatch_outcome;
-use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
+use super::input_helpers::{
+    MouseFrameCapture, mouse_button_mask, single_changed_mouse_button,
+};
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
@@ -27,7 +30,7 @@ use crate::native_bridge::element::{
     NodePublicEventDispatchOutcome, construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_drag_event_with_related_target, construct_keyboard_event,
+    captured_frame_input_surface_hit_test, construct_drag_event_with_related_target, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -941,8 +944,16 @@ impl ScriptVm {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
-        let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
+        let surface_hit = self.pointer_mouse_input_surface_hit(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            pointer.pointer_id,
+        )?;
+        let prepared =
+            self.prepare_mouse_input_dispatch(event_name, button, buttons, pointer.pointer_id);
         let _current_input_event = CurrentInputEventScope::enter(
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
@@ -1017,8 +1028,16 @@ impl ScriptVm {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
-        let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
+        let surface_hit = self.pointer_mouse_input_surface_hit(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            pointer.pointer_id,
+        )?;
+        let prepared =
+            self.prepare_mouse_input_dispatch(event_name, button, buttons, pointer.pointer_id);
         let _current_input_event = CurrentInputEventScope::enter(
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
@@ -1094,6 +1113,7 @@ impl ScriptVm {
         event_name: &str,
         button: i32,
         buttons: Option<i32>,
+        pointer_id: i32,
     ) -> PreparedMouseInputDispatch {
         let previous_pressed_buttons = self.pressed_mouse_buttons;
         let button = if button >= 0 {
@@ -1142,6 +1162,11 @@ impl ScriptVm {
         } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
             self.pending_drag_gesture = None;
         }
+        // The final release has already been hit tested in the captured frame.
+        // Clear its ownership before callbacks can start another input sequence.
+        if matches!(event_name, "mouseup" | "mousemove") && buttons == 0 {
+            self.mouse_frame_captures.remove(&pointer_id);
+        }
         PreparedMouseInputDispatch {
             button,
             buttons,
@@ -1151,6 +1176,80 @@ impl ScriptVm {
                 buttons,
             ),
         }
+    }
+
+    fn captured_mouse_frame_document(&self, capture: MouseFrameCapture) -> Option<DomHandle> {
+        let host = self._context_host.borrow();
+        if host.current_child_frame_lane_task_owner(capture.frame) != Some(capture.owner) {
+            return None;
+        }
+        let captured_document = host.child_browsing_context_document_handle(capture.frame)?;
+        let mut document = captured_document;
+        let mut visited = HashSet::new();
+        while document != self.document_runtime.document_handle() {
+            if !visited.insert(document) {
+                return None;
+            }
+            let frame = host.child_browsing_context_host_for_document_handle(document)?;
+            if !host.dom_host().is_connected(frame) {
+                return None;
+            }
+            document = host.dom_host().owner_document_handle(frame)?;
+        }
+        Some(captured_document)
+    }
+
+    fn pointer_mouse_input_surface_hit(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        pointer_id: i32,
+    ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
+        if !matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
+            return self.mouse_input_surface_hit(x, y, event_name);
+        }
+        let first_press = event_name == "mousedown" && self.pressed_mouse_buttons == 0;
+        if first_press || (event_name == "mousemove" && buttons == Some(0)) {
+            self.mouse_frame_captures.remove(&pointer_id);
+        }
+        if let Some(capture) = self.mouse_frame_captures.get(&pointer_id).copied() {
+            if let Some(document) = self.captured_mouse_frame_document(capture) {
+                return Ok(captured_frame_input_surface_hit_test(
+                    &self._context_host.borrow(),
+                    document,
+                    moli_layout::LayoutPoint::new(x as f32, y as f32),
+                    capture.root_to_frame,
+                    true,
+                )?);
+            }
+            self.mouse_frame_captures.remove(&pointer_id);
+        }
+        let hit = self.mouse_input_surface_hit(x, y, event_name)?;
+        if first_press && buttons.unwrap_or(mouse_button_mask(button)) != 0 {
+            let host = self._context_host.borrow();
+            if let Some(input) = hit.input {
+                let capture = host
+                    .dom_host()
+                    .owner_document_handle(input.handle)
+                    .and_then(|document| {
+                        host.child_browsing_context_host_for_document_handle(document)
+                    })
+                    .and_then(|frame| {
+                        Some(MouseFrameCapture {
+                            frame,
+                            owner: host.current_child_frame_lane_task_owner(frame)?,
+                            root_to_frame: input.root_to_frame,
+                        })
+                    });
+                if let Some(capture) = capture {
+                    self.mouse_frame_captures.insert(pointer_id, capture);
+                }
+            }
+        }
+        Ok(hit)
     }
 
     #[allow(clippy::too_many_arguments)]
