@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::events::{EventInit, modifiers::EventModifierInit, ui::UiEventInit};
 use crate::context_bootstrap::{range, touch_runtime};
+use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
 use crate::util::get_private_value;
 use crate::{web_api_interfaces, webidl};
 use webidl::WebIdlDictionarySerialize;
@@ -29,7 +30,7 @@ pub(super) struct InputEventInit<'s> {
     ui: UiEventInit<'s>,
     #[webidl(nullable, converter = "raw")]
     data: Option<webidl::DomString16>,
-    #[webidl(nullable, interface = web_api_interfaces::DataTransfer)]
+    #[webidl(nullable, interface = web_api_interfaces::DataTransfer, brand_check = is_branded_data_transfer_object)]
     data_transfer: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     input_type: webidl::DomString16,
