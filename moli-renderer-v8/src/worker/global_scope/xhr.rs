@@ -1,5 +1,7 @@
 use super::*;
-use crate::network_host::ResolveContextUrlError;
+use crate::network_host::{
+    ResolveContextUrlError, fetch_browser_subresource_with_preflight_headers,
+};
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::thread;
@@ -589,6 +591,7 @@ fn send_synchronous_worker_xhr(
     let request_method = prepared.method.clone();
     let request_headers = prepared.request_headers.clone();
     let request_body = request_body_text(&prepared.send_body);
+    let preflight_headers = request_headers.to_byte_strings();
     let timeout_document_url = prepared.document_url.clone();
     let timeout_request_url = request_url.clone();
     let timeout_request_method = request_method.clone();
@@ -614,10 +617,18 @@ fn send_synchronous_worker_xhr(
     let spawn_result = thread::Builder::new()
         .name("lm-worker-sync-xhr-fetch".to_owned())
         .spawn(move || {
-            let result = loader
-                .request_client()
-                .fetch_text_for_worker_blocking_boundary_with_cancel(request, worker_cancel_handle)
-                .map_err(|error| error.to_string());
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("failed to build worker sync XHR fetch runtime: {error}"))
+                .and_then(|runtime| {
+                    runtime.block_on(fetch_browser_subresource_with_preflight_headers(
+                        loader.request_client().clone(),
+                        request,
+                        Some(worker_cancel_handle),
+                        preflight_headers,
+                    ))
+                });
             let _ = response_tx.send(result);
         });
 
