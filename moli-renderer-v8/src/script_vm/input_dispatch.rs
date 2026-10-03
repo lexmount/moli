@@ -128,7 +128,7 @@ fn touch_pointer_properties(event_name: &str, pointer_id: i32) -> RendererPointe
     }
 }
 
-fn dispatch_native_pointer_event<'s>(
+pub(super) fn dispatch_native_pointer_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     target: DomHandle,
@@ -206,7 +206,7 @@ fn dispatch_pointer_capture_events(
     }
 }
 
-fn release_pointer_capture_after_pointer_end(
+pub(super) fn release_pointer_capture_after_pointer_end(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     pointer_id: i32,
@@ -662,6 +662,9 @@ impl ScriptVm {
         buttons: Option<i32>,
         pointer_id: i32,
     ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
+        if self.has_native_drag_session() {
+            return self.mouse_input_surface_hit(x, y, event_name);
+        }
         if !matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
             return self.mouse_input_surface_hit(x, y, event_name);
         }
@@ -754,6 +757,16 @@ impl ScriptVm {
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
+        if let Some(outcome) = self.dispatch_native_drag_mouse_input(
+            root_point,
+            event_name,
+            buttons,
+            pointer.pointer_id,
+            modifiers,
+            surface_hit.input,
+        )? {
+            return Ok(outcome);
+        }
         if let Some(control) = surface_hit.control {
             return match control {
                 moli_layout::LayoutControlSurfaceHit::Scrollbar(scrollbar) => {
@@ -864,6 +877,7 @@ impl ScriptVm {
         };
         let mut mouse_down_allows_default = false;
         let mut retire_pending_drag = false;
+        let mut started_native_drag = false;
         let may_start_drag = self.active_drag_session.is_none();
 
         if event_name == "mousedown" && button >= 0 {
@@ -1191,7 +1205,7 @@ impl ScriptVm {
                     match source {
                         Some(source) if drag.threshold_exceeded(current_position) => {
                             retire_pending_drag = true;
-                            Some((source, drag.position))
+                            Some((source, drag))
                         }
                         Some(_) => None,
                         None => {
@@ -1203,7 +1217,8 @@ impl ScriptVm {
             } else {
                 None
             };
-            if let Some((drag_start_handle, drag_position)) = drag_start {
+            if let Some((drag_start_handle, drag)) = drag_start {
+                let drag_position = drag.position;
                 // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
                 // remains exclusively borrowed, so this field pointer is valid for the
                 // duration of the callback.
@@ -1216,75 +1231,46 @@ impl ScriptVm {
                 };
                 if let Some(data_transfer) =
                     crate::context_bootstrap::build_data_transfer_object(scope, &empty_drag_data)
-                    && let Some(event) = construct_drag_event(
+                {
+                    crate::context_bootstrap::initialize_native_drag_data_transfer(
+                        scope,
+                        data_transfer,
+                    );
+                    if let Some(event) = construct_drag_event(
                         scope,
                         "dragstart",
                         f64::from(drag_position.x),
                         f64::from(drag_position.y),
+                        buttons,
                         data_transfer.into(),
-                        0,
-                    )
-                {
-                    if dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
+                        modifiers,
+                    ) && dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
                         .allows_default()
                     {
                         *active_drag_session = Some(ActiveDragSession {
                             data_transfer: v8::Global::new(scope, data_transfer),
                             drop_allowed: false,
+                            native: Some(super::input_drag::NativeDragSource {
+                                handle: drag_start_handle,
+                                pointer_id,
+                                root_to_frame: drag.root_to_frame,
+                                position: root_point,
+                            }),
+                            target: None,
                         });
+                        super::input_drag::suppress_drag_pointer_stream(
+                            scope,
+                            runtime_ptr,
+                            drag_start_handle,
+                            client_x,
+                            client_y,
+                            &pointer,
+                            modifiers,
+                        );
+                        started_native_drag = true;
                     } else {
                         active_drag_session.take();
                     }
-                }
-            }
-            if event_name == "mousemove" && buttons & 1 != 0 {
-                let active_drag_session = unsafe { &mut *active_drag_session };
-                if let Some(session) = active_drag_session.as_mut() {
-                    let data_transfer = v8::Local::new(scope, &session.data_transfer);
-                    if let Some(event) = construct_drag_event(
-                        scope,
-                        "dragover",
-                        client_x,
-                        client_y,
-                        data_transfer.into(),
-                        0,
-                    ) {
-                        session.drop_allowed =
-                            !dispatch_public_event(scope, runtime_ptr, handle, event)
-                                .allows_default();
-                    } else {
-                        session.drop_allowed = false;
-                    }
-                }
-            }
-            if event_name == "mouseup" && button == 0 {
-                let active_drag_session = unsafe { &mut *active_drag_session };
-                if let Some(session) = active_drag_session.as_mut() {
-                    if session.drop_allowed {
-                        let data_transfer = v8::Local::new(scope, &session.data_transfer);
-                        let allows_default = if let Some(event) = construct_drag_event(
-                            scope,
-                            "drop",
-                            client_x,
-                            client_y,
-                            data_transfer.into(),
-                            0,
-                        ) {
-                            dispatch_public_event(scope, runtime_ptr, handle, event)
-                                .allows_default()
-                        } else {
-                            false
-                        };
-                        if allows_default {
-                            let _ = perform_drop_default_action(
-                                scope,
-                                runtime_ptr,
-                                handle,
-                                data_transfer,
-                            );
-                        }
-                    }
-                    active_drag_session.take();
                 }
             }
             // Keep the host-owned press alive through the release listeners;
@@ -1402,6 +1388,21 @@ impl ScriptVm {
             }
             Ok(input_dispatch_outcome(true))
         });
+        if started_native_drag {
+            self._context_host.borrow_mut().clear_mouse_press();
+            self.pending_mouse_drags.remove(&pointer_id);
+            self.mouse_frame_captures.remove(&pointer_id);
+            self.suppressed_drag_pointer = Some(pointer_id);
+            self.hovered_mouse_handle = None;
+            let _ = self.dispatch_native_drag_mouse_input(
+                root_point,
+                "mousemove",
+                buttons,
+                pointer_id,
+                modifiers,
+                hit,
+            )?;
+        }
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         if event_name == "mousedown" && button == 0 {
             self.pending_mouse_drags.remove(&pointer_id);
@@ -2044,6 +2045,7 @@ impl ScriptVm {
             && (!incoming_drag_data_empty || self.active_drag_session.is_none());
         let clear_active_drag_data_transfer = event_name == "drop";
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
+        let buttons = self.pressed_mouse_buttons;
 
         let result = self.with_default_context_scope(move |scope, runtime_ptr| {
             // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
@@ -2060,6 +2062,8 @@ impl ScriptVm {
                     *active_drag_session = Some(ActiveDragSession {
                         data_transfer: v8::Global::new(scope, data_transfer),
                         drop_allowed: false,
+                        native: None,
+                        target: None,
                     });
                     data_transfer
                 } else {
@@ -2077,9 +2081,15 @@ impl ScriptVm {
                 modifiers,
             );
             let data_transfer_value: v8::Local<'_, v8::Value> = data_transfer.into();
-            let allows_default = if let Some(event) =
-                construct_drag_event(scope, event_name, x, y, data_transfer_value, modifiers)
-            {
+            let allows_default = if let Some(event) = construct_drag_event(
+                scope,
+                event_name,
+                x,
+                y,
+                buttons,
+                data_transfer_value,
+                modifiers,
+            ) {
                 dispatch_public_event(scope, runtime_ptr, handle, event).allows_default()
             } else {
                 false
@@ -2101,6 +2111,9 @@ impl ScriptVm {
     }
 
     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
+        if self.has_native_drag_session() {
+            return self.cancel_native_drag(0);
+        }
         self.active_drag_session.take();
         Ok(())
     }
@@ -2151,6 +2164,9 @@ impl ScriptVm {
     }
 
     pub(crate) fn insert_text_into_active_control(&mut self, text: &str) -> Result<bool> {
+        if self.has_native_drag_session() {
+            return self.finish_input_command_checkpoint(Ok(false));
+        }
         let handle = self
             .document_runtime
             .active_element_handle()
@@ -2195,6 +2211,12 @@ impl ScriptVm {
         auto_repeat: bool,
         should_insert_text: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        if self.has_native_drag_session() {
+            if event_name == "keydown" && key.eq_ignore_ascii_case("escape") {
+                self.cancel_native_drag(modifiers)?;
+            }
+            return self.finish_input_command_checkpoint(Ok(input_dispatch_outcome(true)));
+        }
         if event_name == "keypress" && self.suppress_next_keypress_after_canceled_raw_keydown {
             self.suppress_next_keypress_after_canceled_raw_keydown = false;
             return Ok(input_dispatch_outcome(false));
