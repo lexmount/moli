@@ -29,13 +29,13 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
-    draggable_source_at_point, input_surface_hit_test, is_text_control, observable_input_hit_test,
-    perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
-    perform_drop_default_action, perform_implicit_submission_from_control,
-    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
-    replace_text_control_selection, select_contenteditable_contents,
-    text_control_set_selection_range_internal,
+    draggable_source_at_point, input_surface_hit_test, is_text_control, native_element_drag_data,
+    observable_input_hit_test, perform_auxiliary_link_default_action,
+    perform_clipboard_key_default_action, perform_drop_default_action,
+    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
+    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    replace_contenteditable_selection, replace_text_control_selection,
+    select_contenteditable_contents, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -1214,14 +1214,10 @@ impl ScriptVm {
                 // remains exclusively borrowed, so this field pointer is valid for the
                 // duration of the callback.
                 let active_drag_session = unsafe { &mut *active_drag_session };
-                let empty_drag_data = RendererDragData {
-                    items: Vec::new(),
-                    files: Vec::new(),
-                    directories: Vec::new(),
-                    drag_operations_mask: 1,
-                };
+                let drag_data =
+                    native_element_drag_data(unsafe { &*runtime_ptr }, drag_start_handle);
                 if let Some(data_store) =
-                    crate::context_bootstrap::DragDataStore::new(scope, &empty_drag_data)
+                    crate::context_bootstrap::DragDataStore::new(scope, &drag_data)
                 {
                     let backing = data_store.backing_transfer(scope);
                     crate::context_bootstrap::initialize_native_drag_data_transfer(scope, backing);

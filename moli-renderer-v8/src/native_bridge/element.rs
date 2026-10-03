@@ -29,10 +29,13 @@ mod class_list;
 mod content;
 mod dataset;
 mod details_dialog;
+mod drag_data;
 mod event_handlers;
 mod events;
 mod focus;
 mod forms;
+
+pub(crate) use drag_data::native_element_drag_data;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
