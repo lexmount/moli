@@ -2092,3 +2092,83 @@ fn iframe_sandbox_allow_same_origin_disallows_document_domain_after_document_ope
 
     assert_eq!(result, "SecurityError:false:true:18");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn csp_sandbox_top_origin_blocks_tuple_documents_and_preserves_allow_same_origin() {
+    for opaque in [false, true] {
+        let server = StaticHttpServer::spawn(1).await;
+        let base = server.base_url();
+        let source = base.join("source.html").unwrap();
+        let destination = base.join("common/blank.html").unwrap();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(source.as_str(), &loader);
+        vm.set_main_navigation_policy_container(crate::document_runtime::DocumentPolicyContainer {
+            response_content_security_policies: vec![if opaque {
+                "sandbox allow-scripts".into()
+            } else {
+                "sandbox allow-scripts allow-same-origin".into()
+            }],
+            ..Default::default()
+        });
+        vm.eval(r#"
+            if (!document.documentElement) document.appendChild(document.createElement('html'));
+            if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+            globalThis.sandboxFrame=document.createElement('iframe');
+            globalThis.initialSandboxFrameReady=false;
+            sandboxFrame.onload=()=>initialSandboxFrameReady=true;
+            document.body.appendChild(sandboxFrame);
+        "#).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "initialSandboxFrameReady",
+            "true",
+            "initial sandbox document load",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("sandboxFrame.contentDocument !== null").unwrap(),
+            if opaque { "false" } else { "true" },
+            "creation sandbox flags determine the initial document origin"
+        );
+        vm.eval(&format!(
+            r#"
+            globalThis.sandboxTupleResult='pending';
+            sandboxFrame.onload=()=>{{
+                let access;
+                try {{ access=typeof sandboxFrame.contentWindow.fetch; }}
+                catch(error) {{ access=error.name; }}
+                sandboxTupleResult=String(sandboxFrame.contentDocument===null)+'|'+access;
+            }};
+            sandboxFrame.src={url:?};
+        "#,
+            url = destination.as_str()
+        ))
+        .unwrap();
+        let expected = if opaque {
+            "true|SecurityError"
+        } else {
+            "false|function"
+        };
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "sandboxTupleResult",
+            expected,
+            "sandboxed top document access after child commit",
+        )
+        .await;
+        {
+            let host = vm._context_host.borrow();
+            assert_eq!(
+                host.main_default_world_security_token_key().is_none(),
+                opaque
+            );
+            assert_eq!(
+                host.main_isolated_world_security_token_key().is_none(),
+                opaque
+            );
+        }
+        assert_eq!(server.finish_targets().await, vec!["/common/blank.html"]);
+    }
+}

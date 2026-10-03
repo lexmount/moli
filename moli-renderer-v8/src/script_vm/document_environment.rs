@@ -13,6 +13,18 @@ impl ScriptVm {
     ) {
         self.document_runtime
             .set_main_navigation_policy_container(policy);
+        // The main context exists before its navigation response policy is applied.
+        // Refresh its token so a CSP sandbox cannot retain the URL's tuple token.
+        let _ = self.with_default_context_scope(|scope, host_ptr| {
+            let key = unsafe { &*host_ptr }.main_default_world_security_token_key();
+            let context = scope.get_current_context();
+            if !crate::native_bridge::set_window_security_token(scope, context, key.as_deref()) {
+                tracing::warn!(
+                    "failed to refresh main Window security token; using unique context token"
+                );
+            }
+            Ok(())
+        });
     }
 
     pub(crate) fn document_content_security_policies(&self) -> Vec<String> {
