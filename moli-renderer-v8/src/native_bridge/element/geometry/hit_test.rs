@@ -168,6 +168,106 @@ pub(crate) fn observable_deep_hit_test(
     Ok(hit.document_or_element().map(|input| input.handle))
 }
 
+/// Subframe mouse capture keeps hit testing inside the initiating browsing
+/// context until all buttons are released. Unlike element pointer capture, it
+/// still selects elements within that frame and survives its navigation.
+pub(crate) fn captured_frame_input_surface_hit_test(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    root_point: LayoutPoint,
+    previous_root_to_frame: LayoutTransform2D,
+    include_scrollbars: bool,
+) -> Result<InputSurfaceHit, LayoutError> {
+    let (mut hit, root_to_frame) = if runtime.layout_policy().uses_real_layout() {
+        runtime.ensure_initial_layout()?;
+        let root_to_frame = published_root_to_frame(runtime, document)?;
+        let hit = runtime
+            .with_latest_layout_tree_for_document(document, |tree| {
+                input_surface_hit_test_in_tree(
+                    runtime,
+                    tree,
+                    FrameHitTest {
+                        document,
+                        viewport: tree.viewport,
+                        point: root_to_frame.map_point(root_point),
+                        root_to_frame,
+                    },
+                    false,
+                    include_scrollbars,
+                    0,
+                )
+            })
+            .ok_or(LayoutError::NoLayoutSnapshot)??;
+        (hit, root_to_frame)
+    } else {
+        let hit = input_surface_hit_test_in_frame(
+            runtime,
+            FrameHitTest {
+                document,
+                viewport: runtime.layout_viewport_for_document(document),
+                point: previous_root_to_frame.map_point(root_point),
+                root_to_frame: previous_root_to_frame,
+            },
+            false,
+            0,
+        )?;
+        (hit, previous_root_to_frame)
+    };
+    // Captured movement outside the child viewport targets its root element,
+    // rather than escaping into the parent or synthesizing a Document target.
+    if hit.input.is_none() && hit.control.is_none() {
+        hit.input = Some(InputHit {
+            handle: runtime
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(document)
+                .unwrap_or(document),
+            root_to_frame,
+        });
+    }
+    Ok(hit)
+}
+
+fn published_root_to_frame(
+    runtime: &JsContextHost,
+    mut document: DomHandle,
+) -> Result<LayoutTransform2D, LayoutError> {
+    let mut frames = Vec::new();
+    while let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) {
+        if frames.len() >= CHILD_FRAME_DEPTH_LIMIT {
+            return Err(LayoutError::NoLayoutSnapshot);
+        }
+        let parent_document = runtime
+            .dom_host()
+            .owner_document_handle(frame)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        frames.push((parent_document, frame));
+        document = parent_document;
+    }
+    let mut root_to_frame = LayoutTransform2D::IDENTITY;
+    for (parent_document, frame) in frames.into_iter().rev() {
+        let parent_to_child = runtime
+            .with_latest_layout_tree_for_document(parent_document, |tree| {
+                let geometry = tree.box_geometry(tree.source_output(frame)?.principal_box?)?;
+                let viewport_to_local = tree
+                    .coordinate_space(geometry.coordinate_space)?
+                    .local_to_viewport
+                    .inverse()?;
+                Some(
+                    LayoutTransform2D::translation(
+                        -geometry.content_box.x,
+                        -geometry.content_box.y,
+                    )
+                    .concatenate(viewport_to_local),
+                )
+            })
+            .flatten()
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        root_to_frame = parent_to_child.concatenate(root_to_frame);
+    }
+    Ok(root_to_frame)
+}
+
 fn input_surface_hit_test_in_frame(
     runtime: &JsContextHost,
     frame: FrameHitTest,
