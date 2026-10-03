@@ -3,6 +3,25 @@ use super::*;
 mod popup;
 
 #[test]
+fn native_mouse_event_coordinate_accessors() {
+    let mut vm = new_storage_test_vm("https://event-accessors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = Object.getOwnPropertyDescriptor(MouseEvent.prototype, 'clientX').get;
+  const event = new MouseEvent('mousedown', {clientX: 7});
+  let rejected = false;
+  try { get.call({}); } catch (error) { rejected = error instanceof TypeError; }
+  return String(get.call(event) === 7 && rejected);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
     let mut vm = new_storage_test_vm("https://event-attribute-scopes.test/page.html");
 
