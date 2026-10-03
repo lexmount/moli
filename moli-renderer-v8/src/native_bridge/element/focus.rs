@@ -74,6 +74,59 @@ fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
     }
 }
 
+fn html_area_has_associated_image_map(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    let dom = runtime.dom_host();
+    if !dom
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_html_element("area") && element.has_attribute("href"))
+    {
+        return false;
+    }
+    let mut ancestor_maps = std::collections::HashSet::new();
+    let mut ancestor = dom.parent_node(handle);
+    while let Some(candidate) = ancestor {
+        if dom.is_html_element_named(candidate, "map") {
+            ancestor_maps.insert(candidate);
+        }
+        ancestor = dom.parent_node(candidate);
+    }
+    if ancestor_maps.is_empty() {
+        return false;
+    }
+    let Some(root) = dom.root_node_handle(handle) else {
+        return false;
+    };
+    // A hash-name reference resolves to the first matching map in the image's
+    // tree. Keep shadow trees and duplicate map names separate.
+    let mut seen_names = std::collections::HashSet::new();
+    let mut applicable_names = std::collections::HashSet::new();
+    let mut referenced_names = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(candidate) = stack.pop() {
+        if let Some(element) = dom.node(candidate).and_then(Node::as_element) {
+            if element.is_html_element("map")
+                && let Some(name) = element.attribute("name").filter(|name| !name.is_empty())
+                && seen_names.insert(name)
+                && ancestor_maps.contains(&candidate)
+            {
+                applicable_names.insert(name);
+            }
+            if element.is_html_element("img")
+                && let Some(name) = element
+                    .attribute("usemap")
+                    .and_then(|value| value.strip_prefix('#'))
+            {
+                referenced_names.insert(name);
+            }
+        }
+        stack.extend(dom.child_handles_reversed(candidate));
+    }
+    applicable_names
+        .iter()
+        .any(|name| referenced_names.contains(name))
+}
+
 pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
@@ -85,6 +138,9 @@ pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
         || is_disabled_form_control(runtime, handle)
     {
         return false;
+    }
+    if element.namespace() == document::XHTML_NS && element.local_name() == "area" {
+        return html_area_has_associated_image_map(runtime, handle);
     }
     matches!(
         element.local_name(),
