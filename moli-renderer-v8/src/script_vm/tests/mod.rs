@@ -2241,7 +2241,9 @@ mod gamepad_interfaces;
 mod dom_elements;
 mod dom_exception_proxy_identity;
 mod dom_rect_factory_descriptors;
+mod dom_rect_structured_clone;
 mod dom_xhr;
+mod domrect_receiver_consolidation;
 mod dynamic_inline_scripts;
 mod element_click;
 mod encoded_video_chunk_shell;
@@ -2341,9 +2343,9 @@ mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
 mod window_getter_consolidation;
-mod dom_rect_structured_clone;
-mod domrect_receiver_consolidation;
-mod resize_observer_entries;
+
+
+
 mod window_promise_method_receivers;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
