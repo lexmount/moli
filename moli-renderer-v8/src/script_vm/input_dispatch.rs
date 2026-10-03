@@ -2868,7 +2868,8 @@ impl ScriptVm {
             .as_ref()
             .map(|session| session.modifiers)
             .unwrap_or(0);
-        self.finish_active_drag(DragFinishReason::Canceled, modifiers)
+        let result = self.finish_active_drag(DragFinishReason::Canceled, modifiers);
+        self.finish_input_event_dispatch_turn(result)
     }
 
     pub(crate) fn set_file_input_files(
