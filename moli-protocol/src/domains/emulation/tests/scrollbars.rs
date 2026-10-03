@@ -190,6 +190,78 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn scrollbars_hidden_is_applied_before_buffered_response_scripts() {
+    assert_auxiliary_navigation_scrollbar_initialization(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scrollbars_hidden_is_applied_before_network_response_scripts() {
+    assert_auxiliary_navigation_scrollbar_initialization(true).await;
+}
+
+async fn assert_auxiliary_navigation_scrollbar_initialization(network_response: bool) {
+    let mut conn = crate::testing::real_layout_test_connection();
+    let mut browser_context = BrowserContext::new("BID-1".into());
+    browser_context.set_active_target_id("TID-1");
+    browser_context.attach_active_session("SID-1");
+    conn.install_browser_context_fixture_for_test(browser_context);
+    for hidden in [true, false, true] {
+        // Startup hiding is disabled; only the target's emulation policy changes.
+        assert!(
+            conn.update_emulation_state_for_session_owner(Some("SID-1"), |state| {
+                assert!(
+                    state
+                        .expect("target emulation state")
+                        .set_scrollbars_hidden(hidden)
+                );
+            })
+        );
+        let url = url::Url::parse("https://scrollbars.example/auxiliary").unwrap();
+        let html = format!(
+            "{HTML}<script>globalThis.__initialClientWidth = scroller.clientWidth;</script>"
+        );
+        // Exercise the public helpers that build on the resident engine,
+        // rather than the test fixture's prepared-navigation path.
+        let mut navigation = if network_response {
+            let response = moli_core::page::NavigationResponse::from_text_body(
+                url.clone(),
+                200,
+                Vec::new(),
+                html,
+            );
+            conn.build_navigation_from_network_response_async(
+                url,
+                "GET".into(),
+                Vec::new().into(),
+                moli_fetch::NetworkFetchResult::without_request_observation(response),
+            )
+            .await
+            .expect("network response navigation")
+        } else {
+            conn.build_loaded_navigation_from_buffered_response_async(
+                url,
+                "GET".into(),
+                Vec::new().into(),
+                200,
+                Vec::new(),
+                html,
+            )
+            .await
+            .expect("buffered response navigation")
+        };
+        let widths = navigation
+            .page
+            .evaluate_runtime_expression_by_value_async(
+                "[__initialClientWidth, scroller.clientWidth]",
+            )
+            .await
+            .expect("initial and current scrollbar geometry");
+        let expected = if hidden { 200 } else { 185 };
+        assert_eq!(widths["value"], json!([expected, expected]));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scrollbars_hidden_respects_session_noops_and_detach_cleanup() {
     let mut ctx = TestContext::new();
     load_fixture(&mut ctx).await;

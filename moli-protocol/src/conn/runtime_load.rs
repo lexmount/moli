@@ -2372,7 +2372,6 @@ impl CdpConnection {
             .expect("navigation load target must retain its resident NavigationEngine")
             .clone();
         engine.set_document_activity(load_inputs.document_activity);
-        engine.set_emulated_scrollbars_hidden(load_inputs.scrollbars_hidden);
         // The handle may publish lifecycle or resource activity before the
         // DCL-bound navigation result is committed into a target slot.
         self.apply_scheduler_senders_to_navigation_engine(&engine);

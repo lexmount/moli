@@ -117,6 +117,7 @@ impl CdpConnection {
         };
         if let Some(engine) = engine.as_mut() {
             engine.set_document_activity(load_inputs.document_activity);
+            engine.set_emulated_scrollbars_hidden(load_inputs.scrollbars_hidden);
         }
         engine
     }
