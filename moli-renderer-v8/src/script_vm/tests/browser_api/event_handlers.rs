@@ -208,6 +208,25 @@ mod node_compilation;
 mod document_replacement;
 
 #[test]
+fn native_wheel_event_delta_accessors() {
+    let mut vm = new_storage_test_vm("https://event-accessors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = Object.getOwnPropertyDescriptor(WheelEvent.prototype, 'deltaY').get;
+  const event = new WheelEvent('wheel', {deltaY: 7});
+  let rejected = false;
+  try { get.call({}); } catch (error) { rejected = error instanceof TypeError; }
+  return String(get.call(event) === 7 && rejected);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn added_window_and_dom_handler_properties_share_native_registration() {
     let mut vm = new_parsed_test_vm(
         "https://native-handler-surface.test/",
