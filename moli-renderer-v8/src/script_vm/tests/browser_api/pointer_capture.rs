@@ -77,3 +77,223 @@ fn pointer_capture_queries_pending_target_before_native_dispatch() {
         "pointerdown@first|gotpointercapture@first|pointermove@first|lostpointercapture@first|gotpointercapture@second|pointermove@second|lostpointercapture@second|pointermove@first|pointerup@first"
     );
 }
+
+fn new_pointer_activity_test_vm(
+    kind: &str,
+    chorded: bool,
+    contacts: usize,
+) -> StandaloneScriptVmHarness {
+    let mut vm = new_rendered_test_vm(
+        "https://pointer-activity.test/",
+        r#"<html><body><div id="first" style="position:absolute;left:40px;top:40px;width:120px;height:120px">first</div><div id="second" style="position:absolute;left:220px;top:40px;width:120px;height:120px">second</div></body></html>"#,
+    );
+    vm.eval(&format!(
+        "{}; globalThis.__expectedContacts = {contacts}; globalThis.__activityResults = __installPointerActivityProbe(document.getElementById('first'), document.getElementById('second'), '{kind}', {chorded}); 'ready'",
+        include_str!("pointer_activity.js"),
+    ))
+    .unwrap();
+    vm
+}
+
+fn assert_pointer_activity_probe(vm: &mut StandaloneScriptVmHarness) {
+    assert_eq!(
+        vm.eval("globalThis.__activityFinished = __activityResults.finish(); __activityFinished.complete")
+            .unwrap(),
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__activityFinished)").unwrap()
+    );
+}
+
+#[test]
+fn mouse_button_snapshots_preserve_single_button_pointerdown() {
+    for (button, buttons) in [(0, 1), (1, 4), (2, 2), (3, 8), (4, 16)] {
+        let mut vm = new_rendered_test_vm(
+            "https://pointer-button-snapshot.test/",
+            r#"<div style="position:absolute;left:0;top:0;width:200px;height:200px">target</div>"#,
+        );
+        vm.eval(
+            r#"
+            globalThis.buttonEvents = [];
+            for (const type of ['pointermove', 'pointerdown', 'pointerup', 'mousemove', 'mousedown', 'mouseup']) {
+                document.addEventListener(type, event => buttonEvents.push(`${type}:${event.buttons}`));
+            }
+            'ready'
+            "#,
+        )
+        .unwrap();
+        // CDP can report a held button on a move, then press that same button
+        // again. Only another held button makes the press a chorded move.
+        for (event, changed_button, current_buttons) in [
+            ("mousemove", -1, buttons),
+            ("mousedown", button, buttons),
+            ("mousedown", button, buttons),
+            ("mouseup", button, 0),
+        ] {
+            vm.dispatch_mouse_event_at_point(
+                80.0,
+                80.0,
+                event,
+                changed_button,
+                Some(current_buttons),
+                0.0,
+                0.0,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            vm.eval("buttonEvents.join('|')").unwrap(),
+            format!(
+                "pointermove:{buttons}|mousemove:{buttons}|pointerdown:{buttons}|mousedown:{buttons}|pointerdown:{buttons}|mousedown:{buttons}|pointerup:0|mouseup:0"
+            ),
+            "button {button}"
+        );
+    }
+}
+
+#[test]
+fn hovering_pointer_capture_keeps_native_pointer_ids_after_button_release() {
+    for (kind, id) in [("mouse", 1), ("mouse", 17), ("pen", 5)] {
+        let mut vm = new_pointer_activity_test_vm(kind, false, 1);
+        let pointer = crate::runtime::RendererPointerEventProperties {
+            pointer_id: id,
+            pointer_type: kind.to_owned(),
+            ..Default::default()
+        };
+        for (event, button, buttons, x) in [
+            ("mousemove", -1, 0, 80.0),
+            ("mousedown", 0, 1, 80.0),
+            ("mousemove", -1, 1, 82.0),
+            ("mouseup", 0, 0, 82.0),
+            ("mousemove", -1, 0, 84.0),
+        ] {
+            vm.dispatch_mouse_event_at_point_with_pointer(
+                x,
+                80.0,
+                event,
+                button,
+                Some(buttons),
+                1,
+                0.0,
+                0.0,
+                pointer.clone(),
+            )
+            .unwrap();
+        }
+        assert_pointer_activity_probe(&mut vm);
+    }
+}
+
+#[test]
+fn chorded_mouse_capture_ends_only_when_the_last_button_is_released() {
+    let mut vm = new_pointer_activity_test_vm("mouse", true, 1);
+    for (phase, event, button, buttons, x) in [
+        ("hover", "mousemove", -1, 0, 80.0),
+        ("first-press", "mousedown", 0, 1, 80.0),
+        ("second-press", "mousedown", 2, 3, 80.0),
+        ("first-release", "mouseup", 0, 2, 80.0),
+        ("move", "mousemove", -1, 2, 82.0),
+        ("last-release", "mouseup", 2, 0, 82.0),
+        ("after-end-hover", "mousemove", -1, 0, 84.0),
+    ] {
+        vm.eval(&format!("globalThis.__inputPhase = '{phase}'"))
+            .unwrap();
+        vm.dispatch_mouse_event_at_point(x, 80.0, event, button, Some(buttons), 0.0, 0.0)
+            .unwrap();
+    }
+    assert_pointer_activity_probe(&mut vm);
+}
+
+#[test]
+fn ended_and_cancelled_touch_contacts_are_retired_after_capture_events() {
+    for contacts in [1, 2] {
+        for end in ["touchend", "touchcancel"] {
+            let mut vm = new_pointer_activity_test_vm("touch", false, contacts);
+            let points = (0..contacts)
+                .map(|id| crate::runtime::RendererTouchPoint {
+                    id: id as i32,
+                    x: 80.0 + 20.0 * id as f64,
+                    y: 80.0,
+                })
+                .collect::<Vec<_>>();
+            vm.dispatch_touch_event_at_points(&points, "touchstart", false)
+                .unwrap();
+            vm.dispatch_touch_event_at_points(&points, "touchmove", false)
+                .unwrap();
+            vm.dispatch_touch_event_at_points(&[], end, false).unwrap();
+            assert_pointer_activity_probe(&mut vm);
+        }
+    }
+}
+
+#[test]
+fn ending_one_touch_contact_preserves_capture_for_the_other_contact() {
+    let mut vm = new_pointer_activity_test_vm("touch", false, 2);
+    let points = [
+        crate::runtime::RendererTouchPoint {
+            id: 11,
+            x: 80.0,
+            y: 80.0,
+        },
+        crate::runtime::RendererTouchPoint {
+            id: 12,
+            x: 100.0,
+            y: 80.0,
+        },
+    ];
+    vm.dispatch_touch_event_at_points(&points, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&points, "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&points[..1], "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const [ended, remaining] = __activityResults.events.filter(e => e.type === 'pointerdown').map(e => e.id);
+                const first = document.getElementById('first');
+                let error;
+                try { first.releasePointerCapture(ended); } catch (e) { error = e; }
+                return error instanceof DOMException && error.name === 'NotFoundError'
+                    && !first.hasPointerCapture(ended) && first.hasPointerCapture(remaining);
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    assert_pointer_activity_probe(&mut vm);
+}
+
+#[test]
+fn cancelled_pointerdown_suppresses_compatibility_mouse_events_until_last_release() {
+    let mut vm = new_pointer_activity_test_vm("mouse", true, 1);
+    vm.eval(
+        r#"
+        globalThis.__compatibilityMouseEvents = [];
+        const first = document.getElementById('first');
+        first.addEventListener('pointerdown', event => event.preventDefault());
+        for (const type of ['mousedown', 'mouseup', 'mousemove']) {
+            first.addEventListener(type, event => __compatibilityMouseEvents.push(`${type}:${event.buttons}`));
+        }
+        'ready'
+        "#,
+    )
+    .unwrap();
+    for (event, button, buttons) in [
+        ("mousedown", 0, 1),
+        ("mousedown", 2, 3),
+        ("mouseup", 2, 1),
+        ("mousemove", -1, 1),
+        ("mouseup", 0, 0),
+        ("mousemove", -1, 0),
+    ] {
+        vm.dispatch_mouse_event_at_point(80.0, 80.0, event, button, Some(buttons), 0.0, 0.0)
+            .unwrap();
+    }
+    assert_eq!(
+        vm.eval("__compatibilityMouseEvents.join('|')").unwrap(),
+        "mousemove:0"
+    );
+}
