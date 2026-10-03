@@ -34,9 +34,11 @@ JSON.stringify([CompressionStream, DecompressionStream].map(C => {
     );
 }
 
-#[test]
-fn compression_streams_roundtrip_through_response_and_multiple_buffer_sources() {
-    let mut vm = stream_test_vm();
+#[tokio::test(flavor = "current_thread")]
+async fn compression_streams_roundtrip_through_response_and_multiple_buffer_sources() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://stream-runtime.test/", &loader);
     vm.eval(r#"
 globalThis.compressionResult = 'pending';
 (async () => {
@@ -64,15 +66,25 @@ globalThis.compressionResult = 'pending';
   return result;
 })().then(result => compressionResult = result, e => compressionResult = [e.name, e.message]);
 "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(compressionResult !== 'pending')",
+        "true",
+        "compression_streams_roundtrip_through_response_and_multiple_buffer_sources",
+    )
+    .await;
     assert_eq!(
         vm.eval("JSON.stringify(compressionResult)").unwrap(),
         r#"[["ABCDEF","",true],["ABCDEF","",true],["ABCDEF","",true],["ABCDEF","",true]]"#
     );
 }
 
-#[test]
-fn compression_streams_reject_invalid_chunks_and_corrupt_or_truncated_data() {
-    let mut vm = stream_test_vm();
+#[tokio::test(flavor = "current_thread")]
+async fn compression_streams_reject_invalid_chunks_and_corrupt_or_truncated_data() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://stream-runtime.test/", &loader);
     vm.eval(r#"
 globalThis.compressionErrors = 'pending';
 (async () => {
@@ -97,6 +109,14 @@ globalThis.compressionErrors = 'pending';
   return results;
 })().then(result => compressionErrors = result, e => compressionErrors = [e.name,e.message]);
 "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(compressionErrors !== 'pending')",
+        "true",
+        "compression_streams_reject_invalid_chunks_and_corrupt_or_truncated_data",
+    )
+    .await;
     let result = vm.eval("JSON.stringify(compressionErrors)").unwrap();
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     let result = result.as_array().unwrap();
@@ -162,9 +182,11 @@ globalThis.compressionCancellation = 'pending';
     );
 }
 
-#[test]
-fn brotli_compression_preserves_backpressure_and_flushes_on_close() {
-    let mut vm = stream_test_vm();
+#[tokio::test(flavor = "current_thread")]
+async fn brotli_compression_preserves_backpressure_and_flushes_on_close() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://stream-runtime.test/", &loader);
     vm.eval(
         r#"
 globalThis.brotliEvents = [];
@@ -197,5 +219,13 @@ globalThis.brotliResult = 'pending';
 "#,
     )
     .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(brotliResult !== 'pending')",
+        "true",
+        "brotli_compression_preserves_backpressure_and_flushes_on_close",
+    )
+    .await;
     assert_eq!(vm.eval("brotliResult").unwrap(), "AB");
 }
