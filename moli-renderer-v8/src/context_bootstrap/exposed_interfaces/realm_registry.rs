@@ -4,6 +4,9 @@ use std::rc::Rc;
 use anyhow::{Result, anyhow};
 
 use super::metadata::{InterfaceId, RealmKind};
+use crate::util::{
+    register_intrinsic_interface, registered_intrinsic_constructor, registered_intrinsic_prototype,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RealmInterfaceState {
@@ -102,10 +105,66 @@ impl IntrinsicInterfaceRegistry {
             )
         })?;
         *slot = state;
+        if state == RealmInterfaceState::Failed {
+            self.objects.borrow_mut()[id.index()] = None;
+        }
         Ok(())
     }
 
-    pub(super) fn register_objects<'s>(
+    /// Publishes the same intrinsic identities to both registries. Mark the
+    /// interface in progress before either store changes, and make any failed
+    /// publication terminal even if V8 has retained an immutable partial pair.
+    pub(super) fn register_intrinsic_objects<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+        id: InterfaceId,
+        name: &str,
+        constructor: v8::Local<'s, v8::Object>,
+        prototype: v8::Local<'s, v8::Object>,
+        public_interface: v8::Local<'s, v8::Object>,
+    ) -> Result<()> {
+        if self.state(id) == Some(RealmInterfaceState::Failed) {
+            return Err(anyhow!("a previous materialization of `{name}` failed"));
+        }
+        self.set_state(id, RealmInterfaceState::Materializing)?;
+        let result = (|| {
+            // Validate and retain the Rust objects before writing the immutable
+            // JS entries. Accessors expose them only once publication completes.
+            self.register_objects(scope, id, constructor, prototype, public_interface)?;
+            match (
+                registered_intrinsic_constructor(scope, global, name),
+                registered_intrinsic_prototype(scope, global, name),
+            ) {
+                (Some(existing_constructor), Some(existing_prototype)) => {
+                    if !existing_constructor.strict_equals(constructor.into())
+                        || !existing_prototype.strict_equals(prototype.into())
+                    {
+                        return Err(anyhow!(
+                            "intrinsic interface `{name}` was replaced after registration"
+                        ));
+                    }
+                }
+                (None, None) => {
+                    if !register_intrinsic_interface(scope, global, name, constructor, prototype) {
+                        return Err(anyhow!("failed to register intrinsic interface `{name}`"));
+                    }
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "intrinsic interface `{name}` has partial registry state"
+                    ));
+                }
+            }
+            self.set_state(id, RealmInterfaceState::Finalizing)
+        })();
+        if result.is_err() {
+            self.set_state(id, RealmInterfaceState::Failed)?;
+        }
+        result
+    }
+
+    fn register_objects<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
@@ -153,6 +212,12 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if !matches!(
+            self.state(id)?,
+            RealmInterfaceState::Ready | RealmInterfaceState::Finalizing
+        ) {
+            return None;
+        }
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
         Some(v8::Local::new(scope, &object.constructor))
@@ -163,6 +228,12 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if !matches!(
+            self.state(id)?,
+            RealmInterfaceState::Ready | RealmInterfaceState::Finalizing
+        ) {
+            return None;
+        }
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
         Some(v8::Local::new(scope, &object.prototype))
@@ -173,6 +244,12 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if !matches!(
+            self.state(id)?,
+            RealmInterfaceState::Ready | RealmInterfaceState::Finalizing
+        ) {
+            return None;
+        }
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
         Some(v8::Local::new(scope, &object.public_interface))
@@ -230,6 +307,9 @@ mod tests {
         registry
             .register_objects(scope, id, constructor, prototype, public_interface)
             .expect("realm interface objects should register");
+        registry
+            .set_state(id, RealmInterfaceState::Ready)
+            .expect("realm interface objects should become ready");
         context.detach_global();
 
         assert!(

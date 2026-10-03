@@ -11,8 +11,8 @@ use crate::context_bootstrap::runtime_state::set_interface_prototype_constructor
 use crate::context_bootstrap::shared::throw_error;
 use crate::context_bootstrap::specs::ConstructorKind;
 use crate::util::{
-    constructor_prototype_object, register_intrinsic_interface, registered_intrinsic_constructor,
-    registered_intrinsic_prototype, v8str,
+    constructor_prototype_object, registered_intrinsic_constructor, registered_intrinsic_prototype,
+    v8str,
 };
 
 pub(super) fn exposed_interface_lazy_getter<'s>(
@@ -55,7 +55,6 @@ pub(super) fn materialize_interface<'s>(
         .metadata(id)
         .ok_or_else(|| anyhow!("unknown exposed interface id {}", id.index()))?;
     let realm = IntrinsicInterfaceRegistry::for_current_context(scope, registry.len())?;
-    let global = scope.get_current_context().global(scope);
 
     match realm
         .state(id)
@@ -93,15 +92,6 @@ pub(super) fn materialize_interface<'s>(
             ));
         }
         RealmInterfaceState::Uninitialized => {}
-    }
-
-    if registered_intrinsic_constructor(scope, global, metadata.name).is_some()
-        || registered_intrinsic_prototype(scope, global, metadata.name).is_some()
-    {
-        return Err(anyhow!(
-            "uninitialized interface `{}` has partial registry state",
-            metadata.name
-        ));
     }
 
     realm.set_state(id, RealmInterfaceState::Materializing)?;
@@ -196,6 +186,46 @@ fn materialize_uninitialized_interface<'s>(
     let metadata = registry
         .metadata(id)
         .ok_or_else(|| anyhow!("unknown exposed interface id {}", id.index()))?;
+    let context = scope.get_current_context();
+    let global = context.global(scope);
+    match (
+        registered_intrinsic_constructor(scope, global, metadata.name),
+        registered_intrinsic_prototype(scope, global, metadata.name),
+    ) {
+        (Some(constructor), Some(prototype)) => {
+            // A complete native-only pair can outlive an interrupted eager
+            // capture. Reuse its identities without consulting author bindings.
+            if constructor.get_creation_context(scope) != Some(context)
+                || prototype.get_creation_context(scope) != Some(context)
+            {
+                return Err(anyhow!(
+                    "registered intrinsic interface `{}` belongs to another realm",
+                    metadata.name
+                ));
+            }
+            let constructor = v8::Local::<v8::Function>::try_from(constructor).map_err(|_| {
+                anyhow!(
+                    "intrinsic constructor `{}` is not a Function",
+                    metadata.name
+                )
+            })?;
+            return finish_materialized_interface(
+                scope,
+                registry,
+                realm,
+                id,
+                constructor,
+                prototype,
+            );
+        }
+        (None, None) => {}
+        _ => {
+            return Err(anyhow!(
+                "uninitialized interface `{}` has partial registry state",
+                metadata.name
+            ));
+        }
+    }
     let parent = metadata
         .parent
         .map(|parent_id| intrinsic_parent(scope, registry, parent_id))
@@ -256,19 +286,27 @@ fn materialize_uninitialized_interface<'s>(
         }
     }
 
-    let global = scope.get_current_context().global(scope);
-    if !register_intrinsic_interface(
+    finish_materialized_interface(
         scope,
-        global,
-        metadata.name,
-        constructor.into(),
+        registry,
+        realm,
+        id,
+        constructor,
         constructor_prototype,
-    ) {
-        return Err(anyhow!(
-            "failed to register intrinsic interface `{}`",
-            metadata.name
-        ));
-    }
+    )
+}
+
+fn finish_materialized_interface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registry: &Rc<ExposedInterfaceTemplateRegistry>,
+    realm: &Rc<IntrinsicInterfaceRegistry>,
+    id: InterfaceId,
+    constructor: v8::Local<'s, v8::Function>,
+    constructor_prototype: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Value>> {
+    let metadata = registry
+        .metadata(id)
+        .ok_or_else(|| anyhow!("unknown exposed interface id {}", id.index()))?;
     let public_interface = match metadata.kind {
         ConstructorKind::HtmlElement => {
             let proxy =
@@ -284,14 +322,16 @@ fn materialize_uninitialized_interface<'s>(
         }
         _ => constructor.into(),
     };
-    realm.register_objects(
+    let global = scope.get_current_context().global(scope);
+    realm.register_intrinsic_objects(
         scope,
+        global,
         id,
+        metadata.name,
         constructor.into(),
         constructor_prototype,
         public_interface,
     )?;
-    realm.set_state(id, RealmInterfaceState::Finalizing)?;
     finalize_materialized_interface(scope, metadata.name)?;
     realm.set_state(id, RealmInterfaceState::Ready)?;
     registry.record_materialization(id);

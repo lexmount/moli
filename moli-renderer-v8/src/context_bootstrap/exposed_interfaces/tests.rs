@@ -298,6 +298,278 @@ fn entered_context_template_build_is_isolate_cached_and_realm_neutral() {
 }
 
 #[test]
+fn uninitialized_dom_string_map_adopts_its_registered_intrinsics() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let registry = super::template_registry::ExposedInterfaceTemplateRegistry::install(
+        scope,
+        crate::context_bootstrap::specs::constructor_specs(),
+        super::metadata::TemplateBuildProfile::Window,
+    )
+    .expect("template registry");
+    let realm = super::realm_registry::IntrinsicInterfaceRegistry::initialize_for_current_context(
+        scope,
+        registry.len(),
+        super::RealmKind::Window,
+    )
+    .expect("realm registry");
+    let id = registry
+        .id_by_name("DOMStringMap")
+        .expect("dataset interface");
+    let constructor = registry
+        .get_or_build_template(scope, id)
+        .expect("dataset template")
+        .get_function(scope)
+        .expect("dataset constructor");
+    let prototype = crate::util::constructor_prototype_object(scope, constructor.into())
+        .expect("dataset prototype");
+    let global = context.global(scope);
+    assert!(crate::util::register_intrinsic_interface(
+        scope,
+        global,
+        "DOMStringMap",
+        constructor.into(),
+        prototype,
+    ));
+    assert_eq!(
+        global.set_lazy_data_property(
+            scope,
+            v8str(scope, "DOMStringMap").into(),
+            counting_lazy_getter,
+        ),
+        Some(true)
+    );
+    reset_lazy_getter_calls();
+
+    let recovered = super::ensure_intrinsic_interface_prototype(scope, "DOMStringMap")
+        .expect("a complete trusted registration must recover the dataset prototype");
+
+    assert!(recovered.strict_equals(prototype.into()));
+    assert_eq!(
+        realm.state(id),
+        Some(super::realm_registry::RealmInterfaceState::Ready)
+    );
+    assert!(
+        super::ensure_intrinsic_interface_constructor(scope, "DOMStringMap")
+            .expect("recovered dataset constructor")
+            .strict_equals(constructor.into())
+    );
+    assert!(
+        super::materialize::materialize_interface(scope, id)
+            .expect("repeated dataset materialization")
+            .strict_equals(constructor.into())
+    );
+    assert_eq!(registry.build_count(id), 1);
+    assert_eq!(
+        lazy_getter_calls(),
+        0,
+        "recovery must not read the public binding"
+    );
+}
+
+#[test]
+fn incomplete_intrinsic_registration_marks_materialization_failed() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let registry = super::template_registry::ExposedInterfaceTemplateRegistry::install(
+        scope,
+        crate::context_bootstrap::specs::constructor_specs(),
+        super::metadata::TemplateBuildProfile::Window,
+    )
+    .expect("template registry");
+    let realm = super::realm_registry::IntrinsicInterfaceRegistry::initialize_for_current_context(
+        scope,
+        registry.len(),
+        super::RealmKind::Window,
+    )
+    .expect("realm registry");
+    let id = registry
+        .id_by_name("DOMStringMap")
+        .expect("dataset interface");
+    let global = context.global(scope);
+    crate::util::initialize_intrinsic_interface_registry(scope, global);
+    let prototypes = crate::util::get_private_object(scope, global, "__moliIntrinsicPrototypes")
+        .expect("private prototype registry");
+    assert_eq!(
+        prototypes.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+        Some(true)
+    );
+    let constructor = v8::Object::new(scope);
+    let prototype = v8::Object::new(scope);
+    assert!(!crate::util::register_intrinsic_interface(
+        scope,
+        global,
+        "DOMStringMap",
+        constructor,
+        prototype,
+    ));
+    assert!(crate::util::registered_intrinsic_constructor(scope, global, "DOMStringMap").is_some());
+    assert!(crate::util::registered_intrinsic_prototype(scope, global, "DOMStringMap").is_none());
+
+    let error = super::ensure_intrinsic_interface_prototype(scope, "DOMStringMap")
+        .expect_err("an incomplete pair must not supply a dataset prototype");
+
+    assert!(error.to_string().contains("partial registry state"));
+    assert_eq!(
+        realm.state(id),
+        Some(super::realm_registry::RealmInterfaceState::Failed)
+    );
+    let repeated_error = super::ensure_intrinsic_interface_prototype(scope, "DOMStringMap")
+        .expect_err("a failed materialization must not retry the partial registration");
+    assert!(
+        repeated_error
+            .to_string()
+            .contains("previous materialization")
+    );
+    assert_eq!(registry.build_count(id), 0);
+}
+
+#[test]
+fn failed_eager_intrinsic_capture_does_not_leave_an_uninitialized_interface() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let registry = super::template_registry::ExposedInterfaceTemplateRegistry::install(
+        scope,
+        crate::context_bootstrap::specs::constructor_specs(),
+        super::metadata::TemplateBuildProfile::Window,
+    )
+    .expect("template registry");
+    let realm = super::realm_registry::IntrinsicInterfaceRegistry::initialize_for_current_context(
+        scope,
+        registry.len(),
+        super::RealmKind::Window,
+    )
+    .expect("realm registry");
+    let global = context.global(scope);
+    let error_constructor = crate::util::constructor_object(scope, global, "Error")
+        .expect("ECMAScript Error constructor");
+    let error_prototype = crate::util::constructor_prototype_object(scope, error_constructor)
+        .expect("ECMAScript Error prototype");
+    assert!(crate::util::register_intrinsic_interface(
+        scope,
+        global,
+        "Error",
+        error_constructor,
+        error_prototype,
+    ));
+    let id = registry
+        .id_by_name("Window")
+        .expect("eager Window interface");
+    let constructor = v8::Object::new(scope);
+    let prototype = v8::Object::new(scope);
+    assert_eq!(
+        constructor.set(scope, v8str(scope, "prototype").into(), prototype.into()),
+        Some(true)
+    );
+    assert_eq!(
+        global.set(scope, v8str(scope, "Window").into(), constructor.into()),
+        Some(true)
+    );
+    let prototypes = crate::util::get_private_object(scope, global, "__moliIntrinsicPrototypes")
+        .expect("private prototype registry");
+    assert_eq!(
+        prototypes.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+        Some(true)
+    );
+
+    super::capture_eager_intrinsic_interfaces(scope, global, super::RealmKind::Window)
+        .expect_err("a failed private registration must abort eager capture");
+
+    assert_eq!(
+        realm.state(id),
+        Some(super::realm_registry::RealmInterfaceState::Failed)
+    );
+    assert!(realm.constructor(scope, id).is_none());
+    assert!(realm.prototype(scope, id).is_none());
+    assert!(realm.public_interface(scope, id).is_none());
+    assert!(super::ensure_intrinsic_interface_prototype(scope, "Window").is_err());
+}
+
+#[test]
+fn failed_intrinsic_finalization_does_not_expose_registered_objects() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let registry = super::template_registry::ExposedInterfaceTemplateRegistry::install(
+        scope,
+        crate::context_bootstrap::specs::constructor_specs(),
+        super::metadata::TemplateBuildProfile::Window,
+    )
+    .expect("template registry");
+    let realm = super::realm_registry::IntrinsicInterfaceRegistry::initialize_for_current_context(
+        scope,
+        registry.len(),
+        super::RealmKind::Window,
+    )
+    .expect("realm registry");
+    let id = registry.id_by_name("Crypto").expect("Crypto interface");
+    let constructor = registry
+        .get_or_build_template(scope, id)
+        .expect("Crypto template")
+        .get_function(scope)
+        .expect("Crypto constructor");
+    let prototype = crate::util::constructor_prototype_object(scope, constructor.into())
+        .expect("Crypto prototype");
+    let global = context.global(scope);
+    assert!(crate::util::register_intrinsic_interface(
+        scope,
+        global,
+        "Crypto",
+        constructor.into(),
+        prototype,
+    ));
+    let subtle_crypto_available = v8::Boolean::new(scope, true);
+    crate::util::set_private_value(
+        scope,
+        global,
+        "__moliWindowCryptoSubtleAvailable",
+        subtle_crypto_available.into(),
+    );
+    assert_eq!(
+        prototype.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+        Some(true)
+    );
+
+    super::ensure_intrinsic_interface_prototype(scope, "Crypto")
+        .expect_err("a frozen prototype must reject secure-context finalization");
+
+    assert_eq!(
+        realm.state(id),
+        Some(super::realm_registry::RealmInterfaceState::Failed)
+    );
+    assert!(realm.constructor(scope, id).is_none());
+    assert!(realm.prototype(scope, id).is_none());
+    assert!(realm.public_interface(scope, id).is_none());
+    assert!(super::ensure_intrinsic_interface_constructor(scope, "Crypto").is_err());
+    assert!(super::ensure_intrinsic_interface_prototype(scope, "Crypto").is_err());
+    assert!(super::materialized_intrinsic_interface_prototype(scope, "Crypto").is_none());
+    assert_eq!(registry.materialization_count(id), 0);
+    assert!(
+        crate::util::registered_intrinsic_constructor(scope, global, "Crypto")
+            .is_some_and(|value| value.strict_equals(constructor.into()))
+    );
+    assert!(
+        crate::util::registered_intrinsic_prototype(scope, global, "Crypto")
+            .is_some_and(|value| value.strict_equals(prototype.into()))
+    );
+}
+
+#[test]
 fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
     fn own_properties(realm: super::RealmKind) -> Vec<bool> {
         crate::ensure_v8_for_test();

@@ -206,6 +206,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         let captured_constructor = registered_intrinsic_constructor(scope, global, metadata.name);
         let captured_prototype = registered_intrinsic_prototype(scope, global, metadata.name);
         if captured_constructor.is_some() != captured_prototype.is_some() {
+            realm.set_state(metadata.id, RealmInterfaceState::Failed)?;
             return Err(anyhow!(
                 "eager intrinsic `{}` has partial constructor/prototype state",
                 metadata.name
@@ -216,7 +217,15 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
             let public_interface = realm
                 .public_interface(scope, metadata.id)
                 .unwrap_or(constructor);
-            realm.register_objects(scope, metadata.id, constructor, prototype, public_interface)?;
+            realm.register_intrinsic_objects(
+                scope,
+                global,
+                metadata.id,
+                metadata.name,
+                constructor,
+                prototype,
+                public_interface,
+            )?;
             realm.set_state(metadata.id, RealmInterfaceState::Ready)?;
             continue;
         }
@@ -239,13 +248,15 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         let Some(prototype) = constructor_prototype_object(scope, constructor) else {
             continue;
         };
-        if !register_intrinsic_interface(scope, global, metadata.name, constructor, prototype) {
-            return Err(anyhow!(
-                "failed to capture eager intrinsic `{}`",
-                metadata.name
-            ));
-        }
-        realm.register_objects(scope, metadata.id, constructor, prototype, constructor)?;
+        realm.register_intrinsic_objects(
+            scope,
+            global,
+            metadata.id,
+            metadata.name,
+            constructor,
+            prototype,
+            constructor,
+        )?;
         realm.set_state(metadata.id, RealmInterfaceState::Ready)?;
     }
     Ok(())
