@@ -11,7 +11,7 @@ use crate::{
 use super::super::node::{
     node_owner_document_relevant_context, node_runtime_and_handle_from_object_or_detached,
 };
-use super::{element_attribute, set_reflected_attribute};
+use super::{reflected_attribute, set_reflected_attribute};
 
 const CANVAS_CONTEXT_KIND_SLOT: &str = "__moliCanvasContextKind";
 const CANVAS_CONTEXT_2D_SLOT: &str = "__moliCanvasContext2D";
@@ -135,7 +135,7 @@ pub(crate) fn canvas_dimension_value<'s>(
     else {
         return default;
     };
-    element_attribute(unsafe { &*runtime_ptr }, handle, name)
+    reflected_attribute(unsafe { &*runtime_ptr }, handle, name)
         .and_then(|value| parse_unsigned_long_prefix(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(default)
@@ -242,11 +242,11 @@ pub(crate) fn canvas_transfer_control_to_offscreen_callback<'s>(
         rv.set_null();
         return;
     };
-    let width = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
+    let width = reflected_attribute(unsafe { &*runtime_ptr }, handle, "width")
         .and_then(|value| parse_unsigned_long_prefix(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(300);
-    let height = element_attribute(unsafe { &*runtime_ptr }, handle, "height")
+    let height = reflected_attribute(unsafe { &*runtime_ptr }, handle, "height")
         .and_then(|value| parse_unsigned_long_prefix(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(150);

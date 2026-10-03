@@ -17,7 +17,7 @@ pub(in crate::native_bridge) fn form_action_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "action")
+    let value = reflected_attribute(runtime, handle, "action")
         .filter(|value| !value.is_empty())
         .map(|_| resolve_url_like_attribute(runtime, handle, "action"))
         .unwrap_or_else(|| form_owner_document_url(runtime, handle));
@@ -79,7 +79,7 @@ pub(in crate::native_bridge) fn form_autocomplete_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "autocomplete")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "autocomplete")
         .filter(|value| value.eq_ignore_ascii_case("off"))
         .map(|_| "off")
         .unwrap_or("on");
@@ -117,7 +117,7 @@ pub(in crate::native_bridge) fn form_enctype_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "enctype")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "enctype")
         .map(|value| normalized_form_enctype(&value))
         .unwrap_or("application/x-www-form-urlencoded");
     if let Some(value) = v8_string(scope, value) {
@@ -178,7 +178,7 @@ pub(in crate::native_bridge) fn form_method_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let method = element_attribute(unsafe { &*runtime_ptr }, handle, "method")
+    let method = reflected_attribute(unsafe { &*runtime_ptr }, handle, "method")
         .map(|value| normalized_form_method(&value).to_owned())
         .unwrap_or_else(|| "get".to_owned());
     if let Some(value) = v8_string(scope, &method) {
