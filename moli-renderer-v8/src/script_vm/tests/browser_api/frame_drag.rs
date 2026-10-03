@@ -80,7 +80,10 @@ fn held_mouse_and_pen_stay_in_the_initiating_child_frame() {
                     "reposition",
                 ][..],
             ),
-            ("parent", &["release", "capture", "cancelled"][..]),
+            (
+                "parent",
+                &["plain", "release", "capture", "chorded", "cancelled"][..],
+            ),
         ] {
             for mode in modes {
                 let mut vm = new_frame_drag_test_vm(origin, mode);

@@ -36,7 +36,7 @@ fn mouse_drop_requires_prevented_dragover() {
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("first mousedown should dispatch");
-    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
+    vm.dispatch_mouse_event_at_point(30.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
         .expect("first mousemove should start drag");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("first mouseup should finish drag");
@@ -54,7 +54,7 @@ fn mouse_drop_requires_prevented_dragover() {
         .expect("drop permission flag should update");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("second mousedown should dispatch");
-    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
+    vm.dispatch_mouse_event_at_point(30.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
         .expect("second mousemove should start drag");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("second mouseup should finish drag");
@@ -106,7 +106,7 @@ fn mouse_dragstart_prevent_default_cancels_drag_session() {
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch");
-    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
+    vm.dispatch_mouse_event_at_point(30.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
         .expect("mousemove should attempt drag");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("mouseup should dispatch");

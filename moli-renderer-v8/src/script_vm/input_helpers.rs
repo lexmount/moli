@@ -5,6 +5,23 @@ use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage}
 use crate::types::ScriptErrorValue;
 
 #[derive(Clone, Copy)]
+pub(super) struct PendingMouseDrag {
+    pub(super) document: DomHandle,
+    pub(super) position: moli_layout::LayoutPoint,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+impl PendingMouseDrag {
+    pub(super) fn threshold_exceeded(self, position: moli_layout::LayoutPoint) -> bool {
+        // A held move without displacement must never begin a drag. Chromium
+        // uses this platform threshold for both mouse and stylus initiation.
+        let threshold = if cfg!(target_os = "macos") { 3.0 } else { 4.0 };
+        (position.x.floor() - self.position.x.floor()).abs() >= threshold
+            || (position.y.floor() - self.position.y.floor()).abs() >= threshold
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct MouseFrameCapture {
     pub(super) frame: DomHandle,
     // A navigation replaces the Document, but retains this browsing context.
@@ -46,6 +63,7 @@ pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
     vm._context_host.borrow_mut().clear_mouse_input_state();
+    vm.pending_mouse_drags.clear();
     vm.mouse_frame_captures.clear();
     vm.hovered_mouse_handle = None;
     vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
