@@ -41,6 +41,8 @@ mod document_open_origin;
 mod dom_event_worlds;
 mod drag_data_modes;
 #[cfg(feature = "devtools")]
+mod drag_default_payload;
+#[cfg(feature = "devtools")]
 mod drag_init;
 #[cfg(feature = "devtools")]
 mod drag_lifecycle;
