@@ -39,6 +39,7 @@ mod document_domain_setter;
 mod document_open_navigation_abort;
 mod document_open_origin;
 mod dom_event_worlds;
+mod drag_data_modes;
 #[cfg(feature = "devtools")]
 mod drag_init;
 #[cfg(feature = "devtools")]
