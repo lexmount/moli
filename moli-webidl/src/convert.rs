@@ -16,17 +16,8 @@ impl<'s> WebIdlConverter<'s> for DomString {
         context: Context,
         options: &Self::Options,
     ) -> Result<Self, WebIdlError> {
-        if value.is_null() && options.treat_null_as_empty_string {
-            return Ok(Self(String::new()));
-        }
-        if value.is_symbol() {
-            return Err(WebIdlError::new(
-                context,
-                WebIdlErrorKind::CannotConvert("DOMString"),
-            ));
-        }
-        string_value_utf16(scope, value, context, "DOMString")
-            .map(|value| Self(String::from_utf16_lossy(&value)))
+        DomString16::convert(scope, value, context, options)
+            .map(|value| Self(String::from_utf16_lossy(&value.0)))
     }
 }
 
