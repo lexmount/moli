@@ -133,6 +133,18 @@ impl PendingPhaseOneResidence {
         }
     }
 
+    /// Retire the source parser while keeping its PageVm live for a prepared
+    /// cross-document navigation commit. This never waits for source input.
+    pub(in crate::runtime) fn into_navigation_triggered_page_vm(self) -> PageVm {
+        match self {
+            Self::ParserBlockingSourceLoad { runtime, .. }
+            | Self::ClosedInputPageWork { runtime, .. } => {
+                (*runtime).into_navigation_triggered_page_vm()
+            }
+            Self::OpenStreaming(continuation) => continuation.into_navigation_triggered_page_vm(),
+        }
+    }
+
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {
         match self {
             Self::ParserBlockingSourceLoad { runtime, started }
