@@ -116,7 +116,7 @@ async function versionChangeProbe(prefix = 'version-change') {
       try {
         seen.push(name);
         same(label + ': native ' + name + ' versions', [value.oldVersion, value.newVersion], [oldVersion, newVersion]);
-        same(label + ': native ' + name + ' flags', [value.bubbles, value.cancelable, value.composed], [false, false, false]);
+        same(label + ': native ' + name + ' flags', [value.bubbles, value.cancelable, value.composed, value.isTrusted], [false, false, false, true]);
         check(label + ': native ' + name + ' prototype', Object.getPrototypeOf(value) === Ctor.prototype);
         check(label + ': native ' + name + ' inherited attributes', !Object.hasOwn(value, 'oldVersion') && !Object.hasOwn(value, 'newVersion'));
         same(label + ': native ' + name + ' borrowed getters', [get('oldVersion', value), get('newVersion', value)], [oldVersion, newVersion]);
