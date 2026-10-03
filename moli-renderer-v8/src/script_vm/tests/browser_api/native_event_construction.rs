@@ -93,7 +93,7 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
                     0,
                 ),
                 element::construct_pointer_event(scope, "pointerdown", 11.0, 12.0, 0, 1, &pointer),
-                element::construct_drag_event(
+                element::construct_drag_event_with_related_target(
                     scope,
                     "dragstart",
                     11.0,
@@ -101,6 +101,7 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
                     1,
                     transfer.into(),
                     0,
+                    None,
                 ),
                 element::construct_wheel_event(scope, "wheel", 11.0, 12.0, 4.0, 5.0, 0, 1, 0),
                 element::construct_touch_event_with_points(

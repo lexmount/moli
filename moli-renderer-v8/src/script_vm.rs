@@ -1185,7 +1185,7 @@ pub(super) struct ActiveTouchPoint {
 }
 
 pub(super) struct ActiveDragSession {
-    pub data_transfer: v8::Global<v8::Object>,
+    pub data_store: crate::context_bootstrap::DragDataStore,
     pub drop_allowed: bool,
     native: Option<input_drag::NativeDragSource>,
     target: Option<crate::native_bridge::element::InputHit>,
