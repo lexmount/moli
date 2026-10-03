@@ -10,5 +10,6 @@ mod events_and_focus;
 mod frame_geometry_and_input;
 mod frame_navigation_and_history;
 mod geometry_and_scrolling;
+mod inline_layout;
 mod ranges_and_selection;
 mod window_and_frame_surfaces;
