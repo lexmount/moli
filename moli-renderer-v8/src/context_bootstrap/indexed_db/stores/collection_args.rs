@@ -44,8 +44,6 @@ fn should_parse_get_all_options_value<'s>(
     should_parse_get_all_options(GetAllOptionsCandidate {
         is_object: value.is_object(),
         is_key_range: parse_key_range_from_value(scope, value).is_some(),
-        is_string_object: value.is_string_object(),
-        is_number_object: value.is_number_object(),
         is_date: value.is_date(),
         is_array: v8::Local::<v8::Array>::try_from(value).is_ok(),
         is_buffer_source: value_has_array_buffer_view_tag(value)
@@ -121,4 +119,45 @@ fn parse_get_all_options<'s>(
     .map_err(CollectionRequestArgsError::WebIdl)?
     .unwrap_or_else(CursorDirection::default_next);
     Ok((query, count, direction))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+
+    use super::{parse_get_all_options, should_parse_get_all_options_value};
+
+    #[test]
+    fn boxed_primitives_use_dictionary_members_for_get_all_options() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        for expression in [
+            "Object.assign(new Number(1), {count: 2, direction: 'prev'})",
+            "Object.assign(new String('key'), {count: 2, direction: 'prev'})",
+        ] {
+            let source = v8::String::new(scope, expression).unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
+            assert!(should_parse_get_all_options_value(scope, value));
+            let Ok((query, count, direction)) = parse_get_all_options(scope, value) else {
+                panic!("boxed primitives must be converted as dictionaries");
+            };
+            assert!(query.is_undefined());
+            assert_eq!(count, Some(2));
+            assert_eq!(direction, moli_indexeddb::CursorDirection::Prev);
+        }
+        for expression in ["1", "'key'", "new Date(0)", "[1]", "new Uint8Array(1)"] {
+            let source = v8::String::new(scope, expression).unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
+            assert!(
+                !should_parse_get_all_options_value(scope, value),
+                "{expression}"
+            );
+        }
+    }
 }
