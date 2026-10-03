@@ -1103,7 +1103,11 @@ impl ScriptVm {
         pointer_id: i32,
     ) -> PreparedMouseInputDispatch {
         let previous_pressed_buttons = self.pressed_mouse_buttons;
-        let button = if button >= 0 {
+        // Moving does not change a button, even when the input protocol carries
+        // the held button. Chorded down/up still report their changed button.
+        let button = if event_name == "mousemove" {
+            -1
+        } else if button >= 0 {
             button
         } else {
             match event_name {
