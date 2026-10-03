@@ -2217,15 +2217,7 @@ pub(in crate::native_bridge) fn node_draggable_getter_function<'s>(
         rv.set_bool(false);
         return;
     };
-    let draggable = match element.attribute_ns("", "draggable") {
-        Some(value) if value.eq_ignore_ascii_case("true") => true,
-        Some(value) if value.eq_ignore_ascii_case("false") => false,
-        _ => {
-            element.is_html_element("img")
-                || (element.is_html_element("a") && element.has_attribute_ns("", "href"))
-        }
-    };
-    rv.set_bool(draggable);
+    rv.set_bool(element.is_draggable());
 }
 
 pub(in crate::native_bridge) fn node_draggable_setter_function<'s>(

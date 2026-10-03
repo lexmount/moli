@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    MouseFrameCapture, MouseReleaseFollowUp, PendingMousePress, mouse_button_mask,
-    single_changed_mouse_button,
+    MouseFrameCapture, MouseReleaseFollowUp, PendingMouseDrag, PendingMousePress,
+    mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -28,13 +28,14 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
-    observable_input_hit_test, perform_auxiliary_link_default_action,
-    perform_clipboard_key_default_action, perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
+    draggable_source_at_point, input_surface_hit_test, is_text_control, observable_input_hit_test,
+    perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
+    perform_drop_default_action, perform_implicit_submission_from_control,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -610,6 +611,7 @@ impl ScriptVm {
         // Clear its ownership before callbacks can start another input sequence.
         if matches!(event_name, "mouseup" | "mousemove") && buttons == 0 {
             self.mouse_frame_captures.remove(&pointer_id);
+            self.pending_mouse_drags.remove(&pointer_id);
         }
         PreparedMouseInputDispatch {
             button,
@@ -659,6 +661,27 @@ impl ScriptVm {
         let first_press = event_name == "mousedown" && self.pressed_mouse_buttons == 0;
         if first_press || (event_name == "mousemove" && buttons == Some(0)) {
             self.mouse_frame_captures.remove(&pointer_id);
+            self.pending_mouse_drags.remove(&pointer_id);
+        }
+        if event_name == "mousemove"
+            && let Some(drag) = self.pending_mouse_drags.get(&pointer_id).copied()
+        {
+            let document_is_current = drag.document == self.document_runtime.document_handle()
+                || self
+                    .mouse_frame_captures
+                    .get(&pointer_id)
+                    .copied()
+                    .and_then(|capture| self.captured_mouse_frame_document(capture))
+                    == Some(drag.document);
+            if document_is_current {
+                return Ok(drag_start_frame_input_surface_hit_test(
+                    &self._context_host.borrow(),
+                    drag.document,
+                    moli_layout::LayoutPoint::new(x as f32, y as f32),
+                    drag.root_to_frame,
+                )?);
+            }
+            self.pending_mouse_drags.remove(&pointer_id);
         }
         if let Some(capture) = self.mouse_frame_captures.get(&pointer_id).copied() {
             if let Some(document) = self.captured_mouse_frame_document(capture) {
@@ -812,14 +835,25 @@ impl ScriptVm {
         } else {
             None
         };
-        let drag_start_handle = if event_name == "mousemove"
-            && buttons & 1 != 0
-            && self.active_drag_session.is_none()
-        {
-            self.pending_mouse_press.map(|press| press.handle)
+        let pending_drag = self.pending_mouse_drags.get(&pointer_id).copied();
+        let new_drag = if event_name == "mousedown" && button == 0 && click_count <= 1 {
+            hit.and_then(|input| {
+                Some(PendingMouseDrag {
+                    document: self
+                        ._context_host
+                        .borrow()
+                        .dom_host()
+                        .owner_document_handle(input.handle)?,
+                    position: input.root_to_frame.map_point(root_point),
+                    root_to_frame: input.root_to_frame,
+                })
+            })
         } else {
             None
         };
+        let mut mouse_down_allows_default = false;
+        let mut retire_pending_drag = false;
+        let may_start_drag = self.active_drag_session.is_none();
 
         let follow_up = if event_name == "mouseup" {
             match released_press {
@@ -1099,6 +1133,9 @@ impl ScriptVm {
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                    if event_name == "mousedown" {
+                        mouse_down_allows_default = dispatched.allows_default();
+                    }
                     if event_name == "wheel" && dispatched.allows_default() {
                         let _ = perform_wheel_scroll_default_action(
                             scope,
@@ -1122,9 +1159,38 @@ impl ScriptVm {
                     }
                 }
             }
-            if let Some(drag_start_handle) = drag_start_handle
-                && !suppress_current_mouse_event
+            let drag_start = if event_name == "mousemove"
+                && let Some(drag) = pending_drag
             {
+                if buttons != 1 || suppress_current_mouse_event || !may_start_drag {
+                    retire_pending_drag = true;
+                    None
+                } else {
+                    let source = draggable_source_at_point(
+                        unsafe { &*runtime_ptr },
+                        drag.document,
+                        drag.position,
+                    )?;
+                    let current_position = hit
+                        .map(|input| input.root_to_frame)
+                        .unwrap_or(drag.root_to_frame)
+                        .map_point(root_point);
+                    match source {
+                        Some(source) if drag.threshold_exceeded(current_position) => {
+                            retire_pending_drag = true;
+                            Some((source, drag.position))
+                        }
+                        Some(_) => None,
+                        None => {
+                            retire_pending_drag = true;
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some((drag_start_handle, drag_position)) = drag_start {
                 // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
                 // remains exclusively borrowed, so this field pointer is valid for the
                 // duration of the callback.
@@ -1140,8 +1206,8 @@ impl ScriptVm {
                     && let Some(event) = construct_drag_event(
                         scope,
                         "dragstart",
-                        client_x,
-                        client_y,
+                        f64::from(drag_position.x),
+                        f64::from(drag_position.y),
                         data_transfer.into(),
                         0,
                     )
@@ -1311,6 +1377,14 @@ impl ScriptVm {
             Ok(input_dispatch_outcome(true))
         });
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
+        if event_name == "mousedown" && button == 0 {
+            self.pending_mouse_drags.remove(&pointer_id);
+            if mouse_down_allows_default && let Some(drag) = new_drag {
+                self.pending_mouse_drags.insert(pointer_id, drag);
+            }
+        } else if retire_pending_drag {
+            self.pending_mouse_drags.remove(&pointer_id);
+        }
         result
     }
 

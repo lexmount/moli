@@ -962,7 +962,7 @@ fn mouse_dragstart_bubbles_to_window_once() {
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch");
-    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
+    vm.dispatch_mouse_event_at_point(30.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
         .expect("mousemove should start drag");
 
     let result = vm
