@@ -3,12 +3,17 @@
 mod css_parse;
 mod matrix;
 
-pub use css_parse::{dom_matrix_components_from_values, parse_dom_matrix_value};
+pub use css_parse::{
+    dom_matrix_components_from_values, parse_dom_matrix_value,
+    parse_dom_matrix_value_with_dimension,
+};
 pub use matrix::{DOM_MATRIX_COMPONENT_COUNT, DomMatrixComponents};
 
 #[cfg(test)]
 mod tests {
-    use super::{DomMatrixComponents, parse_dom_matrix_value};
+    use super::{
+        DomMatrixComponents, parse_dom_matrix_value, parse_dom_matrix_value_with_dimension,
+    };
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -161,5 +166,25 @@ mod tests {
             "matrix(1, 0, 0, 1, 10, 20)"
         );
         assert!(DomMatrixComponents::nan().css_text().is_none());
+    }
+
+    #[test]
+    fn parsing_tracks_transform_syntax_dimension_independently_of_components() {
+        let (matrix_2d, is_2d) = parse_dom_matrix_value_with_dimension("matrix(1,0,0,1,0,0)")
+            .expect("2D identity matrix should parse");
+        assert!(matrix_2d.is_identity());
+        assert!(is_2d);
+
+        let (matrix_3d, is_2d) =
+            parse_dom_matrix_value_with_dimension("matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)")
+                .expect("3D identity matrix should parse");
+        assert!(matrix_3d.is_identity());
+        assert!(!is_2d);
+    }
+
+    #[test]
+    fn parsing_accepts_an_empty_string_but_rejects_only_whitespace() {
+        assert!(parse_dom_matrix_value("").is_some());
+        assert!(parse_dom_matrix_value(" ").is_none());
     }
 }
