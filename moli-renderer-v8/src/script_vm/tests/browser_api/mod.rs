@@ -34,6 +34,7 @@ mod event_listener_type;
 mod event_prototype_attributes;
 mod events_selection_storage;
 mod fontface_descriptors;
+mod frame_drag;
 mod fullscreen;
 mod gamepad;
 mod history_worlds;
