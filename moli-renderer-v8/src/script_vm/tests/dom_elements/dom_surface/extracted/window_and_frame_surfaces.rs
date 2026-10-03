@@ -1,6 +1,135 @@
 use super::*;
 
 #[test]
+fn retired_window_named_and_indexed_access_cannot_follow_a_reinserted_iframe() {
+    for cleanup_before_reinsertion in [false, true] {
+        let mut vm = new_storage_html_test_vm("https://retained-window-properties.test/");
+        vm.exec(
+            r#"
+globalThis.parentMarker = document.createElement('div');
+parentMarker.id = '__retainedParentMarker';
+parentMarker.textContent = 'PARENT';
+document.body.appendChild(parentMarker);
+globalThis.frame = document.createElement('iframe');
+document.body.appendChild(frame);
+globalThis.oldWindow = frame.contentWindow;
+globalThis.oldDocument = oldWindow.document;
+oldDocument.body.innerHTML = '<div id="__retainedOldMarker">ORIGINAL</div><iframe name="__retainedOldChild"></iframe>';
+globalThis.parentLengthGetter = Object.getOwnPropertyDescriptor(window, 'length').get;
+globalThis.childLengthGetter = Object.getOwnPropertyDescriptor(oldWindow, 'length').get;
+globalThis.retiredProperties = function(w) {
+  return JSON.stringify([
+    w.__retainedParentMarker === undefined,
+    w.__retainedOldMarker === undefined,
+    w.__retainedNewMarker === undefined,
+    w.__retainedNewChild === undefined,
+    !('__retainedParentMarker' in w),
+    !('__retainedNewMarker' in w),
+    !('__retainedNewChild' in w),
+    w.length === 0,
+    w[0] === undefined,
+    !('0' in w),
+    !Object.prototype.hasOwnProperty.call(w, '0'),
+    !Reflect.ownKeys(w).includes('0'),
+    Object.getOwnPropertyDescriptor(w, '0') === undefined
+  ]);
+};
+globalThis.readRetiredProperties = oldWindow.Function('return (' + retiredProperties.toString() + ')(window)');
+"#,
+            None,
+        )
+        .expect("live Window properties and a function in its own realm should be retained");
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify([
+oldWindow.__retainedOldMarker === oldDocument.getElementById('__retainedOldMarker'),
+oldWindow.__retainedOldChild === oldWindow[0],
+oldWindow.length === 1,
+parentLengthGetter.call(oldWindow) === 1,
+childLengthGetter.call(window) === 1
+])"#,
+            )
+            .expect("live Window named access and borrowed length getters should work"),
+            "[true,true,true,true,true]"
+        );
+        vm.exec("frame.remove();", None)
+            .expect("the original browsing context should be removed");
+
+        let assert_retired_properties = |vm: &mut ScriptVm, stage: &str| {
+            let expected = "[true,true,true,true,true,true,true,true,true,true,true,true,true]";
+            assert_eq!(
+                vm.eval("retiredProperties(oldWindow)")
+                    .expect("retired Window properties should be accessible from the parent realm"),
+                expected,
+                "{stage}, cleanup before reinsertion: {cleanup_before_reinsertion}"
+            );
+            assert_eq!(
+                vm.eval("readRetiredProperties()")
+                    .expect("retired Window properties should be accessible from its own realm"),
+                expected,
+                "{stage}, cleanup before reinsertion: {cleanup_before_reinsertion}"
+            );
+            assert_eq!(
+                vm.eval(
+                    "parentLengthGetter.call(oldWindow) + '|' + childLengthGetter.call(oldWindow)"
+                )
+                .expect("borrowed length getters should use the receiver's execution identity"),
+                "0|0",
+                "{stage}, cleanup before reinsertion: {cleanup_before_reinsertion}"
+            );
+        };
+        if cleanup_before_reinsertion {
+            assert!(vm.live_child_default_runtime_realm_inventory().is_empty());
+            assert_retired_properties(&mut vm, "after cleanup");
+        }
+        vm.exec(
+            r#"
+document.body.appendChild(frame);
+globalThis.newWindow = frame.contentWindow;
+globalThis.newDocument = frame.contentDocument;
+newDocument.body.innerHTML = '<div id="__retainedNewMarker">REPLACEMENT</div><iframe name="__retainedNewChild"></iframe>';
+globalThis.newChild = newWindow[0];
+newChild.document.body.textContent = 'NEW CHILD';
+"#,
+            None,
+        )
+        .expect("the reinserted iframe should acquire a new document and child frame");
+        vm.live_child_default_runtime_realm_inventory();
+        assert_retired_properties(&mut vm, "after reinsertion");
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  if (oldWindow.__retainedParentMarker)
+    oldWindow.__retainedParentMarker.textContent = 'WRITTEN VIA OLD WINDOW';
+  if (oldWindow[0])
+    oldWindow[0].document.body.textContent = 'WRITTEN VIA OLD WINDOW';
+  return JSON.stringify([
+    oldWindow !== newWindow,
+    oldWindow.document === oldDocument,
+    oldDocument.body.textContent,
+    parentMarker.textContent,
+    newDocument.body.textContent,
+    newChild.document.body.textContent,
+    newWindow.__retainedNewMarker === newDocument.getElementById('__retainedNewMarker'),
+    newWindow.__retainedNewChild === newChild,
+    newWindow.length === 1,
+    newWindow[0] === newChild,
+    parentLengthGetter.call(newWindow) === 1,
+    childLengthGetter.call(newWindow) === 1,
+    Object.getOwnPropertyDescriptor(newWindow, '0').value === newChild
+  ]);
+})()
+"#,
+            )
+            .expect("only the live Window should expose its document names and child frames"),
+            r#"[true,true,"ORIGINAL","PARENT","REPLACEMENT","NEW CHILD",true,true,true,true,true,true,true]"#,
+            "cleanup before reinsertion: {cleanup_before_reinsertion}"
+        );
+    }
+}
+
+#[test]
 fn window_document_retains_original_document_after_iframe_removal_and_reinsertion() {
     for cleanup_before_reinsertion in [false, true] {
         let mut vm = new_storage_test_vm("https://retained-window-document.test/");
@@ -93,7 +222,7 @@ globalThis.childDocumentGetter = Object.getOwnPropertyDescriptor(retainedWindow,
     )
     .expect("the initial WindowProxy and document getters should be retained");
     vm.drain_pending_child_frame_work_for_test();
-    vm.exec("documentFrame.srcdoc = '<body>DESTINATION</body>';", None)
+    vm.exec("documentFrame.srcdoc = '<body><div id=destinationMarker>DESTINATION</div><iframe name=destinationChild></iframe></body>';", None)
         .expect("same-origin cross-document navigation should start");
     vm.drain_pending_child_frame_work_for_test();
 
@@ -106,11 +235,16 @@ retainedWindow.document === documentFrame.contentDocument,
 parentDocumentGetter.call(retainedWindow) === documentFrame.contentDocument,
 childDocumentGetter.call(retainedWindow) === documentFrame.contentDocument,
 childDocumentGetter.call(window) === document,
-retainedWindow.document.body.textContent
+retainedWindow.document.body.textContent,
+retainedWindow.destinationMarker === documentFrame.contentDocument.getElementById('destinationMarker'),
+retainedWindow.destinationChild === retainedWindow[0],
+retainedWindow.length === 1,
+'0' in retainedWindow,
+Object.getOwnPropertyDescriptor(retainedWindow, '0').value === retainedWindow[0]
 ])"#,
         )
         .expect("retained WindowProxy and borrowed getters should read the destination Document"),
-        r#"[true,true,true,true,true,true,"DESTINATION"]"#
+        r#"[true,true,true,true,true,true,"DESTINATION",true,true,true,true,true]"#
     );
 }
 

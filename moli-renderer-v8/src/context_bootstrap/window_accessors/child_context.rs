@@ -1,5 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_current_dispatch_scope, window_hidden_value,
+    window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -16,7 +17,11 @@ pub(in crate::context_bootstrap) fn window_length_getter<'s>(
         return;
     };
     let runtime = unsafe { &mut *host_ptr };
-    let count = if let Some(handle) = window_child_context_handle(scope, receiver) {
+    let Some(owner) = window_current_dispatch_scope(scope, receiver, runtime) else {
+        rv.set(v8::Number::new(scope, 0.0).into());
+        return;
+    };
+    let count = if let Some(handle) = owner.child_window() {
         runtime.child_browsing_context_child_frame_count(handle)
     } else {
         runtime.child_browsing_context_count()

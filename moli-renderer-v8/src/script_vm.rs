@@ -2091,6 +2091,10 @@ impl ScriptVmPageRealmBootstrap {
                     .install_page_default_context(scope, local_context);
                 let scope = &mut v8::ContextScope::new(scope, local_context);
                 super::context_bootstrap::initialize_main_session_history(scope);
+                // Initial frames must be discovered independently of Window
+                // property enumeration during bootstrap.
+                let host = unsafe { &mut *context_host.as_ptr() };
+                host.sync_child_browsing_context_subtree(scope, host.document_handle());
                 Ok(())
             })
         {
