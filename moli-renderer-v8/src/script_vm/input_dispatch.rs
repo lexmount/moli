@@ -24,7 +24,7 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
+    NodePublicEventDispatchOutcome, construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
@@ -595,6 +595,19 @@ fn touch_pointer_properties(event_name: &str, pointer_id: i32) -> RendererPointe
     }
 }
 
+fn dispatch_native_pointer_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    target: DomHandle,
+    event: v8::Local<'s, v8::Object>,
+    pointer_id: i32,
+) -> NodePublicEventDispatchOutcome {
+    // The native event recipient determines the pointer's active document. Authored
+    // dispatchEvent() and compatibility mouse events must not change this identity.
+    unsafe { &mut *runtime_ptr }.record_pointer_input_target(pointer_id, target);
+    dispatch_public_event(scope, runtime_ptr, target, event)
+}
+
 fn dispatch_pointer_capture_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
@@ -623,7 +636,13 @@ fn dispatch_pointer_capture_events(
             pointer,
             modifiers,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, capture_event.target, event);
+            let _ = dispatch_native_pointer_event(
+                scope,
+                runtime_ptr,
+                capture_event.target,
+                event,
+                pointer_id,
+            );
         }
         if capture_event.event_name == "gotpointercapture" {
             let lost_target = unsafe { &mut *runtime_ptr }
@@ -639,7 +658,13 @@ fn dispatch_pointer_capture_events(
                     modifiers,
                 )
             {
-                let _ = dispatch_public_event(scope, runtime_ptr, lost_target, event);
+                let _ = dispatch_native_pointer_event(
+                    scope,
+                    runtime_ptr,
+                    lost_target,
+                    event,
+                    pointer_id,
+                );
             }
         }
     }
@@ -748,7 +773,13 @@ fn dispatch_touch_pointer_boundary_events(
             pointer,
             related_target,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+            let _ = dispatch_native_pointer_event(
+                scope,
+                runtime_ptr,
+                previous_handle,
+                event,
+                pointer.pointer_id,
+            );
         }
         let related_target = related_target_value(scope, current);
         if let Some(event) = construct_pointer_event_with_related_target(
@@ -760,7 +791,13 @@ fn dispatch_touch_pointer_boundary_events(
             pointer,
             related_target,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+            let _ = dispatch_native_pointer_event(
+                scope,
+                runtime_ptr,
+                previous_handle,
+                event,
+                pointer.pointer_id,
+            );
         }
     }
     if let Some(current_handle) = current {
@@ -774,7 +811,13 @@ fn dispatch_touch_pointer_boundary_events(
             pointer,
             related_target,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, current_handle, event);
+            let _ = dispatch_native_pointer_event(
+                scope,
+                runtime_ptr,
+                current_handle,
+                event,
+                pointer.pointer_id,
+            );
         }
         let related_target = related_target_value(scope, previous);
         if let Some(event) = construct_pointer_event_with_related_target(
@@ -786,7 +829,13 @@ fn dispatch_touch_pointer_boundary_events(
             pointer,
             related_target,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, current_handle, event);
+            let _ = dispatch_native_pointer_event(
+                scope,
+                runtime_ptr,
+                current_handle,
+                event,
+                pointer.pointer_id,
+            );
         }
     }
 }
@@ -1421,7 +1470,13 @@ impl ScriptVm {
                     related_target,
                     modifiers,
                 ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    let _ = dispatch_native_pointer_event(
+                        scope,
+                        runtime_ptr,
+                        previous_handle,
+                        event,
+                        pointer_id,
+                    );
                 }
                 let related_target = related_target_value(scope, Some(handle));
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
@@ -1434,7 +1489,13 @@ impl ScriptVm {
                     related_target,
                     modifiers,
                 ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+                    let _ = dispatch_native_pointer_event(
+                        scope,
+                        runtime_ptr,
+                        previous_handle,
+                        event,
+                        pointer_id,
+                    );
                 }
             }
             if let Some((previous_handle, _)) = pointer_hover_transition {
@@ -1449,7 +1510,13 @@ impl ScriptVm {
                     related_target,
                     modifiers,
                 ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                    let _ = dispatch_native_pointer_event(
+                        scope,
+                        runtime_ptr,
+                        handle,
+                        event,
+                        pointer_id,
+                    );
                 }
                 let entering_targets = if restarting_pointer_stream {
                     let dom = unsafe { &*runtime_ptr }.dom_host();
@@ -1473,7 +1540,7 @@ impl ScriptVm {
                         related_target,
                         modifiers,
                     ) {
-                        let _ = dispatch_public_event(scope, runtime_ptr, entering_target, event);
+                        let _ = dispatch_native_pointer_event(scope, runtime_ptr, entering_target, event, pointer_id);
                     }
                 }
             }
@@ -1488,7 +1555,13 @@ impl ScriptVm {
                     modifiers,
                 )
             {
-                let _ = dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                let _ = dispatch_native_pointer_event(
+                    scope,
+                    runtime_ptr,
+                    pointer_dispatch_handle,
+                    event,
+                    pointer_id,
+                );
                 let post_raw_update_capture_events = {
                     let runtime = unsafe { &mut *runtime_ptr };
                     runtime.process_pending_pointer_capture(pointer_id)
@@ -1593,8 +1666,13 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }
                         .notify_close_watcher_input_activation(pointer_dispatch_handle);
                 }
-                let dispatched =
-                    dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                let dispatched = dispatch_native_pointer_event(
+                    scope,
+                    runtime_ptr,
+                    pointer_dispatch_handle,
+                    event,
+                    pointer_id,
+                );
                 if pointer_event_name == "pointerdown" && !dispatched.allows_default() {
                     suppress_compat_mouse_events = true;
                     mouse_down_allows_drag.set(false);
@@ -2221,7 +2299,13 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }
                         .notify_close_watcher_input_activation(pointer_handle);
                 }
-                let _ = dispatch_public_event(scope, runtime_ptr, pointer_handle, event);
+                let _ = dispatch_native_pointer_event(
+                    scope,
+                    runtime_ptr,
+                    pointer_handle,
+                    event,
+                    TOUCH_POINTER_ID,
+                );
             }
             if should_finish_touch {
                 release_pointer_capture_after_pointer_end(
@@ -2485,8 +2569,13 @@ impl ScriptVm {
                         unsafe { &mut *runtime_ptr }
                             .notify_close_watcher_input_activation(changed.pointer_handle);
                     }
-                    let _ =
-                        dispatch_public_event(scope, runtime_ptr, changed.pointer_handle, event);
+                    let _ = dispatch_native_pointer_event(
+                        scope,
+                        runtime_ptr,
+                        changed.pointer_handle,
+                        event,
+                        changed.pointer_id,
+                    );
                 }
                 if let Some(finish_pointer_handle) = changed.finish_pointer_handle {
                     release_pointer_capture_after_pointer_end(
