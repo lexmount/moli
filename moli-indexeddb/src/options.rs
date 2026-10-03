@@ -63,8 +63,6 @@ pub fn validate_index_options(
 pub struct GetAllOptionsCandidate {
     pub is_object: bool,
     pub is_key_range: bool,
-    pub is_string_object: bool,
-    pub is_number_object: bool,
     pub is_date: bool,
     pub is_array: bool,
     pub is_buffer_source: bool,
@@ -73,8 +71,6 @@ pub struct GetAllOptionsCandidate {
 pub fn should_parse_get_all_options(candidate: GetAllOptionsCandidate) -> bool {
     candidate.is_object
         && !candidate.is_key_range
-        && !candidate.is_string_object
-        && !candidate.is_number_object
         && !candidate.is_date
         && !candidate.is_array
         && !candidate.is_buffer_source
@@ -153,8 +149,6 @@ mod tests {
         assert!(should_parse_get_all_options(GetAllOptionsCandidate {
             is_object: true,
             is_key_range: false,
-            is_string_object: false,
-            is_number_object: false,
             is_date: false,
             is_array: false,
             is_buffer_source: false,
@@ -164,8 +158,6 @@ mod tests {
             GetAllOptionsCandidate {
                 is_object: false,
                 is_key_range: false,
-                is_string_object: false,
-                is_number_object: false,
                 is_date: false,
                 is_array: false,
                 is_buffer_source: false,
@@ -173,8 +165,6 @@ mod tests {
             GetAllOptionsCandidate {
                 is_object: true,
                 is_key_range: true,
-                is_string_object: false,
-                is_number_object: false,
                 is_date: false,
                 is_array: false,
                 is_buffer_source: false,
@@ -182,26 +172,6 @@ mod tests {
             GetAllOptionsCandidate {
                 is_object: true,
                 is_key_range: false,
-                is_string_object: true,
-                is_number_object: false,
-                is_date: false,
-                is_array: false,
-                is_buffer_source: false,
-            },
-            GetAllOptionsCandidate {
-                is_object: true,
-                is_key_range: false,
-                is_string_object: false,
-                is_number_object: true,
-                is_date: false,
-                is_array: false,
-                is_buffer_source: false,
-            },
-            GetAllOptionsCandidate {
-                is_object: true,
-                is_key_range: false,
-                is_string_object: false,
-                is_number_object: false,
                 is_date: true,
                 is_array: false,
                 is_buffer_source: false,
@@ -209,8 +179,6 @@ mod tests {
             GetAllOptionsCandidate {
                 is_object: true,
                 is_key_range: false,
-                is_string_object: false,
-                is_number_object: false,
                 is_date: false,
                 is_array: true,
                 is_buffer_source: false,
@@ -218,8 +186,6 @@ mod tests {
             GetAllOptionsCandidate {
                 is_object: true,
                 is_key_range: false,
-                is_string_object: false,
-                is_number_object: false,
                 is_date: false,
                 is_array: false,
                 is_buffer_source: true,
