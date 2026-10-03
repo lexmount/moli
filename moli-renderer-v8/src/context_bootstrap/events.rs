@@ -14,7 +14,6 @@ mod modifiers;
 mod subclasses;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
-pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod submit;
 mod ui;
 mod value;
@@ -34,6 +33,7 @@ pub(in crate::context_bootstrap) use value::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use ui::{
