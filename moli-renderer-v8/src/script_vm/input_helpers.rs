@@ -4,6 +4,15 @@ use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
 use crate::types::ScriptErrorValue;
 
+#[derive(Clone, Copy)]
+pub(super) struct MouseFrameCapture {
+    pub(super) frame: DomHandle,
+    // A navigation replaces the Document, but retains this browsing context.
+    // Removing and reattaching the same iframe creates a different lane.
+    pub(super) owner: crate::frame_owner_model::FrameLaneTaskOwner,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
 pub(super) fn mouse_button_mask(button: i32) -> i32 {
     match button {
         0 => 1,
@@ -37,6 +46,7 @@ pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
     vm._context_host.borrow_mut().clear_mouse_input_state();
+    vm.mouse_frame_captures.clear();
     vm.hovered_mouse_handle = None;
     vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
     vm._context_host
