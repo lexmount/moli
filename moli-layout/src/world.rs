@@ -317,28 +317,35 @@ pub(crate) enum ViewportDefiningBox {
 pub(crate) struct ViewportScrollPolicy {
     pub(crate) defining_box: ViewportDefiningBox,
     pub(crate) effective_overflow: [LayoutOverflowMode; 2],
-    scrollbar_width: LayoutScrollbarWidth,
-    scrollbar_gutter: LayoutScrollbarGutter,
-    scrollbar_colors: Option<LayoutScrollbarColors>,
-    horizontal_writing_mode: bool,
-    user_scrolling_disabled: bool,
+    scrollbar_style: ViewportScrollbarStyle,
+    embedder_allows_user_scroll: bool,
+    embedder_allows_scrollbar_controls: bool,
     revealed_scrollbar_x: bool,
     revealed_scrollbar_y: bool,
 }
 
+/// Authored scrollbar geometry remains available even when the embedder
+/// suppresses the viewport controls. Stable gutters use this hypothetical
+/// thickness independently of the actual control state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ViewportScrollbarStyle {
+    width: LayoutScrollbarWidth,
+    gutter: LayoutScrollbarGutter,
+    colors: Option<LayoutScrollbarColors>,
+    horizontal_writing_mode: bool,
+}
+
 impl Default for ViewportScrollPolicy {
     fn default() -> Self {
-        Self {
-            defining_box: ViewportDefiningBox::Root,
-            effective_overflow: [LayoutOverflowMode::Auto; 2],
-            scrollbar_width: LayoutScrollbarWidth::Auto,
-            scrollbar_gutter: LayoutScrollbarGutter::Auto,
-            scrollbar_colors: None,
-            horizontal_writing_mode: true,
-            user_scrolling_disabled: false,
-            revealed_scrollbar_x: false,
-            revealed_scrollbar_y: false,
-        }
+        Self::new(
+            ViewportDefiningBox::Root,
+            [LayoutOverflowMode::Auto; 2],
+            LayoutScrollbarWidth::Auto,
+            LayoutScrollbarGutter::Auto,
+            None,
+            true,
+            false,
+        )
     }
 }
 
@@ -355,18 +362,14 @@ impl ViewportScrollPolicy {
         Self {
             defining_box,
             effective_overflow,
-            // The embedder disables viewport input and scrollbar UI together.
-            // Keep its restriction distinct from CSS scrollbar-width: none,
-            // which only hides the scrollbar.
-            scrollbar_width: if user_scrolling_disabled {
-                LayoutScrollbarWidth::None
-            } else {
-                scrollbar_width
+            scrollbar_style: ViewportScrollbarStyle {
+                width: scrollbar_width,
+                gutter: scrollbar_gutter,
+                colors: scrollbar_colors,
+                horizontal_writing_mode,
             },
-            scrollbar_gutter,
-            scrollbar_colors,
-            horizontal_writing_mode,
-            user_scrolling_disabled,
+            embedder_allows_user_scroll: !user_scrolling_disabled,
+            embedder_allows_scrollbar_controls: !user_scrolling_disabled,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
@@ -380,8 +383,11 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn prepare_scrollbar_layout(&mut self) {
-        self.revealed_scrollbar_x = self.effective_overflow[0] == LayoutOverflowMode::Scroll;
-        self.revealed_scrollbar_y = self.effective_overflow[1] == LayoutOverflowMode::Scroll;
+        let allowed = self.allows_scrollbar_controls();
+        self.revealed_scrollbar_x =
+            allowed && self.effective_overflow[0] == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_y =
+            allowed && self.effective_overflow[1] == LayoutOverflowMode::Scroll;
     }
 
     pub(crate) fn reveal_auto_scrollbar(
@@ -390,7 +396,7 @@ impl ViewportScrollPolicy {
         overflowing: bool,
     ) -> bool {
         if !overflowing
-            || self.scrollbar_width == LayoutScrollbarWidth::None
+            || !self.allows_scrollbar_controls()
             || self.overflow_mode(axis) != LayoutOverflowMode::Auto
         {
             return false;
@@ -420,7 +426,7 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn allows_user_scroll(self, axis: LayoutScrollbarAxis) -> bool {
-        !self.user_scrolling_disabled && self.overflow_mode(axis).allows_user_scroll()
+        self.embedder_allows_user_scroll && self.overflow_mode(axis).allows_user_scroll()
     }
 
     pub(crate) fn clips_overflow(self) -> bool {
@@ -430,7 +436,7 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn has_scrollbar(self, axis: LayoutScrollbarAxis, overflowing: bool) -> bool {
-        if self.scrollbar_width == LayoutScrollbarWidth::None {
+        if !self.allows_scrollbar_controls() {
             return false;
         }
         match self.overflow_mode(axis) {
@@ -443,11 +449,20 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) const fn scrollbar_control_thickness(self) -> f32 {
-        self.scrollbar_width.thickness()
+        if self.allows_scrollbar_controls() {
+            self.scrollbar_style.width.thickness()
+        } else {
+            0.0
+        }
     }
 
     pub(crate) const fn scrollbar_colors(self) -> Option<LayoutScrollbarColors> {
-        self.scrollbar_colors
+        self.scrollbar_style.colors
+    }
+
+    const fn allows_scrollbar_controls(self) -> bool {
+        self.embedder_allows_scrollbar_controls
+            && !matches!(self.scrollbar_style.width, LayoutScrollbarWidth::None)
     }
 
     pub(crate) fn scrollbar_gutter_thickness(self, axis: LayoutScrollbarAxis) -> f32 {
@@ -467,35 +482,56 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn scrollbar_layout_insets(self) -> taffy::Rect<f32> {
-        if self.scrollbar_width == LayoutScrollbarWidth::None {
-            return taffy::Rect::ZERO;
+        let actual = self.actual_scrollbar_insets();
+        let reserved = self.stable_gutter_insets();
+        taffy::Rect {
+            left: actual.left.max(reserved.left),
+            right: actual.right.max(reserved.right),
+            top: actual.top.max(reserved.top),
+            bottom: actual.bottom.max(reserved.bottom),
         }
-        let thickness = self.scrollbar_width.thickness();
+    }
+
+    fn actual_scrollbar_insets(self) -> taffy::Rect<f32> {
+        let thickness = self.scrollbar_control_thickness();
+        taffy::Rect {
+            left: 0.0,
+            // Chromium keeps the viewport's vertical control on the physical
+            // right, including RTL and vertical writing modes.
+            right: if self.revealed_scrollbar_y {
+                thickness
+            } else {
+                0.0
+            },
+            top: 0.0,
+            bottom: if self.revealed_scrollbar_x {
+                thickness
+            } else {
+                0.0
+            },
+        }
+    }
+
+    fn stable_gutter_insets(self) -> taffy::Rect<f32> {
         let mut insets = taffy::Rect::ZERO;
-
-        if self.revealed_scrollbar_x {
-            insets.bottom = thickness;
+        if self.scrollbar_style.gutter == LayoutScrollbarGutter::Auto {
+            return insets;
         }
-        // Chromium keeps the viewport's vertical scrollbar on the physical
-        // right, including RTL and vertical writing modes.
-        if self.revealed_scrollbar_y {
+        let thickness = self.scrollbar_style.width.thickness();
+        let both_edges = self.scrollbar_style.gutter == LayoutScrollbarGutter::StableBothEdges;
+        if self.scrollbar_style.horizontal_writing_mode
+            && self.effective_overflow[1].creates_scroll_container()
+        {
             insets.right = thickness;
-        }
-
-        if self.scrollbar_gutter != LayoutScrollbarGutter::Auto {
-            if self.horizontal_writing_mode && self.effective_overflow[1].creates_scroll_container()
-            {
-                insets.right = thickness;
-                if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
-                    insets.left = thickness;
-                }
-            } else if !self.horizontal_writing_mode
-                && self.effective_overflow[0].creates_scroll_container()
-            {
-                insets.bottom = thickness;
-                if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
-                    insets.top = thickness;
-                }
+            if both_edges {
+                insets.left = thickness;
+            }
+        } else if !self.scrollbar_style.horizontal_writing_mode
+            && self.effective_overflow[0].creates_scroll_container()
+        {
+            insets.bottom = thickness;
+            if both_edges {
+                insets.top = thickness;
             }
         }
         insets

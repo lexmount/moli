@@ -353,7 +353,7 @@ fn iframe_scrolling_attribute_suppresses_only_viewport_scrollbars() {
         (" no", false),
         ("", false),
     ] {
-        for gutter in ["auto", "stable both-edges"] {
+        for gutter in ["auto", "stable", "stable both-edges"] {
             let mut vm = new_parsed_test_vm(
                 "https://iframe-scrollbar-policy.test/",
                 "<!doctype html><iframe id=frame style='width:100px;height:100px;border:0'></iframe>",
@@ -368,20 +368,22 @@ fn iframe_scrolling_attribute_suppresses_only_viewport_scrollbars() {
                 "#,
             ))
             .unwrap();
-            let width = if suppressed {
-                100
-            } else if gutter == "auto" {
-                85
-            } else {
+            let width = if gutter == "stable both-edges" {
                 70
+            } else if gutter == "auto" && suppressed {
+                100
+            } else {
+                85
             };
             let query = r#"JSON.stringify([
                 child.documentElement.getBoundingClientRect().width,
+                child.documentElement.getBoundingClientRect().left,
                 child.getElementById('scroller').clientWidth,
                 child.defaultView.getComputedStyle(child.documentElement).overflowY,
                 child.defaultView.getComputedStyle(child.documentElement).scrollbarWidth
             ])"#;
-            let expected = format!(r#"[{width},55,"scroll","auto"]"#);
+            let left = if gutter == "stable both-edges" { 15 } else { 0 };
+            let expected = format!(r#"[{width},{left},55,"scroll","auto"]"#);
             assert_eq!(
                 vm.eval(query).unwrap(),
                 expected,
