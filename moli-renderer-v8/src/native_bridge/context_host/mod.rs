@@ -981,7 +981,7 @@ pub(crate) struct JsContextHost {
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
     next_text_track_load_sequence_id: u64,
     pending_media_text_track_gates: HashMap<DomHandle, PendingMediaTextTrackGate>,
-    active_pointer_buttons: HashMap<i32, i32>,
+    active_pointer_inputs: HashMap<i32, pointer_capture::PointerInputState>,
     pending_pointer_capture_targets: HashMap<i32, DomHandle>,
     pointer_capture_targets: HashMap<i32, DomHandle>,
     lazy_media_load_candidates: HashSet<DomHandle>,
