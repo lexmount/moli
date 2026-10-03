@@ -1638,11 +1638,23 @@ class FixtureServer:
                         "text/html; charset=utf-8",
                         b"<!doctype html><title>gateway error</title><main>gateway error</main>",
                     )
-                elif route == "/navigation-no-content":
+                elif route == "/navigation-empty":
+                    self._send_common(HTTPStatus.OK, "text/plain; charset=utf-8", b"")
+                elif route in {
+                    "/navigation-no-content",
+                    "/navigation-reset-content",
+                    "/navigation-no-content-attachment",
+                    "/navigation-reset-content-attachment",
+                }:
                     self._send_common(
-                        HTTPStatus.NO_CONTENT,
+                        HTTPStatus.RESET_CONTENT if "reset" in route else HTTPStatus.NO_CONTENT,
                         "text/plain; charset=utf-8",
                         b"",
+                        headers=(
+                            {"Content-Disposition": 'attachment; filename="empty.txt"'}
+                            if route.endswith("-attachment")
+                            else None
+                        ),
                     )
                 elif route == "/slow-download":
                     self._send_slow_download()

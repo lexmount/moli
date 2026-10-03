@@ -31,6 +31,7 @@ use moli_page_types::{
 /// attachment, replay, and disposal all address the same session object.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
+    pub(crate) web_mcp_enabled: bool,
     pub(crate) dom_session_state: DevToolsDomSessionState,
     pub(crate) dom_debugger_event_listener_breakpoints:
         BTreeSet<RendererDomDebuggerEventListenerBreakpoint>,
@@ -528,6 +529,7 @@ impl DevToolsSessionRegistry {
             .iter()
             .filter_map(|(key, state)| {
                 let requires_restore = state.runtime_session_state.runtime_frontend_enabled
+                    || state.web_mcp_enabled
                     || state.console_output_session_state.console_enabled
                     || !state.runtime_bindings.is_empty()
                     || !state.dom_debugger_event_listener_breakpoints.is_empty()
@@ -539,6 +541,7 @@ impl DevToolsSessionRegistry {
                         state.inspector_session_state.v8_state.clone(),
                     ),
                     protocol_configuration: RendererInspectorProtocolConfiguration {
+                        web_mcp_enabled: state.web_mcp_enabled,
                         runtime_bindings: state.runtime_bindings.clone(),
                         runtime_frontend_enabled: state
                             .runtime_session_state

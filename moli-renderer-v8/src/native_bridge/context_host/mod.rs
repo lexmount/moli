@@ -1255,6 +1255,7 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.bridge.web_mcp.clear();
         self.pending_history_traversal_admissions.clear();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;

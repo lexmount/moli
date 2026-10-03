@@ -1222,6 +1222,16 @@ impl JsContextHost {
         &self.bridge
     }
 
+    pub(crate) fn retire_web_mcp_document(
+        &mut self,
+        owner: crate::native_bridge::WindowDocumentOwner,
+    ) {
+        let events = self.bridge.web_mcp.retire_document(owner);
+        for event in events {
+            crate::context_bootstrap::web_mcp::emit_protocol_event(self, event);
+        }
+    }
+
     pub(crate) fn character_data_utf16_units(&self, handle: DomHandle) -> Option<Vec<u16>> {
         self.character_data_utf16_overrides
             .get(&handle)

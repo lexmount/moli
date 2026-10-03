@@ -295,6 +295,20 @@ fn invoke_simple_event_callback_with_invocation<'s>(
         unsafe { &*host_ptr }
             .window_execution_context_identity_for_v8_context(scope, relevant_context)
     });
+    // Window callbacks retain their JS realm after iframe removal, but lose
+    // their native execution owner. Do not treat that retired realm as a
+    // callback without Window ownership (such as a worker callback).
+    if host_ptr.is_some()
+        && relevant_identity.is_none()
+        && relevant_context
+            .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+            .is_some()
+    {
+        return SimpleEventCallbackResult {
+            invoked: false,
+            value: None,
+        };
+    }
     if let Some(host_ptr) = host_ptr {
         invocation = invocation.with_execution_context_currentness(host_ptr, relevant_identity);
     }

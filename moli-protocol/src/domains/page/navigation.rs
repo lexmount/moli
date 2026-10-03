@@ -2066,6 +2066,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
 ) -> NavigateCommandStart {
     let session_id = owner.session_id();
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, owner);
@@ -2117,6 +2118,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
                 }
             },
             NavigationStartInitiator::Renderer,
+            web_mcp_invocation,
         )
     };
     clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
@@ -2661,6 +2663,7 @@ fn start_navigate_to_url_command_with_background_policy(
         allow_background_navigation,
         request_load_policy,
         initiator,
+        None,
     )
 }
 
@@ -2685,6 +2688,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
 ) -> NavigateCommandStart {
     let command_session_id = owner.session_id();
     let mut out = Vec::new();
@@ -2734,6 +2738,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
     let mut navigation_state = NavigationDispatchState {
+        web_mcp_invocation,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: command_id,
@@ -3252,6 +3257,13 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+        if let Some(id) = state.web_mcp_invocation.as_ref() {
+            out.extend_background_events_after_messages(super::super::web_mcp::navigation_failed(
+                conn,
+                &state.owner,
+                id.invocation_id,
+            ));
+        }
         push_superseded_navigation_result(out, &state);
         // A stale response cannot commit or alter the current navigation, but
         // its exact renderer-channel suspension still needs to be retired.
@@ -3286,7 +3298,10 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 &state.owner,
                 navigation.final_url(),
             ) {
-                Ok(configuration) => navigation.update_commit_configuration(configuration).await,
+                Ok(mut configuration) => {
+                    configuration.web_mcp_invocation = state.web_mcp_invocation.clone();
+                    navigation.update_commit_configuration(configuration).await
+                }
                 Err(error) => Err(error),
             };
             if let Err(error) = update_result {
@@ -3365,10 +3380,20 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             .await;
         }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
+            if let Some(id) = state.web_mcp_invocation.as_ref() {
+                out.extend_background_events_after_messages(
+                    super::super::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
+                );
+            }
             let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
+            if let Some(id) = state.web_mcp_invocation.as_ref() {
+                out.extend_background_events_after_messages(
+                    super::super::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
+                );
+            }
             let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             let network::MaterializedFailedDocumentProgress {
                 error_text,

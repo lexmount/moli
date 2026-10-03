@@ -209,9 +209,29 @@ pub fn input_step(input_type: InputType, step: Option<&str>) -> Option<f64> {
     Some(
         parse_finite_number(step)
             .filter(|value| *value > 0.0)
-            .map(|value| value * input_step_scale(input_type))
+            .map(|value| {
+                let scaled = value * input_step_scale(input_type);
+                if matches!(input_type, InputType::Time | InputType::DatetimeLocal) {
+                    temporal_step_milliseconds(step).unwrap_or_else(|| scaled.round().max(1.0))
+                } else {
+                    scaled
+                }
+            })
             .unwrap_or_else(|| default_input_step(input_type)),
     )
+}
+
+fn temporal_step_milliseconds(step: &str) -> Option<f64> {
+    let value = parse_decimal_number(step)?;
+    let milliseconds = if value.scale <= 3 {
+        value
+            .coefficient
+            .checked_mul(checked_pow10(3 - value.scale)?)?
+    } else {
+        let divisor = checked_pow10(value.scale - 3)?;
+        value.coefficient / divisor + i128::from(value.coefficient % divisor >= divisor / 2)
+    };
+    Some(milliseconds.max(1) as f64)
 }
 
 fn default_input_step(input_type: InputType) -> f64 {

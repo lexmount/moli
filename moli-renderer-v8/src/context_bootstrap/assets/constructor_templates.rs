@@ -112,6 +112,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }
+        ConstructorKind::ToolActivatedEvent => {
+            build_value_event_template(scope, ValueEventKind::ToolActivated)
+        }
+        ConstructorKind::ToolCancelEvent => {
+            build_value_event_template(scope, ValueEventKind::ToolCancel)
+        }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
         }

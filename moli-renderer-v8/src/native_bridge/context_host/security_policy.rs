@@ -129,7 +129,9 @@ impl JsContextHost {
         owner: OwnerDispatchScope,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         match owner {
-            OwnerDispatchScope::Top => Some(self.document_policy_container().permissions_policy),
+            OwnerDispatchScope::Top => {
+                Some(self.document_policy_container().permissions_policy.clone())
+            }
             OwnerDispatchScope::Child(handle) => self
                 .frame_owner_current_child_snapshot(handle)
                 .map(|snapshot| {
@@ -140,7 +142,7 @@ impl JsContextHost {
                 }),
             OwnerDispatchScope::LightweightPopup(popup_id) => self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy),
+                .map(|policy| policy.permissions_policy.clone()),
         }
     }
 
@@ -149,12 +151,12 @@ impl JsContextHost {
         document: DomHandle,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         if document == self.document_handle() {
-            return Some(self.document_policy_container().permissions_policy);
+            return Some(self.document_policy_container().permissions_policy.clone());
         }
         if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
             return self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy);
+                .map(|policy| policy.permissions_policy.clone());
         }
         let child_handle = self.child_browsing_context_host_for_document_handle(document)?;
         let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;

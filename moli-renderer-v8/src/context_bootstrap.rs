@@ -25,6 +25,7 @@ mod form_data_runtime;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
@@ -253,9 +254,9 @@ pub(crate) use self::events::{
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_attribute, event_backing,
     event_bool_attribute, event_initialized, event_internal_bool_flag, event_is_dispatching,
     event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
-    initialize_event_wrapper, mark_event_trusted, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
-    submit_event_submitter_value,
+    initialize_event_wrapper, mark_agent_submit_event, mark_event_trusted, new_event_state,
+    new_event_wrapper, set_event_composed_path, set_event_internal_flag, set_event_private_value,
+    set_event_trusted, submit_event_submitter_value,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,

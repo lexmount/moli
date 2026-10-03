@@ -11,7 +11,7 @@ use moli_core::page::{
 };
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkExchangeObservation, NetworkObservationJournal, RedirectInfo,
-    StreamingRawResponse,
+    RequestHeaders, ResponseHead, StreamingRawResponse,
 };
 use std::sync::Arc;
 use url::Url;
@@ -20,14 +20,16 @@ use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, NavigationRequestBlocked, ResponseCommitReady, TargetRuntimeSlot,
+    NavigationLoadOutcome, NavigationRequestBlocked, NoContentNavigation, ResponseCommitReady,
+    TargetRuntimeSlot,
 };
 
 #[cfg(test)]
 use gate::MainDocumentProgressDrain;
 pub(crate) use gate::{MainDocumentProgressBackgroundEventBarrier, MainDocumentProgressGate};
 use gate::{
-    MainDocumentProgressEmission, MainDocumentProgressEventBatch, MainDocumentProgressOutputTarget,
+    MainDocumentProgressEmission, MainDocumentProgressEventBatch,
+    MainDocumentProgressOutputBoundary, MainDocumentProgressOutputTarget,
     MainDocumentProgressPhase, MainDocumentProgressQueueHandle, MainDocumentProgressSource,
 };
 
@@ -371,6 +373,9 @@ fn materialize_navigation_load_outcome(
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
+        NavigationLoadOutcome::NoContent(navigation) => {
+            materialize_no_content_navigation_progress(conn, state, *navigation)
+        }
         NavigationLoadOutcome::NetworkFailure(error_text) => {
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
@@ -424,6 +429,47 @@ pub(crate) fn materialize_navigation_failure_preserving_committed_document(
         FailedNavigationDocumentPolicy::PreserveCommittedDocument,
         FailedNavigationResponseMode::ProtocolError,
     ))
+}
+
+fn materialize_no_content_navigation_progress(
+    conn: &CdpConnection,
+    state: &NavigationDispatchState,
+    navigation: NoContentNavigation,
+) -> MaterializedNavigationLoadOutcome {
+    let error_text = moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
+    let progress_gate = match navigation.network_progress.into_completed_body_events() {
+        Some(events) => {
+            let context = CompletedMainDocumentProgressContext::for_navigation(
+                conn,
+                state,
+                completed_body_main_document_network_request_id(
+                    main_document_network_observed(conn, state.session_id.as_deref()),
+                    state.request_id.clone(),
+                ),
+            );
+            let batches = MainDocumentNavigationProgressEventBatches::new(
+                context.request_and_redirect_progress_events(&events),
+                context.response_received_progress_events(&events, &navigation.final_url, 0),
+                observed_navigation_failure_event(conn, state, error_text)
+                    .into_iter()
+                    .collect(),
+            );
+            let queue = MainDocumentProgressQueueHandle::from_source(
+                MainDocumentProgressSource::completed_body(batches),
+            );
+            // No Document commit will advance visibility for this response.
+            queue
+                .mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+            MainDocumentProgressGate::from_queue(queue)
+        }
+        None => failed_navigation_progress_gate(conn, state, error_text),
+    };
+    MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
+        error_text: error_text.to_owned(),
+        document_policy: FailedNavigationDocumentPolicy::PreserveCommittedDocument,
+        response_mode: FailedNavigationResponseMode::CdpErrorTextResult,
+        progress_gate,
+    })
 }
 
 fn materialize_download_navigation_progress(
@@ -545,17 +591,10 @@ fn completed_or_streaming_document_progress_queue(
             MainDocumentProgressSource::streaming(),
         );
     };
-    let context = CompletedMainDocumentProgressContext::new(
-        main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+    let context = CompletedMainDocumentProgressContext::for_navigation(
+        conn,
+        state,
         completed_body_main_document_network_request_id(network_enabled, request_id),
-        state.request_announced,
-        state.requested_url.clone(),
-        state.request_method.clone(),
-        state.request_body.clone(),
-        state.request_headers.to_byte_strings(),
-        state.loader_id.clone(),
-        state.frame_id.clone(),
-        state.timestamp,
     );
     MainDocumentProgressQueueHandle::from_source(MainDocumentProgressSource::completed_body(
         context.event_batches(&events, final_url, encoded_data_length),
@@ -597,6 +636,50 @@ impl MainDocumentBodyProgressSource {
             live_source,
             response_visibility,
         }
+    }
+
+    pub(crate) fn body_network_progress_for_response_head(
+        &self,
+        request_method: &str,
+        request_headers: &RequestHeaders,
+        head: &ResponseHead,
+        network_observation_journal: NetworkObservationJournal,
+    ) -> MainDocumentBodyNetworkProgress {
+        let network_extra_info_available = !network_observation_journal.is_empty();
+        let request_headers = request_headers.to_byte_strings();
+        self.emit_response_metadata(
+            request_method,
+            &request_headers,
+            head.request_cookie_report.as_ref(),
+            &head.redirect_chain,
+            &head.final_url,
+            head.status,
+            &head.headers,
+            &head.cookie_set_reports,
+            &network_observation_journal,
+            network_extra_info_available,
+            head.from_cache,
+            head.negotiated_http_version,
+        );
+        self.body_network_progress_for_completed_events(
+            CompletedMainDocumentNetworkEvents::new(
+                request_method.to_owned(),
+                request_headers,
+                head.request_cookie_report.clone(),
+                head.status,
+                head.headers.clone(),
+                head.cookie_set_reports.clone(),
+                head.redirect_chain
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+                network_extra_info_available,
+                head.from_cache,
+            )
+            .with_negotiated_http_version(head.negotiated_http_version)
+            .with_network_observation_journal(network_observation_journal),
+        )
     }
 
     pub(crate) fn emit_response_metadata(
@@ -1589,6 +1672,25 @@ struct CompletedMainDocumentProgressContext {
 }
 
 impl CompletedMainDocumentProgressContext {
+    fn for_navigation(
+        conn: &CdpConnection,
+        state: &NavigationDispatchState,
+        request_id: Option<String>,
+    ) -> Self {
+        Self::new(
+            main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+            request_id,
+            state.request_announced,
+            state.requested_url.clone(),
+            state.request_method.clone(),
+            state.request_body.clone(),
+            state.request_headers.to_byte_strings(),
+            state.loader_id.clone(),
+            state.frame_id.clone(),
+            state.timestamp,
+        )
+    }
+
     fn new(
         session_ids: Vec<Option<String>>,
         request_id: Option<String>,

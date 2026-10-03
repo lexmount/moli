@@ -193,6 +193,7 @@ pub struct PreparedDocumentPage {
 
 #[derive(Debug, Clone)]
 pub struct PreparedDocumentPageCommitConfiguration {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
@@ -253,6 +254,7 @@ impl PreparedDocumentPage {
         self.prepared
             .update_commit_configuration(
                 moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+                    web_mcp_invocation: configuration.web_mcp_invocation,
                     document_start_scripts: configuration.document_start_scripts,
                     runtime_bindings: configuration.runtime_bindings,
                     runtime_inspector_session_restore_snapshots: configuration

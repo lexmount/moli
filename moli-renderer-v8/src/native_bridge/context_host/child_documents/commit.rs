@@ -291,6 +291,7 @@ impl JsContextHost {
                 .expect("synthetic child Document commit requires its parent authority")
                 .clone()
         });
+        let web_mcp_navigation = self.current_child_navigation_load(handle);
         let owner_transition = self
             .frame_owner_store
             .replace_child_document_with_local_window_transition(
@@ -310,6 +311,16 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        crate::context_bootstrap::web_mcp::commit_child_navigation(
+            self,
+            handle,
+            web_mcp_navigation,
+            crate::native_bridge::WindowDocumentOwner::Frame(
+                owner_transition
+                    .current_owner()
+                    .expect("committed child document"),
+            ),
+        );
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {

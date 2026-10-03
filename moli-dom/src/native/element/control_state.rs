@@ -172,6 +172,8 @@ pub struct ElementControlState {
     scroll_left: Option<f64>,
     custom_validation_message: String,
     popover_open: bool,
+    web_mcp_form_active: bool,
+    web_mcp_submit_active: bool,
     dialog_modal: bool,
     dialog_return_value: String,
     custom_states: IndexSet<String>,
@@ -179,6 +181,20 @@ pub struct ElementControlState {
 }
 
 impl ElementControlState {
+    pub fn web_mcp_form_active(&self) -> bool {
+        self.web_mcp_form_active
+    }
+
+    pub fn web_mcp_submit_active(&self) -> bool {
+        self.web_mcp_submit_active
+    }
+
+    pub fn set_web_mcp_activity(&mut self, form: bool, submit: bool) -> bool {
+        let changed = self.web_mcp_form_active != form || self.web_mcp_submit_active != submit;
+        self.web_mcp_form_active = form;
+        self.web_mcp_submit_active = submit;
+        changed
+    }
     pub fn explicit_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
         self.explicit_element_references
             .as_deref()?

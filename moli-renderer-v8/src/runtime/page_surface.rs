@@ -314,6 +314,7 @@ pub struct RendererDocumentSourcedTopLevelLocationNavigation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RendererTopLevelNavigationRequest {
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     url: String,
     request_method: String,
     request_body: Option<Vec<u8>>,
@@ -354,6 +355,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
         Self {
             source_document,
             request: Box::new(RendererTopLevelNavigationRequest {
+                web_mcp_invocation: None,
                 url,
                 request_method,
                 request_body,
@@ -366,6 +368,18 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn source_document(&self) -> RendererDocumentLifecycleIdentity {
         self.source_document
+    }
+
+    pub fn with_web_mcp_invocation(
+        mut self,
+        id: Option<moli_page_types::RendererWebMcpNavigation>,
+    ) -> Self {
+        self.request.web_mcp_invocation = id;
+        self
+    }
+
+    pub fn web_mcp_invocation(&self) -> Option<moli_page_types::RendererWebMcpNavigation> {
+        self.request.web_mcp_invocation.clone()
     }
 
     pub fn url(&self) -> &str {
@@ -4657,6 +4671,10 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    WebMcp {
+        session: DevToolsSessionKey,
+        command: moli_page_types::RendererWebMcpCommand,
+    },
     // The call fits inline; its operation boxes the recursively contained page command.
     Native(RendererCdpCall),
     Inspector(RendererInspectorCommandEnvelope),
@@ -5657,6 +5675,7 @@ impl RendererPageCommand {
             Self::RemoveDocumentNode { .. } => Some("RemoveDocumentNode"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
+            Self::WebMcp { .. } => Some("WebMCP"),
             Self::ComputedStyleProperties { .. } => Some("ComputedStyleProperties"),
             Self::SetFileInputFilesForBackendNodeId { .. } => {
                 Some("SetFileInputFilesForBackendNodeId")
@@ -5964,6 +5983,7 @@ pub enum RendererCaptureScreencastFrameReply {
 }
 
 pub enum RendererPageReply {
+    WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
     NativeCommandPublished,
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),

@@ -64,6 +64,21 @@ impl<'s> ResolvedAbortSignal<'s> {
         }
     }
 
+    pub(crate) fn reason(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        match self.owner {
+            AbortSignalOwner::Window => {
+                let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+                unsafe { &mut *host_ptr }.abort_signal_reason(scope, self.signal)
+            }
+            AbortSignalOwner::Worker => {
+                crate::worker::abort::worker_abort_signal_reason(scope, self.signal)
+            }
+        }
+    }
+
     pub(crate) fn abort(self, scope: &mut v8::PinScope<'s, '_>, reason: v8::Local<'s, v8::Value>) {
         match self.owner {
             AbortSignalOwner::Window => {

@@ -479,4 +479,6 @@ pub(crate) enum WebAuthnAction {
 pub(crate) enum WebMcpAction {
     Enable,
     Disable,
+    InvokeTool,
+    CancelInvocation,
 }

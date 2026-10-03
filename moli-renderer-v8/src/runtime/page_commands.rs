@@ -171,6 +171,18 @@ impl PageVm {
             RendererPageCommand::TriggerAutofill(request) => self
                 .trigger_autofill(request)
                 .map(RendererPageReply::AutofillTriggerOutcome),
+            RendererPageCommand::WebMcp { session, command } => {
+                let enabled = match command {
+                    moli_page_types::RendererWebMcpCommand::Enable => Some(true),
+                    moli_page_types::RendererWebMcpCommand::Disable => Some(false),
+                    _ => None,
+                };
+                let result = self.vm_mut().dispatch_web_mcp_command(session.clone(), command)?;
+                if result.is_ok() && let Some(enabled) = enabled {
+                    self.runtime_inspector_protocol_configurations.entry(session).or_default().web_mcp_enabled = enabled;
+                }
+                Ok(RendererPageReply::WebMcp(result))
+            }
             RendererPageCommand::ResetNavigationHistory => self
                 .vm_mut()
                 .reset_navigation_history()

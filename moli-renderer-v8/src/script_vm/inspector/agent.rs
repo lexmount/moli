@@ -46,6 +46,42 @@ pub(crate) struct RendererDomDebuggerPauseScheduler {
     state: Weak<RefCell<RendererDevToolsAgentState>>,
 }
 
+/// Weak capability to wrap a native API exception in an existing frontend's
+/// V8 session. The owning renderer agent retains all RemoteObject authority.
+#[derive(Clone)]
+pub(crate) struct RendererInspectorObjectWrapper {
+    state: Weak<RefCell<RendererDevToolsAgentState>>,
+}
+
+impl RendererInspectorObjectWrapper {
+    pub(crate) fn wrap<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        session_key: &DevToolsSessionKey,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<serde_json::Value> {
+        let state = self.state.upgrade()?;
+        let session = state
+            .borrow()
+            .sessions
+            .frontend_session_and_outbound(session_key)?
+            .0;
+        let context = v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .and_then(|object| object.get_creation_context(scope))
+            .unwrap_or_else(|| scope.get_current_context());
+        let remote = session.wrap_object(
+            scope,
+            context,
+            value,
+            v8::inspector::StringView::from(&b""[..]),
+            false,
+        )?;
+        let json = v8::crdtp::cbor_to_json(&remote.to_bytes())?;
+        serde_json::from_slice(&json).ok()
+    }
+}
+
 #[must_use]
 pub(crate) struct RendererDomDebuggerScheduledPause {
     sessions: Vec<Rc<v8::inspector::V8InspectorSession>>,
@@ -123,6 +159,11 @@ impl RendererDomDebuggerPauseScheduler {
 }
 
 impl RendererDevToolsAgent {
+    pub(super) fn object_wrapper(&self) -> RendererInspectorObjectWrapper {
+        RendererInspectorObjectWrapper {
+            state: Rc::downgrade(&self.state),
+        }
+    }
     pub(super) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
         Self {
             state: Rc::new(RefCell::new(RendererDevToolsAgentState {

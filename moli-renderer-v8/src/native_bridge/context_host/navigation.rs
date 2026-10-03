@@ -67,6 +67,7 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
         Option<crate::types::ServiceWorkerClientNavigateContinuation>,
+    pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +186,7 @@ impl JsContextHost {
                 entry_seed,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
+                web_mcp_invocation: None,
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
@@ -215,6 +217,7 @@ impl JsContextHost {
                 entry_seed: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
+                web_mcp_invocation: None,
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
@@ -225,6 +228,22 @@ impl JsContextHost {
             self.pending_top_level_navigation.as_ref(),
             Some(PendingTopLevelNavigation::Location(_))
         )
+    }
+
+    pub(crate) fn bind_pending_web_mcp_navigation(
+        &mut self,
+        id: moli_page_types::RendererWebMcpNavigation,
+    ) -> bool {
+        let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        else {
+            return false;
+        };
+        if pending.kind() != PendingLocationNavigationKind::Document {
+            return false;
+        }
+        pending.web_mcp_invocation = Some(id);
+        true
     }
 
     pub(crate) fn pending_location_navigation_kind(&self) -> Option<PendingLocationNavigationKind> {
@@ -326,6 +345,9 @@ impl JsContextHost {
             return;
         };
         let pending = *pending;
+        if let Some(id) = pending.web_mcp_invocation {
+            crate::context_bootstrap::web_mcp::fail_navigation(self, id);
+        }
         let Some(continuation) = pending.service_worker_client_navigate else {
             return;
         };

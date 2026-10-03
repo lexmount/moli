@@ -352,6 +352,7 @@ mod tests {
 
     fn navigation_state(url: &Url) -> NavigationDispatchState {
         NavigationDispatchState {
+            web_mcp_invocation: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),
