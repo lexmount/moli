@@ -92,6 +92,23 @@ impl WorkerServiceWorkerRequestIdAllocator {
 }
 
 impl WorkerGlobalState {
+    pub(in crate::worker) fn register_pending_service_worker_update(
+        &mut self,
+        pending: PendingServiceWorkerUpdate,
+    ) -> u64 {
+        let request_id = self.service_worker_update_request_ids.allocate();
+        self.pending_service_worker_updates
+            .insert(request_id, pending);
+        request_id
+    }
+
+    pub(in crate::worker) fn take_pending_service_worker_update(
+        &mut self,
+        request_id: u64,
+    ) -> Option<PendingServiceWorkerUpdate> {
+        self.pending_service_worker_updates.remove(&request_id)
+    }
+
     pub(in crate::worker) fn register_pending_service_worker_client_query(
         &mut self,
         resolver: v8::Global<v8::PromiseResolver>,
@@ -895,18 +912,6 @@ pub(in crate::worker) fn drain_service_worker_push_unsubscribe_result(
     }
 }
 
-#[cfg(test)]
-mod service_worker_request_id_allocator_tests {
-    use super::WorkerServiceWorkerRequestIdAllocator;
-
-    #[test]
-    #[should_panic(expected = "worker Service Worker request id space exhausted")]
-    fn operation_local_request_ids_never_wrap() {
-        let mut ids = WorkerServiceWorkerRequestIdAllocator { next: u64::MAX };
-        let _ = ids.allocate();
-    }
-}
-
 pub(in crate::worker) struct PendingServiceWorkerUpdate {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
     pub(in crate::worker) registration: v8::Global<v8::Object>,
@@ -923,8 +928,7 @@ pub(in crate::worker) fn drain_service_worker_update_result(
 ) {
     let Some(pending) = state
         .borrow_mut()
-        .pending_service_worker_updates
-        .remove(&request_id)
+        .take_pending_service_worker_update(request_id)
     else {
         return;
     };
@@ -948,5 +952,17 @@ pub(in crate::worker) fn drain_service_worker_update_result(
             };
             let _ = resolver.reject(scope, exception);
         }
+    }
+}
+
+#[cfg(test)]
+mod service_worker_request_id_allocator_tests {
+    use super::WorkerServiceWorkerRequestIdAllocator;
+
+    #[test]
+    #[should_panic(expected = "worker Service Worker request id space exhausted")]
+    fn operation_local_request_ids_never_wrap() {
+        let mut ids = WorkerServiceWorkerRequestIdAllocator { next: u64::MAX };
+        let _ = ids.allocate();
     }
 }
