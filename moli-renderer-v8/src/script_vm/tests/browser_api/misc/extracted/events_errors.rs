@@ -1236,3 +1236,23 @@ fn clipboard_change_event_frozen_arrays_follow_constructor_realm_with_foreign_ne
         return true;
     })()"#).unwrap(), "true");
 }
+
+#[test]
+fn secure_pointer_event_coalesced_method_validates_receivers() {
+    let mut vm = new_storage_test_vm("https://coalesced-pointer.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const getCoalesced = PointerEvent.prototype.getCoalescedEvents;
+  const valid = getCoalesced.call(new PointerEvent('pointermove'));
+  let rejected = false;
+  try { getCoalesced.call(new MouseEvent('mousemove')); }
+  catch (error) { rejected = error instanceof TypeError; }
+  return String(Array.isArray(valid) && rejected);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
