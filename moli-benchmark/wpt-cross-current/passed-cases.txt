@@ -1654,17 +1654,13 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-014.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-015.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
-css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
 css/css-grid/abspos/positioned-grid-items-001.html
@@ -2378,6 +2374,8 @@ css/css-scrollbars/scrollbar-color-parsing.html
 css/css-scrollbars/scrollbar-width-parsing.html
 css/css-shadow/chrome-1492368-crash.html
 css/css-shadow/css-scoping-shadow-dynamic-remove-style-detached.html
+css/css-shadow/font-face-006.html
+css/css-shadow/font-face-009.html
 css/css-shadow/host-context-parsing.html
 css/css-shadow/host-descendant-invalidation.html
 css/css-shadow/host-dom-001.html
@@ -2808,7 +2806,6 @@ css/css-syntax/serialize-escape-identifiers.html
 css/css-syntax/trailing-braces.html
 css/css-syntax/unclosed-url-at-eof.html
 css/css-syntax/unicode-range-selector.html
-css/css-syntax/urange-parsing.html
 css/css-syntax/url-whitespace-consumption.html
 css/css-syntax/var-with-blocks.html
 css/css-syntax/whitespace.html
@@ -4060,6 +4057,7 @@ dom/ranges/Range-extractContents-dynamic-end.html
 dom/ranges/Range-extractContents.html
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=closed
 dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=open
+dom/ranges/Range-insertNode.html
 dom/ranges/Range-intersectsNode-2.html
 dom/ranges/Range-intersectsNode-binding.html
 dom/ranges/Range-intersectsNode-shadow.html
@@ -4078,6 +4076,7 @@ dom/ranges/Range-mutations-splitText.html
 dom/ranges/Range-selectNode.html
 dom/ranges/Range-set.html
 dom/ranges/Range-stringifier.html
+dom/ranges/Range-surroundContents.html
 dom/ranges/StaticRange-constructor.html
 dom/ranges/crashtests/Range-setEnd-to-node-removed-by-extractContents.html
 dom/svg-insert-crash.html
@@ -5583,6 +5582,7 @@ hr-time/timing-attack.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-client-postmessage.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-unregister.https.html
 html/browsers/browsing-the-web/history-traversal/001.html
+html/browsers/browsing-the-web/history-traversal/api-availability.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash-twice.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-pushState.html
@@ -5840,7 +5840,6 @@ html/browsers/windows/browsing-context-window.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
 html/browsers/windows/nested-browsing-contexts/window-top.html
-html/browsers/windows/noreferrer-null-opener.html
 html/browsers/windows/targeting-cross-origin-nested-browsing-contexts.html
 html/browsers/windows/targeting-with-embedded-null-in-target.html
 html/cross-origin-embedder-policy/no-secure-context.html
@@ -6065,7 +6064,7 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6611,7 +6610,6 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/permission-element/geolocation-element/iframe-use-after-free-crash.html
 html/semantics/popovers/chrome-392042073-crash.html
@@ -6779,8 +6777,10 @@ html/semantics/scripting-1/the-script-element/execution-timing/118.html
 html/semantics/scripting-1/the-script-element/execution-timing/119.html
 html/semantics/scripting-1/the-script-element/execution-timing/120.html
 html/semantics/scripting-1/the-script-element/execution-timing/121.html
+html/semantics/scripting-1/the-script-element/execution-timing/122.html
 html/semantics/scripting-1/the-script-element/execution-timing/123.html
 html/semantics/scripting-1/the-script-element/execution-timing/124.html
+html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/126.html
 html/semantics/scripting-1/the-script-element/execution-timing/127.html
 html/semantics/scripting-1/the-script-element/execution-timing/129.html
@@ -7349,8 +7349,6 @@ html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLU
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-CEReactions.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe.html
@@ -7410,8 +7408,6 @@ html/webappapis/scripting/processing-model-2/compile-error-in-setTimeout.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin-with-hash.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin.html
 html/webappapis/scripting/processing-model-2/compile-error.html
-html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html
-html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setInterval.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setTimeout.html
 html/webappapis/scripting/processing-model-2/runtime-error-data-url.html
@@ -8026,6 +8022,7 @@ quirks/unitless-length/quirks.html
 referrer-policy/generic/subresource-test/attr-referrer-invalid-value.html
 requestidlecallback/basic.html
 requestidlecallback/callback-exception.html
+requestidlecallback/callback-idle-periods.html
 requestidlecallback/callback-iframe-different-origin.html
 requestidlecallback/callback-iframe.html
 requestidlecallback/callback-invoked.html
@@ -9080,8 +9077,6 @@ wasm/core/utf8-custom-section-id.wast.js.html
 wasm/core/utf8-import-field.wast.js.html
 wasm/core/utf8-import-module.wast.js.html
 wasm/core/utf8-invalid-encoding.wast.js.html
-wasm/jsapi/functions/entry-different-function-realm.html
-wasm/jsapi/functions/entry.html
 wasm/jsapi/functions/incumbent.html
 wasm/serialization/module/broadcastchannel-success-and-failure.html
 wasm/serialization/module/broadcastchannel-success.html
@@ -9225,7 +9220,7 @@ workers/SharedWorker-constructor.html
 workers/SharedWorker-detach-frame-in-error-event.html
 workers/SharedWorker-exception-propagation.html
 workers/SharedWorker-exception.html
-workers/SharedWorker-extendedLifetime.html
+workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-script-error.html
 workers/SharedWorker-simple.html
 workers/SharedWorkerPerformanceNow.html
@@ -9369,7 +9364,6 @@ workers/interfaces/WorkerUtils/navigator/005.html
 workers/interfaces/WorkerUtils/navigator/006.html
 workers/interfaces/WorkerUtils/navigator/007.html
 workers/interfaces/WorkerUtils/navigator/language.html
-workers/modules/dedicated-worker-import-csp.html
 workers/modules/dedicated-worker-import-data-url-cross-origin.html
 workers/modules/dedicated-worker-import-failure.html
 workers/modules/dedicated-worker-import-meta.html
@@ -9548,6 +9542,7 @@ xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expired value be
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-reused.html
+xhr/xmlhttprequest-timeout-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-simple.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-simple.html?timeout hit before load
 xhr/xmlhttprequest-timeout-synconmain.html?timeout after open
