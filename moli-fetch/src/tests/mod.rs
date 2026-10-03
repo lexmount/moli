@@ -1612,7 +1612,7 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             .parse::<usize>()?;
         seen.insert(index);
         let case = &cases[index];
-        let (_, method, _, content_type) = case;
+        let (_, method, body, content_type) = case;
         assert!(request.starts_with(&format!("{method} /empty-headers/{index} HTTP/1.1\r\n")));
         let values = |name: &str| {
             request
@@ -1631,6 +1631,22 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             content_type.iter().copied().collect::<Vec<_>>(),
             "{case:?}: {request}"
         );
+        if body.as_ref().is_none_or(Vec::is_empty) {
+            let expected_length = if body.is_some() || matches!(*method, "POST" | "PUT") {
+                vec!["0"]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                values("content-length"),
+                expected_length,
+                "{case:?}: {request}"
+            );
+            assert!(
+                values("transfer-encoding").is_empty(),
+                "{case:?}: {request}"
+            );
+        }
     }
     assert_eq!(seen, (0..cases.len()).collect());
     Ok(())
