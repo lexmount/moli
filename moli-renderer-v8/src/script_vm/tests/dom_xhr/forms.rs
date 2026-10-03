@@ -6008,3 +6008,42 @@ fn disconnected_radio_groups_follow_tree_roots_and_form_owners() {
         "true|true:false|true|true:false|true|true|true:true|false:true"
     );
 }
+
+#[test]
+fn temporal_input_validation_and_stepping_use_rounded_millisecond_steps() {
+    for (kind, step, initial, after_up) in [
+        ("time", "0.9999", "12:30:02", "12:30:03"),
+        ("time", "1.0025", "00:00:01.003", "00:00:02.006"),
+        ("time", "0.0001", "00:00:00.001", "00:00:00.002"),
+        (
+            "datetime-local",
+            "59.9999",
+            "2024-02-29T12:30",
+            "2024-02-29T12:31",
+        ),
+        (
+            "datetime-local",
+            "1.0025",
+            "1970-01-01T00:00:01.003",
+            "1970-01-01T00:00:02.006",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://temporal-step.test/");
+        let result=vm.eval(&format!(r#"
+            (() => {{
+                const input=document.createElement('input');
+                input.type={kind:?};input.step={step:?};input.value={initial:?};
+                const initialMismatch=input.validity.stepMismatch;
+                input.stepUp();
+                const afterUp=input.value, afterUpMismatch=input.validity.stepMismatch;
+                input.stepDown();
+                return JSON.stringify([initialMismatch,afterUp,afterUpMismatch,input.value,input.validity.stepMismatch]);
+            }})()
+        "#)).expect("ordinary temporal input probe");
+        assert_eq!(
+            result,
+            format!("[false,{after_up:?},false,{initial:?},false]"),
+            "{kind} step={step}"
+        );
+    }
+}

@@ -440,6 +440,56 @@ fn meter_values_share_html_numeric_clamping_and_gauge_region_rules() {
 }
 
 #[test]
+fn temporal_steps_round_to_millisecond_precision_before_stepping() {
+    for kind in [InputType::Time, InputType::DatetimeLocal] {
+        for (step, expected) in [
+            ("0.9999", 1000.0),
+            ("1.0025", 1003.0),
+            ("2.0004", 2000.0),
+            ("2.0005", 2001.0),
+            ("0.0001", 1.0),
+            ("5e-4", 1.0),
+            ("59.9999", 60000.0),
+        ] {
+            assert_eq!(
+                input_step(kind, Some(step)),
+                Some(expected),
+                "{kind:?} step={step}"
+            );
+        }
+        assert_eq!(input_step(kind, Some("any")), None);
+        assert_eq!(input_step(kind, Some("0")), Some(60000.0));
+    }
+    assert_eq!(input_step(InputType::Number, Some("0.0001")), Some(0.0001));
+    assert_eq!(input_step(InputType::Range, Some("0.9999")), Some(0.9999));
+    for (kind, initial, expected) in [
+        (InputType::Time, "00:00:01.003", "00:00:02.006"),
+        (
+            InputType::DatetimeLocal,
+            "1970-01-01T00:00:01.003",
+            "1970-01-01T00:00:02.006",
+        ),
+    ] {
+        assert_eq!(
+            step_input_value(
+                InputStepState {
+                    input_type: kind,
+                    value: initial,
+                    min: None,
+                    max: None,
+                    step: Some("1.0025"),
+                    value_attribute: None,
+                },
+                InputStepDirection::Up,
+                1.0
+            )
+            .unwrap(),
+            InputStepOutcome::Set(expected.into())
+        );
+    }
+}
+
+#[test]
 fn input_step_up_down_rules_are_shared() {
     let stepped = step_input_value(
         InputStepState {
