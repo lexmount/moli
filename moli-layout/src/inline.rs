@@ -1003,7 +1003,7 @@ fn resolve_inline_lines(
         );
         for state in &mut states {
             state.parent = state_indices.get(&state.parent_box.index()).copied();
-            state.anchor = state
+            state.alignment.anchor = state
                 .parent
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
@@ -1034,7 +1034,7 @@ fn resolve_inline_lines(
                 .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
         });
         for state in &mut states {
-            state.metrics =
+            state.line_contribution =
                 (!phantom && !context.uses_quirks_line_height && state.has_strut_content)
                     .then_some(state.strut)
                     .flatten()
@@ -1103,7 +1103,7 @@ fn resolve_inline_lines(
         state_order.sort_by_key(|index| std::cmp::Reverse(states[*index].depth));
         for state_index in state_order.iter().copied() {
             let target_pending = std::mem::take(&mut pending[state_index]);
-            let mut target_metrics = states[state_index].metrics.take();
+            let mut target_metrics = states[state_index].line_contribution.take();
             resolve_pending_alignments(
                 target_pending,
                 LineVerticalAnchor::State(state_index),
@@ -1111,17 +1111,28 @@ fn resolve_inline_lines(
                 &mut states,
                 &mut geometries,
             );
-            states[state_index].metrics = target_metrics.or_else(|| {
+            states[state_index].line_contribution = target_metrics.or_else(|| {
                 line_break
                     .filter(|(anchor, _)| *anchor == LineVerticalAnchor::State(state_index))
                     .map(|(_, bounds)| bounds)
             });
 
-            let Some(state_bounds) = states[state_index].metrics else {
-                continue;
-            };
             let parent = states[state_index].parent;
             let vertical_align = states[state_index].vertical_align;
+            // Empty boxes still have a position. Text-edge alignments activate
+            // a zero-sized participant, as Blink's pending alignment does;
+            // length/baseline/middle shifts do not create a height operand.
+            if matches!(
+                vertical_align.kind,
+                LayoutInlineAlignment::TextTop | LayoutInlineAlignment::TextBottom
+            ) {
+                states[state_index]
+                    .line_contribution
+                    .get_or_insert(InlineVerticalBounds::ZERO);
+            }
+            let state_bounds = states[state_index]
+                .line_contribution
+                .unwrap_or(InlineVerticalBounds::ZERO);
             if matches!(
                 vertical_align.kind,
                 LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
@@ -1140,13 +1151,15 @@ fn resolve_inline_lines(
                 alignment_reference(context, &states, parent),
                 state_bounds,
             );
-            states[state_index].relative_offset = offset;
-            include_in_parent(
-                state_bounds.shifted(offset),
-                parent,
-                &mut states,
-                &mut root_bounds,
-            );
+            states[state_index].alignment.relative_offset = offset;
+            if let Some(contribution) = states[state_index].line_contribution {
+                include_in_parent(
+                    contribution.shifted(offset),
+                    parent,
+                    &mut states,
+                    &mut root_bounds,
+                );
+            }
         }
 
         resolve_pending_alignments(
@@ -1194,8 +1207,9 @@ fn resolve_inline_lines(
         if let Some(placements) = placements.as_mut() {
             // Place alignment anchors before the states that reference them.
             for state_index in state_order.iter().rev().copied() {
-                states[state_index].global_offset = states[state_index].relative_offset
-                    + anchor_global_offset(states[state_index].anchor, &states);
+                states[state_index].alignment.global_offset =
+                    states[state_index].alignment.relative_offset
+                        + anchor_global_offset(states[state_index].alignment.anchor, &states);
             }
             let item_offsets = geometries
                 .iter()
@@ -1223,7 +1237,7 @@ fn resolve_inline_lines(
                 .iter()
                 .filter_map(|state| {
                     let strut = state.strut?;
-                    let baseline = root_baseline + state.global_offset;
+                    let baseline = root_baseline + state.alignment.global_offset;
                     // An empty closing fragment has no font box only when
                     // its whole quirks line has no resolved vertical metrics.
                     // Content with zero height still retains the font box.
@@ -1348,7 +1362,14 @@ struct LineInlineBoxState {
     /// Content and start edges, plus closing edges in standards mode,
     /// retain this box's strut and the struts of its structural ancestors.
     has_strut_content: bool,
-    metrics: Option<InlineVerticalBounds>,
+    /// Bounds participating in the line-height union, independent of font
+    /// geometry and the alignment of this fragment. None differs from ZERO.
+    line_contribution: Option<InlineVerticalBounds>,
+    alignment: InlineBoxAlignment,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InlineBoxAlignment {
     anchor: LineVerticalAnchor,
     relative_offset: f32,
     global_offset: f32,
@@ -1500,10 +1521,12 @@ fn build_line_inline_box_states(
             vertical_align: state.vertical_align,
             strut: state.strut,
             has_strut_content: strut_boxes.contains(&state.box_id.index()),
-            metrics: None,
-            anchor: LineVerticalAnchor::Root,
-            relative_offset: 0.0,
-            global_offset: 0.0,
+            line_contribution: None,
+            alignment: InlineBoxAlignment {
+                anchor: LineVerticalAnchor::Root,
+                relative_offset: 0.0,
+                global_offset: 0.0,
+            },
         })
         .collect()
 }
@@ -1553,7 +1576,11 @@ fn include_in_parent(
     root_bounds: &mut Option<InlineVerticalBounds>,
 ) {
     let target = parent
-        .and_then(|index| states.get_mut(index).map(|state| &mut state.metrics))
+        .and_then(|index| {
+            states
+                .get_mut(index)
+                .map(|state| &mut state.line_contribution)
+        })
         .unwrap_or(root_bounds);
     match target {
         Some(metrics) => metrics.include(bounds),
@@ -1615,8 +1642,8 @@ fn resolve_pending_alignments(
         } - child.vertical_align.baseline_shift;
         match child.member {
             PendingLineMember::State(index) => {
-                states[index].anchor = target_anchor;
-                states[index].relative_offset = offset;
+                states[index].alignment.anchor = target_anchor;
+                states[index].alignment.relative_offset = offset;
             }
             PendingLineMember::Item(index) => {
                 geometries[index].anchor = target_anchor;
@@ -1634,9 +1661,9 @@ fn resolve_pending_alignments(
 fn anchor_global_offset(anchor: LineVerticalAnchor, states: &[LineInlineBoxState]) -> f32 {
     match anchor {
         LineVerticalAnchor::Root => 0.0,
-        LineVerticalAnchor::State(index) => {
-            states.get(index).map_or(0.0, |state| state.global_offset)
-        }
+        LineVerticalAnchor::State(index) => states
+            .get(index)
+            .map_or(0.0, |state| state.alignment.global_offset),
     }
 }
 

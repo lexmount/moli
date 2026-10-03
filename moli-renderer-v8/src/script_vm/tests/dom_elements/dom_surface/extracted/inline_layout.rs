@@ -988,3 +988,106 @@ fn inline_end_border_preserves_tall_atomic_content() {
         );
     }
 }
+
+// Geometry measured in Chromium 145.0.7632.116, before and after publication.
+#[test]
+fn empty_inline_alignment_resolves_placement_separately_from_line_contribution() {
+    let cases = [
+        ("baseline", "<span id=b></span>", [20.0, 0.0], [80.0, 0.0]),
+        (
+            "raised",
+            "<span id=b style=vertical-align:100px></span>",
+            [20.0, -100.0],
+            [180.0, -100.0],
+        ),
+        (
+            "lowered",
+            "<span id=b style=vertical-align:-100px></span>",
+            [20.0, 100.0],
+            [180.0, 100.0],
+        ),
+        (
+            "percent",
+            "<span id=b style=vertical-align:50%></span>",
+            [20.0, -40.0],
+            [120.0, -40.0],
+        ),
+        (
+            "nested",
+            "<span style=vertical-align:30px><span id=b style=vertical-align:100px></span></span>",
+            [20.0, -130.0],
+            [210.0, -130.0],
+        ),
+        (
+            "nested_top",
+            "<span style=vertical-align:top><span id=b style=vertical-align:100px></span><i class=atom></i></span>",
+            [20.0, -100.0],
+            [180.0, 0.0],
+        ),
+        (
+            "content",
+            "<span id=b style=vertical-align:100px><i class=atom></i></span>",
+            [120.0, -100.0],
+            [180.0, -100.0],
+        ),
+        (
+            "zero_content",
+            "<span id=b style=vertical-align:100px><i class=atom style=height:0></i></span>",
+            [100.0, -100.0],
+            [180.0, -100.0],
+        ),
+        (
+            "text_top",
+            "<span id=b style=vertical-align:text-top></span>",
+            [46.0, -46.0],
+            [91.0, 11.0],
+        ),
+        (
+            "text_bottom",
+            "<span id=b style=vertical-align:text-bottom></span>",
+            [32.0, 12.0],
+            [91.0, -11.0],
+        ),
+        (
+            "top",
+            "<span id=b style=vertical-align:top></span>",
+            [20.0, -20.0],
+            [80.0, 0.0],
+        ),
+        (
+            "bottom",
+            "<span id=b style=vertical-align:bottom></span>",
+            [20.0, 0.0],
+            [80.0, 0.0],
+        ),
+    ];
+    for (doctype, quirks) in [
+        ("", true),
+        (
+            r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+            true,
+        ),
+        ("<!doctype html>", false),
+    ] {
+        for (id, content, quirks_geometry, standards_geometry) in cases {
+            let markup = format!(
+                r#"{doctype}<style>.line{{font:50px/80px monospace;width:300px}}.atom{{display:inline-block;width:10px;height:20px}}em,i{{font-style:normal}}</style><div id=line class=line><span id=a></span>{content}<i class=atom></i></div>"#
+            );
+            let mut vm = new_parsed_test_vm("https://inline-alignment.test/", &markup);
+            let query = "JSON.stringify([line.getBoundingClientRect().height,b.getBoundingClientRect().top-a.getBoundingClientRect().top])";
+            let expected = if quirks {
+                quirks_geometry
+            } else {
+                standards_geometry
+            };
+            let first = vm.eval(query).unwrap();
+            assert_eq!(
+                serde_json::from_str::<[f64; 2]>(&first).unwrap(),
+                expected,
+                "{doctype} / {id}"
+            );
+            publish_layout_for_test(&mut vm);
+            assert_eq!(vm.eval(query).unwrap(), first, "paint: {doctype} / {id}");
+        }
+    }
+}
