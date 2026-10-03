@@ -1,24 +1,59 @@
 use super::*;
 
+#[derive(Default)]
+pub(super) struct PointerInputState {
+    buttons: i32,
+    document: Option<DomHandle>,
+}
+
 impl JsContextHost {
     pub(crate) fn update_pointer_input(&mut self, pointer_id: i32, buttons: i32) {
         // Hovering devices remain active with no buttons pressed. Touch contacts are removed
         // only after their ending pointer, capture and boundary events have been dispatched.
-        self.active_pointer_buttons.insert(pointer_id, buttons);
+        self.active_pointer_inputs
+            .entry(pointer_id)
+            .or_default()
+            .buttons = buttons;
+    }
+
+    pub(crate) fn record_pointer_input_target(&mut self, pointer_id: i32, target: DomHandle) {
+        let document = self.dom_host().owner_document_handle(target);
+        if let Some(input) = self.active_pointer_inputs.get_mut(&pointer_id) {
+            input.document = document;
+        }
     }
 
     pub(crate) fn finish_touch_pointer_input(&mut self, pointer_id: i32) {
-        self.active_pointer_buttons.remove(&pointer_id);
+        self.active_pointer_inputs.remove(&pointer_id);
     }
 
     pub(crate) fn pointer_capture_is_active(&self, pointer_id: i32) -> bool {
-        self.active_pointer_buttons.contains_key(&pointer_id)
+        self.active_pointer_inputs.contains_key(&pointer_id)
     }
 
     pub(crate) fn pointer_capture_has_active_buttons(&self, pointer_id: i32) -> bool {
-        self.active_pointer_buttons
+        self.active_pointer_inputs
             .get(&pointer_id)
-            .is_some_and(|buttons| *buttons != 0)
+            .is_some_and(|input| input.buttons != 0)
+    }
+
+    pub(crate) fn pointer_capture_has_active_document(
+        &self,
+        pointer_id: i32,
+        target: DomHandle,
+    ) -> bool {
+        self.active_pointer_inputs
+            .get(&pointer_id)
+            .and_then(|input| input.document)
+            .is_some_and(|document| self.dom_host().owner_document_handle(target) == Some(document))
+    }
+
+    fn pointer_capture_document_for_target(&self, pointer_id: i32, target: DomHandle) -> DomHandle {
+        self.active_pointer_inputs
+            .get(&pointer_id)
+            .and_then(|input| input.document)
+            .or_else(|| self.dom_host().owner_document_handle(target))
+            .unwrap_or_else(|| self.document_handle())
     }
 
     pub(crate) fn set_pending_pointer_capture_target(
@@ -85,7 +120,7 @@ impl JsContextHost {
             return None;
         }
         self.clear_pointer_capture_target_if_matches(pointer_id, target);
-        Some(self.document_handle())
+        Some(self.pointer_capture_document_for_target(pointer_id, target))
     }
 
     pub(crate) fn clear_pending_pointer_capture_targets_in_disconnected_subtree(
@@ -145,7 +180,7 @@ impl JsContextHost {
             let target = if self.dom_host().is_connected(current_target) {
                 current_target
             } else {
-                self.document_handle()
+                self.pointer_capture_document_for_target(pointer_id, current_target)
             };
             self.pointer_capture_targets.remove(&pointer_id);
             events.push(PointerCaptureDispatchEvent {
@@ -167,7 +202,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn clear_pointer_capture_state(&mut self) {
-        self.active_pointer_buttons.clear();
+        self.active_pointer_inputs.clear();
         self.pending_pointer_capture_targets.clear();
         self.pointer_capture_targets.clear();
     }

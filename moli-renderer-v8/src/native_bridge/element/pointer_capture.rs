@@ -41,7 +41,9 @@ pub(super) fn node_set_pointer_capture_callback<'s>(
         throw_dom_exception(scope, "InvalidStateError", 11, "InvalidStateError");
         return;
     }
-    if !runtime.pointer_capture_has_active_buttons(pointer_id) {
+    if !runtime.pointer_capture_has_active_buttons(pointer_id)
+        || !runtime.pointer_capture_has_active_document(pointer_id, handle)
+    {
         return;
     }
     runtime.set_pending_pointer_capture_target(pointer_id, handle);
