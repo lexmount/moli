@@ -322,6 +322,7 @@ pub(crate) use self::media_queries::{
     simple_event_target_remove_event_listener_callback, simple_event_target_slot_name,
     simple_object_event_listeners_snapshot, simple_object_event_set_ordered_handler,
     simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
+    simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{

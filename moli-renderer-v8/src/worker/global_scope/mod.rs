@@ -68,7 +68,7 @@ use crate::network_host::{
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
-    close_pending_network_body_stream, convert_xhr_send_body_from_args,
+    close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     extract_subresource_auth_challenge,
