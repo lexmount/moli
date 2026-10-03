@@ -1,5 +1,7 @@
 #[cfg(feature = "devtools")]
-use crate::dom::native::Node;
+use super::provider::flat_tree_parent;
+#[cfg(feature = "devtools")]
+use crate::dom::native::{DomHost, Node};
 #[cfg(feature = "devtools")]
 use moli_layout::LayoutFragmentKind;
 use moli_layout::{
@@ -7,6 +9,8 @@ use moli_layout::{
     LayoutPaintedSurfaceHit, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
     LayoutTransform2D, LayoutViewport,
 };
+#[cfg(feature = "devtools")]
+use std::collections::HashSet;
 
 #[cfg(test)]
 use moli_layout::LayoutScrollbarHit;
@@ -351,25 +355,46 @@ pub(crate) fn draggable_source_at_point(
                         | LayoutFragmentKind::Text { box_id, .. } => box_id,
                         LayoutFragmentKind::Line { owner, .. } => owner,
                     });
+                let mut rendered_path = Vec::new();
                 while let Some(id) = candidate {
                     let layout_box = tree.boxes.get(id.index())?;
-                    if let Some(handle) = layout_box.principal_source
-                        && eligible(handle)
-                    {
-                        return Some(handle);
+                    if let Some(handle) = layout_box.principal_source {
+                        rendered_path.push(handle);
                     }
                     candidate = layout_box.structural_parent;
                 }
-                None
+                // A moved descendant no longer occupies its old rendered
+                // branch. Resolve the origin at the surviving ancestor in
+                // the published path without refreshing layout during input.
+                let mut origin = hit.source;
+                let mut ancestors = flat_tree_ancestors(host, origin);
+                let mut start = 0;
+                for (index, handle) in rendered_path.iter().copied().enumerate() {
+                    if !ancestors.contains(&handle) {
+                        origin = handle;
+                        ancestors = flat_tree_ancestors(host, origin);
+                        start = index;
+                    }
+                }
+                let source = rendered_path[start..]
+                    .iter()
+                    .copied()
+                    .find(|handle| eligible(*handle))?;
+                // Slot distribution supplies rendered ancestry, but does not
+                // make a light child a DOM descendant of the shadow element.
+                host.shadow_including_contains(source, origin)
+                    .then_some(source)
             })
             .ok_or(LayoutError::NoLayoutSnapshot);
     }
-    let mut candidate =
-        live_hit_in_frame(runtime, FrameHitTest::root(runtime, document, point), false)?
-            .map(|(_, handle)| handle);
+    let origin = live_hit_in_frame(runtime, FrameHitTest::root(runtime, document, point), false)?
+        .map(|(_, handle)| handle);
+    let mut candidate = origin;
     while let Some(handle) = candidate {
         if eligible(handle) {
-            return Ok(Some(handle));
+            return Ok(origin
+                .filter(|origin| host.shadow_including_contains(handle, *origin))
+                .map(|_| handle));
         }
         candidate = flat_tree_parent(host, handle);
     }
@@ -636,6 +661,19 @@ fn live_interaction_target(runtime: &PageScriptHost, source: DomHandle) -> Optio
     (runtime.dom_host().is_connected(target)
         && !element_is_inert_for_hit_testing(runtime.dom_host(), target))
     .then_some(target)
+}
+
+#[cfg(feature = "devtools")]
+fn flat_tree_ancestors(host: &DomHost, handle: DomHandle) -> HashSet<DomHandle> {
+    let mut ancestors = HashSet::new();
+    let mut current = Some(handle);
+    while let Some(handle) = current {
+        if !ancestors.insert(handle) {
+            break;
+        }
+        current = flat_tree_parent(host, handle);
+    }
+    ancestors
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

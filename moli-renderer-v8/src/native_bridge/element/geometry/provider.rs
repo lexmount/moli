@@ -361,7 +361,7 @@ pub(crate) fn element_is_inert_for_hit_testing(host: &DomHost, handle: DomHandle
     false
 }
 
-fn flat_tree_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {
+pub(super) fn flat_tree_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {
     if let Some(slot) = host.assigned_slot_for_node(handle) {
         return Some(slot);
     }
