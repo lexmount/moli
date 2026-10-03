@@ -1149,7 +1149,9 @@ impl PageVmEnvConfig {
                     headers, final_url,
                 )
             })
-            .with_content_security_policy_bypass(self.document_settings.bypass_content_security_policy);
+            .with_content_security_policy_bypass(
+                self.document_settings.bypass_content_security_policy,
+            );
         self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container

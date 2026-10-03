@@ -226,10 +226,7 @@ mod tests {
             let source = v8::String::new(scope, expression).unwrap();
             let script = v8::Script::compile(scope, source, None).unwrap();
             let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
-            assert!(
-                !should_parse_options(scope, value),
-                "{expression}"
-            );
+            assert!(!should_parse_options(scope, value), "{expression}");
         }
     }
 }
