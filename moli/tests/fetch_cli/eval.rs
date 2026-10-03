@@ -174,6 +174,53 @@ fn eval_with_layout_publishes_static_geometry() -> Result<()> {
 }
 
 #[test]
+fn eval_hide_scrollbars_removes_gutters_and_preserves_scrolling() -> Result<()> {
+    let url = "data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px'><div id=scroller style='width:200px;height:100px;overflow:scroll;scrollbar-width:auto!important;scrollbar-gutter:stable both-edges'><div style='width:400px;height:300px'></div></div></div>";
+    let script = r#"(() => {
+      const scroller = document.getElementById('scroller');
+      scroller.scrollLeft = 20;
+      scroller.scrollTop = 40;
+      window.scrollTo(0, 100);
+      return {
+        inner: innerWidth,
+        client: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        elementClient: [scroller.clientWidth, scroller.clientHeight, scroller.clientLeft],
+        elementScroll: [scroller.scrollWidth, scroller.scrollHeight],
+        offsets: [scroller.scrollLeft, scroller.scrollTop, scrollY],
+        css: [getComputedStyle(scroller).scrollbarWidth, getComputedStyle(scroller).scrollbarGutter]
+      };
+    })()"#;
+    for hidden in [false, true] {
+        let mut args = vec!["--layout"];
+        if hidden {
+            args.push("--hide-scrollbars");
+        }
+        let output = run_eval(url, script, &args)?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let inner = value["inner"].as_u64().expect("viewport width");
+        assert_eq!(value["client"], inner - if hidden { 0 } else { 15 });
+        assert_eq!(value["scrollWidth"], inner);
+        assert_eq!(
+            value["elementClient"],
+            serde_json::json!(if hidden {
+                [170, 100, 15]
+            } else {
+                [170, 85, 15]
+            })
+        );
+        assert_eq!(value["elementScroll"], serde_json::json!([400, 300]));
+        assert_eq!(value["offsets"], serde_json::json!([20, 40, 100]));
+        assert_eq!(
+            value["css"],
+            serde_json::json!(["auto", "stable both-edges"])
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn eval_computed_sizes_follow_layout_option_with_or_without_css() -> Result<()> {
     let url = "data:text/html,<!doctype html><div id=target style=\"max-width:20px\"></div><canvas id=canvas style=\"max-width:40px\"></canvas>";
     let script = r#"(() => {

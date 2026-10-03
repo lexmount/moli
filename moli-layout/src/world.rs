@@ -382,8 +382,8 @@ impl ViewportScrollPolicy {
         }
     }
 
-    pub(crate) fn prepare_scrollbar_layout(&mut self) {
-        let allowed = self.allows_scrollbar_controls();
+    pub(crate) fn prepare_scrollbar_layout(&mut self, scrollbars_hidden: bool) {
+        let allowed = !scrollbars_hidden && self.allows_scrollbar_controls();
         self.revealed_scrollbar_x =
             allowed && self.effective_overflow[0] == LayoutOverflowMode::Scroll;
         self.revealed_scrollbar_y =
@@ -654,6 +654,7 @@ where
     /// Subtree and synthetic sources still use the same internal root slot.
     pub(crate) root_is_document_element: bool,
     pub(crate) quirks_mode: style::context::QuirksMode,
+    pub(crate) environment: crate::LayoutEnvironment,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
@@ -678,6 +679,7 @@ where
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
             quirks_mode: style::context::QuirksMode::NoQuirks,
+            environment: crate::LayoutEnvironment::default(),
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),

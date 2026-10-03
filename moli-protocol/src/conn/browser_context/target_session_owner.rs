@@ -167,6 +167,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) script_execution_disabled: bool,
+    pub(crate) scrollbars_hidden: bool,
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
@@ -185,6 +186,22 @@ pub(crate) struct TargetNavigationLoadInputs {
 }
 
 impl TargetNavigationLoadInputs {
+    pub(crate) fn document_settings_snapshot(
+        &self,
+        idle_override: Option<moli_page_types::EmulatedIdleOverride>,
+    ) -> moli_page_types::DocumentSettings {
+        moli_page_types::DocumentSettings {
+            script_execution_disabled: self.script_execution_disabled,
+            scrollbars_hidden: self.scrollbars_hidden,
+            bypass_content_security_policy: self.bypass_content_security_policy,
+            emulated_media: self.emulated_media.clone(),
+            idle_override,
+            navigator_overrides: self.navigator_overrides.clone(),
+            viewport_surface: self.viewport_surface,
+            document_activity: self.document_activity,
+        }
+    }
+
     pub(crate) fn with_main_document_commit_seed(
         mut self,
         seed: RendererMainDocumentCommitSeed,
@@ -321,6 +338,7 @@ impl TargetNavigationLoadInputs {
             script_execution_disabled: page_state
                 .effective_emulation_state
                 .script_execution_disabled,
+            scrollbars_hidden: page_state.effective_emulation_state.scrollbars_hidden,
             bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
             emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
             viewport_surface: emulated_device_metrics
@@ -401,6 +419,7 @@ impl TargetNavigationLoadInputs {
             runtime_inspector_session_restore_snapshots: Vec::new(),
             extra_http_headers: Default::default(),
             script_execution_disabled: false,
+            scrollbars_hidden: false,
             bypass_content_security_policy: false,
             emulated_media: Default::default(),
             viewport_surface: None,

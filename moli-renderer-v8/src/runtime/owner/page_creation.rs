@@ -657,6 +657,7 @@ impl RendererOwnerHandle {
         stage: PageVmInitStage,
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateHtmlPageRequest {
+        let layout_configuration = self.seal_layout_configuration_for_page_creation();
         RendererCreateHtmlPageRequest {
             page_reservation,
             root_frame_id: options.root_frame_id,
@@ -680,21 +681,15 @@ impl RendererOwnerHandle {
             runtime_isolated_worlds: Vec::new(),
             permission_overrides: Vec::new(),
             extra_http_headers: options.extra_http_headers,
-            script_execution_disabled: options.script_execution_disabled,
-            bypass_content_security_policy: options.bypass_content_security_policy,
+            document_settings: options.document_settings,
             network_offline: options.network_offline,
             blocked_url_patterns: options.blocked_url_patterns,
             indexed_db_manager: options.indexed_db_manager,
             storage_bucket_store: options.storage_bucket_store,
-            emulated_media: options.emulated_media,
-            idle_override: None,
-            navigator_overrides: Default::default(),
-            viewport_surface: options.viewport_surface,
-            document_activity: options.document_activity,
             fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: options
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.seal_layout_policy_for_page_creation(),
+            layout_configuration,
             wpt_extensions_enabled: false,
             stage,
             reply_boundary: crate::RendererReplyBoundary::Stage,
@@ -721,6 +716,7 @@ impl RendererOwnerHandle {
         stage: PageVmInitStage,
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
+        let layout_configuration = self.seal_layout_configuration_for_page_creation();
         RendererCreateStreamingRawPageRequest {
             document_replacement: None,
             root_frame_id: options.root_frame_id,
@@ -744,13 +740,7 @@ impl RendererOwnerHandle {
             runtime_isolated_worlds: Vec::new(),
             permission_overrides: Vec::new(),
             extra_http_headers: options.extra_http_headers,
-            script_execution_disabled: options.script_execution_disabled,
-            bypass_content_security_policy: options.bypass_content_security_policy,
-            emulated_media: options.emulated_media,
-            idle_override: None,
-            navigator_overrides: Default::default(),
-            viewport_surface: options.viewport_surface,
-            document_activity: options.document_activity,
+            document_settings: options.document_settings,
             network_offline: options.network_offline,
             blocked_url_patterns: options.blocked_url_patterns,
             indexed_db_manager: options.indexed_db_manager,
@@ -758,7 +748,7 @@ impl RendererOwnerHandle {
             fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: options
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.seal_layout_policy_for_page_creation(),
+            layout_configuration,
             wpt_extensions_enabled: false,
             stage,
             reply_boundary: crate::RendererReplyBoundary::Stage,
@@ -818,20 +808,14 @@ impl RendererOwnerHandle {
             runtime_isolated_worlds,
             permission_overrides,
             extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
+            document_settings,
             network_offline,
             blocked_url_patterns,
             indexed_db_manager,
             storage_bucket_store,
-            emulated_media,
-            idle_override,
-            navigator_overrides,
-            viewport_surface,
-            document_activity,
             fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type,
-            layout_policy,
+            layout_configuration,
             wpt_extensions_enabled,
             stage,
             reply_boundary,
@@ -875,7 +859,7 @@ impl RendererOwnerHandle {
             &response_headers,
             &final_url,
         )
-        .with_content_security_policy_bypass(bypass_content_security_policy);
+        .with_content_security_policy_bypass(document_settings.bypass_content_security_policy);
         let document_default_language =
             crate::document_language::document_default_language_from_headers(&response_headers);
         let document_last_modified =
@@ -907,20 +891,14 @@ impl RendererOwnerHandle {
                     document_policy_container,
                     document_default_language,
                     document_last_modified,
-                    script_execution_disabled,
-                    bypass_content_security_policy,
-                    emulated_media,
-                    idle_override,
-                    navigator_overrides,
-                    viewport_surface,
-                    document_activity,
+                    document_settings,
                     network_offline,
                     blocked_url_patterns,
                     indexed_db_manager,
                     storage_bucket_store,
                     fetch_subresource_interception_enabled,
                     fetch_subresource_interception_resource_type,
-                    layout_policy,
+                    layout_configuration,
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
@@ -1130,20 +1108,14 @@ impl RendererOwnerHandle {
             runtime_isolated_worlds,
             permission_overrides,
             extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
+            document_settings,
             network_offline,
             blocked_url_patterns,
             indexed_db_manager,
             storage_bucket_store,
-            emulated_media,
-            idle_override,
-            navigator_overrides,
-            viewport_surface,
-            document_activity,
             fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type,
-            layout_policy,
+            layout_configuration,
             wpt_extensions_enabled,
             stage,
             reply_boundary,
@@ -1178,7 +1150,7 @@ impl RendererOwnerHandle {
             &response_headers,
             &final_url,
         )
-        .with_content_security_policy_bypass(bypass_content_security_policy);
+        .with_content_security_policy_bypass(document_settings.bypass_content_security_policy);
         let document_default_language =
             crate::document_language::document_default_language_from_headers(&response_headers);
         let document_last_modified =
@@ -1207,20 +1179,14 @@ impl RendererOwnerHandle {
                     document_policy_container,
                     document_default_language,
                     document_last_modified,
-                    script_execution_disabled,
-                    bypass_content_security_policy,
-                    emulated_media,
-                    idle_override,
-                    navigator_overrides,
-                    viewport_surface,
-                    document_activity,
+                    document_settings,
                     network_offline,
                     blocked_url_patterns,
                     indexed_db_manager,
                     storage_bucket_store,
                     fetch_subresource_interception_enabled,
                     fetch_subresource_interception_resource_type,
-                    layout_policy,
+                    layout_configuration,
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
@@ -1228,7 +1194,7 @@ impl RendererOwnerHandle {
                     navigation_bootstrap_entry: None,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
-                };
+};
                 let bootstrap = Box::pin(async move {
                     let started = Instant::now();
                     ConcurrentParseTimeRuntime::create_external_raw_document_response_at_reply_boundary(

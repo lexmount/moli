@@ -529,7 +529,7 @@ fn script_disabled_preload_scan_defers_every_script_to_the_page_owner() {
     let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
     let env = default_test_page_vm_env_config_with(|env| {
-        env.script_execution_disabled = true;
+        env.document_settings.script_execution_disabled = true;
     });
     let mut cache = BufferedDocumentPreloadState::default();
     cache.set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(&env));

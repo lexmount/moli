@@ -17,7 +17,7 @@ pub mod storage;
 pub mod testing;
 
 pub use moli_page_types as protocol_types;
-pub use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
+pub use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask};
 pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{

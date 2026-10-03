@@ -19,7 +19,7 @@ use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchResult, Request,
     StreamingRawResponse, ensure_http_status_success,
 };
-use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
+use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererDocumentReplacement,
@@ -199,13 +199,7 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub runtime_isolated_worlds: Vec<RuntimeIsolatedWorldDefinition>,
     pub permission_overrides: Vec<PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub idle_override: Option<crate::page::EmulatedIdleOverride>,
-    pub navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub viewport_surface: Option<ViewportSurface>,
-    pub document_activity: moli_page_types::DocumentActivity,
+    pub document_settings: moli_page_types::DocumentSettings,
     pub browser_resource_runtime: BrowserResourceRuntime,
     pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub network_offline: bool,
@@ -260,13 +254,7 @@ impl PreparedDocumentPage {
                     runtime_isolated_worlds: configuration.runtime_isolated_worlds,
                     permission_overrides: configuration.permission_overrides,
                     extra_http_headers: configuration.extra_http_headers,
-                    script_execution_disabled: configuration.script_execution_disabled,
-                    bypass_content_security_policy: configuration.bypass_content_security_policy,
-                    emulated_media: configuration.emulated_media,
-                    idle_override: configuration.idle_override,
-                    navigator_overrides: configuration.navigator_overrides,
-                    viewport_surface: configuration.viewport_surface,
-                    document_activity: configuration.document_activity,
+                    document_settings: configuration.document_settings,
                     browser_resource_runtime: configuration.browser_resource_runtime,
                     navigator_identity: configuration.navigator_identity,
                     network_offline: configuration.network_offline,
@@ -355,7 +343,7 @@ pub struct NavigationRuntimeConfig {
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
+    layout_configuration: LayoutConfiguration,
 }
 
 impl NavigationRuntimeConfig {
@@ -365,11 +353,28 @@ impl NavigationRuntimeConfig {
         subframe_loading_enabled: bool,
         layout_policy: LayoutPolicy,
     ) -> Self {
+        Self::new_with_layout_configuration(
+            fetch_config,
+            optional_resource_fetch_mask,
+            subframe_loading_enabled,
+            LayoutConfiguration {
+                policy: layout_policy,
+                ..LayoutConfiguration::default()
+            },
+        )
+    }
+
+    pub fn new_with_layout_configuration(
+        fetch_config: FetchConfig,
+        optional_resource_fetch_mask: OptionalResourceFetchMask,
+        subframe_loading_enabled: bool,
+        layout_configuration: LayoutConfiguration,
+    ) -> Self {
         Self {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         }
     }
 
@@ -390,7 +395,20 @@ impl NavigationRuntimeConfig {
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
+    }
+
+    pub fn scrollbars_hidden(&self) -> bool {
+        self.layout_configuration.scrollbars_hidden
+    }
+
+    pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
+        self.layout_configuration.scrollbars_hidden = hidden;
+        self
+    }
+
+    pub fn layout_configuration(&self) -> LayoutConfiguration {
+        self.layout_configuration
     }
 }
 
@@ -407,11 +425,11 @@ impl Default for NavigationRuntimeConfig {
 
 impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
     fn from(config: &crate::config::BrowserConfig) -> Self {
-        Self::new(
+        Self::new_with_layout_configuration(
             config.fetch().clone(),
             config.optional_resource_fetch_mask(),
             config.subframe_loading_enabled(),
-            config.layout_policy(),
+            config.layout_configuration(),
         )
     }
 }
@@ -420,7 +438,8 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
 pub struct NavigationEngine {
     fetch_config: FetchConfig,
     page_network_policy: PageNetworkPolicy,
-    layout_policy: LayoutPolicy,
+    layout_configuration: LayoutConfiguration,
+    emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
@@ -556,7 +575,7 @@ impl NavigationEngine {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
@@ -565,7 +584,7 @@ impl NavigationEngine {
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout_configuration(layout_configuration)?;
         let standalone_lifetime_owner = standalone_browser_context_owner.map(|owner| {
             Rc::new(NavigationEngineLifetimeOwner {
                 js_runtime: Some(js_runtime.clone()),
@@ -579,7 +598,8 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
+            layout_configuration,
+            emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
@@ -595,11 +615,11 @@ impl NavigationEngine {
         subframe_loading_enabled: bool,
     ) -> Result<Self> {
         Self::new_with_runtime_config_and_shared_renderer_owner(
-            NavigationRuntimeConfig::new(
+            NavigationRuntimeConfig::new_with_layout_configuration(
                 fetch_config,
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
-                renderer_owner_source.layout_policy,
+                renderer_owner_source.layout_configuration,
             ),
             renderer_owner_source,
         )
@@ -613,12 +633,12 @@ impl NavigationEngine {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         } = config;
         renderer_owner_source
             .js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout_configuration(layout_configuration)?;
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
@@ -630,7 +650,8 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
+            layout_configuration,
+            emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
@@ -658,6 +679,11 @@ impl NavigationEngine {
 
     pub fn set_document_activity(&mut self, activity: moli_page_types::DocumentActivity) {
         self.document_activity = activity;
+    }
+
+    /// Seeds target-local scrollbar emulation before the next Document starts.
+    pub fn set_emulated_scrollbars_hidden(&mut self, hidden: bool) {
+        self.emulated_scrollbars_hidden = hidden;
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -692,16 +718,16 @@ impl NavigationEngine {
     }
 
     pub fn runtime_config(&self) -> NavigationRuntimeConfig {
-        NavigationRuntimeConfig::new(
+        NavigationRuntimeConfig::new_with_layout_configuration(
             self.fetch_config.clone(),
             self.optional_resource_fetch_mask(),
             self.subframe_loading_enabled(),
-            self.layout_policy,
+            self.layout_configuration,
         )
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
     }
 
     pub fn image_fetch_enabled(&self) -> bool {
@@ -1540,11 +1566,15 @@ impl NavigationEngine {
                 document_start_scripts,
                 runtime_bindings,
                 extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                emulated_media,
-                viewport_surface,
-                document_activity: self.document_activity,
+                document_settings: moli_page_types::DocumentSettings {
+                    script_execution_disabled,
+                    scrollbars_hidden: self.emulated_scrollbars_hidden,
+                    bypass_content_security_policy,
+                    emulated_media,
+                    viewport_surface,
+                    document_activity: self.document_activity,
+                    ..Default::default()
+                },
                 network_offline,
                 blocked_url_patterns,
                 fetch_subresource_interception_enabled,
@@ -1820,11 +1850,15 @@ impl NavigationEngine {
                     document_start_scripts,
                     runtime_bindings,
                     extra_http_headers,
-                    script_execution_disabled,
-                    bypass_content_security_policy,
-                    emulated_media,
-                    viewport_surface,
-                    document_activity: self.document_activity,
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled,
+                        scrollbars_hidden: self.emulated_scrollbars_hidden,
+                        bypass_content_security_policy,
+                        emulated_media,
+                        viewport_surface,
+                        document_activity: self.document_activity,
+                        ..Default::default()
+                    },
                     network_offline,
                     blocked_url_patterns,
                     fetch_subresource_interception_enabled,
@@ -2073,11 +2107,15 @@ impl NavigationEngine {
                     document_start_scripts: options.document_start_scripts,
                     runtime_bindings: options.runtime_bindings,
                     extra_http_headers: options.extra_http_headers,
-                    script_execution_disabled: options.script_execution_disabled,
-                    bypass_content_security_policy: options.bypass_content_security_policy,
-                    emulated_media: options.emulated_media,
-                    viewport_surface: options.viewport_surface,
-                    document_activity: self.document_activity,
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled: options.script_execution_disabled,
+                        scrollbars_hidden: self.emulated_scrollbars_hidden,
+                        bypass_content_security_policy: options.bypass_content_security_policy,
+                        emulated_media: options.emulated_media,
+                        viewport_surface: options.viewport_surface,
+                        document_activity: self.document_activity,
+                        ..Default::default()
+                    },
                     network_offline: options.network_offline,
                     blocked_url_patterns: options.blocked_url_patterns,
                     fetch_subresource_interception_enabled: options
@@ -2529,6 +2567,58 @@ mod tests {
             browser.js_runtime.renderer_owner_handle().layout_policy(),
             LayoutPolicy::Mock
         );
+    }
+
+    #[test]
+    fn hidden_scrollbars_follow_browser_and_shared_navigation_configuration() {
+        let browser_config = BrowserConfig::default()
+            .with_layout_policy(LayoutPolicy::OnDemand)
+            .with_scrollbars_hidden(true);
+        let browser = Browser::new(browser_config.clone()).expect("hidden scrollbar browser");
+        assert!(
+            browser
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+
+        let source = NavigationEngine::new_with_runtime_config((&browser_config).into());
+        assert!(source.runtime_config().scrollbars_hidden());
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+        let shared = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
+            FetchConfig::default(),
+            &source,
+            OptionalResourceFetchMask::NONE,
+            true,
+        )
+        .expect("matching owner configuration");
+        assert!(shared.runtime_config().scrollbars_hidden());
+        assert!(shared.shares_renderer_owner_with(&source));
+
+        let conflicting = source.runtime_config().with_scrollbars_hidden(false);
+        assert!(
+            NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
+                conflicting,
+                &source
+            )
+            .is_err()
+        );
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+    }
+
+    #[test]
+    fn hidden_scrollbars_require_real_layout_for_rust_callers() {
+        assert!(Browser::new(BrowserConfig::default().with_scrollbars_hidden(true)).is_err());
     }
 
     #[test]

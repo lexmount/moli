@@ -910,14 +910,7 @@ impl RendererOwnerLocalStore {
                 request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
                 request.permission_overrides = configuration.permission_overrides;
                 request.extra_http_headers = configuration.extra_http_headers;
-                request.script_execution_disabled = configuration.script_execution_disabled;
-                request.bypass_content_security_policy =
-                    configuration.bypass_content_security_policy;
-                request.emulated_media = configuration.emulated_media;
-                request.idle_override = configuration.idle_override;
-                request.navigator_overrides = configuration.navigator_overrides;
-                request.viewport_surface = configuration.viewport_surface;
-                request.document_activity = configuration.document_activity;
+                request.document_settings = configuration.document_settings;
                 request
                     .loader
                     .replace_browser_resource_runtime(configuration.browser_resource_runtime);

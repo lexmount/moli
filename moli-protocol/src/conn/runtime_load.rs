@@ -1465,6 +1465,7 @@ impl CdpConnection {
     ) -> anyhow::Result<PreparedDocumentPageCommitConfiguration> {
         let idle_override = self.idle_override_for_navigation(owner, final_url);
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
+        let document_settings = load_inputs.document_settings_snapshot(idle_override);
         // The renderer runtime is shared by the BrowserContext, but each Page
         // target owns its NavigationEngine and may have a different transport
         // identity. Resolve through that target's engine at the commit
@@ -1489,13 +1490,7 @@ impl CdpConnection {
             runtime_isolated_worlds: Vec::new(),
             permission_overrides: load_inputs.permission_overrides,
             extra_http_headers: load_inputs.extra_http_headers,
-            script_execution_disabled: load_inputs.script_execution_disabled,
-            bypass_content_security_policy: load_inputs.bypass_content_security_policy,
-            emulated_media: load_inputs.emulated_media,
-            idle_override,
-            navigator_overrides: load_inputs.navigator_overrides,
-            viewport_surface: load_inputs.viewport_surface,
-            document_activity: load_inputs.document_activity,
+            document_settings,
             browser_resource_runtime,
             navigator_identity,
             network_offline: load_inputs.network_offline,
@@ -2377,6 +2372,7 @@ impl CdpConnection {
             .expect("navigation load target must retain its resident NavigationEngine")
             .clone();
         engine.set_document_activity(load_inputs.document_activity);
+        engine.set_emulated_scrollbars_hidden(load_inputs.scrollbars_hidden);
         // The handle may publish lifecycle or resource activity before the
         // DCL-bound navigation result is committed into a target slot.
         self.apply_scheduler_senders_to_navigation_engine(&engine);
@@ -3774,6 +3770,9 @@ async fn apply_navigation_load_input_overrides_async(
             .await
             .context("failed to apply page permission overrides")?;
     }
+    page.set_scrollbars_hidden_async(load_inputs.scrollbars_hidden)
+        .await
+        .context("failed to apply page scrollbar emulation")?;
     if mode == NavigationLoadInputOverrideMode::FreshlyBuiltPage {
         return Ok(());
     }

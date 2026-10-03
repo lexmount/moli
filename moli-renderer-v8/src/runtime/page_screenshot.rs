@@ -199,15 +199,15 @@ impl PageVm {
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         };
         self.flush_page_action_window(barrier)?;
-        let paint_capture =
-            request.paint_capture_request(self.viewport_surface.unwrap_or_default())?;
+        let paint_capture = request
+            .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
-            && self.emulated_media.media.is_none()
+            && self.document_settings.emulated_media.media.is_none()
         {
-            let previous = self.emulated_media.clone();
+            let previous = self.document_settings.emulated_media.clone();
             let mut print = previous.clone();
             print.media = Some("print".to_owned());
-            self.set_emulated_media(&print);
+            self.set_emulated_media(&print)?;
             Some(previous)
         } else {
             None
@@ -223,7 +223,7 @@ impl PageVm {
             },
         );
         if let Some(previous) = restore_media {
-            self.set_emulated_media(&previous);
+            self.set_emulated_media(&previous)?;
         }
         result.map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -252,10 +252,10 @@ impl PageVm {
         before_layout: impl FnOnce(),
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
         self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
-        if self.layout_policy == LayoutPolicy::Mock {
+        if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
         }
-        let surface = self.viewport_surface.unwrap_or_default();
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -319,10 +319,10 @@ impl PageVm {
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
-        if self.layout_policy == LayoutPolicy::Mock {
+        if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererImageCaptureOutcome::LayoutDisabled);
         }
-        let surface = self.viewport_surface.unwrap_or_default();
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,

@@ -40,8 +40,8 @@ use crate::types::ScriptErrorConstructorKind;
 use crate::types::ScriptSkipReason;
 use moli_page_types::{
     ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, InspectorIssueSnapshot,
-    InspectorSourceCodeLocationSnapshot, LayoutPolicy, QuirksModeIssueSnapshot,
-    ScriptObservableOutput, ScriptObservableOutputItem, V8InspectorSessionAttach,
+    InspectorSourceCodeLocationSnapshot, QuirksModeIssueSnapshot, ScriptObservableOutput,
+    ScriptObservableOutputItem, V8InspectorSessionAttach,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -1081,20 +1081,14 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
-    pub(crate) script_execution_disabled: bool,
-    pub(crate) bypass_content_security_policy: bool,
-    pub(crate) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub(crate) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub(crate) document_activity: moli_page_types::DocumentActivity,
+    pub(crate) document_settings: moli_page_types::DocumentSettings,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) fetch_subresource_interception_enabled: bool,
     pub(crate) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub(crate) layout_policy: LayoutPolicy,
+    pub(crate) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client_id:
@@ -1111,7 +1105,9 @@ impl PageVmEnvConfig {
             crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
                 headers, final_url,
             )
-            .with_content_security_policy_bypass(self.bypass_content_security_policy);
+            .with_content_security_policy_bypass(
+                self.document_settings.bypass_content_security_policy,
+            );
         debug_assert!(
             self.document_policy_container
                 .navigation_response_frame_ancestors_check(
@@ -1603,19 +1599,14 @@ pub(crate) struct PageVm {
     pub(super) runtime_inspector_protocol_configurations:
         BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration>,
     pub(super) extra_http_headers: moli_fetch::RequestHeaders,
-    pub(super) bypass_content_security_policy: bool,
-    pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub(super) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub(super) navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub(super) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub(super) document_activity: moli_page_types::DocumentActivity,
+    pub(super) document_settings: moli_page_types::DocumentSettings,
     pub(super) network_offline: bool,
     pub(super) blocked_url_patterns: Vec<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(super) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(super) fetch_subresource_interception_enabled: bool,
     pub(super) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub(super) layout_policy: LayoutPolicy,
+    pub(super) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(super) wpt_extensions_enabled: bool,
     pub(crate) runtime_hooks: PageVmRuntimeHooks,
     pub(super) navigation_response: Option<PageVmNavigationResponse>,
@@ -3995,7 +3986,7 @@ impl PageVm {
             document_title,
             report,
             navigation_response: self.navigation_response.clone(),
-            idle_override: self.idle_override,
+            idle_override: self.document_settings.idle_override,
             service_worker_client_id: self.vm().service_worker_client_id().as_u64(),
             dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot,
@@ -4276,7 +4267,7 @@ impl PageVm {
             );
         let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_document,
-            env.bypass_content_security_policy,
+            env.document_settings.bypass_content_security_policy,
             post_domcontentloaded_page_task_sender,
             script_event_parser_boundary_sender,
             resource_completion_sender,
@@ -4293,7 +4284,11 @@ impl PageVm {
         )?;
         let mut vm = vm_bootstrap.finish()?;
         vm.set_document_navigator_identity(&env.navigator_identity);
-        vm.set_layout_policy(env.layout_policy);
+        vm.set_layout_policy(env.layout_configuration.policy);
+        vm.set_scrollbars_hidden(
+            env.layout_configuration
+                .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),
+        );
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
         let dom_agent_state = vm.renderer_dom_agent_state();
@@ -4343,12 +4338,7 @@ impl PageVm {
                 })
                 .collect(),
             extra_http_headers: env.extra_http_headers.clone(),
-            bypass_content_security_policy: env.bypass_content_security_policy,
-            emulated_media: env.emulated_media.clone(),
-            idle_override: env.idle_override,
-            navigator_overrides: env.navigator_overrides.clone(),
-            viewport_surface: env.viewport_surface,
-            document_activity: env.document_activity,
+            document_settings: env.document_settings.clone(),
             network_offline: env.network_offline,
             blocked_url_patterns: env.blocked_url_patterns.clone(),
             indexed_db_manager: env.indexed_db_manager.clone(),
@@ -4356,7 +4346,7 @@ impl PageVm {
             fetch_subresource_interception_enabled: env.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: env
                 .fetch_subresource_interception_resource_type,
-            layout_policy: env.layout_policy,
+            layout_configuration: env.layout_configuration,
             wpt_extensions_enabled: env.wpt_extensions_enabled,
             runtime_hooks,
             navigation_response: None,
@@ -4379,7 +4369,8 @@ impl PageVm {
         page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
         page_vm
             .vm_mut()
-            .set_script_execution_disabled(env.script_execution_disabled);
+            .initialize_document_settings(&env.document_settings, env.layout_configuration)
+            .map_err(|error| Box::new((error, page_vm.vm().document_runtime.dom_host().clone())))?;
         page_vm
             .vm_mut()
             .set_permission_overrides(&env.permission_overrides);
@@ -4403,19 +4394,6 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
-            .set_emulated_media_for_bootstrap(&env.emulated_media);
-        page_vm.vm_mut().set_idle_override(env.idle_override);
-        page_vm
-            .vm_mut()
-            .set_navigator_overrides(&env.navigator_overrides);
-        page_vm
-            .vm_mut()
-            .set_viewport_surface_for_bootstrap(env.viewport_surface);
-        page_vm
-            .vm_mut()
-            .set_document_activity_for_bootstrap(env.document_activity);
         page_vm.vm_mut().set_network_offline(env.network_offline);
         page_vm
             .vm_mut()

@@ -1116,15 +1116,19 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetScriptExecutionDisabled(disabled) => {
-                self.set_script_execution_disabled(disabled);
+                self.set_script_execution_disabled(disabled)?;
+                Ok(RendererPageReply::Unit)
+            }
+            RendererPageCommand::SetScrollbarsHidden(hidden) => {
+                self.set_scrollbars_hidden(hidden)?;
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetBypassContentSecurityPolicy(bypass) => {
-                self.set_bypass_content_security_policy(bypass);
+                self.set_bypass_content_security_policy(bypass)?;
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetEmulatedMedia(overrides) => {
-                self.set_emulated_media(&overrides);
+                self.set_emulated_media(&overrides)?;
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetViewportSurface(viewport_surface) => {

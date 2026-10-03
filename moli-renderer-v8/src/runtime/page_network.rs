@@ -149,61 +149,6 @@ impl PageVm {
         self.vm_mut().set_permission_overrides(overrides);
     }
 
-    pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
-        self.vm_mut().set_script_execution_disabled(disabled);
-    }
-
-    pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
-        self.bypass_content_security_policy = bypass;
-        self.vm_mut().set_bypass_content_security_policy(bypass);
-    }
-
-    pub(crate) fn set_emulated_media(
-        &mut self,
-        overrides: &crate::protocol_types::EmulatedMediaOverrides,
-    ) {
-        self.emulated_media = overrides.clone();
-        self.vm_mut().set_emulated_media(overrides);
-    }
-
-    pub(crate) fn set_idle_override(
-        &mut self,
-        idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    ) -> anyhow::Result<()> {
-        self.vm_mut()
-            .set_idle_override_and_sync_surface(idle_override)?;
-        self.idle_override = idle_override;
-        Ok(())
-    }
-
-    pub(crate) fn set_viewport_surface(
-        &mut self,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    ) -> anyhow::Result<()> {
-        self.vm_mut().set_viewport_surface(viewport_surface)?;
-        self.viewport_surface = viewport_surface;
-        Ok(())
-    }
-
-    pub(crate) fn set_navigator_overrides(
-        &mut self,
-        overrides: &moli_page_types::NavigatorOverrides,
-    ) -> anyhow::Result<()> {
-        self.vm_mut()
-            .set_navigator_overrides_and_sync_surface(overrides)?;
-        self.navigator_overrides = overrides.clone();
-        Ok(())
-    }
-
-    pub(crate) fn set_document_activity(
-        &mut self,
-        activity: moli_page_types::DocumentActivity,
-    ) -> anyhow::Result<()> {
-        self.vm_mut().set_document_activity(activity)?;
-        self.document_activity = activity;
-        Ok(())
-    }
-
     pub(crate) fn set_network_offline(&mut self, offline: bool) {
         self.network_offline = offline;
         self.vm_mut().set_network_offline(offline);

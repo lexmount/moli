@@ -245,6 +245,36 @@ fn idle_navigation_engine_reset_preserves_mock_layout_policy() {
 }
 
 #[tokio::test]
+async fn hidden_scrollbars_survive_idle_reset_and_browser_context_removal() {
+    let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        crate::CdpInitialStoragePartition::memory(),
+        NavigationRuntimeConfig::new(
+            FetchConfig::default(),
+            OptionalResourceFetchMask::NONE,
+            true,
+            LayoutPolicy::OnDemand,
+        )
+        .with_scrollbars_hidden(true),
+    );
+    assert!(conn.release_idle_navigation_engine_memory_if_idle().reset);
+    assert!(
+        conn.standalone_navigation_engine
+            .runtime_config()
+            .scrollbars_hidden()
+    );
+    conn.insert_browser_context(BrowserContext::new("CTX-hidden-scrollbars".to_owned()));
+    let removed = conn
+        .remove_browser_context_by_id_restoring_active_async("CTX-hidden-scrollbars", None)
+        .await;
+    assert!(removed.is_some());
+    assert!(
+        conn.standalone_navigation_engine
+            .runtime_config()
+            .scrollbars_hidden()
+    );
+}
+
+#[tokio::test]
 async fn browser_context_install_and_removal_preserve_mock_layout_policy() {
     let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
         crate::CdpInitialStoragePartition::memory(),

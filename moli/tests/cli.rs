@@ -140,6 +140,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 resource: false,
                 disable_subframes: false,
                 layout: false,
+                hide_scrollbars: false,
                 cookie_file: Vec::new(),
                 document_start_script: Vec::new(),
                 document_start_script_file: Vec::new(),
@@ -1639,6 +1640,96 @@ fn layout_selects_on_demand_policy_for_fetch_and_serve() {
             config.browser.layout_policy(),
             moli_core::LayoutPolicy::OnDemand
         );
+    }
+}
+
+#[test]
+fn hide_scrollbars_is_opt_in_for_fetch_and_serve() {
+    for command in ["fetch", "serve"] {
+        for hidden in [false, true] {
+            let mut args = vec!["moli", command, "--layout"];
+            if hidden {
+                args.push("--hide-scrollbars");
+            }
+            if command == "fetch" {
+                args.push("about:blank");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let config = AppConfig::from_cli(&cli).unwrap();
+            assert_eq!(config.browser.scrollbars_hidden(), hidden);
+            assert_eq!(
+                config.browser.layout_policy(),
+                moli_core::LayoutPolicy::OnDemand
+            );
+        }
+    }
+}
+
+#[test]
+fn hide_scrollbars_requires_enabled_layout_from_cli_or_environment() {
+    for command in ["fetch", "serve"] {
+        for (case, env_value, explicit_layout, expected) in [
+            ("missing", None, false, false),
+            ("true", Some("true"), false, true),
+            ("one", Some("1"), false, true),
+            ("false", Some("false"), false, false),
+            ("zero", Some("0"), false, false),
+            ("cli-overrides", Some("false"), true, true),
+        ] {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "parse_hide_scrollbars_in_child_process",
+                    "--nocapture",
+                ])
+                .env_remove("MOLI_LAYOUT")
+                .env("MOLI_TEST_HIDE_SCROLLBARS_COMMAND", command)
+                .env(
+                    "MOLI_TEST_HIDE_SCROLLBARS_CLI_LAYOUT",
+                    explicit_layout.to_string(),
+                )
+                .env("MOLI_TEST_HIDE_SCROLLBARS_EXPECTED", expected.to_string());
+            if let Some(value) = env_value {
+                child.env("MOLI_LAYOUT", value);
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{command}/{case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn parse_hide_scrollbars_in_child_process() {
+    let Ok(command) = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_COMMAND") else {
+        return;
+    };
+    let explicit_layout = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_CLI_LAYOUT").unwrap() == "true";
+    let expected = std::env::var("MOLI_TEST_HIDE_SCROLLBARS_EXPECTED").unwrap() == "true";
+    let mut args = vec!["moli", command.as_str(), "--hide-scrollbars"];
+    if explicit_layout {
+        args.push("--layout");
+    }
+    if command == "fetch" {
+        args.push("about:blank");
+    }
+    let result = Cli::try_parse_from(args)
+        .map_err(anyhow::Error::from)
+        .and_then(|cli| AppConfig::from_cli(&cli));
+    if expected {
+        let config = result.unwrap();
+        assert!(config.browser.scrollbars_hidden());
+        assert_eq!(
+            config.browser.layout_policy(),
+            moli_core::LayoutPolicy::OnDemand
+        );
+    } else {
+        assert!(result.unwrap_err().to_string().contains("--layout"));
     }
 }
 
