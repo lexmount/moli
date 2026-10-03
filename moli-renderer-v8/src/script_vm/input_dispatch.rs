@@ -1731,10 +1731,7 @@ impl ScriptVm {
                     let cancel_target = unsafe { &*runtime_ptr }
                         .active_pointer_capture_target(MOUSE_POINTER_ID)
                         .unwrap_or(pointer_dispatch_handle);
-                    let cancel_pointer = RendererPointerEventProperties {
-                        pressure: 0.0,
-                        ..pointer.clone()
-                    };
+                    let cancel_pointer = pointer.clone();
                     if let Some(event) = construct_pointer_event_with_modifiers(
                         scope,
                         "pointercancel",
