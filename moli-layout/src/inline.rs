@@ -782,6 +782,7 @@ pub(crate) fn break_inline_lines(
 /// every item in the same order for painting and fragment geometry.
 fn line_items_with_content<'a>(
     context: &'a InlineFormattingContext,
+    layout: &'a Layout<TextBrush>,
     line: &parley::Line<'a, TextBrush>,
 ) -> impl Iterator<Item = (PositionedLayoutItem<'a, TextBrush>, bool)> + 'a {
     let has_content = |item: &PositionedLayoutItem<'_, TextBrush>| match item {
@@ -798,22 +799,43 @@ fn line_items_with_content<'a>(
         }
         PositionedLayoutItem::InlineBox(_) => false,
     };
-    let mut content_range = 0..0;
+    // CSS whitespace contribution follows logical input order, before bidi
+    // reordering. Parley's visual item order can put an interior space outside
+    // the two atomic objects surrounding it in the logical stream.
+    let logical_range = |item: &PositionedLayoutItem<'_, TextBrush>| match item {
+        PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run
+            .run()
+            .clusters()
+            .filter(|cluster| std::ptr::eq(cluster.first_style(), glyph_run.style()))
+            .map(|cluster| cluster.text_range())
+            .reduce(|left, right| left.start.min(right.start)..left.end.max(right.end)),
+        PositionedLayoutItem::InlineBox(positioned) => usize::try_from(positioned.id)
+            .ok()
+            .and_then(|index| layout.inline_boxes().get(index))
+            .map(|object| object.index..object.index),
+    };
+    let mut content_range: Option<Range<usize>> = None;
     if context.uses_quirks_line_height {
-        for (index, item) in line.items().enumerate() {
-            if has_content(&item) && !only_collapsible_spaces(&item) {
-                if content_range.is_empty() {
-                    content_range.start = index;
-                }
-                content_range.end = index + 1;
+        for item in line.items() {
+            if has_content(&item)
+                && !only_collapsible_spaces(&item)
+                && let Some(range) = logical_range(&item)
+            {
+                content_range = Some(content_range.map_or(range.clone(), |previous| {
+                    previous.start.min(range.start)..previous.end.max(range.end)
+                }));
             }
         }
     }
-    line.items().enumerate().map(move |(index, item)| {
+    line.items().map(move |item| {
+        let interior = || {
+            content_range.as_ref().is_some_and(|content| {
+                logical_range(&item)
+                    .is_some_and(|range| range.start >= content.start && range.end <= content.end)
+            })
+        };
         let contributes = has_content(&item)
-            && (!context.uses_quirks_line_height
-                || content_range.contains(&index)
-                || !only_collapsible_spaces(&item));
+            && (!context.uses_quirks_line_height || !only_collapsible_spaces(&item) || interior());
         (item, contributes)
     })
 }
@@ -891,7 +913,7 @@ fn resolve_inline_lines(
         let metrics = line.metrics();
         let raw_top = unadjusted_line_top;
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
-        let mut geometries = line_items_with_content(context, &line)
+        let mut geometries = line_items_with_content(context, layout, &line)
             .map(|(item, contributes_to_line)| match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
                     let run = glyph_run.run();
@@ -1838,6 +1860,7 @@ struct InlineBuildInput {
     text: String,
     units: Vec<InlineTextUnit>,
     objects: Vec<(usize, InlineObject, InlineBoxKind)>,
+    items: Vec<InlineLogicalItem>,
     source_map: Vec<InlineSourceMapEntry>,
     root_style: LayoutBoxId,
 }
@@ -1885,6 +1908,38 @@ fn append_resolved_inline_run(
 }
 
 impl InlineBuildInput {
+    /// Normalize DOM order first, then adapt forced-break fragment ownership
+    /// to Parley's byte anchors. Synthetic bidi controls are real intervening
+    /// items; consecutive close tags and empty text are the only items that
+    /// Blink absorbs into the preceding forced-break fragment.
+    fn projected_object_anchors(&self) -> Vec<usize> {
+        let mut anchors = self
+            .objects
+            .iter()
+            .map(|(index, _, _)| *index)
+            .collect::<Vec<_>>();
+        let mut forced_break = None;
+        for item in &self.items {
+            match *item {
+                InlineLogicalItem::Text(index) => {
+                    let unit = &self.units[index];
+                    forced_break = (!unit.control && &self.text[unit.output_range.clone()] == "\n")
+                        .then_some(unit.output_range.start);
+                }
+                InlineLogicalItem::Object(index) => {
+                    if self.objects[index].1.role == InlineObjectRole::EndEdge {
+                        if let Some(anchor) = forced_break {
+                            anchors[index] = anchor;
+                        }
+                    } else {
+                        forced_break = None;
+                    }
+                }
+            }
+        }
+        anchors
+    }
+
     fn build<N>(
         mut self,
         world: &LayoutWorld<N>,
@@ -1966,11 +2021,12 @@ impl InlineBuildInput {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
+        let object_anchors = self.projected_object_anchors();
+        for (object_id, (_, _, kind)) in self.objects.iter().enumerate() {
             builder.push_inline_box(InlineBox {
                 id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
                 kind: *kind,
-                index: *byte_index,
+                index: object_anchors[object_id],
                 width: 0.0,
                 height: 0.0,
             });
@@ -2227,18 +2283,14 @@ fn collect_box<N>(
         collect_box(world, owner, child, ancestors, normalizer);
     }
     ancestors.pop();
-    normalizer.close_inline(
-        id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        ancestors,
-        vertical_align,
-    );
+    normalizer.close_inline(id, ancestors, vertical_align);
 }
 
 struct PendingWhitespace {
     output_index: usize,
     unit_index: usize,
     object_index: usize,
+    item_index: usize,
     style_box: LayoutBoxId,
     ancestors: Vec<LayoutBoxId>,
     sources: Vec<SourceOrigin>,
@@ -2252,11 +2304,28 @@ struct PendingCarriageReturn {
     origin: SourceOrigin,
 }
 
+/// Keeps text/control/object order even when several objects share a byte
+/// offset. Indices refer to their normalized input records, not Parley IDs.
+#[derive(Clone, Copy, Debug)]
+enum InlineLogicalItem {
+    Text(usize),
+    Object(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InlineBidiContext {
+    owner: LayoutBoxId,
+    enter: char,
+    exit: char,
+}
+
 struct InlineNormalizer {
     root_style: LayoutBoxId,
     text: String,
     units: Vec<InlineTextUnit>,
     objects: Vec<(usize, InlineObject, InlineBoxKind)>,
+    items: Vec<InlineLogicalItem>,
+    bidi_contexts: Vec<InlineBidiContext>,
     pending: Option<PendingWhitespace>,
     pending_carriage_return: Option<PendingCarriageReturn>,
     line_has_content: bool,
@@ -2270,6 +2339,8 @@ impl InlineNormalizer {
             text: String::new(),
             units: Vec::new(),
             objects: Vec::new(),
+            items: Vec::new(),
+            bidi_contexts: Vec::new(),
             pending: None,
             pending_carriage_return: None,
             line_has_content: false,
@@ -2399,8 +2470,7 @@ impl InlineNormalizer {
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if is_segment_break => {
                 self.pending = None;
-                self.append_unit(style_box, '\n', ancestors, sources, false);
-                self.line_has_content = false;
+                self.append_forced_break(style_box, ancestors, sources);
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if collapsible => {
                 self.queue_whitespace(style_box, ancestors, sources, false);
@@ -2412,7 +2482,11 @@ impl InlineNormalizer {
                 } else {
                     character
                 };
-                self.append_unit(style_box, character, ancestors, sources, false);
+                if character == '\n' {
+                    self.append_forced_break(style_box, ancestors, sources);
+                } else {
+                    self.append_unit(style_box, character, ancestors, sources, false);
+                }
                 if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
                     // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
                     // the required opportunity after every preserved space;
@@ -2443,6 +2517,7 @@ impl InlineNormalizer {
             output_index: self.text.len(),
             unit_index: self.units.len(),
             object_index: self.objects.len(),
+            item_index: self.items.len(),
             style_box,
             ancestors: ancestors.to_vec(),
             sources: Vec::new(),
@@ -2473,6 +2548,15 @@ impl InlineNormalizer {
         for (byte_index, _, _) in &mut self.objects[pending.object_index..] {
             *byte_index += 1;
         }
+        for item in &mut self.items[pending.item_index..] {
+            if let InlineLogicalItem::Text(index) = item {
+                *index += 1;
+            }
+        }
+        self.items.insert(
+            pending.item_index,
+            InlineLogicalItem::Text(pending.unit_index),
+        );
         self.units.insert(
             pending.unit_index,
             InlineTextUnit {
@@ -2490,7 +2574,26 @@ impl InlineNormalizer {
     fn hard_break(&mut self, box_id: LayoutBoxId, ancestors: &[LayoutBoxId]) {
         self.flush_pending_carriage_return();
         self.pending = None;
-        self.append_unit(box_id, '\n', ancestors, Vec::new(), false);
+        self.append_forced_break(box_id, ancestors, Vec::new());
+    }
+
+    fn append_forced_break(
+        &mut self,
+        box_id: LayoutBoxId,
+        ancestors: &[LayoutBoxId],
+        sources: Vec<SourceOrigin>,
+    ) {
+        // CSS bidi contexts end before a paragraph break and resume after it.
+        // Associate synthetic controls with the break, without DOM sources.
+        for index in (0..self.bidi_contexts.len()).rev() {
+            let exit = self.bidi_contexts[index].exit;
+            self.append_unit(box_id, exit, ancestors, Vec::new(), true);
+        }
+        self.append_unit(box_id, '\n', ancestors, sources, false);
+        for index in 0..self.bidi_contexts.len() {
+            let enter = self.bidi_contexts[index].enter;
+            self.append_unit(box_id, enter, ancestors, Vec::new(), true);
+        }
         self.line_has_content = false;
         self.capitalize_word_start = true;
     }
@@ -2503,11 +2606,17 @@ impl InlineNormalizer {
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
     ) {
+        self.flush_pending_carriage_return();
         // CSS Writing Modes injects the opening bidi controls outside the
         // inline box boundary. Keep the opaque item order aligned with
         // Blink's InlineItemsBuilder: enter bidi context, then open the tag.
-        for control in bidi_open(bidi, direction) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+        for (enter, exit) in bidi_controls(bidi, direction) {
+            self.append_unit(box_id, enter, ancestors, Vec::new(), true);
+            self.bidi_contexts.push(InlineBidiContext {
+                owner: box_id,
+                enter,
+                exit,
+            });
         }
         self.push_object(
             box_id,
@@ -2521,7 +2630,6 @@ impl InlineNormalizer {
     fn close_inline(
         &mut self,
         box_id: LayoutBoxId,
-        bidi: InlineUnicodeBidi,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
     ) {
@@ -2533,8 +2641,16 @@ impl InlineNormalizer {
             ancestors,
             vertical_align,
         );
-        for control in bidi_close(bidi) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+        while self
+            .bidi_contexts
+            .last()
+            .is_some_and(|context| context.owner == box_id)
+        {
+            let context = self
+                .bidi_contexts
+                .pop()
+                .expect("checked active bidi context");
+            self.append_unit(box_id, context.exit, ancestors, Vec::new(), true);
         }
     }
 
@@ -2555,23 +2671,10 @@ impl InlineNormalizer {
             self.flush_pending();
             self.line_has_content = true;
         }
-        // Put consecutive closing edges before Parley's newline cluster.
-        // Stop moving edges when a bidi control or another object intervenes.
-        let byte_index = if role == InlineObjectRole::EndEdge {
-            self.units
-                .last()
-                .filter(|unit| &self.text[unit.output_range.clone()] == "\n")
-                .filter(|unit| {
-                    self.objects
-                        .last()
-                        .is_none_or(|(index, _, _)| *index < unit.output_range.end)
-                })
-                .map_or(self.text.len(), |unit| unit.output_range.start)
-        } else {
-            self.text.len()
-        };
+        self.items
+            .push(InlineLogicalItem::Object(self.objects.len()));
         self.objects.push((
-            byte_index,
+            self.text.len(),
             InlineObject {
                 box_id,
                 role,
@@ -2592,6 +2695,7 @@ impl InlineNormalizer {
     ) {
         let start = self.text.len();
         self.text.push(character);
+        self.items.push(InlineLogicalItem::Text(self.units.len()));
         self.units.push(InlineTextUnit {
             output_range: start..self.text.len(),
             style_box,
@@ -2623,6 +2727,7 @@ impl InlineNormalizer {
             text: self.text,
             units: self.units,
             objects: self.objects,
+            items: self.items,
             source_map,
             root_style: self.root_style,
         }
@@ -2642,27 +2747,20 @@ impl InlineNormalizer {
     }
 }
 
-fn bidi_open(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<char> {
+fn bidi_controls(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<(char, char)> {
     let (embed, override_control, isolate) = match direction {
         InlineDirection::Ltr => ('\u{202A}', '\u{202D}', '\u{2066}'),
         InlineDirection::Rtl => ('\u{202B}', '\u{202E}', '\u{2067}'),
     };
     match bidi {
         InlineUnicodeBidi::Normal => Vec::new(),
-        InlineUnicodeBidi::Embed => vec![embed],
-        InlineUnicodeBidi::Isolate => vec![isolate],
-        InlineUnicodeBidi::BidiOverride => vec![override_control],
-        InlineUnicodeBidi::IsolateOverride => vec![isolate, override_control],
-        InlineUnicodeBidi::Plaintext => vec!['\u{2068}'],
-    }
-}
-
-fn bidi_close(bidi: InlineUnicodeBidi) -> Vec<char> {
-    match bidi {
-        InlineUnicodeBidi::Normal => Vec::new(),
-        InlineUnicodeBidi::Embed | InlineUnicodeBidi::BidiOverride => vec!['\u{202C}'],
-        InlineUnicodeBidi::Isolate | InlineUnicodeBidi::Plaintext => vec!['\u{2069}'],
-        InlineUnicodeBidi::IsolateOverride => vec!['\u{202C}', '\u{2069}'],
+        InlineUnicodeBidi::Embed => vec![(embed, '\u{202C}')],
+        InlineUnicodeBidi::Isolate => vec![(isolate, '\u{2069}')],
+        InlineUnicodeBidi::BidiOverride => vec![(override_control, '\u{202C}')],
+        InlineUnicodeBidi::IsolateOverride => {
+            vec![(isolate, '\u{2069}'), (override_control, '\u{202C}')]
+        }
+        InlineUnicodeBidi::Plaintext => vec![('\u{2068}', '\u{2069}')],
     }
 }
 
@@ -2801,10 +2899,10 @@ mod tests {
 
     #[test]
     fn closing_inline_edges_remain_on_the_forced_break_line() {
-        for (bidi, reopen_inline, outer_line) in [
-            (InlineUnicodeBidi::Normal, false, 0),
-            (InlineUnicodeBidi::Embed, false, 1),
-            (InlineUnicodeBidi::Normal, true, 1),
+        for (bidi, reopen_inline, inner_line, outer_line) in [
+            (InlineUnicodeBidi::Normal, false, 0, 0),
+            (InlineUnicodeBidi::Embed, false, 1, 1),
+            (InlineUnicodeBidi::Normal, true, 0, 1),
         ] {
             let root = LayoutBoxId::from_index(0);
             let outer = LayoutBoxId::from_index(1);
@@ -2829,7 +2927,7 @@ mod tests {
                 align,
             );
             normalizer.hard_break(inner, &[outer, inner]);
-            normalizer.close_inline(inner, bidi, &[outer], align);
+            normalizer.close_inline(inner, &[outer], align);
             if reopen_inline {
                 normalizer.open_inline(
                     reopened,
@@ -2838,9 +2936,9 @@ mod tests {
                     &[outer],
                     align,
                 );
-                normalizer.close_inline(reopened, InlineUnicodeBidi::Normal, &[outer], align);
+                normalizer.close_inline(reopened, &[outer], align);
             }
-            normalizer.close_inline(outer, InlineUnicodeBidi::Normal, &[], align);
+            normalizer.close_inline(outer, &[], align);
             normalizer.hard_break(root, &[]);
             let input = normalizer.finish();
 
@@ -2850,11 +2948,12 @@ mod tests {
                 layout_context.style_run_builder(&mut font_context, &input.text, 1.0, true);
             let style = builder.push_style(TextStyle::default());
             builder.push_style_run(style, ..);
-            for (id, (index, _, kind)) in input.objects.iter().enumerate() {
+            let anchors = input.projected_object_anchors();
+            for (id, (_, _, kind)) in input.objects.iter().enumerate() {
                 builder.push_inline_box(InlineBox {
                     id: id as u64,
                     kind: *kind,
-                    index: *index,
+                    index: anchors[id],
                     width: 1.0,
                     height: 20.0,
                 });
@@ -2862,7 +2961,7 @@ mod tests {
             let mut layout = builder.build(&input.text);
             layout.break_all_lines(None);
 
-            for (box_id, expected_line) in [(inner, 0), (outer, outer_line)] {
+            for (box_id, expected_line) in [(inner, inner_line), (outer, outer_line)] {
                 let object_id = input
                     .objects
                     .iter()
@@ -2882,6 +2981,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn preserved_breaks_balance_nested_bidi_contexts_without_synthetic_dom_sources() {
+        for mode in [
+            InlineWhiteSpaceCollapse::Preserve,
+            InlineWhiteSpaceCollapse::PreserveBreaks,
+            InlineWhiteSpaceCollapse::BreakSpaces,
+        ] {
+            let root = LayoutBoxId::from_index(0);
+            let outer = LayoutBoxId::from_index(1);
+            let inner = LayoutBoxId::from_index(2);
+            let text = LayoutBoxId::from_index(3);
+            let align = InlineVerticalAlign::default();
+            let mut normalizer = InlineNormalizer::new(root);
+            normalizer.open_inline(
+                outer,
+                InlineUnicodeBidi::IsolateOverride,
+                InlineDirection::Rtl,
+                &[],
+                align,
+            );
+            normalizer.open_inline(
+                inner,
+                InlineUnicodeBidi::Embed,
+                InlineDirection::Ltr,
+                &[outer],
+                align,
+            );
+            normalizer.push_text(
+                text,
+                "a\r\nb",
+                mode,
+                InlineTextTransform::None,
+                &[outer, inner],
+            );
+            normalizer.close_inline(inner, &[outer], align);
+            normalizer.close_inline(outer, &[], align);
+            assert!(normalizer.bidi_contexts.is_empty());
+            let input = normalizer.finish();
+            assert_eq!(
+                input.text,
+                "\u{2067}\u{202e}\u{202a}a\u{202c}\u{202c}\u{2069}\n\u{2067}\u{202e}\u{202a}b\u{202c}\u{202c}\u{2069}"
+            );
+            let newline = input.text.find('\n').unwrap();
+            assert_eq!(input.source_map.len(), 4);
+            assert_eq!(input.source_map[1].output_range, newline..newline + 1);
+            assert_eq!(input.source_map[2].output_range, newline..newline + 1);
+            for (index, source) in input.source_map.iter().enumerate() {
+                assert_eq!(source.box_id, text);
+                assert_eq!(source.source_byte_range, index..index + 1);
+                assert_eq!(source.source_utf16_range, index..index + 1);
+            }
+            assert!(
+                input
+                    .units
+                    .iter()
+                    .filter(|unit| unit.control)
+                    .all(|unit| unit.sources.is_empty())
+            );
+            assert!(output_ranges_are_monotonic(&input.source_map));
+        }
+    }
+
+    #[test]
+    fn pending_carriage_return_breaks_before_entering_the_next_bidi_context() {
+        let root = LayoutBoxId::from_index(0);
+        let outer = LayoutBoxId::from_index(1);
+        let inner = LayoutBoxId::from_index(2);
+        let text = LayoutBoxId::from_index(3);
+        let align = InlineVerticalAlign::default();
+        let mut normalizer = InlineNormalizer::new(root);
+        normalizer.open_inline(
+            outer,
+            InlineUnicodeBidi::Embed,
+            InlineDirection::Ltr,
+            &[],
+            align,
+        );
+        normalizer.push_text(
+            text,
+            "\r",
+            InlineWhiteSpaceCollapse::Preserve,
+            InlineTextTransform::None,
+            &[outer],
+        );
+        normalizer.open_inline(
+            inner,
+            InlineUnicodeBidi::Isolate,
+            InlineDirection::Rtl,
+            &[outer],
+            align,
+        );
+        normalizer.close_inline(inner, &[outer], align);
+        normalizer.close_inline(outer, &[], align);
+        let input = normalizer.finish();
+        assert_eq!(
+            input.text,
+            "\u{202a}\u{202c}\n\u{202a}\u{2067}\u{2069}\u{202c}"
+        );
+        assert_eq!(input.source_map.len(), 1);
+        assert_eq!(input.source_map[0].source_byte_range, 0..1);
+        assert_eq!(input.source_map[0].source_utf16_range, 0..1);
+        let anchors = input.projected_object_anchors();
+        assert_eq!(anchors[1], "\u{202a}\u{202c}\n\u{202a}\u{2067}".len());
     }
 
     #[test]
@@ -3192,12 +3396,7 @@ mod tests {
             InlineTextTransform::None,
             &[first_inline],
         );
-        normalizer.close_inline(
-            first_inline,
-            InlineUnicodeBidi::Normal,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(first_inline, &[], InlineVerticalAlign::default());
         normalizer.push_text(
             outer_space,
             " ",
@@ -3219,12 +3418,7 @@ mod tests {
             InlineTextTransform::None,
             &[second_inline],
         );
-        normalizer.close_inline(
-            second_inline,
-            InlineUnicodeBidi::Embed,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(second_inline, &[], InlineVerticalAlign::default());
         normalizer.push_text(
             trailing_text,
             "C",

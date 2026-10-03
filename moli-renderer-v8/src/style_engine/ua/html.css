@@ -33,6 +33,12 @@ html {
   color: CanvasText;
 }
 
+/* Direction attributes establish an inline bidi context. Direction itself
+ * enters through presentation hints, so author CSS can override either value. */
+[dir=ltr i], [dir=rtl i] {
+  unicode-bidi: isolate;
+}
+
 html, body, address, article, aside, blockquote, center, dd, dir, div, dl, dt,
 fieldset, figcaption, figure, footer, form, header, hgroup, legend, main, nav,
 noframes, p, search, section, details, summary, optgroup,

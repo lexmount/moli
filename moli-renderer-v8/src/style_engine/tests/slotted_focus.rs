@@ -901,13 +901,14 @@ fn document_part_rule_styles_after_part_dir_and_invalidates() {
         StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
             if roots.contains(&part) && !roots.contains(&shadow_host)
     ));
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(application.diagnostic_target_results()[0].exact());
-    assert!(
-        application.diagnostic_target_results()[0]
-            .fallback_reasons()
-            .is_empty()
-    );
+    // The UA direction rule and the author's ::part rule can both register
+    // dependencies. Their count is not the invalidation contract.
+    let diagnostics = application.diagnostic_target_results();
+    assert!(!diagnostics.is_empty());
+    for result in diagnostics {
+        assert!(result.exact());
+        assert!(result.fallback_reasons().is_empty());
+    }
 
     engine.invalidate_for_mutations(&host, &effects, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);

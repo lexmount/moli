@@ -1091,3 +1091,119 @@ fn empty_inline_alignment_resolves_placement_separately_from_line_contribution()
         }
     }
 }
+
+#[test]
+fn forced_breaks_restore_ancestor_bidi_before_closing_inner_inline_boxes() {
+    for (doctype, quirks) in [
+        ("", true),
+        (
+            r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+            true,
+        ),
+        ("<!doctype html>", false),
+    ] {
+        for bidi in [
+            "normal",
+            "embed",
+            "isolate",
+            "bidi-override",
+            "isolate-override",
+            "plaintext",
+            "dir",
+        ] {
+            for direction in ["ltr", "rtl"] {
+                for preserved in [false, true] {
+                    let outer = if bidi == "dir" {
+                        format!("dir={direction}")
+                    } else {
+                        format!(r#"style="unicode-bidi:{bidi};direction:{direction}""#)
+                    };
+                    let whitespace = if preserved { ";white-space:pre" } else { "" };
+                    let newline = if preserved { "\n" } else { "<br>" };
+                    let markup = format!(
+                        r#"{doctype}<style>#line{{font:20px/30px monospace}}</style><div id=line><span {outer}><span style="font:30px/60px monospace{whitespace}">x{newline}</span><span id=second>x</span></span></div>"#
+                    );
+                    let mut vm =
+                        new_parsed_test_vm("https://inline-bidi-forced-break.test/", &markup);
+                    let query = "JSON.stringify([line.getBoundingClientRect().height,second.getBoundingClientRect().top-line.getBoundingClientRect().top])";
+                    let expected = if quirks || bidi == "normal" {
+                        [90.0, 63.0]
+                    } else {
+                        [120.0, 81.0]
+                    };
+                    let first = vm.eval(query).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<[f64; 2]>(&first).unwrap(),
+                        expected,
+                        "{doctype} / {bidi} / {direction} / pre={preserved}"
+                    );
+                    publish_layout_for_test(&mut vm);
+                    assert_eq!(
+                        vm.eval(query).unwrap(),
+                        first,
+                        "paint: {doctype} / {bidi} / {direction} / pre={preserved}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn restored_bidi_controls_preserve_dom_range_offsets_across_lines() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        for bidi in ["embed", "isolate-override"] {
+            for direction in ["ltr", "rtl"] {
+                let markup = format!(
+                    r#"{doctype}<style>#line{{font:20px/30px monospace}}</style><div id=line><span style="unicode-bidi:{bidi};direction:{direction}"><span id=inner style="font:30px/60px monospace;white-space:pre">x
+x</span></span></div>"#
+                );
+                let mut vm = new_parsed_test_vm("https://bidi-source-mapping.test/", &markup);
+                let query = r#"(() => {
+                    const a=document.createRange(), b=document.createRange();
+                    a.setStart(inner.firstChild,0); a.setEnd(inner.firstChild,1);
+                    b.setStart(inner.firstChild,2); b.setEnd(inner.firstChild,3);
+                    const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
+                    return JSON.stringify([line.getBoundingClientRect().height,br.top-ar.top,br.width/ar.width,a.getClientRects().length,b.getClientRects().length]);
+                })()"#;
+                let first = vm.eval(query).unwrap();
+                assert_eq!(first, "[120,60,1,1,1]", "{doctype} / {bidi} / {direction}");
+                publish_layout_for_test(&mut vm);
+                assert_eq!(
+                    vm.eval(query).unwrap(),
+                    first,
+                    "paint: {doctype} / {bidi} / {direction}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn html_direction_hints_and_bidi_contexts_stay_in_the_style_cascade() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        let markup = format!(
+            r#"{doctype}<style>.override{{direction:ltr;unicode-bidi:normal}}</style><span id=ltr dir=ltr></span><span id=rtl dir=RTL></span><span id=invalid dir=" rtl"></span><span id=override dir=rtl style="direction:ltr;unicode-bidi:normal"></span>"#
+        );
+        let mut vm = new_parsed_test_vm("https://html-bidi-style.test/", &markup);
+        let query = r#"JSON.stringify(['ltr','rtl','invalid','override'].map(id=>{
+            const s=getComputedStyle(document.getElementById(id));
+            return [s.direction,s.unicodeBidi];
+        }))"#;
+        let first = vm.eval(query).unwrap();
+        assert_eq!(
+            first, r#"[["ltr","isolate"],["rtl","isolate"],["ltr","normal"],["ltr","normal"]]"#,
+            "{doctype}"
+        );
+        publish_layout_for_test(&mut vm);
+        assert_eq!(vm.eval(query).unwrap(), first, "paint: {doctype}");
+    }
+}
