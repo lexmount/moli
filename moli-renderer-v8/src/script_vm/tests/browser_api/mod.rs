@@ -78,6 +78,8 @@ mod message_port_lifecycle;
 mod midi_events;
 mod misc;
 mod mouse_event_init;
+#[cfg(feature = "devtools")]
+mod move_button;
 mod native_event_construction;
 mod native_owner_xhr;
 mod navigation;

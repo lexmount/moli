@@ -111,12 +111,16 @@ pub(crate) fn construct_pointer_event<'s>(
         scope,
         EventInit {
             bubbles: !is_enter_or_leave,
-            cancelable: !is_enter_or_leave
-                && !matches!(
-                    event_type,
-                    "pointercancel" | "gotpointercapture" | "lostpointercapture"
-                ),
-            composed: true,
+            cancelable: !matches!(
+                event_type,
+                "pointerenter"
+                    | "pointerleave"
+                    | "pointercancel"
+                    | "pointerrawupdate"
+                    | "gotpointercapture"
+                    | "lostpointercapture"
+            ),
+            composed: !is_enter_or_leave,
         },
         coordinates,
         0,
