@@ -407,6 +407,63 @@ pub(crate) fn apply_drag_modifier_drop_effect<'s>(
     );
 }
 
+pub(crate) fn initialize_native_drag_data_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transfer: v8::Local<'s, v8::Object>,
+) {
+    set_private_string(
+        scope,
+        transfer,
+        DATA_TRANSFER_EFFECT_ALLOWED_SLOT,
+        "uninitialized",
+    );
+    set_drag_drop_effect(scope, transfer, "none");
+}
+
+pub(crate) fn set_drag_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transfer: v8::Local<'s, v8::Object>,
+    effect: &str,
+) {
+    set_private_string(scope, transfer, DATA_TRANSFER_DROP_EFFECT_SLOT, effect);
+}
+
+pub(crate) fn allowed_drag_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transfer: v8::Local<'s, v8::Object>,
+) -> String {
+    let effect = private_string_property(scope, transfer, DATA_TRANSFER_DROP_EFFECT_SLOT)
+        .unwrap_or_else(|| "none".to_owned());
+    let allowed = data_transfer_effect_allowed(scope, transfer);
+    if drop_effect_allowed_by_effect_allowed(allowed.as_deref(), &effect) {
+        effect
+    } else {
+        "none".to_owned()
+    }
+}
+
+pub(crate) fn prepare_drag_drop_effect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transfer: v8::Local<'s, v8::Object>,
+    modifiers: u8,
+) {
+    let allowed = data_transfer_effect_allowed(scope, transfer);
+    let preferred = modifier_drop_effect(modifiers).unwrap_or_else(|| {
+        match allowed.as_deref().unwrap_or("uninitialized") {
+            "link" | "linkMove" => "link",
+            "move" => "move",
+            "none" => "none",
+            _ => "copy",
+        }
+    });
+    let effect = if drop_effect_allowed_by_effect_allowed(allowed.as_deref(), preferred) {
+        preferred
+    } else {
+        "none"
+    };
+    set_drag_drop_effect(scope, transfer, effect);
+}
+
 fn private_string_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
