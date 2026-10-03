@@ -204,6 +204,7 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let view = scope.get_current_context().global(scope);
+    let buttons = i32::from(!matches!(event_type, "drop" | "dragend"));
     let mouse = MouseEventInit::from_native(
         scope,
         EventInit {
@@ -214,7 +215,7 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
         coordinates,
         0,
         0,
-        0,
+        buttons,
         modifiers,
         related_target,
         Some(view),
