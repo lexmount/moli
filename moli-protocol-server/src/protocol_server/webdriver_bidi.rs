@@ -71,13 +71,12 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
     let web_socket_url = state.bidi_ws_url;
     let session_registry = state.bidi_session_registry;
     let cookie_profile = state.cookie_profile;
-    let navigation_runtime_config = NavigationRuntimeConfig::new(
+    let navigation_runtime_config = NavigationRuntimeConfig::new_with_layout_configuration(
         state.fetch_config,
         state.optional_resource_fetch_mask,
         state.subframe_loading_enabled,
-        state.layout_policy,
-    )
-    .with_scrollbars_hidden(state.scrollbars_hidden);
+        state.layout_configuration,
+    );
     ws.on_upgrade(move |socket| {
         handle_bidi_session_socket(
             socket,

@@ -1664,13 +1664,12 @@ pub(super) async fn webdriver_classic_new_session(
     let runtime = ClassicSessionRuntimeHandle::spawn(
         initial_cookie_snapshot,
         initial_storage_partition,
-        moli_core::runtime::NavigationRuntimeConfig::new(
+        moli_core::runtime::NavigationRuntimeConfig::new_with_layout_configuration(
             state.fetch_config.clone(),
             state.optional_resource_fetch_mask,
             state.subframe_loading_enabled,
-            state.layout_policy,
-        )
-        .with_scrollbars_hidden(state.scrollbars_hidden),
+            state.layout_configuration,
+        ),
     );
     let create_context = ClassicDevToolsCommandContext::new(session.session_id.as_str());
     let target_id = match runtime

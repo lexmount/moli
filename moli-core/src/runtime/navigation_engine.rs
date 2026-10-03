@@ -19,7 +19,7 @@ use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchResult, Request,
     StreamingRawResponse, ensure_http_status_success,
 };
-use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
+use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererDocumentReplacement,
@@ -343,8 +343,7 @@ pub struct NavigationRuntimeConfig {
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
-    scrollbars_hidden: bool,
+    layout_configuration: LayoutConfiguration,
 }
 
 impl NavigationRuntimeConfig {
@@ -354,12 +353,28 @@ impl NavigationRuntimeConfig {
         subframe_loading_enabled: bool,
         layout_policy: LayoutPolicy,
     ) -> Self {
+        Self::new_with_layout_configuration(
+            fetch_config,
+            optional_resource_fetch_mask,
+            subframe_loading_enabled,
+            LayoutConfiguration {
+                policy: layout_policy,
+                ..LayoutConfiguration::default()
+            },
+        )
+    }
+
+    pub fn new_with_layout_configuration(
+        fetch_config: FetchConfig,
+        optional_resource_fetch_mask: OptionalResourceFetchMask,
+        subframe_loading_enabled: bool,
+        layout_configuration: LayoutConfiguration,
+    ) -> Self {
         Self {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
-            scrollbars_hidden: false,
+            layout_configuration,
         }
     }
 
@@ -380,16 +395,20 @@ impl NavigationRuntimeConfig {
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
     }
 
     pub fn scrollbars_hidden(&self) -> bool {
-        self.scrollbars_hidden
+        self.layout_configuration.scrollbars_hidden
     }
 
     pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
-        self.scrollbars_hidden = hidden;
+        self.layout_configuration.scrollbars_hidden = hidden;
         self
+    }
+
+    pub fn layout_configuration(&self) -> LayoutConfiguration {
+        self.layout_configuration
     }
 }
 
@@ -406,13 +425,12 @@ impl Default for NavigationRuntimeConfig {
 
 impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
     fn from(config: &crate::config::BrowserConfig) -> Self {
-        Self::new(
+        Self::new_with_layout_configuration(
             config.fetch().clone(),
             config.optional_resource_fetch_mask(),
             config.subframe_loading_enabled(),
-            config.layout_policy(),
+            config.layout_configuration(),
         )
-        .with_scrollbars_hidden(config.scrollbars_hidden())
     }
 }
 
@@ -420,8 +438,7 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
 pub struct NavigationEngine {
     fetch_config: FetchConfig,
     page_network_policy: PageNetworkPolicy,
-    layout_policy: LayoutPolicy,
-    scrollbars_hidden: bool,
+    layout_configuration: LayoutConfiguration,
     emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
@@ -558,8 +575,7 @@ impl NavigationEngine {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
-            scrollbars_hidden,
+            layout_configuration,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
@@ -568,7 +584,7 @@ impl NavigationEngine {
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
             .renderer_owner_handle()
-            .configure_layout(layout_policy, scrollbars_hidden)?;
+            .configure_layout_configuration(layout_configuration)?;
         let standalone_lifetime_owner = standalone_browser_context_owner.map(|owner| {
             Rc::new(NavigationEngineLifetimeOwner {
                 js_runtime: Some(js_runtime.clone()),
@@ -582,8 +598,7 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
-            scrollbars_hidden,
+            layout_configuration,
             emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
@@ -600,13 +615,12 @@ impl NavigationEngine {
         subframe_loading_enabled: bool,
     ) -> Result<Self> {
         Self::new_with_runtime_config_and_shared_renderer_owner(
-            NavigationRuntimeConfig::new(
+            NavigationRuntimeConfig::new_with_layout_configuration(
                 fetch_config,
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
-                renderer_owner_source.layout_policy,
-            )
-            .with_scrollbars_hidden(renderer_owner_source.scrollbars_hidden),
+                renderer_owner_source.layout_configuration,
+            ),
             renderer_owner_source,
         )
     }
@@ -619,13 +633,12 @@ impl NavigationEngine {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
-            scrollbars_hidden,
+            layout_configuration,
         } = config;
         renderer_owner_source
             .js_runtime
             .renderer_owner_handle()
-            .configure_layout(layout_policy, scrollbars_hidden)?;
+            .configure_layout_configuration(layout_configuration)?;
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
@@ -637,8 +650,7 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
-            scrollbars_hidden,
+            layout_configuration,
             emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
@@ -706,17 +718,16 @@ impl NavigationEngine {
     }
 
     pub fn runtime_config(&self) -> NavigationRuntimeConfig {
-        NavigationRuntimeConfig::new(
+        NavigationRuntimeConfig::new_with_layout_configuration(
             self.fetch_config.clone(),
             self.optional_resource_fetch_mask(),
             self.subframe_loading_enabled(),
-            self.layout_policy,
+            self.layout_configuration,
         )
-        .with_scrollbars_hidden(self.scrollbars_hidden)
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
     }
 
     pub fn image_fetch_enabled(&self) -> bool {

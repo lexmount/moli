@@ -1004,7 +1004,7 @@ pub(super) struct RendererOwnerState {
     pub(super) devtools_target_shutdown_registry:
         crate::devtools::target::RendererDevToolsTargetShutdownRegistry,
     pub(super) owner_local_host_id: RendererOwnerLocalHostId,
-    layout_policy: Mutex<RendererOwnerLayoutPolicyState>,
+    layout_configuration: Mutex<Option<moli_page_types::LayoutConfiguration>>,
     context_shutdown_notify: tokio::sync::Notify,
     #[cfg(test)]
     command_dispatch_gate: Mutex<Option<RendererCommandDispatchGateForTesting>>,
@@ -1012,11 +1012,6 @@ pub(super) struct RendererOwnerState {
     publish_next_command_output_before_settlement: std::sync::atomic::AtomicBool,
     #[cfg(debug_assertions)]
     pub(super) owner_local_thread_id: Mutex<Option<ThreadId>>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct RendererOwnerLayoutPolicyState {
-    configuration: Option<moli_page_types::LayoutConfiguration>,
 }
 
 #[cfg(test)]

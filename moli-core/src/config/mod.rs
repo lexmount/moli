@@ -1,15 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use moli_fetch::FetchConfig;
-use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask, SubresourceResourceType};
+use moli_page_types::{
+    LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask, SubresourceResourceType,
+};
 
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
     document_start_scripts: Vec<String>,
     fetch: FetchConfig,
     profile_dir: Option<PathBuf>,
-    layout_policy: LayoutPolicy,
-    scrollbars_hidden: bool,
+    layout_configuration: LayoutConfiguration,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
@@ -23,8 +24,7 @@ impl Default for BrowserConfig {
             document_start_scripts: Vec::new(),
             fetch: FetchConfig::default(),
             profile_dir: None,
-            layout_policy: LayoutPolicy::default(),
-            scrollbars_hidden: false,
+            layout_configuration: LayoutConfiguration::default(),
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
@@ -65,11 +65,11 @@ impl BrowserConfig {
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
     }
 
     pub fn set_layout_policy(&mut self, policy: LayoutPolicy) {
-        self.layout_policy = policy;
+        self.layout_configuration.policy = policy;
     }
 
     pub fn with_layout_policy(mut self, policy: LayoutPolicy) -> Self {
@@ -78,16 +78,20 @@ impl BrowserConfig {
     }
 
     pub fn scrollbars_hidden(&self) -> bool {
-        self.scrollbars_hidden
+        self.layout_configuration.scrollbars_hidden
     }
 
     pub fn set_scrollbars_hidden(&mut self, hidden: bool) {
-        self.scrollbars_hidden = hidden;
+        self.layout_configuration.scrollbars_hidden = hidden;
     }
 
     pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
         self.set_scrollbars_hidden(hidden);
         self
+    }
+
+    pub fn layout_configuration(&self) -> LayoutConfiguration {
+        self.layout_configuration
     }
 
     pub fn image_fetch_enabled(&self) -> bool {

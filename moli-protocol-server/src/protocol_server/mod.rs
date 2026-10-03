@@ -18,7 +18,7 @@ use axum::{
 };
 use moli_cookie_jar::StoredCookie;
 use moli_core::{
-    LayoutPolicy, OptionalResourceFetchMask,
+    LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
@@ -750,8 +750,7 @@ struct AppState {
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
-    scrollbars_hidden: bool,
+    layout_configuration: LayoutConfiguration,
 }
 
 impl AppState {
@@ -826,8 +825,7 @@ impl AppState {
             fetch_config: navigation_runtime_config.fetch_config().clone(),
             optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
             subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
-            layout_policy: navigation_runtime_config.layout_policy(),
-            scrollbars_hidden: navigation_runtime_config.scrollbars_hidden(),
+            layout_configuration: navigation_runtime_config.layout_configuration(),
         }
     }
 
