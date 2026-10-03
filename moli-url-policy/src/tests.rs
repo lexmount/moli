@@ -88,6 +88,31 @@ fn navigation_requires_an_explicit_local_file_capability() {
 }
 
 #[test]
+fn file_hosts_drive_letters_and_empty_segments_do_not_change_access_policy() {
+    for value in [
+        "file://server/C:/private/file",
+        "file://[::1]/C|/private/file",
+        "file:////private//file",
+        "file://localhost////private/file",
+    ] {
+        let file_url = url(value);
+        assert_eq!(
+            route_navigation_url(&file_url, LocalFileNavigationAccess::Denied)
+                .expect_err("file URL parsing must not grant local access")
+                .reason(),
+            UrlPolicyReason::LocalFileCapabilityRequired,
+        );
+        assert_eq!(
+            route_navigation_url(&file_url, LocalFileNavigationAccess::BrowserGranted),
+            Ok(BrowserUrlRoute::LocalFile),
+        );
+        assert!(route_fetch_url(&file_url).is_err());
+        assert!(route_xml_http_request_url(&file_url).is_err());
+        assert!(ensure_http_network_transport_url(&file_url).is_err());
+    }
+}
+
+#[test]
 fn http_transport_never_accepts_a_local_or_non_http_scheme() {
     assert!(ensure_http_network_transport_url(&url("http://example.test/")).is_ok());
     assert!(ensure_http_network_transport_url(&url("https://example.test/")).is_ok());
