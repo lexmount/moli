@@ -867,14 +867,44 @@ impl JsContextHost {
         true
     }
 
-    /// Dispatches the unload sequence used when `Document::open()` removes a
-    /// descendant frame.
-    ///
-    /// This is intentionally distinct from navigation teardown: Chromium's
-    /// document-open steps do not prompt the child with `beforeunload`, and
-    /// dispatch pagehide/visibilitychange before unload while the parent
-    /// document's listeners are still installed.
-    fn dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
+    pub(in crate::native_bridge::context_host) fn dispatch_child_javascript_url_unload_lifecycle(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+        handle: DomHandle,
+    ) {
+        let Some(document) = unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
+        else {
+            return;
+        };
+        let mut handles = vec![handle];
+        unsafe { &*host_ptr }
+            .collect_child_browsing_context_handles_in_document_order_from_document(
+                document,
+                &mut handles,
+            );
+        // Snapshot the documents before any unload handler can remove or
+        // replace a descendant. A new document must not inherit this unload.
+        let documents: Vec<_> = handles
+            .into_iter()
+            .filter_map(|handle| {
+                unsafe { &*host_ptr }
+                    .child_browsing_context_document_handle(handle)
+                    .map(|document| (handle, document))
+            })
+            .collect();
+        for (handle, document) in documents {
+            if unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
+                == Some(document)
+            {
+                Self::dispatch_child_document_unload_without_beforeunload(scope, host_ptr, handle);
+            }
+        }
+    }
+
+    /// JavaScript URL replacement and removal by `Document::open()` unload
+    /// documents without checking whether unloading is canceled. They still
+    /// dispatch the actual unload lifecycle and cancel the old window's timers.
+    fn dispatch_child_document_unload_without_beforeunload(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut Self,
         handle: DomHandle,
@@ -924,9 +954,7 @@ impl JsContextHost {
             {
                 continue;
             }
-            Self::dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
-                scope, host_ptr, handle,
-            );
+            Self::dispatch_child_document_unload_without_beforeunload(scope, host_ptr, handle);
         }
     }
 }
