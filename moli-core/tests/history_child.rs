@@ -4297,7 +4297,11 @@ async fn child_browsing_context_history_go_one_fragment_traversal_events_stay_wi
         ))
         .await?;
     browser
-        .wait_for_page_delay(&mut page, Duration::from_millis(250))
+        .wait_for_selector(
+            &mut page,
+            "body[data-child-traversal-complete='true']",
+            Duration::from_secs(5),
+        )
         .await?;
 
     assert!(

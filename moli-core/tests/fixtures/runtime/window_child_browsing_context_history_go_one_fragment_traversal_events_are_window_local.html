@@ -98,33 +98,40 @@
                     String(event.navigationType)
                   );
                 };
+                childWindow.removeEventListener('hashchange', onHashchange);
+                childWindow.addEventListener(
+                  'hashchange',
+                  () => {
+                    setTimeout(() => {
+                      document.body.setAttribute('data-top-order', topOrder.join(','));
+                      document.body.setAttribute(
+                        'data-top-currententrychange',
+                        String(topCurrentEntryChanges)
+                      );
+                      document.body.setAttribute('data-child-order', childOrder.join(','));
+                      document.body.setAttribute(
+                        'data-child-property-order',
+                        childPropertyOrder.join(',')
+                      );
+                      document.body.setAttribute(
+                        'data-child-timeout-hash',
+                        childWindow.location.hash
+                      );
+                      document.body.setAttribute(
+                        'data-child-timeout-state',
+                        String(childWindow.history.state?.step ?? 'null')
+                      );
+                      document.body.setAttribute('data-child-traversal-complete', 'true');
+                    }, 0);
+                  },
+                  { once: true }
+                );
                 childWindow.history.go(1);
                 document.body.setAttribute('data-child-sync-hash', childWindow.location.hash);
                 document.body.setAttribute(
                   'data-child-sync-state',
                   String(childWindow.history.state?.step ?? 'null')
                 );
-                childWindow.removeEventListener('hashchange', onHashchange);
-                setTimeout(() => {
-                  document.body.setAttribute('data-top-order', topOrder.join(','));
-                  document.body.setAttribute(
-                    'data-top-currententrychange',
-                    String(topCurrentEntryChanges)
-                  );
-                  document.body.setAttribute('data-child-order', childOrder.join(','));
-                  document.body.setAttribute(
-                    'data-child-property-order',
-                    childPropertyOrder.join(',')
-                  );
-                  document.body.setAttribute(
-                    'data-child-timeout-hash',
-                    childWindow.location.hash
-                  );
-                  document.body.setAttribute(
-                    'data-child-timeout-state',
-                    String(childWindow.history.state?.step ?? 'null')
-                  );
-                }, 50);
               },
               { once: false }
             );
