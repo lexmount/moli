@@ -49,6 +49,9 @@ fn build_native_layout_pass_recursive(
         .dom_host()
         .owner_document_handle(root)
         .unwrap_or_else(|| runtime.document_handle());
+    let request = request.with_environment(moli_layout::LayoutEnvironment {
+        scrollbars_hidden: runtime.scrollbars_hidden(),
+    });
     document_stack.push(document);
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,

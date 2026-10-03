@@ -12,6 +12,7 @@ pub(crate) const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 mod builder;
 mod capture;
 mod containment;
+mod environment;
 mod error;
 mod form;
 mod gradient;
@@ -44,6 +45,7 @@ pub use capture::{
     FULL_DOCUMENT_CAPTURE_CSS_DIMENSION_LIMIT, PaintCaptureRegion, PaintCaptureRequest,
     PaintCaptureSurface,
 };
+pub use environment::LayoutEnvironment;
 pub use error::LayoutError;
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,

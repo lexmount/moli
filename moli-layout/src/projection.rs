@@ -291,6 +291,9 @@ where
     }
 
     fn scrollbar_control_thickness(&self, id: LayoutBoxId) -> f32 {
+        if self.world.environment.scrollbars_hidden {
+            return 0.0;
+        }
         if id == self.world.root {
             self.world
                 .viewport_scroll_policy
@@ -354,6 +357,9 @@ where
     }
 
     fn has_scrollbar(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis, overflowing: bool) -> bool {
+        if self.world.environment.scrollbars_hidden {
+            return false;
+        }
         if id == self.world.root {
             self.world
                 .viewport_scroll_policy

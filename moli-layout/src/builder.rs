@@ -377,8 +377,7 @@ where
             root_style.scrollbar_colors(),
             root_style.uses_horizontal_writing_mode(),
             self.source.disables_viewport_user_scrolling(),
-        )
-        .with_scrollbars_hidden(root_style.viewport_scrollbars_hidden());
+        );
     }
 
     fn principal_box(
