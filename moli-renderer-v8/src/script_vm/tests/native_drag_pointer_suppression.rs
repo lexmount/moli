@@ -338,3 +338,48 @@ fn a_dragstart_that_disconnects_or_adopts_the_source_does_not_suppress_pointer_i
         );
     }
 }
+
+#[test]
+fn native_drag_source_follows_shadow_including_dom_ancestry() {
+    for (mode, slotted) in [("open", true), ("open", false), ("closed", false)] {
+        let mut vm = new_rendered_test_vm(
+            "https://drag-shadow-source.test/",
+            r#"<!doctype html><body style="margin:0"><div id="host"></div></body>"#,
+        );
+        vm.eval(&format!(
+            r#"(() => {{
+              window.__dragTargets = [];
+              const host = document.getElementById('host');
+              const root = host.attachShadow({{mode:{mode:?}}});
+              root.innerHTML = '<div id="source" draggable="true" style="width:140px;height:140px"></div>';
+              const source = root.getElementById('source');
+              const content = '<div id="origin" style="width:100px;height:100px"></div>';
+              if ({slotted}) {{
+                source.append(document.createElement('slot'));
+                host.innerHTML = content;
+              }} else {{
+                source.innerHTML = content;
+              }}
+              source.addEventListener('dragstart', event => {{
+                window.__dragTargets.push(event.target.id);
+                event.dataTransfer.setData('text/plain', 'shadow source');
+              }});
+            }})()"#,
+        ))
+        .unwrap();
+        vm.publish_layout_for_test().unwrap();
+        pointer_drag_mouse(&mut vm, "mousedown", 20.0, 20.0);
+        let outcome = pointer_drag_mouse(&mut vm, "mousemove", 40.0, 40.0);
+        assert_eq!(
+            outcome.intercepted_drag.is_some(),
+            !slotted,
+            "{mode}/{slotted}"
+        );
+        let targets = vm.eval("JSON.stringify(window.__dragTargets)").unwrap();
+        assert_eq!(
+            targets,
+            if slotted { "[]" } else { r#"["source"]"# },
+            "{mode}/{slotted}"
+        );
+    }
+}
