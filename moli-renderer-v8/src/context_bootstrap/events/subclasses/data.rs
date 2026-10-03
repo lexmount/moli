@@ -208,14 +208,6 @@ struct CapturedMouseEventInitDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct InputEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    input_type: v8::Local<'scope, v8::String>,
-    is_composing: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct InterestEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
 }
@@ -580,21 +572,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event
         &parsed.url,
         parsed.storage_area.map(|value| value.0.into()),
     );
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_input_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    basic::initialize_ui_event(scope, event, init);
-    let data = init_value_property(scope, init, "data").unwrap_or_else(|| v8::null(scope).into());
-    let input_type = init_string_property(scope, init, "inputType", "");
-    let input_type_value = v8_string(scope, &input_type).expect("input event inputType");
-    let is_composing = init_bool_property(scope, init, "isComposing", false);
-    InputEventInitDeclaration::new(data, input_type_value, is_composing)
-        .initialize(scope, event)
-        .expect("InputEvent init declaration should initialize");
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_event<'s>(

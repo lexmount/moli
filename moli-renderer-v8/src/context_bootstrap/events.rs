@@ -10,6 +10,7 @@ mod message;
 pub(crate) use message::construct_original_message_event;
 mod methods;
 mod modifiers;
+mod references;
 mod subclasses;
 mod ui;
 mod value;
@@ -31,6 +32,7 @@ pub(in crate::context_bootstrap) use modifiers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
 pub(in crate::context_bootstrap) use ui::{
