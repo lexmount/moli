@@ -260,6 +260,28 @@ impl DomHost {
         self.elements_by_tag_name_ns(document, Some(HTML_NAMESPACE_URI), local_name, true)
     }
 
+    /// Indexed candidates in a subtree, including descendants of shadow roots.
+    /// The result has no tree-order guarantee. Empty tag indexes do not traverse
+    /// the subtree, including when the root contains many unrelated elements.
+    pub fn html_elements_by_local_name_in_shadow_including_subtree(
+        &self,
+        root: DomHandle,
+        local_name: &str,
+    ) -> Vec<DomHandle> {
+        self.ensure_namespace_local_name_element_index();
+        let index = self.element_query_index.borrow();
+        let Some(candidates) =
+            index.namespace_local_name_candidates(HTML_NAMESPACE_URI, local_name)
+        else {
+            return Vec::new();
+        };
+        candidates
+            .iter()
+            .copied()
+            .filter(|handle| self.is_host_including_inclusive_ancestor(root, *handle))
+            .collect()
+    }
+
     fn ensure_qualified_name_element_index(&self) {
         if self
             .element_query_index
@@ -840,6 +862,50 @@ mod tests {
         assert!(
             host.elements_by_tag_name_ns(detached_style, Some(HTML_NAMESPACE_URI), "style", false,)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn shadow_including_tag_query_tracks_new_detached_and_moved_candidates() {
+        let mut host = test_host();
+        let document = host.document_handle();
+        let root = host.create_element("section");
+        assert!(host.append_child(document, root));
+        assert!(
+            host.html_elements_by_local_name_in_shadow_including_subtree(root, "form")
+                .is_empty()
+        );
+        let light_form = host.create_element("form");
+        let shadow_root = host.attach_shadow_root(root, "closed").unwrap();
+        let shadow_form = host.create_element("form");
+        let detached_form = host.create_element("form");
+        let foreign_form = host
+            .create_element_ns(Some("http://www.w3.org/2000/svg"), "form")
+            .unwrap();
+        assert!(host.append_child(root, light_form));
+        assert!(host.append_child(root, foreign_form));
+        assert!(host.append_child(shadow_root, shadow_form));
+        let forms = host.html_elements_by_local_name_in_shadow_including_subtree(document, "form");
+        assert_eq!(forms.len(), 2);
+        assert!(forms.contains(&light_form) && forms.contains(&shadow_form));
+        assert_eq!(
+            host.html_elements_by_local_name_in_shadow_including_subtree(detached_form, "form"),
+            vec![detached_form]
+        );
+        assert!(host.remove_child(document, root));
+        assert!(
+            host.html_elements_by_local_name_in_shadow_including_subtree(document, "form")
+                .is_empty()
+        );
+        assert_eq!(
+            host.html_elements_by_local_name_in_shadow_including_subtree(root, "form")
+                .len(),
+            2
+        );
+        assert!(host.append_child(document, shadow_form));
+        assert_eq!(
+            host.html_elements_by_local_name_in_shadow_including_subtree(document, "form"),
+            vec![shadow_form]
         );
     }
 

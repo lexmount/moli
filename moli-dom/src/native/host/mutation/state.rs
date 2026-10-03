@@ -345,6 +345,17 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_web_mcp_activity(&mut self, handle: DomHandle, form: bool, submit: bool) -> bool {
+        let changed = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(|element| element.set_web_mcp_activity(form, submit));
+        if changed {
+            self.record_mutation(MutationScope::QueryState);
+        }
+        changed
+    }
+
     pub fn set_dialog_modal(&mut self, handle: DomHandle, modal: bool) -> bool {
         let did_change = {
             let Some(element) = self

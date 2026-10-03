@@ -52,6 +52,12 @@ impl<'a> QueryElement<'a> {
         if element.autofilled() {
             state |= ElementState::AUTOFILL;
         }
+        if element.web_mcp_form_active() {
+            state |= ElementState::TOOL_FORM_ACTIVE;
+        }
+        if element.web_mcp_submit_active() {
+            state |= ElementState::TOOL_SUBMIT_ACTIVE;
+        }
         if self.matches_validity_pseudo() {
             if self.is_invalid() {
                 state |= ElementState::INVALID;

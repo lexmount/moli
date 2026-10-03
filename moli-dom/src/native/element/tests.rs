@@ -475,3 +475,29 @@ fn range_input_value_uses_live_min_max_and_step_attributes() {
     assert_eq!(defaulted.input_value(), "4");
     assert!(!defaulted.input_value_dirty());
 }
+
+#[test]
+fn range_value_setters_use_element_bounds_and_step_authority() {
+    let mut input = Element::new_html("input");
+    for (name, value) in [
+        ("type", "range"),
+        ("min", "100"),
+        ("max", "200"),
+        ("step", "10"),
+    ] {
+        input.set_attribute(name.into(), String::new(), None, value.into());
+    }
+    for (value, expected) in [
+        ("180", "180"),
+        ("185", "190"),
+        ("250", "200"),
+        ("90", "100"),
+        ("invalid", "150"),
+    ] {
+        input.set_input_value(value);
+        assert_eq!(input.input_value(), expected);
+    }
+    input.set_attribute("step".into(), String::new(), None, "any".into());
+    input.set_input_value("180.25");
+    assert_eq!(input.input_value(), "180.25");
+}

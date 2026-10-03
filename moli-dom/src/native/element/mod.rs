@@ -1068,6 +1068,18 @@ impl Element {
         self.control_state().popover_open()
     }
 
+    pub fn web_mcp_form_active(&self) -> bool {
+        self.control_state().web_mcp_form_active()
+    }
+
+    pub fn web_mcp_submit_active(&self) -> bool {
+        self.control_state().web_mcp_submit_active()
+    }
+
+    pub fn set_web_mcp_activity(&mut self, form: bool, submit: bool) -> bool {
+        self.control_state_mut().set_web_mcp_activity(form, submit)
+    }
+
     pub fn dialog_modal(&self) -> bool {
         self.control_state().dialog_modal()
     }
