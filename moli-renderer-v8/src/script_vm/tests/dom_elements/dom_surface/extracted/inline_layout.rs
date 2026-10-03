@@ -1,5 +1,119 @@
 use super::*;
 
+// Relative geometry measured in Chromium 145.0.7632.116 in all three modes.
+#[test]
+fn atomic_inline_boxes_resolve_bidi_contexts_without_expanding_sibling_fragments() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        for context in [
+            "normal",
+            "embed",
+            "bidi-override",
+            "isolate",
+            "isolate-override",
+            "plaintext",
+            "dir",
+        ] {
+            for direction in ["ltr", "rtl"] {
+                for break_kind in ["br", "pre", "single"] {
+                    for inside in [false, true] {
+                        for tail_space in [false, true] {
+                            if tail_space && break_kind != "pre" {
+                                continue;
+                            }
+                            let white_space = if break_kind == "pre" {
+                                "white-space:pre"
+                            } else {
+                                ""
+                            };
+                            let attributes = if context == "dir" {
+                                format!(r#"dir={direction} style="{white_space}""#)
+                            } else {
+                                format!(
+                                    r#"style="unicode-bidi:{context};direction:{direction};{white_space}""#
+                                )
+                            };
+                            let prefix = match break_kind {
+                                "br" => "x<br>",
+                                "pre" => "x\n",
+                                _ => "",
+                            };
+                            let atom = "<i id=atom></i>";
+                            let markup = format!(
+                                r#"{doctype}<style>body{{margin:0}}#line{{font:20px/30px monospace;width:300px}}#atom{{display:inline-block;width:10px;height:20px}}</style><div id=line><span {attributes}>{prefix}<span id=word>x</span>{}{}</span>{}</div>"#,
+                                if tail_space { " " } else { "" },
+                                if inside { atom } else { "" },
+                                if inside { "" } else { atom },
+                            );
+                            let mut vm =
+                                new_parsed_test_vm("https://atomic-inline-bidi.test/", &markup);
+                            let query = r#"JSON.stringify((()=>{
+                                const line=document.getElementById('line').getBoundingClientRect();
+                                const word=document.getElementById('word'),range=document.createRange();
+                                range.selectNodeContents(word);
+                                const text=range.getBoundingClientRect(),box=word.getBoundingClientRect();
+                                const atom=document.getElementById('atom').getBoundingClientRect();
+                                return [line.height,text.left-line.left,text.right-line.left,
+                                    atom.left-line.left,atom.width,box.left-line.left,box.width,
+                                    word.getClientRects().length,range.getClientRects().length,word.textContent.length];
+                            })())"#;
+                            let first = vm.eval(query).unwrap();
+                            let geometry = serde_json::from_str::<[f64; 10]>(&first).unwrap();
+                            let text_width = geometry[2] - geometry[1];
+                            let rtl_context =
+                                direction == "rtl" && !matches!(context, "normal" | "plaintext");
+                            let expected_text_left = if rtl_context {
+                                (if inside { 10.0 } else { 0.0 })
+                                    + if tail_space { text_width } else { 0.0 }
+                            } else {
+                                0.0
+                            };
+                            let expected_atom_left = if inside && rtl_context {
+                                0.0
+                            } else {
+                                expected_text_left
+                                    + text_width
+                                    + if tail_space && !rtl_context {
+                                        text_width
+                                    } else {
+                                        0.0
+                                    }
+                            };
+                            let case = format!(
+                                "{doctype} / {context} / {direction} / {break_kind} / inside={inside} / tail={tail_space}"
+                            );
+                            for (actual, expected) in [
+                                (
+                                    geometry[0],
+                                    if break_kind == "single" { 30.0 } else { 60.0 },
+                                ),
+                                (geometry[1], expected_text_left),
+                                (geometry[3], expected_atom_left),
+                                (geometry[4], 10.0),
+                                (geometry[5], geometry[1]),
+                                (geometry[6], text_width),
+                                (geometry[7], 1.0),
+                                (geometry[8], 1.0),
+                                (geometry[9], 1.0),
+                            ] {
+                                assert!(
+                                    (actual - expected).abs() < 0.02,
+                                    "{case}: {first}, expected {expected}, got {actual}"
+                                );
+                            }
+                            publish_layout_for_test(&mut vm);
+                            assert_eq!(vm.eval(query).unwrap(), first, "publication: {case}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn quirks_block_line_height_preserves_text_and_atomic_alignment() {
     for (doctype, quirks) in [

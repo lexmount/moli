@@ -14,7 +14,9 @@ use std::{
     ops::Range,
 };
 
-use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
+use parley::{
+    BreakReason, InlineBox, InlineBoxBidi, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle,
+};
 use taffy::{MaybeResolve as _, Point, Size};
 
 use crate::{
@@ -108,6 +110,18 @@ pub(crate) enum InlineObjectRole {
     OutOfFlow,
     StartEdge,
     EndEdge,
+}
+
+impl InlineObjectRole {
+    fn parley_bidi(self) -> InlineBoxBidi {
+        match self {
+            Self::Atomic => InlineBoxBidi::Neutral,
+            // CSS tag boundaries do not add bidi characters. Leading edges
+            // follow the next participant, closing edges the preceding one.
+            Self::StartEdge => InlineBoxBidi::InheritNext,
+            Self::EndEdge | Self::Float | Self::OutOfFlow => InlineBoxBidi::InheritPrevious,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2022,14 +2036,17 @@ impl InlineBuildInput {
             }
         }
         let object_anchors = self.projected_object_anchors();
-        for (object_id, (_, _, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box(InlineBox {
-                id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                kind: *kind,
-                index: object_anchors[object_id],
-                width: 0.0,
-                height: 0.0,
-            });
+        for (object_id, (_, object, kind)) in self.objects.iter().enumerate() {
+            builder.push_inline_box_with_bidi(
+                InlineBox {
+                    id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
+                    kind: *kind,
+                    index: object_anchors[object_id],
+                    width: 0.0,
+                    height: 0.0,
+                },
+                object.role.parley_bidi(),
+            );
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles
@@ -2949,14 +2966,17 @@ mod tests {
             let style = builder.push_style(TextStyle::default());
             builder.push_style_run(style, ..);
             let anchors = input.projected_object_anchors();
-            for (id, (_, _, kind)) in input.objects.iter().enumerate() {
-                builder.push_inline_box(InlineBox {
-                    id: id as u64,
-                    kind: *kind,
-                    index: anchors[id],
-                    width: 1.0,
-                    height: 20.0,
-                });
+            for (id, (_, object, kind)) in input.objects.iter().enumerate() {
+                builder.push_inline_box_with_bidi(
+                    InlineBox {
+                        id: id as u64,
+                        kind: *kind,
+                        index: anchors[id],
+                        width: 1.0,
+                        height: 20.0,
+                    },
+                    object.role.parley_bidi(),
+                );
             }
             let mut layout = builder.build(&input.text);
             layout.break_all_lines(None);
