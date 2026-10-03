@@ -47,12 +47,12 @@ pub(crate) fn abort_controller_abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(_) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
     };
     let controller = args.this();
-    let Some(controller_id) = AbortStore::controller_id_from_object(scope, controller) else {
+    let Some(_) = AbortStore::controller_id_from_object(scope, controller) else {
         rv.set_undefined();
         return;
     };
@@ -67,26 +67,6 @@ pub(crate) fn abort_controller_abort_callback<'s>(
     } else {
         abort_error_value(scope)
     };
-    let host = unsafe { &mut *host_ptr };
-    let Some(signal_id) = host
-        .native_bridge_mut()
-        .abort
-        .controllers
-        .get(&controller_id)
-        .copied()
-    else {
-        rv.set_undefined();
-        return;
-    };
-    if host
-        .native_bridge_mut()
-        .abort
-        .signal_state(signal_id)
-        .is_some_and(|state| state.aborted)
-    {
-        rv.set_undefined();
-        return;
-    }
     crate::native_bridge::abort::abort_signal(scope, signal, reason);
     rv.set_undefined();
 }

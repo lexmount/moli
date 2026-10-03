@@ -1,0 +1,10 @@
+{
+  "focus-ignores-unchanged-busy-context": [
+    {"op": "create", "page": "A"},
+    {"op": "create", "page": "B"},
+    {"op": "new_context", "context": "other"},
+    {"op": "create", "page": "C", "context": "other"},
+    {"op": "activate", "page": "A"},
+    {"op": "busy_unrelated_context", "page": "C", "active": "A", "next": "B"}
+  ]
+}

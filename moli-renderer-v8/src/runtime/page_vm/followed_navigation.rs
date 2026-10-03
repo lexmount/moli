@@ -529,7 +529,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     stage: PageVmInitStage,
 }
 
-struct PageVmCommittedNavigationBootstrapPayload {
+struct FollowedNavigationBootstrapPayload {
     page_id: PageId,
     local_executor: JsLocalExecutor,
     request_client: ResourceRequestClient,
@@ -538,6 +538,19 @@ struct PageVmCommittedNavigationBootstrapPayload {
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     loaded: LoadedFollowedLocationNavigation,
     stage: PageVmInitStage,
+}
+
+enum PageVmCommittedNavigationBootstrapPayload {
+    Followed(Box<FollowedNavigationBootstrapPayload>),
+    PreparedResponse(Box<PreparedResponseBootstrapPayload>),
+}
+
+struct PreparedResponseBootstrapPayload {
+    page_id: PageId,
+    local_executor: JsLocalExecutor,
+    runtime_hooks: PageVmRuntimeHooks,
+    request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+    navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
 }
 
 /// Owns all continuation state after the source Document has committed away
@@ -563,19 +576,54 @@ impl PageVmCommittedNavigationBootstrap {
         let payload = self.payload.take().ok_or_else(|| {
             anyhow!("committed location-navigation bootstrap was already consumed")
         })?;
-        bootstrap_committed_followed_location_navigation(
-            payload.page_id,
-            payload.local_executor,
-            payload.request_client,
-            payload.env,
-            payload.runtime_hooks,
-            payload.navigation_bootstrap_entry,
-            self.reserved_service_worker_client_id,
-            payload.stage,
-            payload.loaded,
-            FollowedLocationNavigationBootstrapBoundary::DocumentCommit,
-        )
-        .await
+        match payload {
+            PageVmCommittedNavigationBootstrapPayload::Followed(payload) => {
+                bootstrap_committed_followed_location_navigation(
+                    payload.page_id,
+                    payload.local_executor,
+                    payload.request_client,
+                    payload.env,
+                    payload.runtime_hooks,
+                    payload.navigation_bootstrap_entry,
+                    self.reserved_service_worker_client_id,
+                    payload.stage,
+                    payload.loaded,
+                    FollowedLocationNavigationBootstrapBoundary::DocumentCommit,
+                )
+                .await
+            }
+            PageVmCommittedNavigationBootstrapPayload::PreparedResponse(payload) => {
+                let PreparedResponseBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    runtime_hooks,
+                    request,
+                    navigation_bootstrap_entry,
+                } = *payload;
+                let mut response = PageVmNavigationResponse {
+                    requested_url: request.requested_url.clone(),
+                    redirected: request.navigation_redirected,
+                    redirect_count: request.navigation_redirect_count,
+                    redirect_chain: request.navigation_redirect_chain.clone(),
+                    status: request.response_status,
+                    headers: request.response_headers.clone(),
+                };
+                let result = request
+                    .bootstrap_with_navigation_seed(
+                        page_id,
+                        local_executor,
+                        runtime_hooks,
+                        navigation_bootstrap_entry,
+                    )
+                    .await?;
+                let (mut outcome, status, headers) =
+                    streaming_navigation_result_to_turn_outcome(result).await?;
+                response.status = status;
+                response.headers = headers;
+                attach_followed_navigation_response(&mut outcome, response);
+                Ok(outcome)
+            }
+        }
     }
 
     pub(in crate::runtime) fn finalize_build_outcome(
@@ -964,21 +1012,105 @@ impl PageVm {
             return Err(error);
         }
         Ok(PageVmCommittedNavigationBootstrap {
-            payload: Some(PageVmCommittedNavigationBootstrapPayload {
-                page_id,
-                local_executor,
-                request_client,
-                env,
-                runtime_hooks,
-                navigation_bootstrap_entry,
-                loaded,
-                stage,
-            }),
+            payload: Some(PageVmCommittedNavigationBootstrapPayload::Followed(
+                Box::new(FollowedNavigationBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    request_client,
+                    env,
+                    runtime_hooks,
+                    navigation_bootstrap_entry,
+                    loaded,
+                    stage,
+                }),
+            )),
             browser_context_runtime,
             initiator_url: Some(initiator_url),
             navigation_handoff,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+        })
+    }
+
+    pub(in crate::runtime) fn commit_prepared_document_response(
+        &mut self,
+        request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+        mut bootstrap: crate::script_vm::RendererDocumentIsolateBootstrap,
+        reservation: crate::runtime::owner_local_store::RendererDocumentIsolateReservation,
+    ) -> Result<PageVmCommittedNavigationBootstrap> {
+        request.validate_bootstrap_configuration()?;
+        let navigation_bootstrap_entry = match request
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.session_history_position)
+        {
+            Some(position) => self
+                .vm_mut()
+                .capture_inherited_history_for_browser_commit(&request.final_url, position)?,
+            None => None,
+        };
+        if moli_url::is_about_blank(&request.final_url)
+            && let Some(replacement) = request.document_replacement.as_ref()
+        {
+            if let Some(environment) = replacement.initial_document_environment.as_ref() {
+                bootstrap.initial_document_environment = Some(
+                    environment.take(
+                        bootstrap
+                            .clone_renderer_document_isolate_handle_for_owner_retention()
+                            .identity_key(),
+                    )?,
+                );
+            } else if let Some(preserve_referrer) = replacement.reload_preserves_navigation_referrer
+            {
+                bootstrap.initial_document_environment = Some(
+                    self.vm_mut()
+                        .capture_about_blank_reload_environment(preserve_referrer)?,
+                );
+            }
+        }
+        ensure!(
+            request.lifecycle_decider.is_none(),
+            "a Page replacement cannot use a Page-creation lifecycle decider"
+        );
+        let environment = self
+            .runtime_hooks
+            .renderer_page_script_environment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow!("prepared replacement requires the current Page script environment")
+            })?;
+        let navigation_handoff = environment
+            .page_runtime_task_source()
+            .next_top_level_navigation_handoff();
+        let runtime_hooks = self
+            .runtime_hooks
+            .clone()
+            .for_cross_document_commit()
+            .with_prepared_renderer_document_isolate(bootstrap, reservation)?;
+        let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
+        let local_executor = self.local_executor.clone();
+        let page_id = self.page_id;
+        // No fallible work follows detachment before returning the committed typestate.
+        self.commit_main_window_proxy_navigation()?;
+        let _ = self.document_lifecycle.request_termination(
+            self.document_lifecycle.identity(),
+            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        );
+        Ok(PageVmCommittedNavigationBootstrap {
+            payload: Some(PageVmCommittedNavigationBootstrapPayload::PreparedResponse(
+                Box::new(PreparedResponseBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    runtime_hooks,
+                    request,
+                    navigation_bootstrap_entry,
+                }),
+            )),
+            browser_context_runtime,
+            initiator_url: None,
+            navigation_handoff,
+            reserved_service_worker_client_id: None,
+            service_worker_client_navigate: None,
         })
     }
 
@@ -1239,6 +1371,13 @@ impl PageVm {
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         if runtime_hooks.has_renderer_page_script_environment() {
             self.commit_main_window_proxy_navigation()?;
+        } else {
+            // This low-level fixture deliberately rebuilds an isolate while
+            // retaining the Page task sources. Retire the old registration
+            // before rebinding that source; production Page replacements
+            // retain their admitted isolate and take the branch above.
+            self.vm()
+                .unregister_document_isolate_platform_for_context_teardown();
         }
         bootstrap_committed_followed_location_navigation(
             self.page_id,

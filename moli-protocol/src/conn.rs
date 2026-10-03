@@ -64,6 +64,7 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::PendingPopupNavigation;
 mod target;
 mod top_level_navigation_work;
 
@@ -537,9 +538,10 @@ pub use runtime_eval::{
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
-    BackgroundNavigationLoadJob, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
+    BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
+    CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    ResponseCommitReady,
+    ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -578,12 +580,12 @@ pub(crate) use state::{
     TargetSharedWorkerProtocolAttachmentRetirement, TargetWindowSurfaceState,
 };
 pub use state::{
-    BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
-    DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
-    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
-    RuntimeBindingDefinition, TargetInfo, URL_BASE,
+    BrowserContext, BrowserWindowBounds, DevToolsDocumentResidenceIdentity,
+    DevToolsPageResidenceIdentity, DocumentStartScript, DownloadNavigation, EmulatedDeviceMetrics,
+    EmulatedGeolocationOverride, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
+    IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
+    NavigationRequestLoadPolicy, PageNavigationHistoryEntry, PageTargetHost,
+    PendingNavigationHistoryUpdate, RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 #[cfg(test)]
 pub(crate) use state::{
@@ -1189,6 +1191,8 @@ pub struct CdpConnection {
 
     // Browser profile, permissions, download and global IO state.
     pub window_bounds: BrowserWindowBounds,
+    pub(crate) browser_window_ids: HashMap<(String, u32), u32>,
+    pub(crate) browser_window_bounds: HashMap<u32, BrowserWindowBounds>,
     pub download_behavior: BrowserDownloadBehavior,
     pub permission_overrides: Vec<PermissionOverride>,
     next_global_io_stream_id: u64,
@@ -1483,6 +1487,8 @@ impl CdpConnection {
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
             window_bounds: BrowserWindowBounds::default(),
+            browser_window_ids: HashMap::new(),
+            browser_window_bounds: HashMap::new(),
             download_behavior: BrowserDownloadBehavior::default(),
             permission_overrides: Vec::new(),
             next_bc_id: 0,
@@ -2279,6 +2285,21 @@ impl CdpConnection {
         self.target_page_residence_identity_for_owner(&owner_scope)
     }
 
+    pub fn document_residence_identity_for_devtools_context(
+        &mut self,
+        context: &AutomationContext,
+    ) -> Option<DevToolsDocumentResidenceIdentity> {
+        let owner = self.command_owner_scope_for_devtools_context(context)?;
+        let page = self.target_page_residence_identity_for_owner(&owner)?;
+        let document = self
+            .runtime_session_owner_slot_for_owner(&owner)
+            .ok()?
+            .page_slot()
+            .renderer_document_lifecycle_binding()?
+            .renderer_document_identity();
+        Some(DevToolsDocumentResidenceIdentity::new(page, document))
+    }
+
     pub fn capture_devtools_document_lifecycle_wait_key(
         &mut self,
         context: &AutomationContext,
@@ -2826,6 +2847,19 @@ impl CdpConnection {
             .unwrap_or(body_spool::DEFAULT_BODY_MATERIALIZE_LIMIT)
     }
 
+    fn estimated_document_isolate_count_for_diagnostics(&self) -> usize {
+        let loaded = self
+            .browser_contexts()
+            .flat_map(BrowserContext::loaded_document_isolate_ids_for_diagnostics)
+            .collect::<HashSet<_>>()
+            .len();
+        loaded
+            + self
+                .browser_contexts()
+                .map(BrowserContext::pending_document_page_build_count)
+                .sum::<usize>()
+    }
+
     pub(crate) fn moli_memory_diagnostics(&self) -> serde_json::Value {
         let active_browser_context = self
             .browser_context
@@ -2961,7 +2995,7 @@ impl CdpConnection {
         let estimated_renderer_owner_count = estimated_renderer_owner_ids.len();
         let document_isolate_model = active_engine.document_isolate_model_for_diagnostics();
         let estimated_document_isolate_count =
-            loaded_document_page_count + pending_document_page_build_count;
+            self.estimated_document_isolate_count_for_diagnostics();
         let document_isolate_accounting =
             active_engine.document_isolate_accounting_for_diagnostics();
         let document_isolate_accounting = json!({
@@ -3023,11 +3057,11 @@ impl CdpConnection {
                 "documentIsolateAccounting": document_isolate_accounting,
                 "estimatedWorkerIsolateCount": estimated_worker_isolate_count,
                 "estimatedLiveV8IsolateCount": estimated_live_v8_isolate_count,
-                "runtimeGetHeapUsageV8HeapScope": "page-vm-document-isolate",
-                "runtimeGetHeapUsageV8HeapIsTargetLocal": true,
+                "runtimeGetHeapUsageV8HeapScope": "related-page-document-isolate",
+                "runtimeGetHeapUsageV8HeapIsTargetLocal": false,
                 "runtimeGetHeapUsageMoliCountersScope": "target-document",
-                "runtimeCollectGarbageScope": "page-vm-document-isolate",
-                "v8ForegroundTaskWakeScope": "page-vm-document-isolate",
+                "runtimeCollectGarbageScope": "related-page-document-isolate",
+                "v8ForegroundTaskWakeScope": "page-runtime",
                 "v8ForegroundTaskWakeContextGroupIdAvailable": false,
                 "v8ForegroundTaskWakeInternalPolicy": "page-runtime-queue-and-owner-page-tick",
                 "v8ForegroundTaskWakeExternalPolicy": "page-owner-runtime-wake",

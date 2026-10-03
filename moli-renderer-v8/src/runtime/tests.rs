@@ -20,6 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
+mod auxiliary_pages;
 mod open_streaming;
 mod redirect_chain;
 
@@ -68,7 +69,6 @@ async fn prepare_test_external_raw_document_with_content_type_and_reply_boundary
     runtime
         .prepare_streaming_raw_document_from_external_body(
             runtime.reserve_page_for_creation(),
-            None,
             url.clone(),
             url,
             None,

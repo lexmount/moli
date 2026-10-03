@@ -963,8 +963,8 @@ impl TargetNetworkAgentState {
     }
 }
 
-/// Network lifecycle state retained only until a replaced renderer Page has
-/// published and closed its final output stream.
+/// Network lifecycle state retained until a replaced Document has published
+/// its final output, including any detached keepalive request terminals.
 #[derive(Debug)]
 pub(crate) struct RetiringTargetNetworkAgentState {
     output_queue: TargetNetworkOutputQueue,
@@ -975,6 +975,10 @@ pub(crate) struct RetiringTargetNetworkAgentState {
 }
 
 impl RetiringTargetNetworkAgentState {
+    pub(crate) fn has_pending_renderer_requests(&self) -> bool {
+        !self.active_renderer_subresource_requests.is_empty()
+    }
+
     pub(crate) fn ingest_renderer_output_item_and_prepare_live_delivery(
         &mut self,
         item: &ScriptNetworkOutputItem,

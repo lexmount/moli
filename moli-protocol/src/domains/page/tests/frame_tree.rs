@@ -39,7 +39,43 @@ async fn assert_initial_document_frame_tree_waits_for_navigation(popup: bool) {
         .unwrap();
     ctx.process_async(json!({ "id": 2002, "method": "Page.enable", "sessionId": session }))
         .await;
-    ctx.take_all();
+    let enabled = ctx.take_all();
+
+    if !popup {
+        // Chromium reports waitingForDebugger for browser-created targets, but
+        // their initial navigation is not gated on runIfWaitingForDebugger.
+        let committed = if let Some(committed) = created.iter().chain(&enabled).find(|message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session
+                && message["params"]["frame"]["url"] == url
+        }) {
+            committed.clone()
+        } else {
+            ctx.wait_for_scheduler_message("browser-created document commit", |message| {
+                message["method"] == "Page.frameNavigated"
+                    && message["sessionId"] == session
+                    && message["params"]["frame"]["url"] == url
+            })
+            .await
+        };
+        ctx.process_async(json!({
+            "id": 2005, "method": "Runtime.evaluate", "sessionId": session,
+            "params": { "expression": "location.href", "returnByValue": true }
+        }))
+        .await;
+        let evaluated = take_response_by_id(&mut ctx, 2005);
+        assert_eq!(evaluated["result"]["result"]["value"], url, "{evaluated}");
+        for (id, method) in [(2003, "Page.getFrameTree"), (2004, "Page.getResourceTree")] {
+            ctx.process_async(json!({ "id": id, "method": method, "sessionId": session }))
+                .await;
+            let reply = take_response_by_id(&mut ctx, id);
+            let frame = &reply["result"]["frameTree"]["frame"];
+            assert_eq!(frame["id"], target);
+            assert_eq!(frame["url"], url);
+            assert_eq!(frame["loaderId"], committed["params"]["frame"]["loaderId"]);
+        }
+        return;
+    }
 
     // Chromium's initial DocumentLoader URL serializes as ":", although the
     // initial DOM document has location.href == "about:blank". Playwright
@@ -107,7 +143,7 @@ async fn native_popup_frame_tree_distinguishes_initial_document_from_first_commi
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn native_created_target_frame_tree_distinguishes_initial_document_from_first_commit() {
+async fn native_created_target_frame_tree_commits_without_startup_resume() {
     tokio::task::LocalSet::new()
         .run_until(assert_initial_document_frame_tree_waits_for_navigation(
             false,

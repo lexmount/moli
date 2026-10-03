@@ -273,7 +273,10 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         new_target["url"],
         json!("about:blank#trailing-slash-target")
     );
-    assert_eq!(new_target["title"], json!(""));
+    assert_eq!(
+        new_target["title"],
+        json!("about:blank#trailing-slash-target")
+    );
     assert_eq!(
         request_json_with_method(Method::PUT, "/json/new").await["url"],
         json!(DEFAULT_TARGET_URL)
@@ -567,7 +570,7 @@ async fn chromium_devtools_json_new_uses_put_and_decodes_first_query_component()
     let target =
         request_json_with_method(Method::PUT, &format!("/json/new?{encoded}&for_tab")).await;
     assert_eq!(target["url"], json!("about:blank?q=1&x=2"));
-    assert_eq!(target["title"], json!(""));
+    assert_eq!(target["title"], json!("about:blank?q=1&x=2"));
     assert_eq!(target["type"], json!("tab"));
     assert!(
         target["webSocketDebuggerUrl"]

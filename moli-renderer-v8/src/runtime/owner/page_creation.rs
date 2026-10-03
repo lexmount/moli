@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::owner_local_store::take_staged_auxiliary_page_on_bound_owner_local_store;
 
 impl RendererOwnerHandle {
     pub(super) async fn run_owner_lane_local_task<R, F>(&self, future: F) -> Result<R>
@@ -215,6 +216,7 @@ impl RendererOwnerHandle {
             Err(error) => return Err(error).into(),
         };
         entry.set_top_level_navigation_dispatch(top_level_navigation_dispatch);
+        let vm_creation_id = entry.page_vm().creation_id;
         self.restore_live_page_entry(token, entry);
 
         if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
@@ -224,6 +226,7 @@ impl RendererOwnerHandle {
                     turn: Box::new(
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
+                            vm_creation_id,
                             follow_count: 0,
                             completion:
                                 LivePagePendingNavigationCompletion::PublishedPageCreation {
@@ -243,6 +246,7 @@ impl RendererOwnerHandle {
                 turn: Box::new(
                     RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                         token,
+                        vm_creation_id,
                         follow_count: 0,
                         completion: LivePagePendingNavigationCompletion::CompletePageCreation {
                             pending,
@@ -895,7 +899,17 @@ impl RendererOwnerHandle {
                 .with_renderer_document_isolate_allocator(renderer_document_isolate_allocator);
                 let local_executor = owner.state.local_executor.clone();
                 debug!(stage = ?stage, %final_url, "starting page VM creation from html");
-                let env = PageVmEnvConfig {
+                let staged_auxiliary_page =
+                    take_staged_auxiliary_page_on_bound_owner_local_store(page_reservation);
+                let reserved_service_worker_client_id = if staged_auxiliary_page.is_some() {
+                    // Adoption keeps the initial Document and its resource authority.
+                    // Release the unused provisional navigation client through its guard.
+                    drop(reserved_service_worker_client);
+                    None
+                } else {
+                    reserved_service_worker_client.map(RendererReservedServiceWorkerClient::release)
+                };
+                let mut env = PageVmEnvConfig {
                     web_storage,
                     document_start_scripts,
                     runtime_bindings,
@@ -926,9 +940,27 @@ impl RendererOwnerHandle {
                     main_document_commit,
                     top_level_storage_key,
                     navigation_bootstrap_entry: None,
-                    reserved_service_worker_client_id: reserved_service_worker_client
-                        .map(RendererReservedServiceWorkerClient::release),
+                    reserved_service_worker_client_id,
                 };
+                env.apply_main_document_commit_referrer();
+                if let Some(mut page_vm) = staged_auxiliary_page {
+                    ensure!(
+                        moli_url::is_about_blank(&final_url),
+                        "a staged auxiliary Page only accepts its initial blank adoption"
+                    );
+                    let started = Instant::now();
+                    page_vm.adopt_initial_auxiliary_page(&loader, &env)?;
+                    return Ok(if page_vm.vm_mut().has_pending_location_navigation() {
+                        ParseTimePageVmCreationOutcome::TriggeredNavigation { page_vm, stage }
+                    } else {
+                        ParseTimePageVmCreationOutcome::ContinuePhaseTwo {
+                            page_vm,
+                            page_tasks: Vec::new(),
+                            stage,
+                            started,
+                        }
+                    });
+                }
                 let bootstrap = Box::pin(async move {
                     let started = Instant::now();
                     ConcurrentParseTimeRuntime::finish_creation_from_html_bootstrap(
@@ -1039,6 +1071,11 @@ impl RendererOwnerHandle {
             ))
             .into();
         }
+        if token.replacement.is_some()
+            && let Err(error) = owner_local_store.validate_live_page_replacement_reservation(token)
+        {
+            return Err(error).into();
+        }
         let owner = self.clone();
         let residence = self
             .run_owner_lane_local_task(async move {
@@ -1108,81 +1145,20 @@ impl RendererOwnerHandle {
         isolate_reservation: RendererDocumentIsolateReservation,
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
-        let RendererCreateStreamingRawPageRequest {
-            document_replacement: _document_replacement,
-            root_frame_id,
-            main_document_commit,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            navigation_redirect_chain,
-            response_status,
-            response_headers,
-            loader,
-            navigator_identity,
-            web_storage,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            runtime_inspector_session_restore_snapshots,
-            runtime_isolated_worlds,
-            permission_overrides,
-            extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            network_offline,
-            blocked_url_patterns,
-            indexed_db_manager,
-            storage_bucket_store,
-            emulated_media,
-            idle_override,
-            navigator_overrides,
-            viewport_surface,
-            document_activity,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            layout_policy,
-            wpt_extensions_enabled,
-            stage,
-            reply_boundary,
-            lifecycle_decider,
-            top_level_navigation_dispatch,
-            navigation_reply_policy,
-            reserved_service_worker_client,
-        } = request;
-        if lifecycle_decider.is_some()
-            && (!matches!(reply_boundary, crate::RendererReplyBoundary::Stage)
-                || !matches!(
-                    top_level_navigation_dispatch,
-                    RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter
-                )
-                || !matches!(
-                    navigation_reply_policy,
-                    NavigationReplyPolicy::FollowBeforeReply
-                ))
-        {
-            return Err(anyhow!(
-                "a lifecycle decider requires standalone follow-before-reply page creation"
-            ))
-            .into();
+        let mut request = request;
+        if let Err(error) = request.validate_bootstrap_configuration() {
+            return Err(error).into();
         }
-        let loader = loader_for_new_document(
-            &loader,
-            &extra_http_headers,
-            network_offline,
-            &blocked_url_patterns,
-        );
-        let document_policy_container = DocumentPolicyContainer::from_navigation_response_headers(
-            &response_headers,
-            &final_url,
-        )
-        .with_content_security_policy_bypass(bypass_content_security_policy);
-        let document_default_language =
-            crate::document_language::document_default_language_from_headers(&response_headers);
-        let document_last_modified =
-            crate::document_last_modified::document_last_modified_from_headers(&response_headers);
+        let requested_url = request.requested_url.clone();
+        let navigation_initiator_url = request.navigation_initiator_url.clone();
+        let navigation_redirected = request.navigation_redirected;
+        let navigation_redirect_count = request.navigation_redirect_count;
+        let navigation_redirect_chain = request.navigation_redirect_chain.clone();
+        let stage = request.stage;
+        let reply_boundary = request.reply_boundary;
+        let lifecycle_decider = request.lifecycle_decider.take();
+        let top_level_navigation_dispatch = request.top_level_navigation_dispatch;
+        let navigation_reply_policy = request.navigation_reply_policy;
         let owner = self.clone();
         let phase_one_result = self
             .run_owner_lane_local_task(async move {
@@ -1194,65 +1170,9 @@ impl RendererOwnerHandle {
                 )
                 .with_renderer_document_isolate_allocator(isolate_allocator)
                 .with_prepared_renderer_document_isolate(isolate_bootstrap, isolate_reservation)?;
-                let local_executor = owner.state.local_executor.clone();
-                let env = PageVmEnvConfig {
-                    web_storage,
-                    document_start_scripts,
-                    runtime_bindings,
-                    runtime_inspector_session_restore_snapshots,
-                    runtime_isolated_worlds,
-                    permission_overrides,
-                    extra_http_headers,
-                    navigator_identity,
-                    document_policy_container,
-                    document_default_language,
-                    document_last_modified,
-                    script_execution_disabled,
-                    bypass_content_security_policy,
-                    emulated_media,
-                    idle_override,
-                    navigator_overrides,
-                    viewport_surface,
-                    document_activity,
-                    network_offline,
-                    blocked_url_patterns,
-                    indexed_db_manager,
-                    storage_bucket_store,
-                    fetch_subresource_interception_enabled,
-                    fetch_subresource_interception_resource_type,
-                    layout_policy,
-                    wpt_extensions_enabled,
-                    root_frame_id,
-                    main_document_commit,
-                    top_level_storage_key: None,
-                    navigation_bootstrap_entry: None,
-                    reserved_service_worker_client_id: reserved_service_worker_client
-                        .map(RendererReservedServiceWorkerClient::release),
-                };
-                let bootstrap = Box::pin(async move {
-                    let started = Instant::now();
-                    ConcurrentParseTimeRuntime::create_external_raw_document_response_at_reply_boundary(
-                        page_id,
-                        local_executor,
-                        &loader,
-                        &env,
-                        runtime_hooks,
-                        stage,
-                        started,
-                        final_url,
-                        response_status,
-                        response_headers,
-                        raw_body,
-                        reply_boundary,
-                    )
+                request
+                    .bootstrap(page_id, owner.state.local_executor.clone(), runtime_hooks)
                     .await
-                });
-                PageVm::run_bootstrap_future_on_fresh_local_task(
-                    owner.state.local_executor.clone(),
-                    "create-page external raw streaming bootstrap local task channel closed",
-                    bootstrap,
-                )
-                .await
             })
             .await;
         match phase_one_result {

@@ -76,12 +76,18 @@ impl RendererOwnerHandle {
                 }
             }
             RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
-                token, ..
+                token,
+                vm_creation_id,
+                ..
             } => {
                 if let Some(entry) = self.checkout_live_page_entry_for_cancellation(
                     token,
                     "phase-one location navigation",
                 ) {
+                    if entry.page_vm().creation_id != vm_creation_id {
+                        self.restore_live_page_entry(token, entry);
+                        return;
+                    }
                     self.retire_pending_phase_one_page_entry(
                         token,
                         entry,
@@ -89,8 +95,24 @@ impl RendererOwnerHandle {
                     );
                 }
             }
-            RenderRuntimeTurn::ContinueLivePageNavigationPostParseLifecycle { token, .. } => {
-                remove_page_on_bound_owner_local_store(token);
+            RenderRuntimeTurn::ContinueLivePageNavigationPostParseLifecycle {
+                token,
+                document,
+                ..
+            } => {
+                if let Some(entry) =
+                    self.checkout_live_page_entry_for_cancellation(token, "post-parse navigation")
+                {
+                    let current = entry.active_page_vm().map(|page_vm| {
+                        RendererDocumentLifecycleIdentity::from(
+                            page_vm.document_lifecycle.current_snapshot(),
+                        )
+                    });
+                    if current == Some(document) {
+                        remove_page_on_bound_owner_local_store(token);
+                    }
+                    self.restore_live_page_entry(token, entry);
+                }
             }
             RenderRuntimeTurn::FinishHtmlCreatePage { .. }
             | RenderRuntimeTurn::DrainSharedWorkerServiceLane
@@ -348,6 +370,10 @@ impl RendererOwnerHandle {
                 self.restore_live_page_entry(token, entry);
                 self.finish_pending_page_creation(pending).await
             }
+            LivePagePendingNavigationCompletion::CompletePageReplacement { .. } => {
+                self.finish_prepared_page_replacement_reply(token, entry, None, None, None)
+                    .await
+            }
             LivePagePendingNavigationCompletion::ReplyWithSnapshot {
                 reply,
                 capture_policy,
@@ -442,6 +468,16 @@ impl RendererOwnerHandle {
                 self.restore_live_page_entry(token, entry);
                 self.finish_pending_page_creation(pending.with_pending_download(download))
                     .await
+            }
+            LivePagePendingNavigationCompletion::CompletePageReplacement { .. } => {
+                self.finish_prepared_page_replacement_reply(
+                    token,
+                    entry,
+                    None,
+                    None,
+                    Some(download),
+                )
+                .await
             }
             LivePagePendingNavigationCompletion::ReplyWithSnapshot {
                 reply,

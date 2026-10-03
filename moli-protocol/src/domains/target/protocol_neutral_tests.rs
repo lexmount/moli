@@ -26,6 +26,7 @@ fn cdp_create_target_builds_protocol_neutral_target_command() {
             for_tab: None,
             background: None,
             focus: None,
+            new_window: None,
         },
     )
     .expect("valid target disposition");

@@ -223,6 +223,16 @@ async fn project_renderer_output_records_for_owner(
                     .await;
             }
             RendererOutputItem::Observation(observation) => {
+                if let moli_core::RendererProtocolObservation::DocumentLifecycle(event) =
+                    &observation
+                    && matches!(
+                        event.kind,
+                        moli_core::page::RendererDocumentLifecycleEventKind::Started { .. }
+                    )
+                    && let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+                {
+                    slot.observe_renderer_output_document_start(event.document);
+                }
                 let outputs = if let moli_core::RendererProtocolObservation::Network {
                     source_document,
                     item,
@@ -245,7 +255,6 @@ async fn project_renderer_output_records_for_owner(
                         conn,
                         owner,
                         cursor.stream().residence(),
-                        cursor.stream().renderer_agent(),
                         &observation,
                     )
                 };
@@ -261,6 +270,11 @@ async fn project_renderer_output_records_for_owner(
                     .await;
             }
         }
+    }
+    if let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+        // Do not release predecessor correlations halfway through a batch:
+        // prepared Network deliveries from that batch still need projection.
+        slot.finish_retiring_document_output_projection();
     }
 }
 

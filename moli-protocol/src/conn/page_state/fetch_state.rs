@@ -59,17 +59,29 @@ impl BrowserContext {
         self.page_targets.background_is_empty()
     }
 
-    pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+    pub(crate) fn insert_page_target_host(&mut self, host: PageTargetHost) -> bool {
+        let window_id = self.page_targets.default_window_id();
+        self.insert_page_target_host_in_window(host, window_id)
+    }
+
+    pub(crate) fn insert_page_target_host_in_window(
+        &mut self,
+        mut host: PageTargetHost,
+        window_id: u32,
+    ) -> bool {
         if self.page_targets.is_empty() {
             host.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
         }
         host.set_base_cache_disabled(self.global_cache_disabled);
         if let Some(config) = self.page_navigation_runtime_config.clone() {
-            let engine = self.new_page_navigation_engine(config);
+            let engine = self.new_page_navigation_engine_for_auxiliary(
+                config,
+                host.runtime_slot.pending_auxiliary_page(),
+            );
             host.install_navigation_engine(engine);
         }
-        self.page_targets.insert(host)
+        self.page_targets.insert(host, window_id)
     }
 
     #[cfg(test)]
@@ -352,6 +364,9 @@ mod tests {
 
     fn navigation_state(url: &Url) -> NavigationDispatchState {
         NavigationDispatchState {
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),

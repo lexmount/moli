@@ -733,13 +733,8 @@ impl CdpConnection {
                 .dedicated_worker_running_worker_isolate_count;
         }
 
-        let estimated_document_isolate_count = self
-            .browser_contexts()
-            .map(|browser_context| {
-                browser_context.loaded_document_page_count()
-                    + browser_context.pending_document_page_build_count()
-            })
-            .sum::<usize>();
+        let estimated_document_isolate_count =
+            self.estimated_document_isolate_count_for_diagnostics();
         let shared_worker_running_worker_isolate_count = self
             .browser_contexts()
             .map(|browser_context| {

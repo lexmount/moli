@@ -62,6 +62,7 @@ impl<V> DenseReflectorMap<V> {
         self.sparse.insert(id, value)
     }
 
+    #[cfg(test)]
     pub(super) fn clear(&mut self) {
         self.dense_base = None;
         self.dense.clear();
@@ -111,6 +112,13 @@ impl<V> DenseReflectorMap<V> {
     #[cfg(test)]
     pub(super) fn values(&self) -> impl Iterator<Item = &V> {
         self.dense.iter().flatten().chain(self.sparse.values())
+    }
+
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.dense
+            .iter_mut()
+            .flatten()
+            .chain(self.sparse.values_mut())
     }
 }
 

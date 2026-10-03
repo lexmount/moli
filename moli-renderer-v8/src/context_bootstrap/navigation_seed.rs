@@ -34,6 +34,7 @@ pub(super) fn history_entry_from_snapshot(
 ) -> HistoryEntryRef {
     HistoryEntry {
         url: snapshot.url.clone(),
+        inherited_origin: snapshot.inherited_origin.clone(),
         referrer_policy: snapshot.referrer_policy.clone(),
         history_state: snapshot.history_state.clone(),
         navigation_state: snapshot.navigation_state.clone(),
@@ -75,6 +76,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
             let state = serialize_history_state(scope, fallback_state);
             HistoryEntry {
                 url: "about:blank".to_owned(),
+                inherited_origin: None,
                 referrer_policy: None,
                 history_state: state.clone(),
                 navigation_state: state,

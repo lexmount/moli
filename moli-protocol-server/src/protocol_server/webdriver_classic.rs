@@ -17,7 +17,7 @@ use moli_core::page::{
 };
 use moli_html_input_type::InputType;
 use moli_protocol::{
-    DevToolsPageResidenceIdentity,
+    DevToolsDocumentResidenceIdentity,
     automation::{
         AutomationCommand, AutomationContext, AutomationResult, DevToolsDomGeometryResult,
         DevToolsDomNodeReference, DevToolsDownloadBehaviorSetting, DevToolsElementClickCommand,
@@ -413,7 +413,7 @@ fn classic_element_reference_from_id(element_id: String) -> Value {
 fn registered_classic_element_reference_from_dom_reference(
     state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     node_id: u32,
     reference: DevToolsDomNodeReference,
 ) -> Value {
@@ -434,7 +434,7 @@ fn registered_classic_element_reference_from_dom_reference(
 fn registered_classic_element_references_from_canonical_references(
     state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     references: impl IntoIterator<Item = ClassicScriptCanonicalNodeReference>,
 ) -> Vec<Value> {
     references
@@ -454,7 +454,7 @@ fn registered_classic_element_references_from_canonical_references(
 fn registered_classic_shadow_root_reference_from_dom_reference(
     state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     node_id: u32,
     reference: DevToolsDomNodeReference,
 ) -> Value {
@@ -486,7 +486,7 @@ fn classic_frame_reference(frame_id: impl Into<String>) -> Value {
 
 #[derive(Debug)]
 struct ClassicPageBoundRemoteObject {
-    page_residence: DevToolsPageResidenceIdentity,
+    page_residence: DevToolsDocumentResidenceIdentity,
     object_id: String,
 }
 
@@ -517,7 +517,7 @@ async fn release_classic_remote_handle(
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     value: &DevToolsRemoteValue,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     label: &str,
 ) {
     let object_id = value
@@ -719,7 +719,7 @@ fn classic_dom_reference_from_frame_owner_result(
 async fn classic_default_execution_context_id(
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     label: &str,
 ) -> Result<i64, ClassicError> {
     let command = AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
@@ -775,7 +775,7 @@ async fn release_classic_remote_objects(
 struct ClassicScriptArgumentHandles {
     descriptors: Vec<Value>,
     remote_handles: Vec<ClassicPageBoundRemoteObject>,
-    page_residence: Option<DevToolsPageResidenceIdentity>,
+    page_residence: Option<DevToolsDocumentResidenceIdentity>,
 }
 
 enum ClassicScriptArgumentReference<'a> {
@@ -793,7 +793,7 @@ enum ClassicResolvedScriptArgumentReference {
 }
 
 impl ClassicResolvedScriptArgumentReference {
-    fn page_residence(&self) -> Option<&DevToolsPageResidenceIdentity> {
+    fn page_residence(&self) -> Option<&DevToolsDocumentResidenceIdentity> {
         match self {
             Self::Element(reference) | Self::ShadowRoot(reference) | Self::Frame(reference) => {
                 Some(&reference.page_residence)
@@ -1135,14 +1135,15 @@ async fn execute_classic_script_with_argument_page(
     binding: &ClassicSessionBinding,
     command: AutomationCommand,
     timeout: Option<Duration>,
-    expected_page: Option<DevToolsPageResidenceIdentity>,
-) -> Result<(AutomationResult, DevToolsPageResidenceIdentity), DevToolsError> {
+    expected_page: Option<DevToolsDocumentResidenceIdentity>,
+) -> Result<(AutomationResult, DevToolsDocumentResidenceIdentity), DevToolsError> {
     match expected_page {
-        Some(expected_page) => binding
-            .runtime
-            .execute_script_on_page(command, timeout, expected_page.clone())
-            .await
-            .map(|result| (result, expected_page)),
+        Some(expected_page) => {
+            binding
+                .runtime
+                .execute_script_on_page(command, timeout, expected_page)
+                .await
+        }
         None => {
             binding
                 .runtime
@@ -1290,7 +1291,7 @@ fn classic_script_argument_deserializer_function(user_function: String) -> Strin
 fn classic_script_result_value(
     state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     value: Value,
     dom_references_by_node_id: &BTreeMap<u32, ClassicScriptCanonicalNodeReference>,
     frame_ids_by_owner_reference: &BTreeMap<ClassicScriptFrameOwnerReferenceKey, String>,
@@ -1403,7 +1404,7 @@ fn classic_script_result_value(
 async fn classic_webdriver_script_result_value(
     state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     value: Value,
 ) -> Result<Value, ClassicError> {
     let dom_references =
@@ -1425,7 +1426,7 @@ async fn classic_webdriver_script_result_value(
 
 async fn classic_script_dom_references_by_node_id(
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     value: &Value,
 ) -> Result<BTreeMap<u32, ClassicScriptCanonicalNodeReference>, ClassicError> {
     let mut node_ids = Vec::new();
@@ -1462,7 +1463,7 @@ async fn classic_script_dom_references_by_node_id(
 
 async fn classic_script_frame_ids_by_owner_reference(
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     value: &Value,
 ) -> Result<BTreeMap<ClassicScriptFrameOwnerReferenceKey, String>, ClassicError> {
     let mut owner_references = Vec::new();
@@ -1491,7 +1492,7 @@ async fn classic_script_frame_ids_by_owner_reference(
 
 async fn classic_script_frame_owner_dom_reference(
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     owner_reference: ClassicScriptFrameOwnerReferenceKey,
 ) -> Result<ClassicPageBoundDomReference, ClassicError> {
     if owner_reference.has_backend_node_id() {
@@ -3211,7 +3212,7 @@ async fn webdriver_classic_execute_find_element_command(
     binding: &ClassicSessionBinding,
     command: AutomationCommand,
     multiple: bool,
-    expected_page: Option<DevToolsPageResidenceIdentity>,
+    expected_page: Option<DevToolsDocumentResidenceIdentity>,
 ) -> Result<ClassicFindElementExecution, DevToolsError> {
     let implicit_wait = Duration::from_millis(binding.timeouts.implicit.unwrap_or(0));
     let started = tokio::time::Instant::now();
@@ -3278,7 +3279,7 @@ async fn webdriver_classic_execute_find_element_command(
 
 struct ClassicFindElementExecution {
     result: AutomationResult,
-    page_residence: Option<DevToolsPageResidenceIdentity>,
+    page_residence: Option<DevToolsDocumentResidenceIdentity>,
 }
 
 async fn webdriver_classic_find_element_result_response(
@@ -3416,7 +3417,7 @@ async fn webdriver_classic_find_element_result_response(
 
 async fn classic_find_canonical_dom_references_by_frontend_node_id(
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     frontend_node_ids: Vec<u32>,
     label: &str,
 ) -> Result<Vec<ClassicScriptCanonicalNodeReference>, ClassicError> {
@@ -3443,7 +3444,7 @@ async fn classic_find_canonical_dom_references_by_frontend_node_id(
 
 async fn classic_find_canonical_dom_reference_for_frontend_node_id(
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsPageResidenceIdentity,
+    page_residence: &DevToolsDocumentResidenceIdentity,
     frontend_node_id: u32,
     label: &str,
 ) -> Result<ClassicScriptCanonicalNodeReference, ClassicError> {

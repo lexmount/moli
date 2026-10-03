@@ -41,6 +41,13 @@ struct RendererDevToolsAgentState {
     output_journal: Option<RendererTurnOutputJournal>,
 }
 
+impl Drop for RendererDevToolsAgentState {
+    fn drop(&mut self) {
+        self.isolate_backend
+            .remove_context_group(self.context_group_id);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RendererDomDebuggerPauseScheduler {
     state: Weak<RefCell<RendererDevToolsAgentState>>,
@@ -124,10 +131,12 @@ impl RendererDomDebuggerPauseScheduler {
 
 impl RendererDevToolsAgent {
     pub(super) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
+        let context_group_id = DocumentInspectorContextGroupId::next();
+        isolate_backend.bind_context_group(context_group_id);
         Self {
             state: Rc::new(RefCell::new(RendererDevToolsAgentState {
                 token: RendererDevToolsAgentToken::allocate(),
-                context_group_id: DocumentInspectorContextGroupId::next(),
+                context_group_id,
                 isolate_backend,
                 sessions: RendererDevToolsAgentSessions::default(),
                 output_journal: None,
@@ -327,6 +336,7 @@ impl RendererDevToolsAgent {
 
 fn session_connection(state: &RendererDevToolsAgentState) -> RendererDevToolsSessionConnection {
     RendererDevToolsSessionConnection::new(
+        state.isolate_backend.clone(),
         state.context_group_id,
         state.token,
         state.output_journal.clone(),

@@ -363,12 +363,15 @@ impl RendererOwnerHandle {
                 }
                 self.enqueue_parked_turns_for_wake(token, parked_turns, pending_turns);
             }
-            RendererOwnerWake::CommittedDocumentParserUnblocked { token } => {
+            RendererOwnerWake::CommittedDocumentParserUnblocked {
+                token,
+                vm_creation_id,
+            } => {
                 let mut unblocked = false;
-                for parked_turn in parked_turns
-                    .iter_mut()
-                    .filter(|turn| turn.wake_token == token)
-                {
+                for parked_turn in parked_turns.iter_mut().filter(|turn| {
+                    turn.wake_token == token
+                        && turn.turn.phase_one_vm_creation_id() == Some(vm_creation_id)
+                }) {
                     unblocked |= parked_turn.condition.unblock_committed_document_parser();
                 }
                 if !unblocked {
@@ -414,6 +417,25 @@ impl RendererOwnerHandle {
                 token,
                 vm_creation_id,
             } => {
+                // A chained navigation can commit another Document before
+                // this queued wake is consumed. Only the current generation
+                // can discard superseded parser drivers; an older wake must
+                // not discard the newer Document's driver.
+                if self.state.page_table.active_vm_creation_id(token.page_id())
+                    == Some(vm_creation_id)
+                {
+                    let before = parked_turns.len();
+                    parked_turns.retain(|turn| {
+                        turn.wake_token != token
+                            || turn
+                                .turn
+                                .phase_one_vm_creation_id()
+                                .is_none_or(|id| id == vm_creation_id)
+                    });
+                    if parked_turns.len() != before {
+                        self.enqueue_parked_turns_for_wake(token, parked_turns, pending_turns);
+                    }
+                }
                 self.enqueue_parked_turns_for_replacement_view_settlement(
                     token,
                     vm_creation_id,
@@ -440,6 +462,28 @@ impl RendererOwnerHandle {
                 return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
             }
         };
+        if entry.page_vm().vm().pending_location_navigation_handoff() == Some(handoff)
+            && matches!(
+                entry.top_level_navigation_dispatch(),
+                RendererTopLevelNavigationDispatch::DelegateToBrowser
+            )
+        {
+            // A related Page can request this navigation without running a
+            // command or ordinary task on the target Page. Its exact handoff
+            // still needs the same browser/renderer ownership arbitration.
+            let delegated = entry
+                .page_vm_mut()
+                .vm_mut()
+                .publish_pending_document_location_navigation();
+            if !matches!(delegated, Ok(false)) {
+                let output = entry.page_vm_mut().settle_renderer_output_publication();
+                self.restore_live_page_entry(token, entry);
+                if let Some(output) = output {
+                    self.publish_renderer_output(output);
+                }
+                return RenderRuntimeDispatchOutcome::BackgroundComplete(delegated.map(|_| ()));
+            }
+        }
         let claimed = entry.begin_renderer_navigation_follow_from_handoff(handoff);
         self.restore_live_page_entry(token, entry);
         if !claimed {

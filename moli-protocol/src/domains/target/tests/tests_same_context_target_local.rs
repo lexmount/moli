@@ -1,6 +1,50 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn closing_active_target_selects_adjacent_tab_in_creation_order() {
+    // Chromium TabStripModel::DetermineNewSelectedIndex prefers the next tab
+    // to the right, or the left neighbor when closing the last unrelated tab.
+    for (closing_index, selected_index) in [(0, 1), (1, 2), (2, 1)] {
+        let mut ctx = TestContext::new();
+        load_bc_with_target(&mut ctx, "BID-close-order", "TID-first");
+        let mut targets = vec!["TID-first".to_owned()];
+        for id in [10, 11] {
+            ctx.process_async(json!({
+                "id": id,
+                "method": "Target.createTarget",
+                "params": {
+                    "browserContextId": "BID-close-order",
+                    "url": format!("about:blank#{id}")
+                }
+            }))
+            .await;
+            targets.push(take_created_target_id(&mut ctx, id));
+            ctx.take_all();
+        }
+        ctx.process_async(json!({
+            "id": 12,
+            "method": "Target.activateTarget",
+            "params": {"targetId": targets[closing_index]}
+        }))
+        .await;
+        ctx.take_all();
+        ctx.process_async(json!({
+            "id": 13,
+            "method": "Target.closeTarget",
+            "params": {"targetId": targets[closing_index]}
+        }))
+        .await;
+        assert_eq!(take_response_by_id(&mut ctx, 13)["result"]["success"], true);
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(
+            context.active_target_id(),
+            Some(targets[selected_index].as_str())
+        );
+        assert!(context.page_target(&targets[closing_index]).is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn activate_target_activates_auto_attached_background_session_into_page_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
@@ -157,7 +201,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
             "targetInfo": {
                 "targetId": second_target_id,
                 "type": "page",
-                "title": "",
+                "title": "about:blank#second",
                 "url": "about:blank#second",
                 "attached": false,
                 "canAccessOpener": false,
@@ -176,7 +220,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
+async fn popup_target_diagnostics_count_related_pages_in_one_document_isolate() {
     let mut ctx = TestContext::new();
     ctx.conn.set_auto_attach_owner(
         None,
@@ -291,18 +335,18 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(2),
-        "opener and loaded popup target must remain independently schedulable: {diagnostics:?}"
+        json!(1),
+        "related opener and popup share their renderer owner: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
-        json!(2),
-        "loaded popup PageVM must own a distinct document isolate: {diagnostics:?}"
+        json!(1),
+        "related popup and opener must count as one document isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedLiveV8IsolateCount"],
-        json!(2),
-        "opener plus popup without workers should report two live page document isolates: {diagnostics:?}"
+        json!(1),
+        "opener plus popup without workers should report one live document isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["documentContextCount"],
@@ -352,7 +396,7 @@ async fn attach_to_target_keeps_background_target_background_when_active_target_
             "targetInfo": {
                 "targetId": second_target_id,
                 "type": "page",
-                "title": "",
+                "title": "about:blank#second",
                 "url": "about:blank#second",
                 "attached": true,
                 "canAccessOpener": false,

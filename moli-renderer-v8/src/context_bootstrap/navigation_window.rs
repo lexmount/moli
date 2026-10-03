@@ -140,6 +140,15 @@ pub(super) fn window_task_target_for_runtime_owner<'s>(
     ))
 }
 
+pub(super) fn navigation_document_is_initial_empty<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    runtime_window_is_global(scope, owner)
+        && context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host| unsafe { &*host }.main_document_is_initial_empty())
+}
+
 pub(super) fn navigation_document_is_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -155,7 +164,7 @@ pub(super) fn navigation_document_can_update_current_entry<'s>(
         return false;
     }
     if runtime_window_is_global(scope, owner) {
-        return true;
+        return !navigation_document_is_initial_empty(scope, owner);
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return false;

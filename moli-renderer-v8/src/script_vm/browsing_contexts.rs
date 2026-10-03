@@ -27,10 +27,17 @@ impl ScriptVm {
     pub(crate) fn navigate_top_level_same_document_from_browser(
         &mut self,
         url: &str,
+        replace_current: bool,
     ) -> Result<bool> {
         let url = url.to_owned();
         self.with_default_context_scope(|scope, _host_ptr| {
-            Ok(crate::context_bootstrap::navigate_top_level_same_document_from_browser(scope, url))
+            Ok(
+                crate::context_bootstrap::navigate_top_level_same_document_from_browser(
+                    scope,
+                    url,
+                    replace_current,
+                ),
+            )
         })
     }
 

@@ -1060,6 +1060,9 @@ async fn disable_clears_fetch_state() {
             interception_session_id: Some("SID-1".to_owned()),
             document_navigation_token: None,
             navigation: crate::conn::NavigationDispatchState {
+                navigation_initiator: None,
+                initial_document_environment: None,
+                auxiliary_document_response: None,
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
                 navigate_id: Some(1),
@@ -1102,6 +1105,9 @@ async fn disable_clears_fetch_state() {
                 response_stage_request_id: "INT-1".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1330,6 +1336,9 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 response_stage_request_id: "INT-8".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1407,6 +1416,9 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 response_stage_request_id: "INT-9".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1581,6 +1593,9 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
         interception_session_id: Some("SID-1".to_owned()),
         document_navigation_token: None,
         navigation: crate::conn::NavigationDispatchState {
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),

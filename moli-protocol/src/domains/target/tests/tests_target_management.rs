@@ -1246,7 +1246,7 @@ async fn get_targets_reports_pending_initial_document_page_target_info() {
         .expect("pending initial document target should be reported");
     assert_eq!(pending["type"], json!("page"));
     assert_eq!(pending["url"], json!("about:blank#pending-targets"));
-    assert_eq!(pending["title"], json!(""));
+    assert_eq!(pending["title"], json!("about:blank#pending-targets"));
     assert_eq!(pending["attached"], json!(false));
 }
 
@@ -1297,7 +1297,7 @@ async fn get_target_info_known_target() {
             "targetInfo": {
                 "targetId": "TID-000000000C",
                 "type": "page",
-                "title": "",
+                "title": "about:blank",
                 "url": "about:blank",
                 "attached": false,
                 "canAccessOpener": false,
@@ -1340,7 +1340,7 @@ async fn get_target_info_reports_pending_initial_document_page_target_info() {
             "targetInfo": {
                 "targetId": "TID-pending-info",
                 "type": "page",
-                "title": "",
+                "title": "about:blank#pending-info",
                 "url": "about:blank#pending-info",
                 "attached": false,
                 "canAccessOpener": false,

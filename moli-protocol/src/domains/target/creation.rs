@@ -82,6 +82,11 @@ pub(super) fn emit_target_creation_protocol_events(
             out.push_target_background_event(event);
         }
     }
+    let page_session_ids = events
+        .attached_sessions
+        .iter()
+        .map(|session| session.session_id().to_owned())
+        .collect::<Vec<_>>();
     let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
         events.page_target_id,
         target_info,
@@ -89,6 +94,12 @@ pub(super) fn emit_target_creation_protocol_events(
     ));
     for event in event_plan {
         out.push_target_background_event(event);
+    }
+    // Direct browser creation does not install the renderer startup pause
+    // used by window.open(). Chromium still reports the requested waiting
+    // flag in attachedToTarget. Tab-level browser throttles are independent.
+    for session_id in page_session_ids {
+        conn.release_waiting_for_debugger_session(Some(&session_id));
     }
     Ok(())
 }
@@ -112,6 +123,7 @@ pub(super) struct CreateTargetParams {
     pub(super) for_tab: Option<bool>,
     pub(super) background: Option<bool>,
     pub(super) focus: Option<bool>,
+    pub(super) new_window: Option<bool>,
 }
 
 fn default_blank() -> String {
@@ -142,6 +154,7 @@ pub(super) fn start_create_target_command(
             for_tab: None,
             background: None,
             focus: None,
+            new_window: None,
         },
         Err(e) => {
             return super::target_command_error(-32602, e);
@@ -152,6 +165,7 @@ pub(super) fn start_create_target_command(
     } else {
         CreateTargetResultHost::Page
     };
+    let new_window = params.new_window.unwrap_or(false);
     let command = match build_cdp_create_target_command(cmd, params) {
         Ok(command) => command,
         Err(message) => return super::target_command_error(-32602, message),
@@ -162,6 +176,7 @@ pub(super) fn start_create_target_command(
         cmd.session_id,
         command,
         result_host,
+        new_window,
     )
 }
 
@@ -202,6 +217,7 @@ pub(super) fn start_devtools_create_target_command(
         command_session_id,
         command,
         CreateTargetResultHost::Page,
+        false,
     )
 }
 
@@ -211,9 +227,10 @@ fn start_devtools_create_target_command_with_result_host(
     command_session_id: Option<&str>,
     command: DevToolsCreateTargetCommand,
     result_host: CreateTargetResultHost,
+    new_window: bool,
 ) -> TargetCommandTaskStep {
     let mut plan = CommandOutputPlan::default();
-    let execution = execute_devtools_create_target_command(conn, command);
+    let execution = execute_devtools_create_target_command_in_window(conn, command, new_window);
     let (created_target_id, creation_commit) = match execution {
         Ok(execution) => {
             let target_id = execution.result.target_id.clone();
@@ -279,6 +296,14 @@ pub(super) fn execute_devtools_create_target_command(
     conn: &mut CdpConnection,
     command: DevToolsCreateTargetCommand,
 ) -> Result<DevToolsCreateTargetExecution, DevToolsError> {
+    execute_devtools_create_target_command_in_window(conn, command, false)
+}
+
+fn execute_devtools_create_target_command_in_window(
+    conn: &mut CdpConnection,
+    command: DevToolsCreateTargetCommand,
+    new_window: bool,
+) -> Result<DevToolsCreateTargetExecution, DevToolsError> {
     let restore_browser_context_id = previously_active_browser_context_id(conn);
     if let Err(error) = activate_browser_context_for_create_target(conn, &command) {
         restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
@@ -327,32 +352,19 @@ pub(super) fn execute_devtools_create_target_command(
         None
     };
     let activating_created_target = has_active_target && command.activate;
-    let activation = activating_created_target
-        .then(|| TargetActivationTransition::new(target_id.clone(), previous_active_target_id));
+    let activation = command.activate.then(|| {
+        TargetActivationTransition::new(target_id.clone(), previous_active_target_id.clone())
+    });
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
     {
         let bc = conn.browser_context.as_mut().unwrap();
-        if creating_background_target {
-            bc.stage_background_target(
-                target_id.clone(),
-                auto_attached_background_session_id.clone(),
-                command.url.clone(),
-                Some(initial_empty_document_url.clone()),
-                None,
-            );
-        } else if activating_created_target {
-            bc.stage_foreground_target(
-                target_id.clone(),
-                None,
-                command.url.clone(),
-                Some(initial_empty_document_url.clone()),
-            );
+        let window_id = if new_window {
+            bc.page_targets.allocate_window_id()
         } else {
-            let claimed_default_placeholder =
-                claims_default_placeholder && bc.rekey_active_target(target_id.clone());
-            if !claimed_default_placeholder {
-                bc.set_active_target_id(target_id.clone());
-            }
+            bc.page_targets.default_window_id()
+        };
+        if claims_default_placeholder && bc.page_targets.rekey_active(target_id.clone(), window_id)
+        {
             bc.set_target_url(command.url.clone());
             bc.begin_active_target_initial_empty_document(initial_empty_document_url.clone());
             bc.page_target_mut(&target_id)
@@ -360,6 +372,24 @@ pub(super) fn execute_devtools_create_target_command(
                 .owner_state
                 .target_crash_state
                 .clear();
+        } else {
+            bc.stage_background_target_in_window(
+                target_id.clone(),
+                auto_attached_background_session_id.clone(),
+                command.url.clone(),
+                Some(initial_empty_document_url.clone()),
+                None,
+                window_id,
+            );
+            if !creating_background_target {
+                bc.set_active_target_id(target_id.clone());
+            }
+        }
+        if new_window && creating_background_target {
+            // Select the first tab without changing browser focus for a
+            // background window.
+            let selected = bc.page_targets.select_tab(&target_id);
+            debug_assert!(selected, "new window target must be registered");
         }
         if command.url != initial_empty_document_url {
             // Chromium gives Target.createTarget(url) one initial
@@ -370,6 +400,15 @@ pub(super) fn execute_devtools_create_target_command(
         }
     }
     let tab_target_id = conn.register_top_level_page_target(&target_id);
+    if command.activate {
+        conn.select_browser_focus_for_target(&target_id);
+    } else if !has_active_target {
+        let another_window_exists = conn
+            .inactive_browser_contexts
+            .iter()
+            .any(|context| !context.page_targets.is_empty());
+        conn.browser_context.as_mut().unwrap().window_is_focused = !another_window_exists;
+    }
     if !creating_background_target {
         conn.notify_target_host_activated(&target_id);
     }

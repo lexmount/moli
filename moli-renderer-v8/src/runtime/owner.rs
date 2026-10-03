@@ -94,11 +94,13 @@ use moli_page_types::LayoutPolicy;
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
+mod document_response;
 mod lifecycle_decision;
 mod owner_commands;
 mod owner_loop;
 mod page_commands;
 mod page_creation;
+mod page_replacement;
 mod page_turn_completion;
 mod scheduler;
 
@@ -231,7 +233,18 @@ pub struct RendererCreateStreamingRawPageRequest {
 }
 
 pub enum RendererOwnerCommand {
+    ReleaseCapturedDocumentEnvironment {
+        id: u64,
+    },
     CreateHtmlPage(RendererCreateHtmlPageRequest),
+    CancelPendingAuxiliaryPage {
+        reservation: RendererPageReservationToken,
+    },
+    ReserveLivePageReplacement(RendererPageReplacementReservationRequest),
+    CancelLivePageReplacementReservation {
+        token: RendererPageToken,
+        reservation_nonce: u64,
+    },
     PrepareStreamingRawDocument {
         token: RendererPageReservationToken,
         request: RendererCreateStreamingRawPageRequest,
@@ -241,6 +254,9 @@ pub enum RendererOwnerCommand {
         configuration: RendererPreparedDocumentCommitConfiguration,
     },
     CommitPreparedRendererDocument {
+        permit: RendererDocumentCommitPermit,
+    },
+    CommitPreparedPageReplacement {
         permit: RendererDocumentCommitPermit,
     },
     CancelPreparedRendererDocument {
@@ -296,7 +312,11 @@ pub enum RendererOwnerCommand {
 }
 
 pub enum RendererOwnerReply {
+    CapturedDocumentEnvironmentReleased,
     PageCreated(Box<RendererAttachedPage>),
+    PendingAuxiliaryPageCanceled,
+    PageReplacementCommitted(Box<RendererPageReplacementCommit>),
+    LivePageReplacementReserved(RendererPageReservationToken),
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
     },
@@ -328,6 +348,10 @@ enum RenderRuntimeDispatchOutcome {
     },
     PageCreatedAndContinueNavigation {
         page: Box<RendererAttachedPage>,
+        continuation: RenderRuntimePageCreationContinuation,
+    },
+    PageReplacementCommittedAndContinueNavigation {
+        replacement: Box<RendererPageReplacementCommit>,
         continuation: RenderRuntimePageCreationContinuation,
     },
     BackgroundComplete(Result<()>),
@@ -785,6 +809,7 @@ enum RenderRuntimeTurn {
     },
     ContinueLivePagePendingLocationNavigationPhaseOne {
         token: RendererPageToken,
+        vm_creation_id: u64,
         follow_count: usize,
         completion: LivePagePendingNavigationCompletion,
     },
@@ -846,10 +871,21 @@ impl RenderRuntimeTurn {
             Self::WaitLifecycleNavigation(wait) => wait.token() == token,
             Self::ContinueLivePageNavigationPostParseLifecycle {
                 token: observer_token,
-                completion: LivePagePendingNavigationCompletion::CompletePageCreation { .. },
+                completion:
+                    LivePagePendingNavigationCompletion::CompletePageCreation { .. }
+                    | LivePagePendingNavigationCompletion::CompletePageReplacement { .. },
                 ..
             } => *observer_token == token,
             _ => false,
+        }
+    }
+
+    fn phase_one_vm_creation_id(&self) -> Option<u64> {
+        match self {
+            Self::ContinueLivePagePendingLocationNavigationPhaseOne { vm_creation_id, .. } => {
+                Some(*vm_creation_id)
+            }
+            _ => None,
         }
     }
 
@@ -884,6 +920,7 @@ impl RenderRuntimeTurn {
             }
             Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token,
+                vm_creation_id,
                 follow_count,
                 completion,
             } => {
@@ -891,6 +928,7 @@ impl RenderRuntimeTurn {
                 (
                     Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                         token,
+                        vm_creation_id,
                         follow_count,
                         completion,
                     },
@@ -1017,6 +1055,7 @@ pub(super) struct RendererOwnerState {
     pub(super) next_page_id: Arc<AtomicU64>,
     pub(super) page_wake_tx: mpsc::UnboundedSender<RendererOwnerWake>,
     pub(super) render_runtime_admission: std::sync::OnceLock<RenderRuntimeHandle>,
+    pub(super) runtime_handle: std::sync::OnceLock<super::page::RendererProducerShutdownHandle>,
     pub(super) inspector_io_wake_tx: mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
     pub(super) browser_context_runtime: RendererBrowserContextRuntime,
     pub(super) devtools_target_shutdown_registry:
@@ -1270,6 +1309,7 @@ mod tests {
             reply_tx: None,
             turn: RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token: parser_token,
+                vm_creation_id: 1,
                 follow_count: 0,
                 completion: LivePagePendingNavigationCompletion::Background,
             },

@@ -781,11 +781,13 @@ mod tests {
             navigation_redirect_chain: Vec::new(),
             final_url: url,
             document_title: String::new(),
+            document_activity: Default::default(),
             status: 200,
             headers: Vec::new(),
             script_execution: Arc::new(ScriptExecutionReport::default()),
             idle_override: None,
             service_worker_client_id: 0,
+            document_isolate_identity: 0,
             dedicated_worker_running_worker_isolate_count: 0,
             performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
         })

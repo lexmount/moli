@@ -712,7 +712,7 @@ async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owner
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the_last() {
+async fn rust_cdp_popup_resumes_after_any_inspector_session_runs_it() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
     ctx.enable_background_navigation_scheduler_for_test();
@@ -813,16 +813,9 @@ async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the
     .await;
     ctx.expect_result(89_105, json!({}), Some(&root_popup_session_id));
     assert!(
-        ctx.conn
+        !ctx.conn
             .target_has_waiting_for_debugger_session(&popup_target_id),
-        "the second inspector session must keep the target behind its debugger barrier"
-    );
-    assert!(
-        !ctx.sent
-            .iter()
-            .any(|message| message["method"] == json!("Fetch.requestPaused")),
-        "one of two waiting sessions must not release the popup navigation: {:?}",
-        ctx.sent
+        "one Runtime resume releases the shared Page startup pause"
     );
 
     ctx.process_async(json!({
@@ -835,7 +828,7 @@ async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the
     assert!(
         !ctx.conn
             .target_has_waiting_for_debugger_session(&popup_target_id),
-        "detaching the final waiting session must release the target barrier"
+        "detaching another Inspector cannot restore the released startup pause"
     );
 
     fulfill_popup_document_and_evaluate(
@@ -844,7 +837,7 @@ async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the
         &popup_target_id,
         &root_popup_session_id,
         &popup_url,
-        "all-debugger-barriers-released",
+        "shared-debugger-pause-released",
     )
     .await;
 }

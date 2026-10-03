@@ -1,0 +1,9 @@
+{
+  "popup-reuse-then-rename-same-turn": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/report", "child": "C", "name": "report"},
+    {"op": "popup_reuse", "page": "A", "path": "/report", "child": "C", "name": "report", "renameAfter": "renamed"},
+    {"op": "popup_reference", "page": "A"},
+    {"op": "popup_ref_close", "page": "A", "child": "C"}
+  ]
+}

@@ -26,6 +26,9 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+mod auxiliary_document_response;
+pub(crate) use auxiliary_document_response::AuxiliaryDocumentResponseReceiver;
+pub use auxiliary_document_response::RendererAuxiliaryDocumentResponse;
 mod element_click;
 pub use element_click::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
@@ -37,8 +40,10 @@ mod window_document_source;
 pub use javascript_dialog::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
 };
+pub use popup_activation::RendererPopupActivationParts;
 pub use popup_activation::{
-    RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererNavigationInitiator, RendererPendingPopupActivation, RendererPopupActivationSource,
+    RendererPopupDisposition,
 };
 pub use window_document_source::RendererWindowDocumentSource;
 
@@ -319,6 +324,7 @@ struct RendererTopLevelNavigationRequest {
     request_body: Option<Vec<u8>>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    history_mutation: moli_page_types::NavigationHistoryMutation,
 }
 
 impl RendererDocumentSourcedTopLevelLocationNavigation {
@@ -359,6 +365,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
+                history_mutation: moli_page_types::NavigationHistoryMutation::Push,
             }),
             runtime_command_cause,
         }
@@ -366,6 +373,18 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn source_document(&self) -> RendererDocumentLifecycleIdentity {
         self.source_document
+    }
+
+    pub fn with_history_mutation(
+        mut self,
+        mutation: moli_page_types::NavigationHistoryMutation,
+    ) -> Self {
+        self.request.history_mutation = mutation;
+        self
+    }
+
+    pub fn history_mutation(&self) -> moli_page_types::NavigationHistoryMutation {
+        self.request.history_mutation
     }
 
     pub fn url(&self) -> &str {
@@ -816,9 +835,13 @@ pub struct RendererMainDocumentCommit {
     pub unreachable_url: Option<String>,
     pub security_origin: String,
     pub secure_context_type: String,
+    /// Selected request referrer, including an explicitly suppressed empty value.
+    pub document_referrer: Option<String>,
     pub timestamp: f64,
     /// Browser-owned session-history cursor and length at this document's commit.
     pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+    /// Browser-selected related page group, including history restoration.
+    pub browsing_context_group: Option<super::RendererBrowsingContextGroup>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1274,14 +1297,20 @@ impl RendererRuntimeInspectorMessageBatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDomMutationEventBatch {
+    pub agent_token: RendererDevToolsAgentToken,
     pub session: DevToolsSessionKey,
     pub events: Vec<RendererDomMutationEvent>,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
 }
 
 impl RendererDomMutationEventBatch {
-    pub fn new(session: DevToolsSessionKey, events: Vec<RendererDomMutationEvent>) -> Self {
+    pub fn new(
+        agent_token: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+        events: Vec<RendererDomMutationEvent>,
+    ) -> Self {
         Self {
+            agent_token,
             session,
             events,
             renderer_agent_attachment_id: None,
@@ -4710,6 +4739,7 @@ pub enum RendererPageCommand {
     },
     NavigateTopLevelSameDocument {
         url: String,
+        replace_current: bool,
     },
     RefreshFullPageState,
     PageDiagnosticsSnapshot,
@@ -6126,11 +6156,13 @@ impl RendererPageTable {
                 navigation_redirect_chain: Vec::new(),
                 final_url,
                 document_title,
+                document_activity: Default::default(),
                 status,
                 headers: Vec::new(),
                 script_execution: Arc::new(ScriptExecutionReport::default()),
                 idle_override: None,
                 service_worker_client_id: 0,
+                document_isolate_identity: 0,
                 dedicated_worker_running_worker_isolate_count: 0,
                 performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
             }),
@@ -6184,6 +6216,12 @@ impl RendererPageTable {
 
     pub(crate) fn record(&self, page_id: PageId) -> Option<RendererPageRecord> {
         self.entry(page_id).and_then(|entry| entry.active_record())
+    }
+
+    pub(super) fn active_vm_creation_id(&self, page_id: PageId) -> Option<u64> {
+        self.entry(page_id)
+            .filter(RendererPageEntry::is_active)
+            .map(|entry| entry.vm_creation_id())
     }
 
     pub(crate) fn len(&self) -> usize {

@@ -13,6 +13,7 @@ struct SurfaceOverrideInputs {
     navigator_queries: moli_page_types::NavigatorQueryOverrides,
     focus_emulation_enabled: bool,
     active_target_surface: bool,
+    window_is_focused: bool,
     window_document_hidden: bool,
 }
 
@@ -35,6 +36,7 @@ impl SurfaceOverrideInputs {
                 .effective_emulation_state
                 .focus_emulation_enabled,
             active_target_surface: true,
+            window_is_focused: browser_context.window_is_focused,
             window_document_hidden: browser_context
                 .active_page_target()
                 .owner_state
@@ -46,6 +48,7 @@ impl SurfaceOverrideInputs {
         state: &PageTargetHost,
         default_network_conditions: Option<EmulatedNetworkConditions>,
         default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
+        selected_tab: bool,
     ) -> Self {
         Self {
             network_conditions: state
@@ -60,8 +63,9 @@ impl SurfaceOverrideInputs {
             max_touch_points: state.effective_emulation_state.max_touch_points,
             navigator_queries: state.devtools_sessions.navigator_emulation.effective(),
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
-            active_target_surface: false,
-            window_document_hidden: false,
+            active_target_surface: selected_tab,
+            window_is_focused: false,
+            window_document_hidden: state.owner_state.window_document_hidden(),
         }
     }
 
@@ -116,7 +120,7 @@ impl SurfaceOverrideInputs {
     }
 
     fn document_is_visible(&self) -> bool {
-        self.document_is_focused() && !self.window_document_hidden
+        (self.active_target_surface || self.focus_emulation_enabled) && !self.window_document_hidden
     }
 
     fn document_is_focused(&self) -> bool {
@@ -125,7 +129,8 @@ impl SurfaceOverrideInputs {
         // report focused and visible by default; background targets
         // stay unfocused/hidden unless CDP explicitly asks to simulate a
         // focused and active page.
-        (self.active_target_surface && !self.window_document_hidden) || self.focus_emulation_enabled
+        (self.active_target_surface && self.window_is_focused && !self.window_document_hidden)
+            || self.focus_emulation_enabled
     }
 }
 
@@ -143,6 +148,7 @@ impl BrowserContext {
                 self.default_geolocation_override
                     .clone()
                     .or_else(|| self.global_geolocation_override.clone()),
+                self.page_targets.is_selected_tab(target_id),
             )
             .navigator_overrides(),
         )
@@ -168,6 +174,7 @@ impl BrowserContext {
                     self.default_geolocation_override
                         .clone()
                         .or_else(|| self.global_geolocation_override.clone()),
+                    self.page_targets.is_selected_tab(target_id),
                 )
             }
             .document_activity(),

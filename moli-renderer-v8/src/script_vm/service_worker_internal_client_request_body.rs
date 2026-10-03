@@ -245,18 +245,19 @@ impl ScriptVm {
         self.with_default_context_scope(|scope, host_ptr| {
             let host = unsafe { &mut *host_ptr };
             let previous_owner_context = host_scope.enter(scope);
-            let popup_id = host
-                .open_lightweight_popup_window(
-                    scope,
-                    host_ptr,
-                    None,
-                    None,
-                    "_blank",
-                    &url,
-                    creator_base_url.clone(),
-                    crate::document_runtime::DocumentPolicyContainer::default(),
-                )
-                .map(|opened_popup| opened_popup.popup_id);
+            let opened_popup = host.open_lightweight_popup_window(
+                scope,
+                host_ptr,
+                None,
+                None,
+                "_blank",
+                &url,
+                creator_base_url.clone(),
+                crate::document_runtime::DocumentPolicyContainer::default(),
+                false,
+            );
+            let popup_id = opened_popup.as_ref().map(|popup| popup.popup_id);
+            let document_response = opened_popup.and_then(|popup| popup.document_response);
             let session_storage_store = popup_id
                 .and_then(|popup_id| host.lightweight_popup_session_storage_store(popup_id));
             let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
@@ -269,6 +270,7 @@ impl ScriptVm {
                     "_blank".to_owned(),
                     crate::RendererPopupDisposition::Foreground,
                 )
+                .with_document_response(document_response)
                 .with_initial_auxiliary_state(
                     session_storage_store,
                     initial_empty_document_storage_key,
@@ -327,18 +329,19 @@ impl ScriptVm {
         self.with_default_context_scope(|scope, host_ptr| {
             let host = unsafe { &mut *host_ptr };
             let previous_owner_context = host_scope.enter(scope);
-            let popup_id = host
-                .open_lightweight_popup_window(
-                    scope,
-                    host_ptr,
-                    None,
-                    None,
-                    "_blank",
-                    &url,
-                    creator_base_url.clone(),
-                    crate::document_runtime::DocumentPolicyContainer::default(),
-                )
-                .map(|opened_popup| opened_popup.popup_id);
+            let opened_popup = host.open_lightweight_popup_window(
+                scope,
+                host_ptr,
+                None,
+                None,
+                "_blank",
+                &url,
+                creator_base_url.clone(),
+                crate::document_runtime::DocumentPolicyContainer::default(),
+                false,
+            );
+            let popup_id = opened_popup.as_ref().map(|popup| popup.popup_id);
+            let document_response = opened_popup.and_then(|popup| popup.document_response);
             let session_storage_store = popup_id
                 .and_then(|popup_id| host.lightweight_popup_session_storage_store(popup_id));
             let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
@@ -351,6 +354,7 @@ impl ScriptVm {
                     "_blank".to_owned(),
                     crate::RendererPopupDisposition::Foreground,
                 )
+                .with_document_response(document_response)
                 .with_initial_auxiliary_state(
                     session_storage_store,
                     initial_empty_document_storage_key,

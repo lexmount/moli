@@ -721,6 +721,16 @@ mod get_data_sealed {
 }
 
 impl<'p> PinnedRef<'p, HandleScope<'_, ()>> {
+  /// Returns the last API-entered context or the current microtask context,
+  /// if one exists. Unlike `get_entered_or_microtask_context`, this is also
+  /// safe at isolate interrupts and owner boundaries with no entered context.
+  pub fn try_get_entered_or_microtask_context(&self) -> Option<Local<'_, Context>> {
+    let context = unsafe {
+      raw::v8__Isolate__GetEnteredOrMicrotaskContext(self.0.isolate.as_ptr())
+    };
+    unsafe { Local::from_raw(context) }
+  }
+
   #[inline(always)]
   pub(crate) unsafe fn cast_local<T>(
     &self,

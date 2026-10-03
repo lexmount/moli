@@ -1391,6 +1391,7 @@ fn start_devtools_navigate_command(
     if session_owner_navigation_is_same_document_fragment(conn, owner, command.url.as_str()) {
         return start_top_level_same_document_navigate_command(conn, owner, command);
     }
+    conn.mark_next_browser_navigation_from_initial_document_for_owner(owner);
     start_navigate_to_url_command_with_background_policy(
         conn,
         command_id,
@@ -1441,7 +1442,7 @@ fn start_top_level_same_document_navigate_command(
         None,
         &command.url,
     );
-    start_top_level_same_document_navigate(conn, owner, command.url.clone(), result_payload)
+    start_top_level_same_document_navigate(conn, owner, command.url.clone(), result_payload, false)
 }
 
 fn start_top_level_same_document_navigate(
@@ -1449,6 +1450,7 @@ fn start_top_level_same_document_navigate(
     owner: &CommandOwnerScope,
     url: String,
     result_payload: Value,
+    replace_current: bool,
 ) -> NavigateCommandStart {
     let Some(page) = conn
         .runtime_session_owner_slot_mut_for_owner(owner)
@@ -1460,7 +1462,9 @@ fn start_top_level_same_document_navigate(
             "NoDocumentLoaded",
         ));
     };
-    match page.start_top_level_same_document_navigation(url) {
+    match page
+        .start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
+    {
         Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
             PendingSameDocumentNavigateCommand {
                 pending,
@@ -2066,6 +2070,10 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) -> NavigateCommandStart {
     let session_id = owner.session_id();
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, owner);
@@ -2075,15 +2083,25 @@ pub(super) fn start_session_owner_navigation_from_renderer(
         None,
         url,
     );
-    let start = if request_method.eq_ignore_ascii_case("GET")
+    let start = if browser_navigation_kind == moli_fetch::BrowserNavigationRequestKind::Navigate
+        && request_method.eq_ignore_ascii_case("GET")
         && session_owner_navigation_is_same_document_fragment(conn, owner, url)
     {
         // A renderer-owned top-level navigation follows the same fragment
         // classification as Page.navigate. In particular, a freshly created
         // popup's `about:blank#fragment` target must not discard its initial
         // Document by trying to fetch the non-fetchable about: URL.
-        start_top_level_same_document_navigate(conn, owner, url.to_owned(), result_payload)
+        start_top_level_same_document_navigate(
+            conn,
+            owner,
+            url.to_owned(),
+            result_payload,
+            auxiliary_navigation == Some(moli_core::page::RendererAuxiliaryNavigationKind::Replace),
+        )
     } else {
+        if let Some(kind) = auxiliary_navigation {
+            conn.mark_next_auxiliary_navigation_history_for_owner(owner, kind);
+        }
         let result_projection = NavigationResultProjection::Cdp(result_payload);
         start_navigate_to_url_command_with_background_policy_and_request(
             conn,
@@ -2113,10 +2131,13 @@ pub(super) fn start_session_owner_navigation_from_renderer(
                     NavigationRequestLoadPolicy::DocumentInitiated
                 }
                 moli_fetch::BrowserNavigationRequestKind::Reload => {
-                    NavigationRequestLoadPolicy::Reload
+                    NavigationRequestLoadPolicy::DocumentInitiatedReload
                 }
             },
             NavigationStartInitiator::Renderer,
+            document_response,
+            initial_document_environment,
+            navigation_initiator,
         )
     };
     clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
@@ -2661,6 +2682,9 @@ fn start_navigate_to_url_command_with_background_policy(
         allow_background_navigation,
         request_load_policy,
         initiator,
+        None,
+        None,
+        None,
     )
 }
 
@@ -2685,6 +2709,9 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) -> NavigateCommandStart {
     let command_session_id = owner.session_id();
     let mut out = Vec::new();
@@ -2734,6 +2761,9 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
     let mut navigation_state = NavigationDispatchState {
+        navigation_initiator,
+        initial_document_environment,
+        auxiliary_document_response: document_response,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: command_id,
@@ -3282,6 +3312,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
+            let stable_page_target = navigation.stable_page_target().cloned();
             let update_result = match conn.prepared_document_commit_configuration_for_owner(
                 &state.owner,
                 navigation.final_url(),
@@ -3298,20 +3329,35 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                     &token,
                     navigation.renderer_devtools_agent_token(),
                 );
-                match candidate.and_then(|candidate| {
-                    conn.commit_renderer_agent_candidate_for_owner(
+                match candidate.and_then(|candidate| match stable_page_target.as_ref() {
+                    Some(expected) => conn.commit_renderer_agent_candidate_for_existing_page(
+                        &state.owner,
+                        candidate,
+                        expected,
+                    ),
+                    None => conn.commit_renderer_agent_candidate_for_owner(
                         &state.owner,
                         candidate,
                         renderer_page,
-                    )
+                    ),
                 }) {
                     Ok(transaction) => {
                         let permit = navigation.issue_commit_permit();
-                        match navigation.commit(permit).await {
-                            Ok(navigation) => {
-                                let navigation = network::materialize_loaded_navigation_progress(
+                        let failed_url = navigation.final_url().clone();
+                        let committed = match stable_page_target.as_ref() {
+                            Some(expected) => conn.commit_existing_page_navigation_document(
+                                &state.owner, expected, navigation, permit,
+                            ).await.map(|navigation| network::materialize_loaded_navigation_progress(
+                                conn, &state, navigation,
+                            )),
+                            None => navigation.commit(permit).await
+                                .map(|navigation| network::materialize_loaded_navigation_progress(
                                     conn, &state, navigation,
-                                );
+                                ))
+                                .map_err(moli_core::page::RendererPageReplacementError::document_preserved),
+                        };
+                        match committed {
+                            Ok(navigation) => {
                                 commit_loaded_navigation_async(
                                     conn,
                                     out,
@@ -3324,7 +3370,11 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                                 .await;
                             }
                             Err(error) => {
-                                if let Err(rollback_error) = conn
+                                if error.disposition() == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable {
+                                    conn.discard_loaded_page_after_failed_navigation_for_owner_async(
+                                        &state.owner, &failed_url,
+                                    ).await;
+                                } else if let Err(rollback_error) = conn
                                     .rollback_committed_renderer_agent_candidate_for_owner(
                                         &state.owner,
                                         transaction,
@@ -3427,7 +3477,7 @@ async fn finish_renderer_navigation_into_buffer_async(
         let (new_attachment_id, terminations, replays) = renderer_call_replacements.into_parts();
         let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
             terminations,
-            "Inspected target navigated or closed",
+            "Execution context was destroyed.",
         );
         out.extend_background_events_after_messages(termination_events);
         match conn
@@ -3518,6 +3568,9 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
             );
             continue;
         }
+        crate::domains::target::emit_target_info_changed_for_owner_background_event(
+            conn, out, owner,
+        );
         emit_same_document_navigation_background_event(
             conn,
             out,

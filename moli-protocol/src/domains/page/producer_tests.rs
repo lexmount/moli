@@ -215,6 +215,66 @@ fn protocol_messages_from_background_events(events: Vec<BackgroundProtocolEvent>
 }
 
 #[test]
+fn background_document_title_uses_its_frozen_page_residence() {
+    let mut conn = CdpConnection::default();
+    let mut bc = BrowserContext::new("BID-title-source".into());
+    bc.set_active_target_id("TID-background");
+    bc.attach_active_session("SID-background");
+    bc.stage_foreground_target(
+        "TID-foreground".into(),
+        Some("SID-foreground".into()),
+        "about:blank".into(),
+        None,
+    );
+    conn.install_browser_context_fixture_for_test(bc);
+    let background_document = renderer_document_identity_for_test(1, 1);
+    bind_renderer_document_for_test(
+        &mut conn,
+        "SID-background",
+        "TID-background",
+        background_document,
+    );
+    bind_renderer_document_for_test(
+        &mut conn,
+        "SID-foreground",
+        "TID-foreground",
+        renderer_document_identity_for_test(2, 2),
+    );
+    let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+        browser_context_id: "BID-title-source".into(),
+        target_id: "TID-background".into(),
+        session_key: moli_page_types::DevToolsSessionKey::Primary,
+    });
+    let title = RendererDocumentTitleChanged {
+        source_document: background_document,
+        title: "background title".into(),
+    };
+    assert_eq!(
+        conn.apply_renderer_document_title_for_owner(&owner, &title),
+        Some(true)
+    );
+    assert_eq!(
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .target_info("TID-background")
+            .unwrap()["title"],
+        json!("background title"),
+    );
+    bind_renderer_document_for_test(
+        &mut conn,
+        "SID-background",
+        "TID-background",
+        renderer_document_identity_for_test(3, 3),
+    );
+    assert_eq!(
+        conn.apply_renderer_document_title_for_owner(&owner, &title),
+        None,
+        "replacing the background Document still revokes its old title authority"
+    );
+}
+
+#[test]
 fn stale_document_title_cannot_overwrite_replacement_target_metadata() {
     let mut conn = CdpConnection::default();
     let mut bc = BrowserContext::new("BID-title-source".into());
@@ -1879,6 +1939,8 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         javascript_dialogs: Vec::new(),
         window_open_events: Vec::new(),
         popup_activations: Vec::new(),
+        auxiliary_window_closes: Vec::new(),
+        auxiliary_window_navigations: Vec::new(),
         document_title_changes: Vec::new(),
         document_lifecycle_events: Vec::new(),
         child_frame_activities: vec![super::PagePreparedChildFrameActivity::from_document(

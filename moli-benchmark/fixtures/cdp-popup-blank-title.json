@@ -1,0 +1,13 @@
+{
+  "blank-popup-display-title": [
+    {"op":"create","page":"A"},
+    {"op":"popup","page":"A","child":"C","url":"about:blank","name":"initial"},
+    {"op":"title","page":"C","value":"Named"},
+    {"op":"title","page":"C","value":""},
+    {"op":"hash","page":"C","value":"fragment"},
+    {"op":"title","page":"C","value":"Named again"},
+    {"op":"title","page":"C","value":""},
+    {"op":"hash","page":"C","value":"new-document"},
+    {"op":"reload","page":"C"}
+  ]
+}

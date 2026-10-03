@@ -53,6 +53,7 @@ use std::{
 };
 use url::Url;
 
+mod auxiliary_page;
 pub(crate) mod backend_node_registry;
 mod command_turn_output;
 mod css_agent_state;
@@ -1102,6 +1103,26 @@ pub(crate) struct PageVmEnvConfig {
 }
 
 impl PageVmEnvConfig {
+    fn inspector_protocol_configurations(
+        &self,
+    ) -> BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration> {
+        self.runtime_inspector_session_restore_snapshots
+            .iter()
+            .filter(|restore| restore.protocol_configuration.requires_restore())
+            .map(|restore| {
+                (
+                    DevToolsSessionKey::from_wire_session_id(
+                        restore
+                            .inspector_session_id
+                            .as_deref()
+                            .filter(|id| !id.is_empty()),
+                    ),
+                    restore.protocol_configuration.clone(),
+                )
+            })
+            .collect()
+    }
+
     pub(crate) fn apply_navigation_response_headers(
         &mut self,
         final_url: &Url,
@@ -1112,6 +1133,7 @@ impl PageVmEnvConfig {
                 headers, final_url,
             )
             .with_content_security_policy_bypass(self.bypass_content_security_policy);
+        self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container
                 .navigation_response_frame_ancestors_check(
@@ -1126,6 +1148,24 @@ impl PageVmEnvConfig {
         self.document_last_modified =
             crate::document_last_modified::document_last_modified_from_headers(headers);
     }
+
+    pub(crate) fn apply_main_document_commit_referrer(&mut self) {
+        if let Some(referrer) = self
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.document_referrer.as_ref())
+        {
+            self.document_policy_container.document_referrer = referrer.clone();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuxiliaryEnvironmentApply {
+    Navigation,
+    InheritedNavigation,
+    InitialRealm,
+    Adoption,
 }
 
 /// Runtime wiring for a live `PageVm`.
@@ -1373,6 +1413,23 @@ impl PageVmRuntimeHooks {
         self.prepared_renderer_document_isolate_bootstrap =
             Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
         Ok(self)
+    }
+
+    pub(in crate::runtime) fn with_auxiliary_page_bootstrap(
+        mut self,
+        bootstrap: RendererDocumentIsolateBootstrap,
+        reservation: RendererDocumentIsolateReservation,
+    ) -> Self {
+        assert!(reservation.is_active());
+        self.renderer_page_script_environment = Some(
+            bootstrap
+                .renderer_page_script_environment()
+                .expect("staged auxiliary bootstrap must retain its Page environment"),
+        );
+        self.renderer_document_isolate_reservation = Some(reservation);
+        self.prepared_renderer_document_isolate_bootstrap =
+            Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
+        self
     }
 
     fn for_cross_document_commit(mut self) -> Self {
@@ -3993,10 +4050,12 @@ impl PageVm {
         Ok(PageVmStateCapture {
             final_url,
             document_title,
+            document_activity: self.document_activity,
             report,
             navigation_response: self.navigation_response.clone(),
             idle_override: self.idle_override,
             service_worker_client_id: self.vm().service_worker_client_id().as_u64(),
+            document_isolate_identity: self.vm().document_isolate_identity_for_diagnostics(),
             dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot,
         })
@@ -4268,6 +4327,15 @@ impl PageVm {
         let PageVmRendererDocumentIsolateBootstrap {
             renderer_document_isolate_bootstrap,
         } = page_vm_isolate_bootstrap;
+        let inherited_env = renderer_document_isolate_bootstrap
+            .initial_document_environment
+            .as_ref()
+            .map(|environment| {
+                let mut env = env.clone();
+                env.document_policy_container = environment.policy_container.clone();
+                env
+            });
+        let env = inherited_env.as_ref().unwrap_or(env);
         let backend_node_registry = new_shared_renderer_backend_node_registry();
         let initial_document_loader_bootstrap =
             crate::network::context::DocumentResourceLoaderBootstrap::new(
@@ -4296,13 +4364,44 @@ impl PageVm {
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
+        let mut page_vm = Self::finish_construction(
+            page_id,
+            local_executor,
+            env,
+            runtime_hooks,
+            document_lifecycle,
+            page_task_queue,
+            vm,
+            started,
+        );
+        page_vm.apply_environment_config(
+            env,
+            if inherited_env.is_some() {
+                AuxiliaryEnvironmentApply::InheritedNavigation
+            } else {
+                AuxiliaryEnvironmentApply::Navigation
+            },
+        );
+        Ok(page_vm)
+    }
+
+    fn finish_construction(
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        env: &PageVmEnvConfig,
+        runtime_hooks: PageVmRuntimeHooks,
+        document_lifecycle: RendererDocumentLifecycleJournalHandle,
+        page_task_queue: PageTaskQueue,
+        vm: ScriptVm,
+        started: Instant,
+    ) -> Self {
         let dom_agent_state = vm.renderer_dom_agent_state();
         let report = ScriptExecutionReport::default();
         let creation_id = register_page_vm_creation();
         let document_loader = vm
             .current_main_document_resource_loader()
             .expect("PageVm bootstrap must publish the committed Document resource authority");
-        let mut page_vm = Self {
+        let page_vm = Self {
             page_id,
             creation_id,
             document_lifecycle,
@@ -4326,22 +4425,7 @@ impl PageVm {
             permission_overrides: env.permission_overrides.clone(),
             document_start_scripts: env.document_start_scripts.clone(),
             runtime_bindings: env.runtime_bindings.clone(),
-            runtime_inspector_protocol_configurations: env
-                .runtime_inspector_session_restore_snapshots
-                .iter()
-                .filter(|restore| restore.protocol_configuration.requires_restore())
-                .map(|restore| {
-                    (
-                        DevToolsSessionKey::from_wire_session_id(
-                            restore
-                                .inspector_session_id
-                                .as_deref()
-                                .filter(|session_id| !session_id.is_empty()),
-                        ),
-                        restore.protocol_configuration.clone(),
-                    )
-                })
-                .collect(),
+            runtime_inspector_protocol_configurations: env.inspector_protocol_configurations(),
             extra_http_headers: env.extra_http_headers.clone(),
             bypass_content_security_policy: env.bypass_content_security_policy,
             emulated_media: env.emulated_media.clone(),
@@ -4369,73 +4453,78 @@ impl PageVm {
             "page vm runtime initialized"
         );
         page_vm
-            .vm_mut()
-            .set_indexed_db_manager(env.indexed_db_manager.clone());
-        if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
-            page_vm
-                .vm_mut()
-                .set_storage_bucket_store(storage_bucket_store);
+    }
+
+    fn apply_environment_config(&mut self, env: &PageVmEnvConfig, mode: AuxiliaryEnvironmentApply) {
+        if mode != AuxiliaryEnvironmentApply::InitialRealm {
+            self.vm_mut()
+                .set_indexed_db_manager(env.indexed_db_manager.clone());
+            if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
+                self.vm_mut().set_storage_bucket_store(storage_bucket_store);
+            }
         }
-        page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_web_storage_handles(&env.web_storage);
+        self.vm_mut()
             .set_script_execution_disabled(env.script_execution_disabled);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_permission_overrides(&env.permission_overrides);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_extra_http_headers(&env.extra_http_headers);
-        page_vm
-            .vm_mut()
-            .set_main_navigation_policy_container(env.document_policy_container.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_default_language(env.document_default_language.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_source_last_modified(env.document_last_modified);
-        page_vm
-            .vm_mut()
+        if mode != AuxiliaryEnvironmentApply::Adoption {
+            if matches!(
+                mode,
+                AuxiliaryEnvironmentApply::InitialRealm
+                    | AuxiliaryEnvironmentApply::InheritedNavigation
+            ) {
+                self.vm_mut()
+                    .document_runtime
+                    .set_initial_document_policy_container(env.document_policy_container.clone());
+            } else {
+                self.vm_mut()
+                    .set_main_navigation_policy_container(env.document_policy_container.clone());
+            }
+            self.vm_mut()
+                .document_runtime
+                .set_document_default_language(env.document_default_language.clone());
+            self.vm_mut()
+                .document_runtime
+                .set_document_source_last_modified(env.document_last_modified);
+        }
+        self.vm_mut()
             .set_stored_document_start_scripts(&env.document_start_scripts);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_emulated_media_for_bootstrap(&env.emulated_media);
-        page_vm.vm_mut().set_idle_override(env.idle_override);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_idle_override(env.idle_override);
+        self.vm_mut()
             .set_navigator_overrides(&env.navigator_overrides);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_viewport_surface_for_bootstrap(env.viewport_surface);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_document_activity_for_bootstrap(env.document_activity);
-        page_vm.vm_mut().set_network_offline(env.network_offline);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_network_offline(env.network_offline);
+        self.vm_mut()
             .set_blocked_url_patterns(&env.blocked_url_patterns);
-        page_vm.vm_mut().set_fetch_subresource_interception(
+        self.vm_mut().set_fetch_subresource_interception(
             env.fetch_subresource_interception_enabled,
             env.fetch_subresource_interception_resource_type,
         );
-        page_vm
-            .vm_mut()
-            .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
-        if env.navigation_bootstrap_entry.is_none()
-            && let Some(position) = env
-                .main_document_commit
-                .as_ref()
-                .and_then(|commit| commit.session_history_position)
-        {
-            page_vm.vm_mut().install_session_history_position(position);
+        if matches!(
+            mode,
+            AuxiliaryEnvironmentApply::Navigation | AuxiliaryEnvironmentApply::InheritedNavigation
+        ) {
+            self.vm_mut()
+                .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
+            if env.navigation_bootstrap_entry.is_none()
+                && let Some(position) = env
+                    .main_document_commit
+                    .as_ref()
+                    .and_then(|commit| commit.session_history_position)
+            {
+                self.vm_mut().install_session_history_position(position);
+            }
         }
-        Ok(page_vm)
     }
 
     pub(super) fn new_from_parser_stream_and_run_document_start(

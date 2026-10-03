@@ -502,6 +502,15 @@ impl DocumentRuntime {
         &self.policy_container
     }
 
+    /// An initial empty Document inherits the complete creator policy,
+    /// including sandbox flags supplied by an embedding iframe.
+    pub(crate) fn set_initial_document_policy_container(
+        &mut self,
+        policy: DocumentPolicyContainer,
+    ) {
+        self.policy_container = policy;
+    }
+
     pub(crate) fn set_main_navigation_policy_container(
         &mut self,
         mut policy: DocumentPolicyContainer,

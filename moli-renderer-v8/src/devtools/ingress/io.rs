@@ -31,11 +31,17 @@ type RendererInspectorInterruptCallback =
 
 pub(crate) struct RendererInspectorInterruptTarget {
     route_id: RendererInspectorSessionExecutorRouteId,
+    close_requested: AtomicBool,
+    page_scoped: bool,
 }
 
 impl RendererInspectorInterruptTarget {
     pub(crate) fn route_id(&self) -> RendererInspectorSessionExecutorRouteId {
         self.route_id
+    }
+
+    pub(crate) fn take_close_request(&self) -> bool {
+        self.close_requested.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -220,6 +226,8 @@ pub(crate) struct RendererInspectorIoIngress {
 
 struct RendererInspectorIoShared {
     state: Mutex<RendererInspectorIoState>,
+    page_pause_wakes:
+        Mutex<BTreeMap<RendererInspectorSessionExecutorRouteId, RendererInspectorPauseLoopWake>>,
     interrupt_armed: AtomicBool,
     owner_wake_armed: AtomicBool,
     interrupt_route: Option<RendererInspectorInterruptRoute>,
@@ -359,8 +367,32 @@ impl RendererInspectorIoIngress {
             RendererInspectorSessionExecutorRouteId,
         )>,
     ) -> Self {
+        Self::new_with_execution_scope(pause_wake, interrupt_route, false)
+    }
+
+    pub(crate) fn new_for_page(
+        pause_wake: RendererInspectorPauseLoopWake,
+        interrupt_route: (
+            v8::IsolateHandle,
+            RendererInspectorInterruptCallback,
+            RendererInspectorSessionExecutorRouteId,
+        ),
+    ) -> Self {
+        Self::new_with_execution_scope(pause_wake, Some(interrupt_route), true)
+    }
+
+    fn new_with_execution_scope(
+        pause_wake: RendererInspectorPauseLoopWake,
+        interrupt_route: Option<(
+            v8::IsolateHandle,
+            RendererInspectorInterruptCallback,
+            RendererInspectorSessionExecutorRouteId,
+        )>,
+        page_scoped: bool,
+    ) -> Self {
         Self {
             shared: Arc::new(RendererInspectorIoShared {
+                page_pause_wakes: Mutex::new(BTreeMap::new()),
                 state: Mutex::new(RendererInspectorIoState {
                     commands: VecDeque::new(),
                     environment_notifications: ProcessEnvironmentNotifications::default(),
@@ -375,7 +407,11 @@ impl RendererInspectorIoIngress {
                     RendererInspectorInterruptRoute {
                         isolate,
                         callback,
-                        target: Arc::new(RendererInspectorInterruptTarget { route_id }),
+                        target: Arc::new(RendererInspectorInterruptTarget {
+                            route_id,
+                            close_requested: AtomicBool::new(false),
+                            page_scoped,
+                        }),
                     }
                 }),
                 pause_wake,
@@ -407,17 +443,41 @@ impl RendererInspectorIoIngress {
         self.shared.state.lock().environment_notifications.take()
     }
 
+    pub(crate) fn register_page_pause_wake(
+        &self,
+        route: RendererInspectorSessionExecutorRouteId,
+        wake: RendererInspectorPauseLoopWake,
+    ) {
+        self.shared.page_pause_wakes.lock().insert(route, wake);
+    }
+
+    pub(crate) fn unregister_page_pause_wake(
+        &self,
+        route: RendererInspectorSessionExecutorRouteId,
+    ) {
+        self.shared.page_pause_wakes.lock().remove(&route);
+    }
+
     /// Breaks an active V8 call so target teardown can reach the Page owner.
     ///
     /// Closing the ingress prevents queued IO work from being claimed, but
-    /// the owner may still be inside non-yielding JavaScript. Target close
-    /// owns this isolate's lifetime, so teardown can terminate that execution
-    /// directly instead of depending on another DevTools command.
+    /// the owner may still be inside non-yielding JavaScript. An interrupt
+    /// checks the entered Page before terminating: related Pages may share
+    /// this isolate and their execution must survive an unrelated close.
     pub(crate) fn terminate_execution_for_target_close(&self) -> bool {
-        self.shared
-            .interrupt_route
-            .as_ref()
-            .is_some_and(|route| route.isolate.terminate_execution())
+        let Some(route) = &self.shared.interrupt_route else {
+            return false;
+        };
+        if !route.target.page_scoped {
+            // Renderer-owner shutdown owns the whole isolate, including all
+            // related Pages and any bootstrap that has no context yet.
+            return route.isolate.terminate_execution();
+        }
+        route.target.close_requested.store(true, Ordering::Release);
+        // Do not coalesce this terminal interrupt with ordinary IO work. An
+        // already-running callback may have checked close_requested before
+        // this store and must not consume the only opportunity to stop JS.
+        self.post_interrupt()
     }
 
     pub(crate) fn configure_owner_wake(
@@ -689,13 +749,16 @@ impl RendererInspectorIoIngress {
         if self.shared.state.lock().has_ready() {
             self.request_interrupt();
             self.shared.pause_wake.notify_one();
+            for wake in self.shared.page_pause_wakes.lock().values() {
+                wake.notify_all();
+            }
         }
     }
 
     fn request_interrupt(&self) {
-        let Some(route) = self.shared.interrupt_route.as_ref() else {
+        if self.shared.interrupt_route.is_none() {
             return;
-        };
+        }
         if self
             .shared
             .interrupt_armed
@@ -704,6 +767,15 @@ impl RendererInspectorIoIngress {
         {
             return;
         }
+        if !self.post_interrupt() {
+            self.shared.interrupt_armed.store(false, Ordering::Release);
+        }
+    }
+
+    fn post_interrupt(&self) -> bool {
+        let Some(route) = self.shared.interrupt_route.as_ref() else {
+            return false;
+        };
         // Match Chromium's InspectorTaskRunner lifetime protocol: every V8
         // interrupt owns one strong callback target until V8 invokes it. A
         // late callback after executor teardown can therefore safely observe
@@ -718,8 +790,9 @@ impl RendererInspectorIoIngress {
             // above, and V8 rejected the request, so no callback can consume
             // this one strong reference.
             unsafe { drop(Arc::from_raw(callback_target)) };
-            self.shared.interrupt_armed.store(false, Ordering::Release);
+            return false;
         }
+        true
     }
 }
 

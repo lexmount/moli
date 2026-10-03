@@ -27,6 +27,7 @@ pub(super) use self::outbound::ScriptVmInspectorCommandTurnOutputScope;
 #[cfg(test)]
 use self::v8_backend::RendererInspectorClientUniqueIdState;
 pub(in crate::script_vm) use self::v8_backend::RendererInspectorIsolateBackend;
+pub(in crate::script_vm) use self::v8_backend::finish_page_close_termination;
 pub(crate) use self::v8_backend::{
     RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
     dispatch_inspector_main_owner_wake,
@@ -113,6 +114,10 @@ impl DocumentInspectorBinding {
 
     pub(crate) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
         self.devtools_target.clone()
+    }
+
+    pub(crate) fn isolate_backend_handle(&self) -> RendererInspectorIsolateBackendHandle {
+        self.agent.isolate_backend_handle()
     }
 
     pub(crate) fn dom_debugger_pause_scheduler(&self) -> RendererDomDebuggerPauseScheduler {

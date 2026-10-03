@@ -1,0 +1,48 @@
+{
+  "named-empty-url": [
+    {
+      "op": "create",
+      "page": "A"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "child": "C",
+      "name": "child",
+      "path": "/child"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "window.marker=73;document.body.textContent='keep this document';void 0"
+    },
+    {
+      "op": "activate",
+      "page": "A"
+    },
+    {
+      "op": "popup_reuse",
+      "page": "A",
+      "child": "C",
+      "name": "child",
+      "url": ""
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "({marker:window.marker??null,text:document.body.textContent,url:location.href,history:history.length})"
+    },
+    {
+      "op": "popup_reuse",
+      "page": "A",
+      "child": "C",
+      "name": "child",
+      "url": "about:blank"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "({marker:window.marker??null,text:document.body.textContent,url:location.href})"
+    }
+  ]
+}

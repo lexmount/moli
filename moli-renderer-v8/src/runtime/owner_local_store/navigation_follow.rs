@@ -97,6 +97,21 @@ impl NavigationLocalTaskEntry {
         Ok(())
     }
 
+    fn commit_prepared_response(
+        &mut self,
+        expected_vm_creation_id: u64,
+        residence: super::RendererPreparedDocumentResidence,
+    ) -> Result<()> {
+        let navigation = self
+            .live_mut()
+            .commit_prepared_document_response(expected_vm_creation_id, residence)?;
+        let Self::Live(entry) = std::mem::replace(self, Self::Transitioning) else {
+            unreachable!("prepared response commit must consume a live entry")
+        };
+        *self = Self::Committed(CommittedNavigationEntry::new(entry, navigation));
+        Ok(())
+    }
+
     fn finish_commit(&mut self) {
         let Self::Committed(entry) = std::mem::replace(self, Self::Transitioning) else {
             unreachable!("replacement bootstrap must complete a committed entry")
@@ -213,5 +228,53 @@ pub(in crate::runtime) async fn follow_pending_location_navigation_one_turn_on_e
         NavigationLocalTaskEntry::Transitioning => {
             unreachable!("navigation task cannot return while changing typestate")
         }
+    }
+}
+
+/// The same typed commit guard used by renderer-followed navigation also owns
+/// browser-prepared responses. An abandoned bootstrap can only retire the
+/// committed Page, never restore the source Document after detachment.
+pub(in crate::runtime) async fn commit_prepared_document_response_on_entry_via_local_task(
+    local_executor: JsLocalExecutor,
+    entry: LivePageEntry,
+    expected_vm_creation_id: u64,
+    residence: super::RendererPreparedDocumentResidence,
+) -> LivePageNavigationFollowEntryAdvance {
+    let initiator = residence.request.navigation_initiator_url.clone();
+    let (entry, result) = run_typed_entry_on_bound_owner_local_store_local_task(
+        local_executor,
+        NavigationLocalTaskEntry::Live(entry),
+        move |entry| {
+            Box::pin(async move {
+                entry.commit_prepared_response(expected_vm_creation_id, residence)?;
+                let outcome = entry.bootstrap_committed_navigation().await?;
+                let document_commit = entry
+                    .live_mut()
+                    .publish_replacement_document_commit_with_initiator(
+                        super::NavigationInitiatorMetadata::Replace(initiator),
+                    )?;
+                Ok(LivePageNavigationFollowTurn {
+                    outcome,
+                    document_commit: Some(document_commit),
+                })
+            })
+        },
+    )
+    .await;
+    match entry {
+        NavigationLocalTaskEntry::Live(entry) => {
+            LivePageNavigationFollowEntryAdvance::Live { entry, result }
+        }
+        NavigationLocalTaskEntry::Committed(entry) => {
+            LivePageNavigationFollowEntryAdvance::Committed {
+                entry,
+                error: result.err().unwrap_or_else(|| {
+                    anyhow!("prepared response did not install its replacement Document")
+                }),
+            }
+        }
+        NavigationLocalTaskEntry::Transitioning => unreachable!(
+            "prepared response task cannot return during the synchronous commit transition"
+        ),
     }
 }

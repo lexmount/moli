@@ -642,6 +642,9 @@ async fn page_navigate_network_failure_commits_error_document() {
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
         old_document_token.clone(),
         crate::conn::NavigationDispatchState {
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: None,
@@ -707,17 +710,17 @@ async fn page_navigate_network_failure_commits_error_document() {
     }))
     .await;
     ctx.expect_error(91, -32000, "No resource with given identifier found");
-    assert_ne!(
+    assert_eq!(
         ctx.conn
             .target_page_residence_identity_for_session(Some("SID-1")),
         Some(before_target_page),
-        "current master installs navigation Documents as a new target Page attachment"
+        "the error Document must retain the target Page residence"
     );
-    assert_ne!(
+    assert_eq!(
         ctx.conn
             .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
         Some(before_renderer_page),
-        "the error Document must not reuse the retired renderer Page"
+        "the error Document replaces the Document within the existing renderer Page"
     );
     assert_ne!(
         ctx.conn.current_renderer_agent_attachment_id_for_owner(

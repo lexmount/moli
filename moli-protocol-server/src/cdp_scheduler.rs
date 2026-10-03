@@ -16,7 +16,7 @@ use moli_protocol::{
     CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
     CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
-    DeferredMainDocumentLoadPredecessorCandidate, DevToolsPageResidenceIdentity,
+    DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentResidenceIdentity,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
@@ -90,9 +90,9 @@ pub(crate) struct AutomationExecution {
     pub(crate) protocol_output: ProtocolOutputSequence,
 }
 
-pub(crate) struct AutomationPageExecution {
+pub(crate) struct AutomationDocumentExecution {
     pub(crate) execution: AutomationExecution,
-    pub(crate) page_residence: Option<DevToolsPageResidenceIdentity>,
+    pub(crate) page_residence: Option<DevToolsDocumentResidenceIdentity>,
 }
 
 // `Dispatch` is the common, short-lived command-start result. Boxing it only
@@ -124,12 +124,12 @@ enum DefaultTargetRuntimeInitialization {
 }
 
 impl CdpScheduler {
-    pub(crate) fn page_residence_identity_for_devtools_context(
+    pub(crate) fn document_residence_identity_for_devtools_context(
         &mut self,
         context: &moli_protocol::automation::AutomationContext,
-    ) -> Option<DevToolsPageResidenceIdentity> {
+    ) -> Option<DevToolsDocumentResidenceIdentity> {
         self.conn
-            .page_residence_identity_for_devtools_context(context)
+            .document_residence_identity_for_devtools_context(context)
     }
 }
 
@@ -1144,13 +1144,13 @@ impl CdpScheduler {
         .execution
     }
 
-    pub(crate) async fn execute_automation_command_with_external_load_wait_and_page_residence(
+    pub(crate) async fn execute_automation_command_with_external_load_wait_and_document_residence(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
         timeout: Option<std::time::Duration>,
-        expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> AutomationPageExecution {
+        expected_page: Option<&DevToolsDocumentResidenceIdentity>,
+    ) -> AutomationDocumentExecution {
         self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
             receivers,
             command,
@@ -1167,8 +1167,8 @@ impl CdpScheduler {
         command: AutomationCommand,
         timeout: Option<std::time::Duration>,
         background_command_id: Option<u64>,
-        expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> AutomationPageExecution {
+        expected_page: Option<&DevToolsDocumentResidenceIdentity>,
+    ) -> AutomationDocumentExecution {
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_lifecycle_milestone =
             devtools_navigation_lifecycle_milestone(navigation_wait);
@@ -1189,7 +1189,7 @@ impl CdpScheduler {
             Ok(output) => output,
             Err(failure) => {
                 let (protocol_output, error) = failure.into_parts();
-                return AutomationPageExecution {
+                return AutomationDocumentExecution {
                     execution: AutomationExecution {
                         result: Err(error),
                         protocol_output,
@@ -1199,16 +1199,17 @@ impl CdpScheduler {
             }
         };
         // Background navigation completion is deliberately drained before a
-        // command starts. Capture and authorize the Page only after that
+        // command starts. Capture and authorize the Document only after that
         // drain, so a DOM reference cannot pass a pre-drain check and then be
-        // dispatched to the replacement Page.
-        let page_residence = self.page_residence_identity_for_devtools_context(&navigation_context);
+        // dispatched to a replacement Document in the same Page.
+        let page_residence =
+            self.document_residence_identity_for_devtools_context(&navigation_context);
         if expected_page.is_some_and(|expected| page_residence.as_ref() != Some(expected)) {
-            return AutomationPageExecution {
+            return AutomationDocumentExecution {
                 execution: AutomationExecution {
                     result: Err(DevToolsError::new(
                         moli_protocol::automation::DevToolsErrorKind::NoSuchNode,
-                        "DOM reference belongs to a replaced Page",
+                        "DOM reference belongs to a replaced Document",
                     )),
                     protocol_output,
                 },
@@ -1413,9 +1414,16 @@ impl CdpScheduler {
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.finish());
-        AutomationPageExecution {
+        AutomationDocumentExecution {
             execution,
-            page_residence,
+            // Script may itself replace the Document with document.open().
+            // Any returned DOM references belong to the resulting Document.
+            // A command that removes its own frame can still return a value;
+            // retain its original identity when the route no longer exists.
+            // That retired identity cannot authorize a later DOM command.
+            page_residence: self
+                .document_residence_identity_for_devtools_context(&navigation_context)
+                .or(page_residence),
         }
     }
 

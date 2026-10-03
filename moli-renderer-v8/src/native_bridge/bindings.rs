@@ -106,6 +106,18 @@ fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle
 }
 
 impl NativeBridgeBindings {
+    pub(crate) fn build_peer_in_scope(&self, scope: &mut v8::PinScope<'_, '_>) -> Self {
+        let window_template = v8::Local::new(scope, &self.window_global_template);
+        let cross_origin_template =
+            v8::Local::new(scope, &self.cross_origin_window_global_template);
+        Self::build(
+            scope,
+            self.isolate_ptr,
+            window_template,
+            cross_origin_template,
+        )
+    }
+
     pub(crate) fn build(
         scope: &mut v8::PinScope<'_, '_, ()>,
         isolate_ptr: v8::UnsafeRawIsolatePtr,

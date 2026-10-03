@@ -1,0 +1,17 @@
+{
+  "named-root-opener": [
+    {"op": "create", "page": "A"},
+    {"op": "name", "page": "A", "value": "parent"},
+    {"op": "popup", "page": "A", "path": "/child", "child": "C", "name": "child"},
+    {"op": "evaluate", "page": "C", "expression": "window.popupRef=opener;void 0"},
+    {"op": "popup_reuse", "page": "C", "child": "A", "name": "parent", "path": "/parent-renavigated", "renameAfter": "renamedParent"}
+  ],
+  "named-current-page-before-related-pages": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/child", "child": "C", "name": "child"},
+    {"op": "name", "page": "A", "value": "shared"},
+    {"op": "name", "page": "C", "value": "shared"},
+    {"op": "evaluate", "page": "C", "expression": "window.popupRef=window;void 0"},
+    {"op": "popup_reuse", "page": "C", "child": "C", "name": "shared", "path": "/current-reused", "renameAfter": "shared"}
+  ]
+}

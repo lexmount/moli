@@ -79,7 +79,13 @@ pub(crate) fn navigate_location_object<'s>(
 pub(crate) fn navigate_top_level_same_document_from_browser(
     scope: &mut v8::PinScope<'_, '_>,
     target: String,
+    replace_current: bool,
 ) -> bool {
+    let kind = if replace_current {
+        LocationNavigationKind::Replace
+    } else {
+        LocationNavigationKind::Assign
+    };
     let owner = scope.get_current_context().global(scope);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return false;
@@ -87,12 +93,9 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     let Some(current_href) = location_href_slot(scope, location) else {
         return false;
     };
-    let Some(resolved) = resolve_location_navigation_target(
-        scope,
-        &current_href,
-        LocationNavigationKind::Assign,
-        Some(target.clone()),
-    ) else {
+    let Some(resolved) =
+        resolve_location_navigation_target(scope, &current_href, kind, Some(target.clone()))
+    else {
         return false;
     };
     let current = url::Url::parse(&current_href).ok();
@@ -107,7 +110,7 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     navigate_location_object_with_source_element_and_child_navigate_event(
         scope,
         location,
-        LocationNavigationKind::Assign,
+        kind,
         Some(target),
         None,
         false,
@@ -303,11 +306,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             child_browsing_context_handle_for_runtime_owner(scope, owner)
         };
-        let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
-            context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
-                unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
-            })
-        });
+        let replaces_initial_about_blank =
+            super::navigation_window::navigation_document_is_initial_empty(scope, owner)
+                || child_handle.is_some_and(|handle| {
+                    context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
+                        unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
+                    })
+                });
         let effective_kind = match kind {
             LocationNavigationKind::Assign if replaces_initial_about_blank => {
                 LocationNavigationKind::Replace

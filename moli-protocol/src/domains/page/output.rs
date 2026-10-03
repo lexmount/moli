@@ -1,6 +1,65 @@
 use super::*;
 
 impl PagePreparedOutputs {
+    pub(crate) fn from_renderer_auxiliary_window_navigation(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        window: moli_core::page::RendererAuxiliaryWindow,
+        url: String,
+        kind: moli_core::page::RendererAuxiliaryNavigationKind,
+        document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            auxiliary_window_navigations: vec![
+                prepared_navigation::PagePreparedAuxiliaryWindowNavigation {
+                    browser_context_id: residence.browser_context_id().to_owned(),
+                    window,
+                    url,
+                    kind,
+                    document_response,
+                },
+            ],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_auxiliary_window_navigation_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.auxiliary_window_navigations.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::NavigateAuxiliaryWindow);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
+        }
+    }
+
+    pub(crate) fn from_renderer_auxiliary_window_close(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        window: moli_core::page::RendererAuxiliaryWindow,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            auxiliary_window_closes: vec![(residence.browser_context_id().to_owned(), window)],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_auxiliary_window_close_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.auxiliary_window_closes.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::CloseAuxiliaryWindow);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
+        }
+    }
+
     pub(crate) fn from_renderer_javascript_dialog(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
@@ -310,6 +369,10 @@ impl PagePreparedOutputs {
         self.javascript_dialogs.extend(other.javascript_dialogs);
         self.window_open_events.extend(other.window_open_events);
         self.popup_activations.extend(other.popup_activations);
+        self.auxiliary_window_closes
+            .extend(other.auxiliary_window_closes);
+        self.auxiliary_window_navigations
+            .extend(other.auxiliary_window_navigations);
         self.document_title_changes
             .extend(other.document_title_changes);
         self.document_lifecycle_events
@@ -440,6 +503,8 @@ impl PagePreparedOutputs {
                 .collect(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -458,6 +523,8 @@ impl PagePreparedOutputs {
         Self {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             popup_activations: activations
                 .into_iter()
                 .map(|activation| {
@@ -516,6 +583,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: vec![activity],
@@ -535,6 +604,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -559,6 +630,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -777,6 +850,58 @@ pub(in crate::domains) async fn project_page_output_async(
                     emit_prepared_child_frame_activity(conn, &mut events, activity, None).await;
                 }
                 context.command.protocol_events_mut().extend(events);
+            }
+        }
+        ProtocolOutputSlot::NavigateAuxiliaryWindow => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for navigation in std::mem::take(&mut slot.outputs.auxiliary_window_navigations) {
+                    let context = conn.browser_context_by_id(&navigation.browser_context_id);
+                    let target_id = context
+                        .and_then(|context| context.target_id_for_popup_id(navigation.window.id()));
+                    if !navigation.window.is_closed()
+                        && let Some(target_id) = target_id
+                        && let Some(action) = crate::conn::PopupTargetNavigationOwnerAction::capture(
+                            conn,
+                            &navigation.browser_context_id,
+                            target_id,
+                            navigation.url,
+                            crate::conn::PopupTargetNavigationKind::WindowReference(
+                                navigation.kind,
+                            ),
+                        )
+                    {
+                        conn.publish_popup_target_navigation_owner_action(
+                            action.with_document_response(navigation.document_response),
+                        );
+                    }
+                }
+            }
+        }
+        ProtocolOutputSlot::CloseAuxiliaryWindow => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for (browser_context_id, window) in
+                    std::mem::take(&mut slot.outputs.auxiliary_window_closes)
+                {
+                    let target_id = conn
+                        .browser_context_by_id(&browser_context_id)
+                        .and_then(|context| context.target_id_for_popup_id(window.id()))
+                        .map(str::to_owned);
+                    let Some(target_id) = target_id else {
+                        continue;
+                    };
+                    let Some(route) = conn.target_session_route_for_target_id(&target_id) else {
+                        continue;
+                    };
+                    let owner = CommandOwnerScope::for_route(route);
+                    let events = termination::prepare_page_target_termination_async(
+                        conn,
+                        &owner,
+                        target_id,
+                        context.command,
+                    )
+                    .await;
+                    context.command.protocol_events_mut().extend(events);
+                }
             }
         }
         ProtocolOutputSlot::SessionHistoryUpdate => {

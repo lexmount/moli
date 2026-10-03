@@ -1,0 +1,110 @@
+{
+  "popup-source-window-true": [
+    {
+      "op": "create",
+      "page": "A"
+    },
+    {
+      "op": "create",
+      "page": "B",
+      "newWindow": true
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "path": "/source-popup",
+      "child": "C",
+      "name": "child",
+      "userGesture": true
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "path": "/independent",
+      "child": "D",
+      "name": "independent",
+      "features": "popup,width=420,height=310",
+      "userGesture": true
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "activate",
+      "page": "B"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "window.open('', 'child').name==='child'",
+      "userGesture": false
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "close",
+      "page": "D"
+    },
+    {
+      "op": "window_map"
+    }
+  ],
+  "popup-source-window-false": [
+    {
+      "op": "create",
+      "page": "A"
+    },
+    {
+      "op": "create",
+      "page": "B",
+      "newWindow": true
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "path": "/source-popup",
+      "child": "C",
+      "name": "child",
+      "userGesture": false
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "path": "/independent",
+      "child": "D",
+      "name": "independent",
+      "features": "popup,width=420,height=310",
+      "userGesture": false
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "activate",
+      "page": "B"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "window.open('', 'child').name==='child'",
+      "userGesture": false
+    },
+    {
+      "op": "window_map"
+    },
+    {
+      "op": "close",
+      "page": "D"
+    },
+    {
+      "op": "window_map"
+    }
+  ]
+}

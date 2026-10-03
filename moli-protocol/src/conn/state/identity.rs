@@ -85,6 +85,24 @@ pub struct TargetPageResidenceIdentity {
     page_attachment_id: TargetPageAttachmentId,
 }
 
+/// Captures both the target Page and the Document that owns a DOM reference.
+/// Page residence alone cannot authorize an element after cross-document
+/// navigation, since the Page and its WindowProxy remain resident.
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub struct DevToolsDocumentResidenceIdentity {
+    page: TargetPageResidenceIdentity,
+    document: moli_core::RendererDocumentLifecycleIdentity,
+}
+
+impl DevToolsDocumentResidenceIdentity {
+    pub(crate) fn new(
+        page: TargetPageResidenceIdentity,
+        document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Self {
+        Self { page, document }
+    }
+}
+
 impl TargetPageResidenceIdentity {
     pub(crate) fn new(
         browser_context_id: String,

@@ -4,6 +4,11 @@ use super::context_registry::{
     DocumentInspectorContextRegistry,
 };
 mod interrupt;
+#[cfg(test)]
+mod page_target_tests;
+mod page_targets;
+
+use page_targets::RendererInspectorPageTargets;
 
 use crate::{
     devtools::{
@@ -25,6 +30,7 @@ use crate::{
         RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
     },
 };
+pub(in crate::script_vm) use interrupt::finish_page_close_termination;
 use interrupt::{
     allocate_session_executor_route_id, dispatch_inspector_interrupt, register_session_executor,
     unregister_session_executor,
@@ -43,7 +49,7 @@ struct RendererInspectorClient {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
     context_registry: DocumentInspectorContextRegistry,
     unique_id_state: Rc<RendererInspectorClientUniqueIdState>,
-    session_executor: Rc<RendererInspectorSessionExecutorLocal>,
+    page_targets: RendererInspectorPageTargets,
 }
 
 #[derive(Clone)]
@@ -66,6 +72,8 @@ struct RendererInspectorSessionExecutorLocal {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
     target: RendererDevToolsTargetHandle,
     route_id: RendererInspectorSessionExecutorRouteId,
+    page_targets: RendererInspectorPageTargets,
+    isolate_environment_ingress: Option<RendererInspectorIoIngress>,
     sessions: RefCell<HashMap<(i32, DevToolsSessionKey), RendererInspectorSessionRoute>>,
     interrupt_sessions: RefCell<
         HashMap<(RendererDevToolsAgentToken, DevToolsSessionKey), RendererInspectorSessionRoute>,
@@ -80,6 +88,9 @@ enum RendererInspectorNestedCommand {
 
 impl Drop for RendererInspectorSessionExecutorLocal {
     fn drop(&mut self) {
+        if let Some(environment) = &self.isolate_environment_ingress {
+            environment.unregister_page_pause_wake(self.route_id);
+        }
         unregister_session_executor(self.route_id);
         self.target
             .main_ref()
@@ -119,12 +130,16 @@ impl RendererInspectorSessionExecutorLocal {
         isolate: v8::UnsafeRawIsolatePtr,
         target: RendererDevToolsTargetHandle,
         route_id: RendererInspectorSessionExecutorRouteId,
+        page_targets: RendererInspectorPageTargets,
+        isolate_environment_ingress: Option<RendererInspectorIoIngress>,
     ) -> Rc<Self> {
         debug_assert_eq!(target.io_ref().route_id(), Some(route_id));
         let session_executor = Rc::new(Self {
             isolate: UnsafeCell::new(isolate),
             target,
             route_id,
+            page_targets,
+            isolate_environment_ingress,
             sessions: RefCell::new(HashMap::new()),
             interrupt_sessions: RefCell::new(HashMap::new()),
         });
@@ -176,7 +191,9 @@ impl RendererInspectorSessionExecutorLocal {
                 // These are actual posted owner tasks, not an environment-version
                 // check. Service them in both pause modes, before a following
                 // Inspector observation; they never execute page JavaScript.
-                if let Some(invalidation) = self.target.io_ref().claim_environment_invalidation() {
+                if let Some(invalidation) =
+                    self.environment_ingress().claim_environment_invalidation()
+                {
                     return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
                         invalidation,
                     ));
@@ -259,6 +276,12 @@ impl RendererInspectorSessionExecutorLocal {
             }
         }
         self.target.pause_ref().leave_pause();
+    }
+
+    fn environment_ingress(&self) -> &RendererInspectorIoIngress {
+        self.isolate_environment_ingress
+            .as_ref()
+            .unwrap_or_else(|| self.target.io_ref())
     }
 
     fn dispatch_io_command(&self, context_group_id: i32, command: RendererInspectorIoCommand) {
@@ -548,13 +571,13 @@ impl RendererInspectorClient {
         isolate: v8::UnsafeRawIsolatePtr,
         context_registry: DocumentInspectorContextRegistry,
         unique_id_state: Rc<RendererInspectorClientUniqueIdState>,
-        session_executor: Rc<RendererInspectorSessionExecutorLocal>,
+        page_targets: RendererInspectorPageTargets,
     ) -> Self {
         Self {
             isolate: UnsafeCell::new(isolate),
             context_registry,
             unique_id_state,
-            session_executor,
+            page_targets,
         }
     }
 }
@@ -583,14 +606,19 @@ impl v8::inspector::V8InspectorClientImpl for RendererInspectorClient {
         // pointer or changing the pause bridge protocol.
         let isolate = unsafe { &mut *self.isolate.get() };
         let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
+        let Some(executor) = self.page_targets.executor_for_group(context_group_id) else {
+            return;
+        };
+        let _pause = self.page_targets.enter_pause(&executor);
         with_scoped_inspector_microtasks(isolate, || {
-            self.session_executor
-                .run_message_loop_on_pause(context_group_id);
+            executor.run_message_loop_on_pause(context_group_id);
         });
     }
 
     fn quit_message_loop_on_pause(&self) {
-        self.session_executor.quit_message_loop_on_pause();
+        if let Some(executor) = self.page_targets.paused_executor() {
+            executor.quit_message_loop_on_pause();
+        }
     }
 
     fn generate_unique_id(&self) -> i64 {
@@ -621,14 +649,25 @@ struct RendererInspectorIsolateBackendIdentity;
 /// holder remains the backend owner and controls isolate entry and teardown.
 #[derive(Clone)]
 pub(crate) struct RendererInspectorIsolateBackendHandle {
+    endpoint: Rc<RendererInspectorPageEndpoint>,
+}
+
+// Keep the immutable control endpoint shared as one unit. These handles travel
+// through Page bootstrap and navigation futures, so clones must stay small.
+struct RendererInspectorPageEndpoint {
     identity: Rc<RendererInspectorIsolateBackendIdentity>,
     target: RendererDevToolsTargetHandle,
+    isolate_environment_ingress: RendererInspectorIoIngress,
+    session_executor: Option<Rc<RendererInspectorSessionExecutorLocal>>,
+    shutdown_registry: Option<crate::devtools::target::RendererDevToolsTargetShutdownRegistry>,
+    _shutdown_registration:
+        Option<crate::devtools::target::RendererDevToolsTargetShutdownRegistration>,
 }
 
 impl std::fmt::Debug for RendererInspectorIsolateBackendHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RendererInspectorIsolateBackendHandle")
-            .field("identity_key", &Rc::as_ptr(&self.identity))
+            .field("identity_key", &Rc::as_ptr(&self.endpoint.identity))
             .finish()
     }
 }
@@ -640,6 +679,8 @@ pub(in crate::script_vm) struct RendererInspectorIsolateBackend {
     unique_id_state: Rc<RendererInspectorClientUniqueIdState>,
     target: RendererDevToolsTargetHandle,
     session_executor: Rc<RendererInspectorSessionExecutorLocal>,
+    page_targets: RendererInspectorPageTargets,
+    shutdown_registry: Option<crate::devtools::target::RendererDevToolsTargetShutdownRegistry>,
 }
 
 impl RendererInspectorIsolateBackend {
@@ -661,51 +702,61 @@ impl RendererInspectorIsolateBackend {
             )),
         );
         let target = RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress);
-        let session_executor =
-            RendererInspectorSessionExecutorLocal::new(isolate_ptr, target.clone(), route_id);
+        let page_targets = RendererInspectorPageTargets::default();
+        let session_executor = RendererInspectorSessionExecutorLocal::new(
+            isolate_ptr,
+            target.clone(),
+            route_id,
+            page_targets.clone(),
+            None,
+        );
         let inspector_client =
             v8::inspector::V8InspectorClient::new(Box::new(RendererInspectorClient::new(
                 isolate_ptr,
                 context_registry.clone(),
                 unique_id_state.clone(),
-                session_executor.clone(),
+                page_targets.clone(),
             )));
+        let identity = Rc::new(RendererInspectorIsolateBackendIdentity);
+        assert!(
+            isolate.set_slot(identity.clone()),
+            "one Inspector backend must own this isolate"
+        );
         Self {
-            identity: Rc::new(RendererInspectorIsolateBackendIdentity),
+            identity,
             inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
             context_registry,
             unique_id_state,
             target,
             session_executor,
+            page_targets,
+            shutdown_registry: None,
         }
+    }
+
+    pub(in crate::script_vm) fn with_shutdown_registry(
+        mut self,
+        registry: Option<crate::devtools::target::RendererDevToolsTargetShutdownRegistry>,
+    ) -> Self {
+        self.shutdown_registry = registry;
+        self
     }
 
     pub(crate) fn handle(&self) -> RendererInspectorIsolateBackendHandle {
         RendererInspectorIsolateBackendHandle {
-            identity: Rc::clone(&self.identity),
-            target: self.target.clone(),
+            endpoint: Rc::new(RendererInspectorPageEndpoint {
+                identity: Rc::clone(&self.identity),
+                target: self.target.clone(),
+                isolate_environment_ingress: self.target.io_ref().clone(),
+                session_executor: Some(self.session_executor.clone()),
+                shutdown_registry: self.shutdown_registry.clone(),
+                _shutdown_registration: None,
+            }),
         }
     }
 
     pub(in crate::script_vm) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
         self.target.clone()
-    }
-
-    pub(super) fn register_session_executor_route(
-        &self,
-        context_group_id: DocumentInspectorContextGroupId,
-        agent_token: RendererDevToolsAgentToken,
-        session_key: DevToolsSessionKey,
-        session: &Rc<v8::inspector::V8InspectorSession>,
-        outbound: InspectorOutbound,
-    ) -> RendererInspectorSessionExecutorRegistration {
-        self.session_executor.register_session(
-            context_group_id,
-            agent_token,
-            session_key,
-            session,
-            outbound,
-        )
     }
 
     pub(super) fn connect_session(
@@ -730,6 +781,13 @@ impl RendererInspectorIsolateBackend {
         origin: &[u8],
         aux_data: &[u8],
     ) -> Option<String> {
+        if let Some(executor) = self.page_targets.executor_for_group(context_group_id.get()) {
+            let previous = context.set_slot(Rc::new(executor.route_id));
+            assert!(
+                previous.is_none_or(|previous| *previous == executor.route_id),
+                "an Inspector context must retain its Page executor"
+            );
+        }
         self.unique_id_state.capture_context_unique_id(|| {
             self.inspector.context_created(
                 context,
@@ -801,13 +859,34 @@ impl RendererInspectorIsolateBackend {
 }
 
 impl RendererInspectorIsolateBackendHandle {
-    pub(super) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
-        self.target.clone()
+    pub(super) fn register_session_executor_route(
+        &self,
+        context_group_id: DocumentInspectorContextGroupId,
+        agent_token: RendererDevToolsAgentToken,
+        session_key: DevToolsSessionKey,
+        session: &Rc<v8::inspector::V8InspectorSession>,
+        outbound: InspectorOutbound,
+    ) -> RendererInspectorSessionExecutorRegistration {
+        self.endpoint
+            .session_executor
+            .as_ref()
+            .expect("a live Inspector Page has an executor")
+            .register_session(
+                context_group_id,
+                agent_token,
+                session_key,
+                session,
+                outbound,
+            )
+    }
+
+    pub(crate) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
+        self.endpoint.target.clone()
     }
 
     pub(super) fn assert_matches(&self, backend: &RendererInspectorIsolateBackend) {
         assert!(
-            Rc::ptr_eq(&self.identity, &backend.identity),
+            Rc::ptr_eq(&self.endpoint.identity, &backend.identity),
             "renderer DevTools agent used a different isolate Inspector backend"
         );
     }
@@ -820,13 +899,19 @@ impl RendererInspectorIsolateBackendHandle {
             RendererInspectorMainIngress::new(route_id, pause_bridge.pause_loop_wake());
         let io_ingress = RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None);
         Self {
-            identity: Rc::new(RendererInspectorIsolateBackendIdentity),
-            target: RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress),
+            endpoint: Rc::new(RendererInspectorPageEndpoint {
+                identity: Rc::new(RendererInspectorIsolateBackendIdentity),
+                isolate_environment_ingress: io_ingress.clone(),
+                target: RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress),
+                session_executor: None,
+                shutdown_registry: None,
+                _shutdown_registration: None,
+            }),
         }
     }
 
     #[cfg(test)]
     pub(super) fn is_same_backend(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.identity, &other.identity)
+        Rc::ptr_eq(&self.endpoint.identity, &other.endpoint.identity)
     }
 }

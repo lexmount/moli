@@ -37,6 +37,29 @@ pub(super) fn dynamic_script_execute_is_runnable_before_dom_content_loaded(
 }
 
 impl ScriptVmContextBootstrap {
+    pub(super) fn new_main_default_in_scope<'s>(
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        global_template: v8::Local<'s, v8::ObjectTemplate>,
+        context_host: Rc<RefCell<JsContextHost>>,
+        resource_owner_id: ResourceOwnerId,
+        promise_reject_dispatch: &PromiseRejectDispatchSlot,
+        storage_bucket_store: SharedStorageBucketStore,
+        environment: crate::script_vm::RendererPageScriptEnvironment,
+    ) -> Result<Self> {
+        Self::new_in_scope(
+            scope,
+            global_template,
+            context_host,
+            resource_owner_id,
+            promise_reject_dispatch,
+            None,
+            Some(storage_bucket_store),
+            WindowContextBootstrapMode::MainDefault,
+            Some(environment),
+            false,
+        )
+    }
+
     pub(super) fn new_main_default(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
@@ -301,7 +324,10 @@ impl ScriptVmContextBootstrap {
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
-            } => unsafe { &*host_ptr }.document_url().clone(),
+            } => unsafe { &*host_ptr }
+                .current_main_document_resource_loader()
+                .and_then(|loader| url::Url::parse(loader.fetch_context().origin()).ok())
+                .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone()),
         };
         if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
             let owner_context = match child_handle {
@@ -362,6 +388,13 @@ impl ScriptVmContextBootstrap {
         }
         if let Some(registration) = realm_registration.as_mut() {
             registration.commit();
+        }
+        // Child Window exposure can reach bootstrap while the caller holds
+        // the host's RefCell borrow. Follow the bootstrap's raw host access
+        // discipline and end each native read before touching V8 again.
+        if unsafe { &*host_ptr }.document_host_is_published() {
+            let queue = unsafe { &*host_ptr }.deferred_context_host_release_queue();
+            crate::util::retain_context_host_for_document_realm(local_context, context_host, queue);
         }
         Ok(Self {
             context: v8::Global::new(scope, local_context),

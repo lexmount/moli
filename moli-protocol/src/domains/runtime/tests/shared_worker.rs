@@ -621,7 +621,10 @@ onconnect = event => {
 
     let response = take_response_by_id(&mut ctx, 90_022);
     let isolate_scope = &response["result"]["isolateScope"];
-    assert_eq!(isolate_scope["documentIsolateModel"], json!("page-vm"));
+    assert_eq!(
+        isolate_scope["documentIsolateModel"],
+        json!("related-pages")
+    );
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
@@ -791,13 +794,13 @@ onconnect = event => {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(2),
-        "opener and popup must remain independently schedulable: {response:?}"
+        json!(1),
+        "related opener and popup share their renderer owner: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
-        json!(2),
-        "popup PageVM must be counted as a second document isolate: {response:?}"
+        json!(1),
+        "related popup and opener must count as one document isolate: {response:?}"
     );
     assert_eq!(
         isolate_scope["documentContextCount"],
@@ -822,8 +825,8 @@ onconnect = event => {
     );
     assert_eq!(
         isolate_scope["estimatedLiveV8IsolateCount"],
-        json!(4),
-        "combo should be two page document isolates plus two worker isolates: {response:?}"
+        json!(3),
+        "combo should be one related-page document isolate plus two worker isolates: {response:?}"
     );
     assert_eq!(
         response["result"]["activeBrowserContext"]["backgroundLoadedPageCount"],

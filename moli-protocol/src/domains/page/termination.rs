@@ -590,7 +590,6 @@ pub(super) async fn complete_close_command_dispatch(
     owner: &CommandOwnerScope,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let mut out = Vec::new();
     let session_id = owner.session_id();
     let Some((_, target_id)) = conn.target_owner_identity_for_owner(owner) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
@@ -605,7 +604,17 @@ pub(super) async fn complete_close_command_dispatch(
         ));
     };
     let target_id = target_id.expect("validated Page target identity");
+    let out = prepare_page_target_termination_async(conn, owner, target_id, command_context).await;
+    complete_success_with_background_events(out)
+}
 
+pub(super) async fn prepare_page_target_termination_async(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    target_id: String,
+    command_context: &mut crate::conn::CommandDispatchContext,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut out = Vec::new();
     let (
         pending_navigations,
         pending_auth_navigations,
@@ -651,7 +660,7 @@ pub(super) async fn complete_close_command_dispatch(
         owner.clone(),
         target_id,
     ));
-    complete_success_with_background_events(out)
+    out
 }
 
 pub(crate) async fn complete_page_target_termination_owner_action_async(
@@ -664,6 +673,12 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
         .target_owner_identity_for_owner(&owner_scope)
         .and_then(|(_, target_id)| target_id);
     if current_target_id.as_deref() != Some(expected_target_id.as_str()) {
+        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
+            out,
+            conn.take_scheduler_events(),
+        );
+    }
+    if !conn.activate_browser_context_for_target(&expected_target_id) {
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(
             out,
             conn.take_scheduler_events(),

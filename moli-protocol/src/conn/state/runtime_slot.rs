@@ -44,6 +44,7 @@ struct RetiringRendererDocumentOutput {
     page_attachment_id: TargetPageAttachmentId,
     binding: CommittedRendererDocumentBinding,
     network_agent: RetiringTargetNetworkAgentState,
+    predecessor_output_drained: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,11 +56,13 @@ pub(in crate::conn::state) struct TargetNetworkRequestCounters {
 #[derive(Debug, Default)]
 pub(crate) struct TargetRuntimeSlot {
     page_slot: TargetPageSlot,
+    pending_auxiliary_page: Option<moli_core::page::RendererPendingAuxiliaryPage>,
     devtools_renderer_channel: DevToolsRendererChannel,
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
     network_agent: TargetNetworkAgentState,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
+    last_started_output_document: Option<moli_core::page::RendererDocumentToken>,
     log_output_queue: TargetLogOutputQueueState,
     observable_queue: TargetRuntimeObservableQueueState,
     request_counters: TargetNetworkRequestCounters,
@@ -104,6 +107,26 @@ impl TargetNetworkRequestIdAllocator<'_> {
 }
 
 impl TargetRuntimeSlot {
+    pub(crate) fn pending_auxiliary_page(
+        &self,
+    ) -> Option<&moli_core::page::RendererPendingAuxiliaryPage> {
+        self.pending_auxiliary_page.as_ref()
+    }
+
+    pub(crate) fn stage_auxiliary_page(
+        &mut self,
+        page: moli_core::page::RendererPendingAuxiliaryPage,
+    ) {
+        assert!(!self.has_loaded_page() && self.pending_auxiliary_page.is_none());
+        self.pending_auxiliary_page = Some(page);
+    }
+
+    pub(crate) fn take_auxiliary_page(
+        &mut self,
+    ) -> Option<moli_core::page::RendererPendingAuxiliaryPage> {
+        self.pending_auxiliary_page.take()
+    }
+
     pub(crate) fn from_page_slot(page_slot: TargetPageSlot) -> Self {
         let mut slot = Self {
             page_slot,
@@ -196,8 +219,22 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
-        self.javascript_dialog_scope.retire();
         let mut page = page;
+        self.rotate_current_document_output_for_replacement();
+        self.ensure_renderer_attachment_for_replacement(page.as_mut());
+        let previous = self.page_slot.replace_loaded_page(page);
+        self.ingest_owner_page_observable_output_updates();
+        previous
+    }
+
+    pub(crate) fn finish_existing_page_document_commit(&mut self) {
+        self.rotate_current_document_output_for_replacement();
+        self.page_slot.finish_existing_page_document_commit();
+        self.ingest_owner_page_observable_output_updates();
+    }
+
+    fn rotate_current_document_output_for_replacement(&mut self) {
+        self.javascript_dialog_scope.retire();
         let retiring_document = self
             .page_slot
             .loaded_page()
@@ -212,14 +249,18 @@ impl TargetRuntimeSlot {
         let retiring_document =
             retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
                 RetiringRendererDocumentOutput {
+                    predecessor_output_drained: self.last_started_output_document.is_some_and(
+                        |document| {
+                            document.page_id == binding.renderer_document.page_id
+                                && document != binding.renderer_document
+                        },
+                    ),
                     renderer_page,
                     page_attachment_id,
                     binding,
                     network_agent: self.network_agent.rotate_document_for_replacement(),
                 }
             });
-        self.ensure_renderer_attachment_for_replacement(page.as_mut());
-        let previous = self.page_slot.replace_loaded_page(page);
         if let Some(retiring_document) = retiring_document {
             self.retiring_renderer_document_outputs
                 .push(retiring_document);
@@ -227,8 +268,6 @@ impl TargetRuntimeSlot {
         } else {
             self.reset_document_output_state();
         }
-        self.ingest_owner_page_observable_output_updates();
-        previous
     }
 
     pub(crate) fn clear_loaded_page_with_reason(
@@ -427,6 +466,24 @@ impl TargetRuntimeSlot {
         Ok(())
     }
 
+    pub(crate) fn bind_existing_page_to_committed_renderer_agent_candidate(
+        &mut self,
+        transaction: &CommittedRendererAgentAttachment,
+    ) -> Result<(), DevToolsRendererChannelError> {
+        let current = transaction.current();
+        if self.devtools_renderer_channel.current() != Some(current) {
+            return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
+        }
+        let Some(page) = self.page_slot.loaded_page_mut() else {
+            return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
+        };
+        if page.renderer_devtools_agent_token() != current.agent_token() {
+            return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
+        }
+        page.bind_renderer_agent_attachment(current.id());
+        Ok(())
+    }
+
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
         page: &mut Page,
@@ -518,6 +575,30 @@ impl TargetRuntimeSlot {
                 );
             }
             false
+        });
+    }
+
+    pub(crate) fn observe_renderer_output_document_start(
+        &mut self,
+        document: moli_core::page::RendererDocumentToken,
+    ) {
+        self.last_started_output_document = Some(document);
+        // A replacement VM starts only after its predecessor has retired its
+        // producers and journaled their final synchronous output. The stable
+        // Page stream orders that prefix before this Started record. Keepalive
+        // requests retain their own entries until their later terminal facts.
+        for entry in &mut self.retiring_renderer_document_outputs {
+            if entry.binding.renderer_document.page_id == document.page_id
+                && entry.binding.renderer_document != document
+            {
+                entry.predecessor_output_drained = true;
+            }
+        }
+    }
+
+    pub(crate) fn finish_retiring_document_output_projection(&mut self) {
+        self.retiring_renderer_document_outputs.retain(|entry| {
+            !entry.predecessor_output_drained || entry.network_agent.has_pending_renderer_requests()
         });
     }
 
@@ -1365,6 +1446,11 @@ mod tests {
 
     #[test]
     fn successor_network_idle_ignores_retained_predecessor_delivery_state() {
+        assert_predecessor_network_retirement(false);
+        assert_predecessor_network_retirement(true);
+    }
+
+    fn assert_predecessor_network_retirement(keepalive: bool) {
         let page_id = moli_core::PageId::new_for_testing(41);
         let handle = SubresourceNetworkRequestHandle::new(7);
         let document_url = Url::parse("https://old.example/").expect("document URL should parse");
@@ -1382,7 +1468,8 @@ mod tests {
                 SubresourceResourceType::Fetch,
                 SubresourceRequestInitiatorType::Script,
                 None,
-            ),
+            )
+            .with_keepalive(keepalive),
         ));
         let mut predecessor_agent = TargetNetworkAgentState::default();
         predecessor_agent.ingest_renderer_output_item(&started, "LOADER-old");
@@ -1391,7 +1478,7 @@ mod tests {
             retiring_agent
                 .unterminated_document_bound_request_diagnostics()
                 .len(),
-            1
+            usize::from(!keepalive)
         );
 
         let mut slot = TargetRuntimeSlot::default();
@@ -1413,11 +1500,46 @@ mod tests {
                     document_open_replacement_epoch: None,
                 },
                 network_agent: retiring_agent,
+                predecessor_output_drained: false,
             });
 
         assert!(
             slot.renderer_subresources_are_idle(),
             "predecessor delivery state must not hold the current loader's network-idle milestone"
+        );
+        slot.finish_retiring_document_output_projection();
+        assert_eq!(slot.retiring_renderer_document_outputs.len(), 1);
+        slot.observe_renderer_output_document_start(RendererDocumentToken::new_for_testing(
+            page_id, 2,
+        ));
+        slot.finish_retiring_document_output_projection();
+        assert_eq!(
+            slot.retiring_renderer_document_outputs.len(),
+            1,
+            "even detached keepalive requests need their predecessor's request correlations"
+        );
+        let source = slot.retiring_renderer_document_outputs[0]
+            .binding
+            .renderer_document_identity();
+        let terminal = ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+            moli_core::page::SubresourceBodyFinished::failed(handle, "finished".to_owned()),
+        ));
+        assert!(
+            slot.ingest_renderer_network_output_item_and_prepare_live_delivery(
+                None,
+                source,
+                &terminal,
+                None,
+                None,
+                None,
+                &mut ConnectionNetworkRequestIdAllocator::default(),
+            )
+            .is_some()
+        );
+        slot.finish_retiring_document_output_projection();
+        assert!(
+            slot.retiring_renderer_document_outputs.is_empty(),
+            "completed predecessor state must not accumulate on the stable Page stream"
         );
     }
 }

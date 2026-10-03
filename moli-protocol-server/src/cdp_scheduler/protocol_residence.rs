@@ -519,6 +519,6 @@ fn protocol_residence_is_external_load_wait_activity(
                 && load_predecessors.is_empty()
                 && (work.is_root_frame_stopped_loading()
                 || work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                || work.is_top_level_location_navigation_owner_action())
+                || work.navigation_dependency() == ProtocolNavigationDependency::ReplacesPendingLoad)
     )
 }

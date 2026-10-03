@@ -21,6 +21,7 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
+    pub(crate) window_id: u32,
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
     pub(crate) devtools_sessions: DevToolsSessionRegistry,
@@ -45,6 +46,7 @@ impl PageTargetHost {
     pub(crate) fn empty(target_id: String) -> Self {
         Self {
             target_id,
+            window_id: 0,
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),
             devtools_sessions: DevToolsSessionRegistry::default(),
@@ -240,6 +242,8 @@ impl PageTargetHost {
 pub(crate) struct PageTargetRegistry {
     active_target_id: Option<String>,
     hosts: IndexMap<String, PageTargetHost>,
+    selected_tabs: HashMap<u32, String>,
+    next_window_id: u32,
 }
 
 impl PageTargetRegistry {
@@ -272,31 +276,102 @@ impl PageTargetRegistry {
         self.hosts.get_mut(target_id)
     }
 
-    pub(crate) fn insert(&mut self, host: PageTargetHost) -> bool {
+    pub(crate) fn insert(&mut self, mut host: PageTargetHost, window_id: u32) -> bool {
         let target_id = host.target_id().to_owned();
         if self.hosts.contains_key(&target_id) {
             return false;
         }
+        host.window_id = window_id;
         self.hosts.insert(target_id, host);
         true
     }
 
     pub(crate) fn remove(&mut self, target_id: &str) -> Option<PageTargetHost> {
+        let window_id = self.get(target_id)?.window_id;
+        if self.is_selected_tab(target_id) {
+            let neighbor = self.adjacent_tab_id(target_id).map(str::to_owned);
+            self.selected_tabs.remove(&window_id);
+            if let Some(neighbor) = neighbor {
+                self.selected_tabs.insert(window_id, neighbor);
+            }
+        }
         if self.active_target_id() == Some(target_id) {
             self.active_target_id = None;
         }
         self.hosts.shift_remove(target_id)
     }
 
+    /// Preserve tab-strip order when an active target closes: prefer its right
+    /// neighbor, then the left neighbor at the end of the strip. Compute this
+    /// before removal, while the closing target still identifies its position.
+    pub(crate) fn adjacent_target_id(&self, target_id: &str) -> Option<&str> {
+        self.adjacent_tab_id(target_id).or_else(|| {
+            self.hosts
+                .values()
+                .rev()
+                .find(|host| {
+                    host.target_id() != target_id && self.is_selected_tab(host.target_id())
+                })
+                .map(PageTargetHost::target_id)
+        })
+    }
+
+    fn adjacent_tab_id(&self, target_id: &str) -> Option<&str> {
+        let index = self.hosts.get_index_of(target_id)?;
+        let window_id = self.get(target_id)?.window_id;
+        self.hosts
+            .values()
+            .skip(index + 1)
+            .find(|host| host.window_id == window_id)
+            .or_else(|| {
+                self.hosts
+                    .values()
+                    .take(index)
+                    .rev()
+                    .find(|host| host.window_id == window_id)
+            })
+            .map(PageTargetHost::target_id)
+    }
+
+    pub(crate) fn is_selected_tab(&self, target_id: &str) -> bool {
+        self.get(target_id).is_some_and(|host| {
+            self.selected_tabs
+                .get(&host.window_id)
+                .is_some_and(|selected| selected == target_id)
+        })
+    }
+
+    pub(crate) fn default_window_id(&mut self) -> u32 {
+        self.active()
+            .or_else(|| self.hosts.values().next())
+            .map(|host| host.window_id)
+            .unwrap_or_else(|| self.allocate_window_id())
+    }
+
+    pub(crate) fn allocate_window_id(&mut self) -> u32 {
+        let id = self.next_window_id;
+        self.next_window_id = id.checked_add(1).expect("window id space exhausted");
+        id
+    }
+
+    pub(crate) fn select_tab(&mut self, target_id: &str) -> bool {
+        let Some(host) = self.get(target_id) else {
+            return false;
+        };
+        self.selected_tabs
+            .insert(host.window_id, target_id.to_owned());
+        true
+    }
+
     pub(crate) fn select(&mut self, target_id: &str) -> bool {
-        if self.get(target_id).is_none() {
+        if !self.select_tab(target_id) {
             return false;
         }
         self.active_target_id = Some(target_id.to_owned());
         true
     }
 
-    pub(crate) fn rekey_active(&mut self, target_id: String) -> bool {
+    pub(crate) fn rekey_active(&mut self, target_id: String, window_id: u32) -> bool {
         if self.hosts.contains_key(&target_id) {
             return false;
         }
@@ -308,7 +383,11 @@ impl PageTargetRegistry {
         else {
             return false;
         };
+        self.selected_tabs.remove(&active.window_id);
+        active.window_id = window_id;
         active.replace_target_id(target_id.clone());
+        self.selected_tabs
+            .insert(active.window_id, target_id.clone());
         self.hosts.shift_insert(index, target_id.clone(), active);
         self.active_target_id = Some(target_id);
         true
@@ -342,5 +421,24 @@ impl PageTargetRegistry {
 
     pub(crate) fn background_is_empty(&self) -> bool {
         self.background().next().is_none()
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn reopening_after_the_last_tab_closes_uses_a_new_window_identity() {
+        let mut targets = PageTargetRegistry::default();
+        let window_id = targets.default_window_id();
+        targets.insert(PageTargetHost::empty("first".into()), window_id);
+        targets.select("first");
+        let first_window = targets.remove("first").unwrap().window_id;
+        let window_id = targets.default_window_id();
+        targets.insert(PageTargetHost::empty("second".into()), window_id);
+        targets.select("second");
+        assert_ne!(targets.get("second").unwrap().window_id, first_window);
+        assert!(targets.is_selected_tab("second"));
     }
 }

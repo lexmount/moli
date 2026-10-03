@@ -518,6 +518,12 @@ impl Page {
         })
     }
 
+    /// The activity last published by this concrete renderer document. Reading
+    /// it does not enqueue work on a possibly busy Page.
+    pub fn document_activity(&self) -> moli_page_types::DocumentActivity {
+        self.page_state.state().document_activity
+    }
+
     pub async fn set_document_activity_async(
         &mut self,
         activity: moli_page_types::DocumentActivity,

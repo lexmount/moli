@@ -11,7 +11,7 @@ use super::{
 };
 use crate::runtime::PageId;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct RendererDevToolsTargetShutdownRegistry {
     shared: Arc<Mutex<RendererDevToolsTargetShutdownRegistryState>>,
 }

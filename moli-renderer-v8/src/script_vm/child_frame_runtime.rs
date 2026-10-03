@@ -479,6 +479,13 @@ impl ScriptVm {
             )
         })?;
         let runtime_command_cause = pending.runtime_command_cause;
+        let history_mutation = if pending.entry_seed.as_ref().is_some_and(|seed| {
+            seed.session_history.commit == moli_page_types::SessionHistoryCommit::Replace
+        }) {
+            moli_page_types::NavigationHistoryMutation::Replace
+        } else {
+            moli_page_types::NavigationHistoryMutation::Push
+        };
         let action = crate::runtime::RendererOwnerAction::TopLevelLocationNavigation(
             crate::runtime::RendererDocumentSourcedTopLevelLocationNavigation::
                 new_with_request_and_runtime_command_cause(
@@ -489,7 +496,8 @@ impl ScriptVm {
                     pending.request_headers,
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
-                ),
+                )
+                .with_history_mutation(history_mutation),
         );
         anyhow::ensure!(
             self._context_host
@@ -664,5 +672,19 @@ impl ScriptVm {
             crate::context_bootstrap::install_navigation_bootstrap_entry(scope, &entry_seed);
             Ok(())
         });
+    }
+
+    pub(crate) fn capture_inherited_history_for_browser_commit(
+        &mut self,
+        url: &url::Url,
+        position: moli_session_history::SessionHistoryPosition,
+    ) -> Result<Option<crate::native_bridge::NavigationHistoryEntrySeed>> {
+        self.with_default_context_scope(|scope, _| {
+            Ok(
+                crate::context_bootstrap::capture_inherited_history_for_browser_commit(
+                    scope, url, position,
+                ),
+            )
+        })
     }
 }

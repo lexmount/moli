@@ -7,6 +7,7 @@ use crate::*;
 fn entry(id: &str) -> HistoryEntryRef {
     HistoryEntry {
         url: format!("https://example.test/#{id}"),
+        inherited_origin: None,
         id: id.to_owned(),
         key: NavigationHistoryEntryKey::allocate(),
         document: NavigationHistoryDocumentId::allocate(),

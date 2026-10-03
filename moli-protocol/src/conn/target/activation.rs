@@ -56,15 +56,97 @@ impl CompletedTargetActivation {
 }
 
 impl CdpConnection {
+    fn target_document_is_visible(&self, target_id: &str) -> bool {
+        self.browser_context
+            .iter()
+            .chain(self.inactive_browser_contexts.iter())
+            .find_map(|context| context.document_activity_for_target(target_id))
+            .is_some_and(|activity| activity.visible)
+    }
+    pub(crate) fn select_browser_focus_for_target(&mut self, target_id: &str) {
+        let Some(browser_context_id) = self
+            .target_session_route_for_target_id(target_id)
+            .and_then(|route| route.browser_context_id().map(str::to_owned))
+        else {
+            return;
+        };
+        for context in self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+        {
+            context.window_is_focused = context.id == browser_context_id;
+        }
+    }
+
+    pub(crate) async fn apply_browser_document_activity_async(&mut self) -> anyhow::Result<()> {
+        for context in self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+        {
+            let activities = context
+                .page_targets
+                .iter()
+                .filter(|target| !target.has_pending_javascript_dialog())
+                .map(|target| {
+                    (
+                        target.target_id().to_owned(),
+                        context
+                            .document_activity_for_target(target.target_id())
+                            .unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (target_id, activity) in activities {
+                if let Some(page) = context
+                    .page_target_mut(&target_id)
+                    .and_then(|host| host.runtime_slot.loaded_page_mut())
+                    && page.document_activity() != activity
+                {
+                    // An unchanged page is not a participant in this focus
+                    // transition. Do not wait for its renderer to become idle.
+                    page.set_document_activity_async(activity).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn restore_browser_focus_after_removal_async(&mut self) {
+        if !self
+            .browser_context
+            .iter()
+            .chain(self.inactive_browser_contexts.iter())
+            .any(|context| context.window_is_focused && context.active_target_id().is_some())
+            && let Some(target_id) = self
+                .browser_context
+                .iter()
+                .chain(self.inactive_browser_contexts.iter())
+                .find_map(BrowserContext::active_target_id_owned)
+        {
+            self.select_browser_focus_for_target(&target_id);
+        }
+        if let Err(error) = self.apply_browser_document_activity_async().await {
+            tracing::warn!(%error, "failed to update document activity after target removal");
+        }
+    }
+
     /// Completes the renderer-surface half of a foreground transition that was
     /// staged synchronously while creating a new target.
     pub(crate) async fn complete_staged_target_activation_async(
         &mut self,
         transition: &TargetActivationTransition,
     ) -> CompletedTargetActivation {
+        if let Err(error) = self.apply_browser_document_activity_async().await {
+            tracing::warn!(%error, "failed to update document activity after target creation");
+        }
         let Some(previous_target_id) = transition.deactivated_target_id() else {
             return CompletedTargetActivation::new(Vec::new());
         };
+        if self.target_document_is_visible(previous_target_id) {
+            return CompletedTargetActivation::new(Vec::new());
+        }
         let protocol_events = self
             .page_screencast_session_ids_for_target(previous_target_id)
             .into_iter()
@@ -93,6 +175,8 @@ impl CdpConnection {
         &mut self,
         target_id: &str,
     ) -> anyhow::Result<Option<CompletedTargetActivation>> {
+        self.select_browser_focus_for_target(target_id);
+        let was_visible = self.target_document_is_visible(target_id);
         let previous_active_target_id = self
             .browser_context
             .as_ref()
@@ -111,28 +195,36 @@ impl CdpConnection {
         }
         self.refresh_active_browser_context_loader_async().await;
         self.notify_target_host_activated(target_id);
+        self.apply_browser_document_activity_async().await?;
 
         let mut protocol_events = Vec::new();
         if transition.changed_active_target() {
             // Chromium's PageHandler reports RenderWidgetHost visibility only
             // while that attachment has an active screencast. Hide the old
             // surface before exposing the selected one.
-            protocol_events.extend(hidden_screencast_sessions.into_iter().map(|session_id| {
-                BackgroundProtocolEvent::page_screencast_visibility_changed(
-                    session_id.as_deref(),
-                    false,
-                )
-            }));
-            protocol_events.extend(
-                self.page_screencast_session_ids_for_target(target_id)
-                    .into_iter()
-                    .map(|session_id| {
-                        BackgroundProtocolEvent::page_screencast_visibility_changed(
-                            session_id.as_deref(),
-                            true,
-                        )
-                    }),
-            );
+            if transition
+                .deactivated_target_id()
+                .is_some_and(|previous| !self.target_document_is_visible(previous))
+            {
+                protocol_events.extend(hidden_screencast_sessions.into_iter().map(|session_id| {
+                    BackgroundProtocolEvent::page_screencast_visibility_changed(
+                        session_id.as_deref(),
+                        false,
+                    )
+                }));
+            }
+            if !was_visible {
+                protocol_events.extend(
+                    self.page_screencast_session_ids_for_target(target_id)
+                        .into_iter()
+                        .map(|session_id| {
+                            BackgroundProtocolEvent::page_screencast_visibility_changed(
+                                session_id.as_deref(),
+                                true,
+                            )
+                        }),
+                );
+            }
         }
         Ok(Some(CompletedTargetActivation::new(protocol_events)))
     }
