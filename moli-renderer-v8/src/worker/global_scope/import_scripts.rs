@@ -647,7 +647,7 @@ pub(super) fn worker_import_scripts_callback<'s>(
     let Some(state) = get_worker_state(scope) else {
         return;
     };
-    if state.borrow().script_kind == super::thread::WorkerScriptKind::Module {
+    if state.borrow().script_kind == crate::worker::thread::WorkerScriptKind::Module {
         throw_type_error(scope, "Module scripts don't support importScripts().");
         return;
     }

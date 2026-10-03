@@ -66,7 +66,7 @@ async fn assert_body_utf8_decoding(scenario: &str) -> Result<()> {
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(
