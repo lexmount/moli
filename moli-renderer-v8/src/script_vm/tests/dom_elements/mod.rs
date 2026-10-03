@@ -12,6 +12,7 @@ mod form_data_brands;
 mod input_value_modes;
 mod live_document;
 mod option_select_values;
+mod reflection_namespace;
 mod text_control_values;
 mod text_controls;
 #[cfg(feature = "devtools")]

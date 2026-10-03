@@ -1,10 +1,11 @@
 use super::super::geometry::read_bounding_client_rect;
 use super::super::{
     canonical_cross_origin_value, canonical_loading_value, canonical_preload_value,
-    construct_simple_event, dispatch_public_event, element_attribute, html_element_getter_receiver,
-    html_element_setter_receiver, html_media_element_getter_receiver,
+    construct_simple_event, dispatch_public_event, has_reflected_attribute,
+    html_element_getter_receiver, html_element_setter_receiver, html_media_element_getter_receiver,
     html_media_element_setter_receiver, parsed_url_like_attribute, property_dom_string_value,
-    property_usv_string_value, resolve_url_like_attribute, set_reflected_attribute,
+    property_usv_string_value, reflected_attribute, remove_reflected_attribute,
+    resolve_url_like_attribute, set_reflected_attribute, set_reflected_boolean_attribute,
     should_block_dangling_markup_subresource,
 };
 use crate::document_runtime::DocumentSubresourceCspKind;
@@ -55,7 +56,7 @@ pub(in crate::native_bridge) fn media_src_setter_function<'s>(
     else {
         return;
     };
-    let previous = element_attribute(unsafe { &*runtime_ptr }, handle, "src");
+    let previous = reflected_attribute(unsafe { &*runtime_ptr }, handle, "src");
     set_reflected_attribute(scope, runtime_ptr, handle, "src", &value);
     if previous.as_deref() == Some(value.as_str()) {
         // The generic attribute mutation hook owns changed values. Preserve
@@ -77,7 +78,7 @@ pub(in crate::native_bridge) fn media_cross_origin_getter_function<'s>(
         rv.set_null();
         return;
     };
-    match media_reflected_attribute(unsafe { &*runtime_ptr }, handle, "crossorigin") {
+    match reflected_attribute(unsafe { &*runtime_ptr }, handle, "crossorigin") {
         Some(value) => {
             let Some(value) = v8_string(scope, canonical_cross_origin_value(&value)) else {
                 rv.set_null();
@@ -102,7 +103,7 @@ pub(in crate::native_bridge) fn media_cross_origin_setter_function<'s>(
     };
     let value = args.get(0);
     if value.is_null() || value.is_undefined() {
-        remove_media_reflected_attribute(scope, runtime_ptr, handle, "crossorigin");
+        remove_reflected_attribute(scope, runtime_ptr, handle, "crossorigin");
         rv.set_undefined();
         return;
     }
@@ -110,7 +111,7 @@ pub(in crate::native_bridge) fn media_cross_origin_setter_function<'s>(
     else {
         return;
     };
-    set_media_reflected_attribute(scope, runtime_ptr, handle, "crossorigin", &value);
+    set_reflected_attribute(scope, runtime_ptr, handle, "crossorigin", &value);
     rv.set_undefined();
 }
 
@@ -125,7 +126,8 @@ pub(in crate::native_bridge) fn media_loading_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "loading").unwrap_or_default();
+    let value =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "loading").unwrap_or_default();
     let Some(value) = v8_string(scope, canonical_loading_value(&value)) else {
         rv.set_null();
         return;
@@ -148,7 +150,7 @@ pub(in crate::native_bridge) fn media_loading_setter_function<'s>(
     else {
         return;
     };
-    let previous = element_attribute(unsafe { &*runtime_ptr }, handle, "loading");
+    let previous = reflected_attribute(unsafe { &*runtime_ptr }, handle, "loading");
     set_reflected_attribute(scope, runtime_ptr, handle, "loading", &value);
     if previous.as_deref() == Some(value.as_str()) {
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, "loading");
@@ -168,7 +170,7 @@ pub(in crate::native_bridge) fn media_preload_getter_function<'s>(
         return;
     };
     let value =
-        media_reflected_attribute(unsafe { &*runtime_ptr }, handle, "preload").unwrap_or_default();
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "preload").unwrap_or_default();
     if let Some(value) = v8_string(scope, canonical_preload_value(&value)) {
         rv.set(value.into());
     } else {
@@ -191,7 +193,7 @@ pub(in crate::native_bridge) fn media_preload_setter_function<'s>(
     else {
         return;
     };
-    set_media_reflected_attribute(scope, runtime_ptr, handle, "preload", &value);
+    set_reflected_attribute(scope, runtime_ptr, handle, "preload", &value);
     rv.set_undefined();
 }
 
@@ -881,7 +883,7 @@ pub(in crate::native_bridge) fn media_plays_inline_getter_function<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(media_has_reflected_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "playsinline",
@@ -903,7 +905,7 @@ pub(in crate::native_bridge) fn media_plays_inline_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    set_media_reflected_boolean_attribute(
+    set_reflected_boolean_attribute(
         scope,
         runtime_ptr,
         handle,
@@ -940,7 +942,7 @@ fn media_boolean_attribute_getter<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(media_has_reflected_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         name,
@@ -958,7 +960,7 @@ fn media_boolean_attribute_setter<'s>(
         rv.set_undefined();
         return;
     };
-    set_media_reflected_boolean_attribute(
+    set_reflected_boolean_attribute(
         scope,
         runtime_ptr,
         handle,
@@ -966,77 +968,4 @@ fn media_boolean_attribute_setter<'s>(
         args.get(0).boolean_value(scope),
     );
     rv.set_undefined();
-}
-
-fn media_reflected_attribute(
-    runtime: &PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) -> Option<String> {
-    runtime
-        .dom_host()
-        .node(handle)?
-        .as_element()?
-        .attribute_ns("", name)
-        .map(str::to_owned)
-}
-fn media_has_reflected_attribute(
-    runtime: &PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) -> bool {
-    runtime
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .is_some_and(|element| element.has_attribute_ns("", name))
-}
-fn set_media_reflected_attribute(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-    value: &str,
-) {
-    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        super::super::set_live_element_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            None,
-            None,
-            name,
-            name,
-            value,
-        );
-    });
-}
-fn remove_media_reflected_attribute(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) {
-    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        super::super::remove_live_element_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            None,
-            name,
-        );
-    });
-}
-fn set_media_reflected_boolean_attribute(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-    enabled: bool,
-) {
-    if enabled {
-        set_media_reflected_attribute(scope, runtime_ptr, handle, name, "");
-    } else {
-        remove_media_reflected_attribute(scope, runtime_ptr, handle, name);
-    }
 }

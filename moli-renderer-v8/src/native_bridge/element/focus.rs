@@ -15,8 +15,8 @@ use super::{
     resolved_reflected_element_attribute_handle,
 };
 use super::{
-    element_attribute, element_has_attribute, label_control_handle,
-    label_receives_programmatic_focus,
+    has_reflected_attribute, label_control_handle, label_receives_programmatic_focus,
+    reflected_attribute,
 };
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 #[cfg(feature = "devtools")]
@@ -458,7 +458,7 @@ pub(super) fn run_dialog_focusing_steps(
 ) {
     let target = {
         let runtime = unsafe { &*runtime_ptr };
-        if element_has_attribute(runtime, dialog, "autofocus") {
+        if has_reflected_attribute(runtime, dialog, "autofocus") {
             dialog
         } else {
             first_dialog_focus_target(runtime, dialog).unwrap_or(dialog)
@@ -1519,8 +1519,11 @@ fn is_interactive_sequential_focusable_descendant(
     }
     let dom = runtime.dom_host().dom();
     let is_interactive_element = dom.has_default_focus_behavior(handle);
-    let has_non_negative_tab_index = dom.node(handle).and_then(Node::as_element)
-        .and_then(Element::explicit_tab_index).is_some_and(|value| value >= 0);
+    let has_non_negative_tab_index = dom
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(Element::explicit_tab_index)
+        .is_some_and(|value| value >= 0);
     (is_interactive_element || has_non_negative_tab_index)
         && sequential_tab_index_without_scroll_descendant_check(runtime, handle).is_some()
 }
@@ -1538,7 +1541,8 @@ fn default_sequential_tab_index(runtime: &PageScriptHost, handle: DomHandle) -> 
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
-    if (runtime.dom_host().dom().has_default_focus_behavior(handle) && !element.is_html_element("dialog"))
+    if (runtime.dom_host().dom().has_default_focus_behavior(handle)
+        && !element.is_html_element("dialog"))
         || element_is_scrollable(runtime, handle)
     {
         0
@@ -1618,7 +1622,7 @@ fn access_key_target(
     stack.reverse();
     while let Some(handle) = stack.pop() {
         if runtime.dom_host().is_connected(handle)
-            && element_attribute(runtime, handle, "accesskey")
+            && reflected_attribute(runtime, handle, "accesskey")
                 .is_some_and(|value| access_key_attribute_matches(&value, &needle))
         {
             return Some(handle);

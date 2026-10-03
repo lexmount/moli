@@ -4,8 +4,8 @@ use std::str::FromStr;
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::{
     attribute_property_getter_from_object_or_detached,
-    boolean_attribute_property_getter_from_object_or_detached, element_attribute,
-    property_dom_string_value, queue_text_track_load_if_source, resolve_url_like_attribute,
+    boolean_attribute_property_getter_from_object_or_detached, property_dom_string_value,
+    queue_text_track_load_if_source, reflected_attribute, resolve_url_like_attribute,
     set_dom_string_attribute_property_on_object, set_reflected_attribute,
     set_reflected_boolean_attribute, track_ready_state_for_handle,
 };
@@ -37,7 +37,7 @@ pub(in crate::native_bridge::element) fn track_kind_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let kind = element_attribute(unsafe { &*runtime_ptr }, handle, "kind")
+    let kind = reflected_attribute(unsafe { &*runtime_ptr }, handle, "kind")
         .map(|value| canonical_track_kind(&value).to_owned())
         .unwrap_or_else(|| "subtitles".to_owned());
     if let Some(kind) = v8_string(scope, &kind) {

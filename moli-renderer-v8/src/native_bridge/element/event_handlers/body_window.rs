@@ -4,7 +4,7 @@ use crate::{
 };
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::super::element_attribute;
+use super::super::reflected_attribute;
 use super::shared::compile_event_attribute_handler;
 
 const MESSAGEERROR_EVENT_TYPE: &str = "messageerror";
@@ -96,7 +96,7 @@ fn compile_body_onmessageerror_attribute<'s>(
     body_handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let runtime = unsafe { &*host_ptr };
-    let source = element_attribute(runtime, body_handle, ONMESSAGEERROR_ATTRIBUTE)?;
+    let source = reflected_attribute(runtime, body_handle, ONMESSAGEERROR_ATTRIBUTE)?;
     if source.is_empty() {
         return None;
     }
@@ -136,7 +136,11 @@ impl ParserAddedBodyWindowHandlers {
                     .is_some_and(super::body_or_frameset_reflects_window_event_type)
             })
             .filter(|name| {
-                dom_host.get_attribute(handle, name).is_none()
+                dom_host
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .and_then(|element| element.attribute_ns("", name))
+                    .is_none()
                     && attrs
                         .iter()
                         .any(|attr| attr.namespace().is_empty() && attr.local_name() == *name)
