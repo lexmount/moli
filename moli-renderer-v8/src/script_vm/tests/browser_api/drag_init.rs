@@ -46,6 +46,8 @@ fn native_mouse_and_pen_resolve_drag_source_and_consume_canceled_attempts() {
             "image",
             "svg",
             "shadow",
+            "shadow-descendant",
+            "shadow-closed-descendant",
             "native-getters",
             "toggle-on",
             "toggle-off",
