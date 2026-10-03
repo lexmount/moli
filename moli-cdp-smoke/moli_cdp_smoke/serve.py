@@ -79,6 +79,7 @@ async def start_moli_serve(
     *,
     layout: bool = True,
     extra_args: tuple[str, ...] = (),
+    env_overrides: dict[str, str | None] | None = None,
 ) -> MoliServe:
     binary = moli_binary()
     http_cache_dir = tempfile.mkdtemp(prefix="moli-cdp-smoke-cache-")
@@ -96,11 +97,17 @@ async def start_moli_serve(
     if layout:
         command.append("--layout")
     command.extend(("--http-cache-dir", http_cache_dir, *extra_args))
+    env = clear_proxy_env(os.environ)
+    for key, value in (env_overrides or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=str(REPO_ROOT),
-            env=clear_proxy_env(os.environ),
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=subprocess_starts_new_session(),
