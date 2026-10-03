@@ -536,7 +536,7 @@ impl Element {
     }
 
     pub fn button_type_state(&self) -> ButtonTypeState {
-        ButtonTypeState::from_attribute_value(self.attribute("type"))
+        ButtonTypeState::from_attribute_value(self.attribute_ns("", "type"))
     }
 
     pub fn input_value(&self) -> String {
@@ -674,7 +674,7 @@ impl Element {
             self.input_type(),
             value,
             InputValueSanitizationContext {
-                multiple: self.has_attribute("multiple"),
+                multiple: self.has_attribute_ns("", "multiple"),
                 min: self.attribute("min"),
                 max: self.attribute("max"),
                 step: self.attribute("step"),
@@ -1358,7 +1358,7 @@ impl Element {
             .flatten();
         let input_type = self.input_type();
         let input_context = InputValueSanitizationContext {
-            multiple: is_html_input && self.has_attribute("multiple"),
+            multiple: is_html_input && self.has_attribute_ns("", "multiple"),
             min: input_min.as_deref(),
             max: input_max.as_deref(),
             step: input_step.as_deref(),

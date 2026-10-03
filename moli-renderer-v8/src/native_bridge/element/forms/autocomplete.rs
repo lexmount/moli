@@ -196,9 +196,9 @@ fn autocomplete_getter_for_receiver<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let wears_autofill_anchor_mantle = local_name == "input"
-        && element_attribute(runtime, handle, "type")
+        && reflected_attribute(runtime, handle, "type")
             .is_some_and(|value| value.eq_ignore_ascii_case("hidden"));
-    let raw = element_attribute(runtime, handle, "autocomplete");
+    let raw = reflected_attribute(runtime, handle, "autocomplete");
     let value = idl_exposed_autofill_value(raw.as_deref(), wears_autofill_anchor_mantle);
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());

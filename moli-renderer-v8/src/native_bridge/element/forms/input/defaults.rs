@@ -42,7 +42,7 @@ fn input_default_checked_getter_from_object<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "checked",

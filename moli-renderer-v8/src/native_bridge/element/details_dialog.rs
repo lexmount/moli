@@ -20,7 +20,7 @@ use super::focus::{
 use super::popover::popover_is_open;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    construct_simple_event, dispatch_public_event, element_has_attribute,
+    construct_simple_event, dispatch_public_event, has_reflected_attribute,
     html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
     set_reflected_boolean_attribute,
 };
@@ -72,7 +72,7 @@ pub(crate) fn queue_parser_details_toggle_event(
 ) {
     let runtime = unsafe { &*runtime_ptr };
     if runtime.dom_host().is_html_element_named(handle, "details")
-        && element_has_attribute(runtime, handle, "open")
+        && has_reflected_attribute(runtime, handle, "open")
     {
         queue_element_toggle_event(
             scope,
@@ -136,7 +136,7 @@ pub(super) fn closed_details_child_participates(
     child: DomHandle,
 ) -> bool {
     if !runtime.dom_host().is_html_element_named(details, "details")
-        || element_has_attribute(runtime, details, "open")
+        || has_reflected_attribute(runtime, details, "open")
     {
         return true;
     }
@@ -162,7 +162,7 @@ pub(super) fn closed_details_ancestors_to_reveal(
     let mut branch = target;
     while let Some(parent) = details_reveal_flat_tree_parent(runtime, branch) {
         if runtime.dom_host().is_html_element_named(parent, "details")
-            && !element_has_attribute(runtime, parent, "open")
+            && !has_reflected_attribute(runtime, parent, "open")
             && main_summary_child(runtime, parent) != Some(branch)
         {
             ancestors.push(parent);
@@ -231,7 +231,7 @@ pub(super) fn perform_summary_click_default_action(
     let Some(details) = main_summary_details_handle(runtime, handle) else {
         return true;
     };
-    let was_open = element_has_attribute(runtime, details, "open");
+    let was_open = has_reflected_attribute(runtime, details, "open");
     set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", !was_open);
     true
 }
@@ -282,7 +282,7 @@ fn dialog_boolean_attribute_getter<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         name,
@@ -345,7 +345,7 @@ fn dispatch_dialog_toggle_events(
     }
     if opening {
         let runtime = unsafe { &*runtime_ptr };
-        if element_has_attribute(runtime, handle, "open")
+        if has_reflected_attribute(runtime, handle, "open")
             || (as_modal
                 && (!runtime.dom_host().is_connected(handle) || popover_is_open(runtime, handle)))
         {
@@ -405,7 +405,7 @@ pub(super) fn details_open_getter_function<'s>(
         rv.set_bool(false);
         return;
     };
-    rv.set_bool(element_has_attribute(
+    rv.set_bool(has_reflected_attribute(
         unsafe { &*runtime_ptr },
         handle,
         "open",
@@ -504,7 +504,7 @@ pub(super) fn dialog_show_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if element_has_attribute(runtime, handle, "open") {
+    if has_reflected_attribute(runtime, handle, "open") {
         if dialog_is_modal(runtime, handle) {
             throw_dom_exception(
                 scope,
@@ -533,7 +533,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if element_has_attribute(runtime, handle, "open") {
+    if has_reflected_attribute(runtime, handle, "open") {
         if !dialog_is_modal(runtime, handle) {
             throw_dom_exception(
                 scope,
@@ -601,7 +601,7 @@ pub(super) fn dialog_request_close_callback<'s>(
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "dialog")
         || !runtime.dom_host().is_connected(handle)
-        || !element_has_attribute(runtime, handle, "open")
+        || !has_reflected_attribute(runtime, handle, "open")
     {
         return;
     }
@@ -626,7 +626,7 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "dialog")
-        || !element_has_attribute(runtime, handle, "open")
+        || !has_reflected_attribute(runtime, handle, "open")
     {
         return false;
     }

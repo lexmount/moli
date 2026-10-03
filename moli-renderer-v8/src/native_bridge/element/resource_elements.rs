@@ -107,7 +107,7 @@ pub(super) fn html_referrer_policy_getter_function<'s>(
         return;
     }
     let value =
-        element_attribute(unsafe { &*runtime_ptr }, handle, "referrerpolicy").unwrap_or_default();
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "referrerpolicy").unwrap_or_default();
     let Some(value) = v8_string(scope, canonical_referrer_policy_value(&value)) else {
         rv.set_null();
         return;
@@ -130,7 +130,7 @@ fn html_cross_origin_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    match element_attribute(unsafe { &*runtime_ptr }, handle, "crossorigin") {
+    match reflected_attribute(unsafe { &*runtime_ptr }, handle, "crossorigin") {
         Some(value) => {
             let Some(value) = v8_string(scope, canonical_cross_origin_value(&value)) else {
                 rv.set_null();
@@ -191,7 +191,8 @@ fn html_loading_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "loading").unwrap_or_default();
+    let value =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, "loading").unwrap_or_default();
     let Some(value) = v8_string(scope, canonical_loading_value(&value)) else {
         rv.set_null();
         return;
@@ -210,7 +211,7 @@ fn image_loading_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "loading")
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "loading")
         .unwrap_or_else(|| "eager".to_owned());
     let Some(value) = v8_string(scope, &value) else {
         rv.set_empty_string();
@@ -1225,7 +1226,7 @@ fn iframe_srcdoc_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "srcdoc").unwrap_or_default();
+    let value = reflected_attribute(unsafe { &*runtime_ptr }, handle, "srcdoc").unwrap_or_default();
     match v8_string(scope, &value) {
         Some(value) => rv.set(value.into()),
         None => rv.set_null(),
@@ -2386,7 +2387,8 @@ fn svg_style_dom_string_getter_function<'s>(
     else {
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
+    let value =
+        reflected_attribute(unsafe { &*runtime_ptr }, handle, attribute).unwrap_or_default();
     set_element_string_return_value(scope, &mut rv, &value);
 }
 

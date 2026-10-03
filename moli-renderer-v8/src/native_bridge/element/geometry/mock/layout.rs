@@ -156,7 +156,7 @@ fn is_viewport_mock_root(runtime: &JsContextHost, handle: DomHandle) -> bool {
     })
 }
 
-fn element_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -> Option<String> {
+fn reflected_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -> Option<String> {
     runtime.dom_host().get_attribute(handle, name)
 }
 
@@ -164,7 +164,7 @@ pub(in crate::native_bridge::element) fn element_has_hidden_attribute(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    element_attribute(runtime, handle, "hidden").is_some()
+    reflected_attribute(runtime, handle, "hidden").is_some()
 }
 
 fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -219,7 +219,7 @@ fn class_has_fill_available_shell_hints(class: &str) -> bool {
 }
 
 fn element_class(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
-    element_attribute(runtime, handle, "class")
+    reflected_attribute(runtime, handle, "class")
 }
 
 fn has_explicit_viewport_shell_hint(runtime: &JsContextHost, handle: DomHandle) -> bool {

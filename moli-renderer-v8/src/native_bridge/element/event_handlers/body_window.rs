@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::super::element_attribute;
+use super::super::reflected_attribute;
 use super::shared::compile_event_attribute_handler_for_owner_with_context;
 
 // Keep the parser's reflected handler names and both interface bindings in
@@ -236,7 +236,7 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let runtime = unsafe { &*runtime_ptr };
-    let source = element_attribute(runtime, owner, &format!("on{event_type}"))?;
+    let source = reflected_attribute(runtime, owner, &format!("on{event_type}"))?;
     let window_owner = runtime.owner_dispatch_scope_for_node(owner)?;
     let document = runtime.dom_host().owner_document_handle(owner)?;
     let base_url = runtime.document_base_url_for_handle(document);

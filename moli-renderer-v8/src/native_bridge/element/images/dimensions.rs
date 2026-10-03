@@ -2,7 +2,7 @@ use crate::document_runtime::DomHandle;
 use crate::webidl;
 
 use super::super::super::{JsContextHost, node::node_runtime_and_handle_from_object_or_detached};
-use super::super::{element_attribute, parse_non_negative_dimension, set_reflected_attribute};
+use super::super::{parse_non_negative_dimension, reflected_attribute, set_reflected_attribute};
 
 pub(in crate::native_bridge) fn image_width_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -53,7 +53,7 @@ fn image_width_value<'s>(
         return 0;
     };
     let runtime = unsafe { &*runtime_ptr };
-    element_attribute(runtime, handle, "width")
+    reflected_attribute(runtime, handle, "width")
         .map(|value| parse_non_negative_dimension(Some(value)))
         .filter(|value| *value > 0)
         .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(width, _)| width))
@@ -69,7 +69,7 @@ fn image_height_value<'s>(
         return 0;
     };
     let runtime = unsafe { &*runtime_ptr };
-    element_attribute(runtime, handle, "height")
+    reflected_attribute(runtime, handle, "height")
         .map(|value| parse_non_negative_dimension(Some(value)))
         .filter(|value| *value > 0)
         .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(_, height)| height))

@@ -1,5 +1,5 @@
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::super::{element_has_attribute, remove_reflected_attribute, set_reflected_attribute};
+use super::super::{has_reflected_attribute, remove_reflected_attribute, set_reflected_attribute};
 
 pub(in crate::native_bridge) fn link_disabled_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -15,7 +15,7 @@ pub(in crate::native_bridge) fn link_disabled_getter_function<'s>(
     rv.set(
         v8::Boolean::new(
             scope,
-            element_has_attribute(unsafe { &*runtime_ptr }, handle, "disabled"),
+            has_reflected_attribute(unsafe { &*runtime_ptr }, handle, "disabled"),
         )
         .into(),
     );

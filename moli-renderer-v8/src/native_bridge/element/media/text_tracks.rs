@@ -19,8 +19,8 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::{
-    construct_event, construct_simple_event, dispatch_public_event, element_attribute,
-    html_media_element_getter_receiver, html_media_element_method_receiver,
+    construct_event, construct_simple_event, dispatch_public_event,
+    html_media_element_getter_receiver, html_media_element_method_receiver, reflected_attribute,
 };
 
 const TEXT_TRACK_CACHE_SLOT: &str = "__moliTextTrack";
@@ -339,7 +339,7 @@ fn owner_track_attribute<'s>(
 ) -> Option<String> {
     let handle = owner_track_handle(scope, track)?;
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    element_attribute(unsafe { &*runtime_ptr }, handle, name)
+    reflected_attribute(unsafe { &*runtime_ptr }, handle, name)
 }
 
 fn owner_track_attribute_or_default<'s>(
@@ -349,7 +349,7 @@ fn owner_track_attribute_or_default<'s>(
 ) -> Option<String> {
     let handle = owner_track_handle(scope, track)?;
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    Some(element_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default())
+    Some(reflected_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default())
 }
 
 fn make_cue_list<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
@@ -568,11 +568,11 @@ fn ensure_track_element_text_track<'s>(
     {
         return Some(cached);
     }
-    let kind = element_attribute(runtime, handle, "kind")
+    let kind = reflected_attribute(runtime, handle, "kind")
         .map(|value| canonical_text_track_kind(&value).to_owned())
         .unwrap_or_else(|| "subtitles".to_owned());
-    let label = element_attribute(runtime, handle, "label").unwrap_or_default();
-    let language = element_attribute(runtime, handle, "srclang").unwrap_or_default();
+    let label = reflected_attribute(runtime, handle, "label").unwrap_or_default();
+    let language = reflected_attribute(runtime, handle, "srclang").unwrap_or_default();
     let track = make_text_track(
         scope,
         &kind,
@@ -1297,7 +1297,7 @@ pub(crate) fn queue_default_text_track_mode_if_needed(
 ) {
     let runtime = unsafe { &*runtime_ptr };
     if !track_has_media_parent(runtime, handle)
-        || element_attribute(runtime, handle, "default").is_none()
+        || reflected_attribute(runtime, handle, "default").is_none()
     {
         return;
     }
@@ -1311,7 +1311,7 @@ pub(crate) fn apply_default_text_track_mode_for_track(
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if !track_has_media_parent(runtime, handle)
-        || element_attribute(runtime, handle, "default").is_none()
+        || reflected_attribute(runtime, handle, "default").is_none()
     {
         return false;
     }
@@ -1384,7 +1384,7 @@ fn queue_text_track_load_with_media_gate(
     if !track_has_media_parent(runtime, handle) {
         return;
     }
-    let src = element_attribute(runtime, handle, "src").unwrap_or_default();
+    let src = reflected_attribute(runtime, handle, "src").unwrap_or_default();
     let Some(wrapper) = node_wrapper_from_handle(scope, handle) else {
         return;
     };
@@ -1657,7 +1657,7 @@ fn cancel_text_track_sequence_and_settle_media(
 }
 
 fn track_source_still_matches(runtime: &JsContextHost, handle: DomHandle, src: &str) -> bool {
-    element_attribute(runtime, handle, "src").unwrap_or_default() == src
+    reflected_attribute(runtime, handle, "src").unwrap_or_default() == src
 }
 
 fn queue_text_track_list_track_event<'s>(

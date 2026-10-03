@@ -1060,6 +1060,9 @@ impl DocumentRuntime {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, true);
         }
         if changed && namespace.is_none() {
+            self.dispatch_custom_element_form_state_attribute_change(
+                scope, host_ptr, handle, local_name,
+            );
             Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, local_name, true,
             );
@@ -1244,6 +1247,11 @@ impl DocumentRuntime {
         {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
         }
+        if changed && namespace.is_none() {
+            self.dispatch_custom_element_form_state_attribute_change(
+                scope, host_ptr, handle, local_name,
+            );
+        }
         if namespace.is_none() && (changed || old_value.as_deref() == Some(value)) {
             Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, local_name, false,
@@ -1341,19 +1349,24 @@ impl DocumentRuntime {
         reaction_policy: AttributeChangedReactionPolicy,
     ) -> bool {
         if enabled {
-            self.set_attribute_with_reaction_policy(
+            self.set_attribute_ns_with_reaction_policy(
                 scope,
                 host_ptr,
                 handle,
+                None,
+                None,
+                name,
                 name,
                 "",
+                None,
                 reaction_policy,
             )
         } else {
-            self.remove_attribute_with_reaction_policy(
+            self.remove_attribute_ns_with_reaction_policy(
                 scope,
                 host_ptr,
                 handle,
+                None,
                 name,
                 reaction_policy,
             )

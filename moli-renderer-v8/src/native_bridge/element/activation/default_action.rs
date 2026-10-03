@@ -28,10 +28,10 @@ use super::super::{
     construct_command_event, construct_input_event, construct_simple_event,
     contenteditable_editing_host, dispatch_beforeinput, dispatch_popover_hide_events,
     dispatch_popover_show_events, dispatch_popover_toggle_events, dispatch_public_event,
-    element_attribute, element_has_attribute, form_associated_form_owner, is_disabled_form_control,
-    is_focusable, is_valid_submit_button, label_activation_control_handle,
+    form_associated_form_owner, has_reflected_attribute, is_disabled_form_control, is_focusable,
+    is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    replace_text_control_selection, resolve_url_like_attribute,
+    reflected_attribute, replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
     set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
@@ -1109,7 +1109,7 @@ fn element_has_activation_behavior(runtime: &JsContextHost, handle: DomHandle) -
         || element.is_html_label()
         || element.is_html_element("summary")
         || element_is_anchor_with_href(runtime, handle)
-        || (element.is_html_element("link") && element_has_attribute(runtime, handle, "href"))
+        || (element.is_html_element("link") && has_reflected_attribute(runtime, handle, "href"))
 }
 
 pub(crate) fn dispatched_click_activation_target(
@@ -1604,7 +1604,7 @@ fn perform_option_click_default_action(
         .dom_host()
         .select_selected_option_elements(select_handle)
         .contains(&handle);
-    let is_multiple = element_has_attribute(runtime, select_handle, "multiple");
+    let is_multiple = has_reflected_attribute(runtime, select_handle, "multiple");
     let mut changed = false;
     {
         let runtime = unsafe { &mut *runtime_ptr };
@@ -1637,7 +1637,7 @@ fn is_html_option_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
 }
 
 fn element_is_anchor_with_href(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    if !element_has_attribute(runtime, handle, "href") {
+    if !has_reflected_attribute(runtime, handle, "href") {
         return false;
     }
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -1659,7 +1659,7 @@ fn perform_button_command_default_action(
         if !runtime.dom_host().is_html_element_named(handle, "button") {
             return false;
         }
-        let command = normalized_button_command(element_attribute(runtime, handle, "command"));
+        let command = normalized_button_command(reflected_attribute(runtime, handle, "command"));
         if command.is_empty() {
             return false;
         }
@@ -1700,7 +1700,7 @@ fn perform_button_command_default_action(
     }
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_connected(target)
-        || !element_has_attribute(runtime, target, "popover")
+        || !has_reflected_attribute(runtime, target, "popover")
     {
         return true;
     }
@@ -1791,7 +1791,7 @@ fn send_anchor_ping_requests(
 }
 
 fn anchor_ping_urls(runtime: &JsContextHost, handle: DomHandle) -> Option<(url::Url, String)> {
-    let ping_urls = element_attribute(runtime, handle, "ping")?;
+    let ping_urls = reflected_attribute(runtime, handle, "ping")?;
     if ping_urls.is_empty() {
         return None;
     }
@@ -1905,9 +1905,9 @@ fn anchor_click_default_action(
     }
     send_anchor_ping_requests(scope, runtime_ptr, handle, &resolved);
     let runtime = unsafe { &*runtime_ptr };
-    if element_has_attribute(runtime, handle, "download") {
+    if has_reflected_attribute(runtime, handle, "download") {
         let suggested_filename =
-            element_attribute(runtime, handle, "download").filter(|value| !value.is_empty());
+            reflected_attribute(runtime, handle, "download").filter(|value| !value.is_empty());
         return anchor_download_activation(
             scope,
             runtime_ptr,
@@ -1929,7 +1929,7 @@ fn anchor_click_default_action(
             None,
         );
     }
-    let effective_target_name = element_attribute(runtime, handle, "target")
+    let effective_target_name = reflected_attribute(runtime, handle, "target")
         .filter(|value| !value.is_empty())
         .or_else(|| {
             let document = runtime.dom_host().owner_document_handle(handle)?;
@@ -2077,7 +2077,7 @@ fn anchor_default_navigation_yields_to_pending_child_navigation(
     resolved: &str,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let raw_href = element_attribute(runtime, handle, "href").unwrap_or_default();
+    let raw_href = reflected_attribute(runtime, handle, "href").unwrap_or_default();
     if raw_href.trim_start().starts_with('#') {
         return true;
     }
@@ -2173,7 +2173,7 @@ fn reveal_details_ancestors_for_fragment_target(
     for details in ancestors {
         let runtime = unsafe { &*runtime_ptr };
         if !runtime.dom_host().is_connected(details)
-            || element_has_attribute(runtime, details, "open")
+            || has_reflected_attribute(runtime, details, "open")
         {
             return;
         }
