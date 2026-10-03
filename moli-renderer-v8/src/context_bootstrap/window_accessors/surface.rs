@@ -1,6 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value,
-    window_host_ptr, window_receiver,
+    window_child_context_handle, window_hidden_value, window_host_ptr, window_is_closed,
+    window_receiver,
 };
 use super::*;
 
@@ -94,13 +94,22 @@ fn set_receiver_window_alias<'s>(
     let Some(receiver) = window_receiver(scope, args) else {
         return;
     };
+    if matches!(slot, WINDOW_PARENT_SLOT | WINDOW_TOP_SLOT) && window_is_closed(scope, receiver) {
+        rv.set_null();
+        return;
+    }
+    // Cross-origin descriptors run in the accessing realm. Only these public
+    // Window aliases resolve their internal slots in the receiver's realm.
+    let context = receiver
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     rv.set(
-        window_hidden_value(scope, receiver, slot)
-            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+        window_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into()),
     );
 }
 
-pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
+pub(crate) fn window_opener_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -109,7 +118,7 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
         return;
     };
     rv.set_null();
-    if window_child_context_handle(scope, receiver).is_some() {
+    if window_is_closed(scope, receiver) || window_child_context_handle(scope, receiver).is_some() {
         return;
     }
     let Some(host) = receiver
@@ -314,7 +323,7 @@ pub(in crate::context_bootstrap) fn window_window_getter<'s>(
     set_receiver_window_alias(scope, &args, WINDOW_SELF_SLOT, rv);
 }
 
-pub(in crate::context_bootstrap) fn window_top_getter<'s>(
+pub(crate) fn window_top_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -322,7 +331,7 @@ pub(in crate::context_bootstrap) fn window_top_getter<'s>(
     set_receiver_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
 }
 
-pub(in crate::context_bootstrap) fn window_parent_getter<'s>(
+pub(crate) fn window_parent_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -346,7 +355,7 @@ pub(in crate::context_bootstrap) fn window_self_getter<'s>(
     set_receiver_window_alias(scope, &args, WINDOW_SELF_SLOT, rv);
 }
 
-pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
+pub(crate) fn window_closed_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -354,21 +363,5 @@ pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
-    {
-        let closed = window_host_ptr(scope, receiver)
-            .is_none_or(|host_ptr| !unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
-        rv.set_bool(closed);
-        return;
-    }
-    if window_child_context_handle(scope, receiver).is_some() {
-        rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
-        return;
-    }
-    rv.set_bool(
-        receiver
-            .get_creation_context(scope)
-            .and_then(context_host_ptr_from_context_slot)
-            .is_none_or(|host| unsafe { &*host }.browsing_context_is_closed()),
-    );
+    rv.set_bool(window_is_closed(scope, receiver));
 }

@@ -193,6 +193,10 @@ mod webassembly_runtime;
 mod webrtc;
 mod websocket;
 mod window_accessors;
+pub(crate) use window_accessors::{
+    cached_cross_origin_window_surface, window_closed_getter, window_length_getter,
+    window_opener_getter, window_parent_getter, window_top_getter,
+};
 mod window_events;
 mod window_lazy_surface;
 mod window_receiver;

@@ -604,7 +604,19 @@ unsafe extern "C" fn window_access_check_callback(
     let Some(accessed_context) = accessed_object.get_creation_context(scope) else {
         return false;
     };
-    if accessing_context == accessed_context {
+    contexts_can_script_access(scope, accessing_context, accessed_context)
+}
+
+fn contexts_can_script_access<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    accessing_context: v8::Local<'s, v8::Context>,
+    accessed_context: v8::Local<'s, v8::Context>,
+) -> bool {
+    if accessing_context == accessed_context
+        || accessing_context
+            .get_security_token(scope)
+            .strict_equals(accessed_context.get_security_token(scope))
+    {
         return true;
     }
 
@@ -2216,12 +2228,27 @@ fn child_window_cross_origin_named_getter<'s>(
         return v8::Intercepted::kNo;
     };
     if surface.has_own_property(scope, key).unwrap_or(false)
-        && let Some(value) = surface.get(scope, key.into())
+        && let Some(value) = cross_origin_surface_get(scope, holder, surface, key.into())
     {
         rv.set(value);
         return v8::Intercepted::kYes;
     }
     v8::Intercepted::kNo
+}
+
+fn cross_origin_surface_get<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    holder: v8::Local<'s, v8::Object>,
+    surface: v8::Local<'s, v8::Object>,
+    key: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    // Main-page accessors resolve the call receiver. Property lookup must pass
+    // the WindowProxy through; otherwise `this` is the internal surface.
+    if main_page::is_main_surface(scope, surface) {
+        let window = child_window_cross_origin_proxy_self(scope, holder);
+        return surface.get_with_receiver(scope, key, window);
+    }
+    surface.get(scope, key)
 }
 
 fn child_window_cross_origin_named_setter<'s>(
@@ -2240,7 +2267,12 @@ fn child_window_cross_origin_named_setter<'s>(
         .as_deref()
         == Some("location");
     if is_location {
-        let _ = surface.set(scope, key.into(), value);
+        if main_page::is_main_surface(scope, surface) {
+            let window = child_window_cross_origin_proxy_self(scope, args.holder());
+            let _ = surface.set_with_receiver(scope, key.into(), value, window);
+        } else {
+            let _ = surface.set(scope, key.into(), value);
+        }
         return v8::Intercepted::kYes;
     }
     v8::Intercepted::kNo
@@ -2272,10 +2304,12 @@ fn child_window_cross_origin_named_enumerator<'s>(
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
     let mut property_names = v8::GetPropertyNamesArgsBuilder::new();
+    property_names.mode(v8::KeyCollectionMode::OwnOnly);
     property_names.property_filter(v8::PropertyFilter::ALL_PROPERTIES);
+    property_names.index_filter(v8::IndexFilter::SkipIndices);
     property_names.key_conversion(v8::KeyConversionMode::ConvertToString);
     let names = child_window_cross_origin_access_surface(scope, callback_args.holder())
-        .and_then(|surface| surface.get_own_property_names(scope, property_names.build()))
+        .and_then(|surface| surface.get_property_names(scope, property_names.build()))
         .unwrap_or_else(|| v8::Array::new(scope, 0));
     rv.set(names);
 }
@@ -2365,8 +2399,11 @@ fn child_window_cross_origin_indexed_enumerator<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
-    let count = child_window_cross_origin_access_surface(scope, args.holder())
-        .and_then(|surface| surface.get(scope, v8str(scope, "length").into()))
+    let holder = args.holder();
+    let count = child_window_cross_origin_access_surface(scope, holder)
+        .and_then(|surface| {
+            cross_origin_surface_get(scope, holder, surface, v8str(scope, "length").into())
+        })
         .and_then(|length| length.uint32_value(scope))
         .unwrap_or(0);
     let array =

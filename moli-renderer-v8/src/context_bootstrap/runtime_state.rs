@@ -1803,6 +1803,7 @@ pub(crate) fn finish_context_bootstrap(
     document_runtime: &mut JsContextHost,
     secure_context_url: &url::Url,
 ) -> Result<()> {
+    super::window_accessors::initialize_cross_origin_window_cache(scope)?;
     super::exposed_interfaces::initialize_realm_interface_registry(
         scope,
         super::exposed_interfaces::RealmKind::Window,

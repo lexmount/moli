@@ -1,9 +1,10 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_hidden_value, window_host_ptr, window_is_closed,
+    window_receiver,
 };
 use super::*;
 
-pub(in crate::context_bootstrap) fn window_length_getter<'s>(
+pub(crate) fn window_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -11,6 +12,10 @@ pub(in crate::context_bootstrap) fn window_length_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if window_is_closed(scope, receiver) {
+        rv.set_uint32(0);
+        return;
+    }
     let Some(host_ptr) = window_host_ptr(scope, receiver) else {
         rv.set(v8::Number::new(scope, 0.0).into());
         return;
