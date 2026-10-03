@@ -7,6 +7,7 @@ mod media_capabilities;
 mod media_devices;
 mod navigator;
 mod navigator_subobjects;
+mod protocol_handlers;
 mod screen;
 mod user_activation;
 mod visual_viewport;

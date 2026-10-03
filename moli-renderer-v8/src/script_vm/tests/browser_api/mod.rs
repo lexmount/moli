@@ -84,6 +84,7 @@ mod popup_live_document_stream;
 mod promise_rejection;
 mod request_init;
 mod rtc_dictionary_init;
+mod protocol_handlers;
 mod rtc_error;
 mod rtc_peer_dictionary;
 mod scroll_dictionary;
