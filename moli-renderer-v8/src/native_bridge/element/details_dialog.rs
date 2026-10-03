@@ -11,6 +11,7 @@ use crate::{
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::focus::apply_modal_dialog_focus_fixup;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
     element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
@@ -451,6 +452,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+    apply_modal_dialog_focus_fixup(scope, runtime_ptr, handle);
 }
 
 pub(super) fn dialog_close_callback<'s>(
