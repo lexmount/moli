@@ -27,6 +27,7 @@ mod document_open_navigation_abort;
 mod document_open_origin;
 mod dom_event_worlds;
 mod drag_init;
+mod drag_lifecycle;
 mod error_event_init;
 mod event_constructor_type;
 mod event_handlers;

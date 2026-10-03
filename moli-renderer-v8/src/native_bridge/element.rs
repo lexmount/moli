@@ -285,8 +285,8 @@ pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
     NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
     construct_activation_pointer_event, construct_clipboard_event, construct_command_event,
-    construct_drag_event, construct_form_data_event, construct_input_event,
-    construct_interest_event, construct_keyboard_event,
+    construct_drag_event, construct_drag_event_with_related_target, construct_form_data_event,
+    construct_input_event, construct_interest_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -427,15 +427,15 @@ pub use geometry::ClientRect;
 #[cfg(test)]
 pub(crate) use geometry::observable_scrollbar_hit_test;
 pub(crate) use geometry::{
-    InputSurfaceHit, apply_scroll_observable_effects, captured_frame_input_surface_hit_test,
-    drag_start_frame_input_surface_hit_test, draggable_source_at_point,
-    element_is_inert_for_hit_testing, input_surface_hit_test, observable_caret_position,
-    observable_deep_hit_test, observable_document_metrics, observable_event_offset,
-    observable_geometry_batch, observable_geometry_query, observable_hit_test,
-    observable_hit_test_all, observable_input_hit_test, observable_sources_with_fragments,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    published_geometry_batch, queue_scroll_observable_effects, scroll_node_into_view_at_center,
-    scroll_node_into_view_at_start,
+    InputHit, InputSurfaceHit, apply_scroll_observable_effects,
+    captured_frame_input_surface_hit_test, drag_start_frame_input_surface_hit_test,
+    draggable_source_at_point, element_is_inert_for_hit_testing, input_surface_hit_test,
+    observable_caret_position, observable_deep_hit_test, observable_document_metrics,
+    observable_event_offset, observable_geometry_batch, observable_geometry_query,
+    observable_hit_test, observable_hit_test_all, observable_input_hit_test,
+    observable_sources_with_fragments, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, published_geometry_batch, queue_scroll_observable_effects,
+    scroll_node_into_view_at_center, scroll_node_into_view_at_start,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,

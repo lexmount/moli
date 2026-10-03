@@ -801,6 +801,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db_task_body;
 mod input_dispatch;
+mod input_drag;
 mod input_helpers;
 mod inspector;
 mod promise_rejection_task;
@@ -1114,6 +1115,7 @@ pub(super) struct ScriptVm {
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
     active_drag_session: Option<ActiveDragSession>,
+    suppressed_drag_pointer: Option<i32>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
     next_internal_frontend_inspector_call_id: i32,
@@ -1185,6 +1187,8 @@ pub(super) struct ActiveTouchPoint {
 pub(super) struct ActiveDragSession {
     pub data_transfer: v8::Global<v8::Object>,
     pub drop_allowed: bool,
+    native: Option<input_drag::NativeDragSource>,
+    target: Option<crate::native_bridge::element::InputHit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2633,6 +2637,7 @@ impl ScriptVmDefaultWorldBootstrap {
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,
             active_drag_session: None,
+            suppressed_drag_pointer: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
             next_internal_frontend_inspector_call_id: -1,
