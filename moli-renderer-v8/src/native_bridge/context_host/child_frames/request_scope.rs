@@ -690,27 +690,66 @@ impl JsContextHost {
         handle: DomHandle,
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> crate::permissions_policy::DocumentPermissionsPolicy {
+        self.child_browsing_context_permissions_policy_for_document(
+            handle,
+            bootstrap,
+            self.child_browsing_context_sandbox_policy_from_owner(handle),
+            &crate::permissions_policy::DocumentPermissionsPolicy::default(),
+        )
+    }
+
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_permissions_policy_for_document(
+        &self,
+        handle: DomHandle,
+        bootstrap: &ChildBrowsingContextBootstrap,
+        sandbox: crate::document_runtime::DocumentSandboxPolicy,
+        response_policy: &crate::permissions_policy::DocumentPermissionsPolicy,
+    ) -> crate::permissions_policy::DocumentPermissionsPolicy {
         let parent_document = self
             .dom_host()
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
             .unwrap_or_else(|| self.document_handle());
-        let parent_url = self.document_url_for_handle(parent_document);
+        let parent_origin = self.permissions_policy_origin_for_document(parent_document);
         let parent_policy = self
             .document_permissions_policy_for_document_handle(parent_document)
-            .unwrap_or_else(|| self.document_policy_container().permissions_policy);
-        let child_url = Self::child_browsing_context_bootstrap_url(bootstrap)
-            .unwrap_or_else(|| parent_url.clone());
+            .unwrap_or_else(|| self.document_policy_container().permissions_policy.clone());
+        let child_origin = if sandbox.forces_opaque_origin {
+            url::Origin::new_opaque()
+        } else if bootstrap.security_origin_inherited() {
+            parent_origin.clone()
+        } else {
+            Self::child_browsing_context_bootstrap_url(bootstrap)
+                .map_or_else(url::Origin::new_opaque, |url| url.origin())
+        };
+        // The container's 'src' allowlist remains bound to its declared source,
+        // while inheritance and default 'self' use the final Document origin.
+        let source = self
+            .child_browsing_context_bootstrap_for_handle(handle)
+            .unwrap_or_else(|| bootstrap.clone());
+        let source_origin = if self
+            .child_browsing_context_sandbox_policy_from_owner(handle)
+            .forces_opaque_origin
+        {
+            child_origin.clone()
+        } else if source.security_origin_inherited() {
+            parent_origin.clone()
+        } else {
+            Self::child_browsing_context_bootstrap_url(&source)
+                .map_or_else(url::Origin::new_opaque, |url| url.origin())
+        };
         let is_iframe = self.dom_host().is_html_element_named(handle, "iframe");
         let allow = is_iframe
             .then(|| self.dom_host().get_attribute(handle, "allow"))
             .flatten();
-        parent_policy.delegated_to_child(
-            &parent_url,
-            &child_url,
-            bootstrap.security_origin_inherited(),
-            allow.as_deref(),
-        )
+        parent_policy
+            .delegated_to_child(
+                &parent_origin,
+                &child_origin,
+                &source_origin,
+                allow.as_deref(),
+            )
+            .intersect(&response_policy.for_document_origin(&child_origin))
     }
 
     pub(crate) fn child_browsing_context_is_same_origin_with_top(&self, handle: DomHandle) -> bool {

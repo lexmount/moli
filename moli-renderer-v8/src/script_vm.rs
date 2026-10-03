@@ -823,6 +823,7 @@ mod text_track_load;
 mod user_interaction;
 mod view_transition_update;
 pub(crate) mod web_fonts;
+mod web_mcp;
 pub(crate) mod webcrypto_tasks;
 mod websocket_event_body;
 mod websocket_worker;
@@ -899,6 +900,7 @@ pub(crate) use input_helpers::*;
 use inspector::*;
 pub(crate) use inspector::{
     DocumentInspectorBinding, RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
+    RendererInspectorObjectWrapper,
 };
 use isolated_worlds::*;
 pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
@@ -1467,6 +1469,16 @@ impl ScriptVm {
     ) -> Result<()> {
         const INTERNAL_RUNTIME_ENABLE_ID: u64 = 900_013;
         const INTERNAL_CONSOLE_ENABLE_ID: u64 = 900_014;
+        if protocol_configuration.web_mcp_enabled {
+            self.prepare_web_mcp_session(
+                &moli_page_types::DevToolsSessionKey::from_wire_session_id(inspector_session_id),
+            );
+        }
+        crate::context_bootstrap::web_mcp::configure_session(
+            &mut self._context_host.borrow_mut(),
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(inspector_session_id),
+            protocol_configuration.web_mcp_enabled,
+        );
 
         self.set_inspector_session_runtime_bindings(
             inspector_session_id,

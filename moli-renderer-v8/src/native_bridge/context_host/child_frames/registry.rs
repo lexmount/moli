@@ -53,6 +53,9 @@ impl JsContextHost {
         retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         document_handle: DomHandle,
     ) {
+        self.retire_web_mcp_document(crate::native_bridge::WindowDocumentOwner::Frame(
+            retired_owner,
+        ));
         let _ = self.retire_document_resource_loader(
             crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
         );
@@ -386,7 +389,7 @@ impl JsContextHost {
                         )
                     } else {
                         refresh_policy_source
-                            .map(|policy| policy.permissions_policy)
+                            .map(|policy| policy.permissions_policy.clone())
                             .unwrap_or_default()
                     },
                 };

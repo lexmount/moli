@@ -19,6 +19,7 @@ use super::{
         event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
+        submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
         submit_event_submitter_getter_function, track_event_track_getter_function,
         ui_event_pseudo_target_getter_function,
     },
@@ -153,6 +154,10 @@ struct TrackEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SubmitEvent, enumerable, receiver)]
 struct SubmitEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "agentInvoked", getter = submit_event_agent_invoked_getter_function)]
+    agent_invoked: (),
+    #[webapi(method = "respondWith", length = 1, callback = submit_event_respond_with_callback)]
+    respond_with: (),
     #[webapi(accessor_property, getter = submit_event_submitter_getter_function)]
     submitter: (),
 }

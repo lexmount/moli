@@ -1754,6 +1754,7 @@ fn materialized_navigation_test_state(
     requested_url: &str,
 ) -> NavigationDispatchState {
     NavigationDispatchState {
+        web_mcp_invocation: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id,

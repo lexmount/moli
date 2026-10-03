@@ -2355,11 +2355,16 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
                 return false;
             };
             let runtime = unsafe { &mut *runtime_ptr };
-            return runtime.navigate_child_browsing_context_to_url(
-                scope,
-                child_handle,
-                resolved_url,
-            );
+            let navigated =
+                runtime.navigate_child_browsing_context_to_url(scope, child_handle, resolved_url);
+            if navigated {
+                crate::context_bootstrap::web_mcp::bind_child_navigation(
+                    runtime,
+                    form_handle,
+                    child_handle,
+                );
+            }
+            return navigated;
         }
         let source_element = node_wrapper_from_handle(scope, form_handle);
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
@@ -2377,6 +2382,10 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             return false;
         };
         unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        crate::context_bootstrap::web_mcp::bind_root_navigation(
+            unsafe { &mut *runtime_ptr },
+            form_handle,
+        );
         return true;
     }
     navigate_target_browsing_context(

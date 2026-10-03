@@ -129,7 +129,9 @@ impl JsContextHost {
         owner: OwnerDispatchScope,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         match owner {
-            OwnerDispatchScope::Top => Some(self.document_policy_container().permissions_policy),
+            OwnerDispatchScope::Top => {
+                Some(self.document_policy_container().permissions_policy.clone())
+            }
             OwnerDispatchScope::Child(handle) => self
                 .frame_owner_current_child_snapshot(handle)
                 .map(|snapshot| {
@@ -140,7 +142,7 @@ impl JsContextHost {
                 }),
             OwnerDispatchScope::LightweightPopup(popup_id) => self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy),
+                .map(|policy| policy.permissions_policy.clone()),
         }
     }
 
@@ -149,12 +151,12 @@ impl JsContextHost {
         document: DomHandle,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         if document == self.document_handle() {
-            return Some(self.document_policy_container().permissions_policy);
+            return Some(self.document_policy_container().permissions_policy.clone());
         }
         if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
             return self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy);
+                .map(|policy| policy.permissions_policy.clone());
         }
         let child_handle = self.child_browsing_context_host_for_document_handle(document)?;
         let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
@@ -163,6 +165,38 @@ impl JsContextHost {
                 .settings
                 .document_policy_container
                 .permissions_policy,
+        )
+    }
+
+    pub(in crate::native_bridge::context_host) fn permissions_policy_origin_for_document(
+        &self,
+        document: crate::document_runtime::DomHandle,
+    ) -> url::Origin {
+        if document == self.document_handle() && self.document_sandbox_policy().forces_opaque_origin
+        {
+            return url::Origin::new_opaque();
+        }
+        let serialized = (document == self.document_handle())
+            .then(|| {
+                self.frame_owner_store
+                    .current_main_owner_snapshot()
+                    .map(|owner| owner.settings.origin)
+            })
+            .flatten()
+            .or_else(|| {
+                self.lightweight_popup_id_for_document_handle(document)
+                    .and_then(|popup| self.lightweight_popup_origin(popup))
+                    .or_else(|| {
+                        self.child_browsing_context_host_for_document_handle(document)
+                            .and_then(|child| self.child_browsing_context_target_origin(child))
+                    })
+            });
+        serialized.map_or_else(
+            || self.document_url_for_handle(document).origin(),
+            |origin| {
+                url::Url::parse(&origin)
+                    .map_or_else(|_| url::Origin::new_opaque(), |url| url.origin())
+            },
         )
     }
 

@@ -15,6 +15,7 @@ impl NativeDomBridge {
             bindings,
             identity: BridgeIdentityStore::default(),
             abort: abort::AbortStore::default(),
+            web_mcp: crate::context_bootstrap::web_mcp::ModelContextStore::default(),
             traversal: traversal::TraversalStore::default(),
         }
     }

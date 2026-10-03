@@ -16,6 +16,7 @@ const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
+const TOOL_NAME_SLOT: &str = "__moliToolEventName";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -23,6 +24,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Transition,
     Blob,
     WebGlContext,
+    ToolActivated,
+    ToolCancel,
 }
 
 impl ValueEventKind {
@@ -32,6 +35,8 @@ impl ValueEventKind {
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
             Self::WebGlContext => "WebGLContextEvent",
+            Self::ToolActivated => "ToolActivatedEvent",
+            Self::ToolCancel => "ToolCancelEvent",
         }
     }
 
@@ -79,6 +84,33 @@ struct BlobEventPrototypeDeclaration {
 struct WebGlContextEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, STATUS_MESSAGE_SLOT))]
     status_message: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToolActivatedEvent, enumerable, receiver)]
+struct ToolActivatedEventPrototypeDeclaration {
+    #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
+    tool_name: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToolCancelEvent, enumerable, receiver)]
+struct ToolCancelEventPrototypeDeclaration {
+    #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
+    tool_name: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ToolEventInit")]
+struct ToolEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(name = "toolName", with = string_member)]
+    tool_name: v8::Local<'s, v8::String>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -196,6 +228,12 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "BlobEvent" => {
             BlobEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "ToolActivatedEvent" => {
+            ToolActivatedEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "ToolCancelEvent" => {
+            ToolCancelEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -231,6 +269,8 @@ fn value_event_constructor<'s>(
         Some(1) => ValueEventKind::Transition,
         Some(2) => ValueEventKind::Blob,
         Some(3) => ValueEventKind::WebGlContext,
+        Some(4) => ValueEventKind::ToolActivated,
+        Some(5) => ValueEventKind::ToolCancel,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -309,6 +349,11 @@ fn value_event_constructor<'s>(
                     TIMECODE_SLOT,
                     v8::Number::new(scope, parsed.timecode.unwrap_or(f64::NAN)).into(),
                 );
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
+                let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
+                set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };

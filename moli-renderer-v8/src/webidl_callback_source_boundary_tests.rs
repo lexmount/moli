@@ -32,6 +32,9 @@ struct AllowedDirectCallFile {
 }
 
 const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
+    // WebMCP retains native registration/invocation abort algorithms here.
+    // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
+    ("context_bootstrap/web_mcp/state.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
@@ -68,6 +71,14 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/view_transition_runtime/lifecycle.rs",
+        1,
+        DirectCallOwner::TypedWebIdlAdapter,
+    ),
+    // The typed Window callback adapter checks exact Realm currentness and
+    // enters the Web IDL relevant/incumbent contexts before normalizing the
+    // Promise-returning execute callback. It owns no raw author-function root.
+    allowed(
+        "context_bootstrap/web_mcp/execution.rs",
         1,
         DirectCallOwner::TypedWebIdlAdapter,
     ),

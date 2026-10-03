@@ -97,8 +97,15 @@ impl JsContextHost {
                 return Some(ChildDocumentCommitResult::ready(None));
             }
             let sandbox = self.child_browsing_context_sandbox_policy_from_owner(handle);
+            let permissions_policy = self.child_browsing_context_permissions_policy_for_document(
+                handle,
+                &bootstrap,
+                sandbox,
+                &snapshot.policy_container.permissions_policy,
+            );
             {
                 let entry = self.child_browsing_contexts.get_mut(&handle)?;
+                entry.set_document_permissions_policy(permissions_policy);
                 entry.commit_child_document_after_failed_async_start(
                     bootstrap,
                     &snapshot,
@@ -140,8 +147,18 @@ impl JsContextHost {
                 self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
             return Some(ChildDocumentCommitResult::ready(None));
         }
+        let permissions_policy = self.child_browsing_context_permissions_policy_for_document(
+            handle,
+            &bootstrap,
+            sandbox,
+            &cached_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.policy_container.permissions_policy.clone())
+                .unwrap_or_default(),
+        );
         {
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
+            entry.set_document_permissions_policy(permissions_policy);
             entry.commit_new_child_document(
                 bootstrap,
                 cached_snapshot.as_ref(),

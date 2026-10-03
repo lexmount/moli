@@ -310,6 +310,7 @@ interfaces! {
     MessageChannel;
     MessageEvent: Event;
     MessagePort: EventTarget;
+    ModelContext: EventTarget;
     MimeType;
     MimeTypeArray;
     MouseEvent: UIEvent;
@@ -495,6 +496,8 @@ interfaces! {
     ToggleEvent: Event;
     TimeRanges;
     VideoPlaybackQuality;
+    ToolActivatedEvent: Event;
+    ToolCancelEvent: Event;
     Touch;
     TouchEvent: UIEvent;
     TouchList;

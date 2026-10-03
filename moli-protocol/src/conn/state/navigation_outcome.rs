@@ -304,6 +304,7 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,

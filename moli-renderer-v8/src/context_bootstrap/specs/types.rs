@@ -11,6 +11,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     TransitionEvent,
     BlobEvent,
     WebGLContextEvent,
+    ToolActivatedEvent,
+    ToolCancelEvent,
     UiEvent,
     FocusEvent,
     CompositionEvent,

@@ -79,6 +79,14 @@ impl DocumentRuntime {
             .queue_once(scope, callback, delay_ms, owner, extra_args)
     }
 
+    pub(crate) fn queue_internal_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+    ) {
+        self.timeouts.queue_internal_task(scope, callback);
+    }
+
     pub(crate) fn queue_timeout_with_receiver<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -88,8 +96,14 @@ impl DocumentRuntime {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
-        self.timeouts
-            .queue_once_with_receiver(scope, callback, receiver, delay_ms, owner, extra_args)
+        self.timeouts.queue_once_with_receiver(
+            scope,
+            callback,
+            receiver,
+            u64::from(delay_ms),
+            owner,
+            extra_args,
+        )
     }
 
     pub(crate) fn queue_window_timer_callback<'s>(

@@ -1444,6 +1444,15 @@ impl DocumentRuntime {
         self.dom_host.set_autofilled_state(handle, autofilled)
     }
 
+    pub(crate) fn set_web_mcp_activity(
+        &mut self,
+        handle: DomHandle,
+        form: bool,
+        submit: bool,
+    ) -> bool {
+        self.dom_host.set_web_mcp_activity(handle, form, submit)
+    }
+
     pub(crate) fn set_input_files(
         &mut self,
         handle: DomHandle,

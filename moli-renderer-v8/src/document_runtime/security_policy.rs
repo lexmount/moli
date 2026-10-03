@@ -140,6 +140,14 @@ impl DocumentPolicyContainer {
     ) -> Self {
         let response_content_security_policies =
             response_content_security_policies_from_headers(headers);
+        let sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
+            &response_content_security_policies,
+        );
+        let origin = if sandbox.forces_opaque_origin {
+            url::Origin::new_opaque()
+        } else {
+            final_url.origin()
+        };
         Self {
             referrer_policy: crate::referrer_policy::response_referrer_policy_from_headers(headers),
             cross_origin_embedder_policy:
@@ -151,9 +159,7 @@ impl DocumentPolicyContainer {
                     final_url, headers,
                 ),
             document_content_security_policies: response_content_security_policies.clone(),
-            sandbox: DocumentSandboxPolicy::from_response_content_security_policies(
-                &response_content_security_policies,
-            ),
+            sandbox,
             response_content_security_policies,
             response_content_security_report_only_policies:
                 response_content_security_report_only_policies_from_headers(headers),
@@ -166,7 +172,7 @@ impl DocumentPolicyContainer {
                 crate::permissions_policy::DocumentPermissionsPolicy::from_navigation_response_headers(
                     headers,
                     final_url,
-                ),
+                ).for_document_origin(&origin),
             ..Self::default()
         }
     }

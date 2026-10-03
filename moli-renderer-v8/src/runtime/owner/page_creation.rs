@@ -659,6 +659,7 @@ impl RendererOwnerHandle {
     ) -> RendererCreateHtmlPageRequest {
         let layout_configuration = self.seal_layout_configuration_for_page_creation();
         RendererCreateHtmlPageRequest {
+            web_mcp_invocation: None,
             page_reservation,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
@@ -718,6 +719,7 @@ impl RendererOwnerHandle {
     ) -> RendererCreateStreamingRawPageRequest {
         let layout_configuration = self.seal_layout_configuration_for_page_creation();
         RendererCreateStreamingRawPageRequest {
+            web_mcp_invocation: None,
             document_replacement: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
@@ -787,6 +789,7 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateHtmlPageRequest {
+            web_mcp_invocation,
             page_reservation,
             root_frame_id,
             main_document_commit,
@@ -877,6 +880,7 @@ impl RendererOwnerHandle {
                     owner.state.browser_context_runtime.clone(),
                 )
                 .with_renderer_document_isolate_allocator(renderer_document_isolate_allocator);
+                let runtime_hooks = runtime_hooks.with_web_mcp_navigation(web_mcp_invocation);
                 let local_executor = owner.state.local_executor.clone();
                 debug!(stage = ?stage, %final_url, "starting page VM creation from html");
                 let env = PageVmEnvConfig {
@@ -1087,6 +1091,7 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateStreamingRawPageRequest {
+            web_mcp_invocation,
             document_replacement: _document_replacement,
             root_frame_id,
             main_document_commit,
@@ -1166,6 +1171,7 @@ impl RendererOwnerHandle {
                 )
                 .with_renderer_document_isolate_allocator(isolate_allocator)
                 .with_prepared_renderer_document_isolate(isolate_bootstrap, isolate_reservation)?;
+                let runtime_hooks = runtime_hooks.with_web_mcp_navigation(web_mcp_invocation);
                 let local_executor = owner.state.local_executor.clone();
                 let env = PageVmEnvConfig {
                     web_storage,

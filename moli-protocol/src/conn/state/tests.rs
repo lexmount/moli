@@ -25,6 +25,7 @@ use url::Url;
 
 fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchState {
     NavigationDispatchState {
+        web_mcp_invocation: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),

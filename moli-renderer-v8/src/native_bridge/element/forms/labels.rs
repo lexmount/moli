@@ -276,7 +276,7 @@ fn label_reflected_control_handle(
     label_control_handle(runtime, label_handle)
 }
 
-pub(in crate::native_bridge) fn control_label_handles(
+pub(crate) fn control_label_handles(
     runtime: &JsContextHost,
     control_handle: DomHandle,
 ) -> Vec<DomHandle> {

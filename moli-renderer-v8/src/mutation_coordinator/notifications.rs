@@ -30,6 +30,7 @@ pub(crate) fn notify_dom_mutation(
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());
     }
     host.note_app_manifest_link_mutation(dom_host, effects);
+    crate::context_bootstrap::web_mcp::note_mutation(scope, host, dom_host, effects);
 
     let profile = moli_trace::cpu_profile_enabled();
     let started = profile.then(Instant::now);

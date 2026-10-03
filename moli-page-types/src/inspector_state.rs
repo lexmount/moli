@@ -75,6 +75,7 @@ impl V8InspectorSessionAttach {
 /// segments instead.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RendererInspectorProtocolConfiguration {
+    pub web_mcp_enabled: bool,
     pub runtime_bindings: Vec<RuntimeBindingRegistration>,
     pub runtime_frontend_enabled: bool,
     pub console_frontend_enabled: bool,
@@ -179,6 +180,7 @@ impl RendererInspectorProtocolConfiguration {
 
     pub fn requires_restore(&self) -> bool {
         self.runtime_frontend_enabled
+            || self.web_mcp_enabled
             || !self.runtime_bindings.is_empty()
             || self.console_frontend_enabled
             || !self.dom_debugger_event_listener_breakpoints.is_empty()

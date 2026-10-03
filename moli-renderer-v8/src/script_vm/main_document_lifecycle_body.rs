@@ -19,6 +19,25 @@ use crate::dom::native::DocumentReadyState;
 use crate::frame_owner_model::{FrameDocumentTaskOwner, MainDocumentInteractiveLifecycleAction};
 
 impl ScriptVm {
+    pub(crate) fn receive_web_mcp_navigation(
+        &mut self,
+        id: moli_page_types::RendererWebMcpNavigation,
+    ) {
+        let mut host = self._context_host.borrow_mut();
+        let owner = crate::native_bridge::WindowDocumentOwner::Frame(
+            host.current_main_document_task_owner()
+                .expect("committed main document"),
+        );
+        crate::context_bootstrap::web_mcp::receive_navigation(&mut host, owner, id);
+    }
+
+    pub(crate) fn fail_web_mcp_navigation(
+        &mut self,
+        id: moli_page_types::RendererWebMcpNavigation,
+    ) {
+        crate::context_bootstrap::web_mcp::fail_navigation(&self._context_host.borrow(), id);
+    }
+
     /// Apply Blink's `CancelParsing()` readiness boundary for Page.stopLoading.
     ///
     /// This is deliberately separate from the ordinary Window-load body: the
@@ -155,6 +174,15 @@ impl ScriptVm {
             "dispatching document-owned main DOMContentLoaded transition"
         );
         self.document_runtime.note_dom_content_loaded_dispatched();
+        {
+            let mut host = self._context_host.borrow_mut();
+            let document = host.document_handle();
+            crate::context_bootstrap::web_mcp::complete_navigation(
+                &mut host,
+                document,
+                crate::native_bridge::WindowDocumentOwner::Frame(owner),
+            );
+        }
         self.document_runtime
             .record_quirks_mode_inspector_issue_at_dom_content_loaded();
         let event_end =

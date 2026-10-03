@@ -8,6 +8,7 @@ mod init;
 mod kind;
 mod methods;
 mod subclasses;
+mod submit;
 mod value;
 mod wrappers;
 
@@ -26,6 +27,12 @@ const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
 const CLOSE_EVENT_REASON_SLOT: &str = "__moliCloseEventReason";
 const SUBMIT_EVENT_SUBMITTER_SLOT: &str = "__moliSubmitEventSubmitter";
+const SUBMIT_EVENT_AGENT_INVOKED_SLOT: &str = "__moliSubmitEventAgentInvoked";
+const SUBMIT_EVENT_RESPONSE_SLOT: &str = "__moliSubmitEventResponse";
+pub(crate) use submit::{mark_agent_submit_event, take_submit_event_response};
+pub(super) use submit::{
+    submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
+};
 const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";

@@ -172,11 +172,11 @@ pub(in crate::native_bridge) use self::input::{
     textarea_text_length_getter_function, textarea_type_getter_function,
     textarea_wrap_getter_function, textarea_wrap_setter_function,
 };
+pub(crate) use self::labels::control_label_handles;
 pub(in crate::native_bridge) use self::labels::{
-    control_label_handles, control_labels_getter_function, label_activation_control_handle,
-    label_control_getter_function, label_control_handle, label_form_getter_function,
-    label_html_for_getter_function, label_html_for_setter_function,
-    label_receives_programmatic_focus,
+    control_labels_getter_function, label_activation_control_handle, label_control_getter_function,
+    label_control_handle, label_form_getter_function, label_html_for_getter_function,
+    label_html_for_setter_function, label_receives_programmatic_focus,
 };
 pub(in crate::native_bridge) use self::owner::form_associated_form_getter_function;
 pub(crate) use self::owner::{
@@ -245,6 +245,7 @@ pub(in crate::native_bridge) use self::text_control::{
     text_control_set_selection_range_callback, textarea_value_getter_function,
     textarea_value_setter_function,
 };
+pub(crate) use self::validation::v8_pattern_is_usable;
 pub(in crate::native_bridge) use self::validation::{
     control_check_validity_callback, control_matches_validity_pseudo,
     control_report_validity_callback, control_set_custom_validity_callback,

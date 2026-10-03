@@ -1,0 +1,197 @@
+{
+  "source_commit": "2d184faab9fb11e1070fb1eeafebf291f6e85923",
+  "source_path": "third_party/blink/renderer/core/html/forms/html_form_mcp_tool_test.cc",
+  "license": "BSD-3-Clause; see licenses/Chromium-BSD-3-Clause.txt at the repository root",
+  "cases": [
+    {
+      "name": "ParameterSchema_Disabled",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\">\n      <input name=\"text2\" type=\"text\" disabled>\n      <textarea name=\"area1\" disabled>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Readonly",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\">\n      <input name=\"text2\" type=\"text\" readonly>\n      <textarea name=\"area1\" readonly>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_Required",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\">\n      <input name=\"text2\" type=\"text\" required>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\"},\"text2\":{\"type\":\"string\"}},\"required\":[\"text2\"]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_Description",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\" toolparamdescription=\"Some nice text\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"Some nice text\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_Label",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label for=\"text\">Some text</label>\n      <input id=\"text\" name=\"text1\" type=\"text\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"Some text\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_Label_Multiple",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label for=\"text\">Label one</label>\n      <label for=\"text\">Label two</label>\n      <input id=\"text\" name=\"text1\" type=\"text\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"Label one; Label two\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_AriaDescription",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\" aria-description=\"ARIA\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"ARIA\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_PreferLabelOverAria",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label for=\"text\">Label</label>\n      <input id=\"text\" name=\"text1\" type=\"text\" aria-description=\"ARIA\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"Label\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_PreferAttrOverLabel",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label for=\"text\">Label</label>\n      <input\n        id=\"text\"\n        name=\"text1\"\n        type=\"text\"\n        toolparamdescription=\"ATTR\"\n        aria-description=\"ARIA\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\",\"description\":\"ATTR\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextInput_DuplicateName",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"text1\" type=\"text\">\n      <input name=\"text2\" type=\"text\">\n      <input name=\"text2\" type=\"text\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"text1\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_ImplicitLabelText",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label>\n        LABEL\n        <select name=\"select\" required>\n          <option value=\"Option 1\">This is option 1</option>\n          <option value=\"Option 2\">This is option 2</option>\n          <option value=\"Option 3\">This is option 3</option>\n        </select>\n        <button>Button text</button>\n      </label>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"select\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"Option 1\",\"title\":\"This is option 1\"},{\"type\":\"string\",\"const\":\"Option 2\",\"title\":\"This is option 2\"},{\"type\":\"string\",\"const\":\"Option 3\",\"title\":\"This is option 3\"}],\"enum\":[\"Option 1\",\"Option 2\",\"Option 3\"],\"description\":\"LABEL\"}},\"required\":[\"select\"]}"
+    },
+    {
+      "name": "ParameterSchema_Select",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <select name=\"select\" required>\n        <option value=\"Option 1\">This is option 1</option>\n        <option value=\"Option 2\">This is option 2</option>\n        <option value=\"Option 3\">This is option 3</option>\n      </select>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"select\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"Option 1\",\"title\":\"This is option 1\"},{\"type\":\"string\",\"const\":\"Option 2\",\"title\":\"This is option 2\"},{\"type\":\"string\",\"const\":\"Option 3\",\"title\":\"This is option 3\"}],\"enum\":[\"Option 1\",\"Option 2\",\"Option 3\"]}},\"required\":[\"select\"]}"
+    },
+    {
+      "name": "ParameterSchema_Select_Multiple",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <select name=\"select\" multiple required>\n        <option value=\"Option 1\">This is option 1</option>\n        <option value=\"Option 2\">This is option 2</option>\n        <option value=\"Option 3\">This is option 3</option>\n      </select>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"select\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"Option 1\",\"title\":\"This is option 1\"},{\"type\":\"string\",\"const\":\"Option 2\",\"title\":\"This is option 2\"},{\"type\":\"string\",\"const\":\"Option 3\",\"title\":\"This is option 3\"}],\"enum\":[\"Option 1\",\"Option 2\",\"Option 3\"]},\"uniqueItems\":true}},\"required\":[\"select\"]}"
+    },
+    {
+      "name": "ParameterSchema_NumberInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"num1\" type=\"number\" min=\"10\" max=\"100\">\n      <input name=\"num2\" type=\"number\" min=\"30\" max=\"60\" step=\"10\">\n      <input name=\"num3\" type=\"number\" min=\"15\" step=\"10\">\n      <input name=\"num4\" type=\"number\" step=\"13\">\n      <input name=\"num5\" type=\"number\" step=\"0.1\">\n      <input name=\"num6\" type=\"number\" min=\"0.15\" step=\"0.1\">\n      <input name=\"num7\" type=\"number\" pattern=\"[1-4]{3}\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"num1\":{\"type\":\"number\",\"minimum\":10,\"maximum\":100,\"multipleOf\":1},\"num2\":{\"type\":\"number\",\"minimum\":30,\"maximum\":60,\"multipleOf\":10},\"num3\":{\"type\":\"number\",\"minimum\":15},\"num4\":{\"type\":\"number\",\"multipleOf\":13},\"num5\":{\"type\":\"number\",\"multipleOf\":0.1},\"num6\":{\"type\":\"number\",\"minimum\":0.15},\"num7\":{\"type\":\"number\",\"multipleOf\":1,\"pattern\":\"[1-4]{3}\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_NumberInput_MinOnly",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"num1\" type=\"number\" min=\"10\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"num1\":{\"type\":\"number\",\"minimum\":10,\"multipleOf\":1}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_NumberInput_MaxOnly",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"num1\" type=\"number\" max=\"100\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"num1\":{\"type\":\"number\",\"maximum\":100,\"multipleOf\":1}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Checkbox",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"check1\" type=\"checkbox\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"check1\":{\"type\":\"boolean\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Checkbox_Multiple",
+      "html": "\n    <form id=form toolname=\"mytool\" tooldescription=\"pick fruits you like\">\n      <label>\n        <input id=\"apple\" name=\"fruit\" type=\"checkbox\" value=\"apple\">\n        Apple\n      </label>\n      <label>\n        <input id=\"melon\" name=\"fruit\" type=\"checkbox\" value=\"melon\">\n        Melon\n      </label>\n      <label>\n        <input id=\"grape\" name=\"fruit\" type=\"checkbox\" value=\"grape\">\n        Grape\n      </label>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"fruit\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"apple\",\"title\":\"Apple\"},{\"type\":\"string\",\"const\":\"melon\",\"title\":\"Melon\"},{\"type\":\"string\",\"const\":\"grape\",\"title\":\"Grape\"}],\"enum\":[\"apple\",\"melon\",\"grape\"]},\"uniqueItems\":true}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Checkbox_IgnoreToolParamAttributes",
+      "html": "\n    <form id=form toolname=\"mytool\" tooldescription=\"pick fruits you like\">\n      <input\n        id=\"apple\"\n        name=\"fruit\"\n        type=\"checkbox\"\n        value=\"apple\"\n        toolparamdescription=\"ERR1\"\n        >\n      <input\n        id=\"melon\"\n        name=\"fruit\"\n        type=\"checkbox\"\n        value=\"melon\"\n        toolparamdescription=\"ERR2\"\n        >\n      <input id=\"grape\" name=\"fruit\" type=\"checkbox\" value=\"grape\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"fruit\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"apple\"},{\"type\":\"string\",\"const\":\"melon\"},{\"type\":\"string\",\"const\":\"grape\"}],\"enum\":[\"apple\",\"melon\",\"grape\"]},\"uniqueItems\":true}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_RangeInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"range1\" type=\"range\" min=\"0\" max=\"50\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"range1\":{\"type\":\"number\",\"minimum\":0,\"maximum\":50,\"multipleOf\":1}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_RangeInput_Defaults",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"range1\" type=\"range\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"range1\":{\"type\":\"number\",\"minimum\":0,\"maximum\":100,\"multipleOf\":1}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_RangeInput_Step",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"range1\" type=\"range\" min=\"0\" max=\"10\" step=\"2\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"range1\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10,\"multipleOf\":2}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_RangeInput_StepBaseOffset",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"range1\" type=\"range\" min=\"1\" max=\"11\" step=\"2\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"range1\":{\"type\":\"number\",\"minimum\":1,\"maximum\":11}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_DateInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"date1\" type=\"date\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"date1\":{\"type\":\"string\",\"format\":\"date\",\"description\":\"Dates MUST be provided in 'YYYY-MM-DD' format.\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_DatetimeLocalInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"datetime1\" type=\"datetime-local\">\n      <input name=\"datetime2\" type=\"datetime-local\" step=\"1\">\n      <input name=\"datetime3\" type=\"datetime-local\" step=\"0.001\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"datetime1\":{\"type\":\"string\",\"format\":\"^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]$\"},\"datetime2\":{\"type\":\"string\",\"format\":\"^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$\"},\"datetime3\":{\"type\":\"string\",\"format\":\"^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\\\.[0-9]{1,3})?)?$\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_MonthInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"month1\" type=\"month\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"month1\":{\"type\":\"string\",\"format\":\"^[0-9]{4}-(0[1-9]|1[0-2])$\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_WeekInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"week1\" type=\"week\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"week1\":{\"type\":\"string\",\"format\":\"^[0-9]{4}-W(0[1-9]|[1-4][0-9]|5[0-3])$\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TimeInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"time1\" type=\"time\">\n      <input name=\"time2\" type=\"time\" step=\"1\">\n      <input name=\"time3\" type=\"time\" step=\"0.001\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"time1\":{\"type\":\"string\",\"format\":\"^([01][0-9]|2[0-3]):[0-5][0-9]$\"},\"time2\":{\"type\":\"string\",\"format\":\"^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$\"},\"time3\":{\"type\":\"string\",\"format\":\"^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\\\.[0-9]{1,3})?)?$\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_ColorInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"color1\" type=\"color\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"color1\":{\"type\":\"string\",\"format\":\"^#[0-9a-zA-Z]{6}$\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_TextArea",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <textarea name=\"area1\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"area1\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_BaseTextInput",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"email1\" type=\"email\">\n      <input name=\"search1\" type=\"search\">\n      <input name=\"tel1\" type=\"tel\">\n      <input name=\"url1\" type=\"url\">\n      <input name=\"hidden1\" type=\"hidden\">\n      <input name=\"hidden2\" type=\"hidden\" toolparamdescription=\"DESC\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"email1\":{\"type\":\"string\"},\"search1\":{\"type\":\"string\"},\"tel1\":{\"type\":\"string\"},\"url1\":{\"type\":\"string\"},\"hidden2\":{\"type\":\"string\",\"description\":\"DESC\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_BaseTextInputPatternAttribute",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input name=\"email1\" type=\"email\" pattern=\"[A-Z]{10}\">\n      <input name=\"search1\" type=\"search\" pattern=\"[A-Z]{10}\">\n      <input name=\"tel1\" type=\"tel\" pattern=\"[A-Z]{10}\">\n      <input name=\"url1\" type=\"url\" pattern=\"[A-Z]{10}\">\n      <input name=\"hidden1\" type=\"hidden\" pattern=\"[A-Z]{10}\">\n      <input name=\"hidden2\" type=\"hidden\" toolparamdescription=\"DESC\" pattern=\"[A-Z]{10}\">\n      <input name=\"invalid_pattern\" type=\"text\" toolparamdescription=\"invalid pattern input\" pattern=\"[)]\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"email1\":{\"type\":\"string\",\"pattern\":\"[A-Z]{10}\"},\"search1\":{\"type\":\"string\",\"pattern\":\"[A-Z]{10}\"},\"tel1\":{\"type\":\"string\",\"pattern\":\"[A-Z]{10}\"},\"url1\":{\"type\":\"string\",\"pattern\":\"[A-Z]{10}\"},\"hidden2\":{\"type\":\"string\",\"pattern\":\"[A-Z]{10}\",\"description\":\"DESC\"},\"invalid_pattern\":{\"type\":\"string\",\"description\":\"invalid pattern input\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Radio",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <label>\n        <input type=radio name=size value=s>\n        Small\n      </label>\n      <label>\n        <input type=radio name=size value=m>\n        Medium\n      </label>\n      <label>\n        <input type=radio name=size value=l>\n        Large\n      </label>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"s\",\"title\":\"Small\"},{\"type\":\"string\",\"const\":\"m\",\"title\":\"Medium\"},{\"type\":\"string\",\"const\":\"l\",\"title\":\"Large\"}],\"enum\":[\"s\",\"m\",\"l\"]}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Radio_Multiple",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input type=radio name=size value=s>\n      <input type=radio name=size value=m>\n      <input type=radio name=size value=l>\n      <input type=radio name=item value=hoodie>\n      <input type=radio name=item value=shirt>\n      <input type=radio name=item value=hat>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"s\"},{\"type\":\"string\",\"const\":\"m\"},{\"type\":\"string\",\"const\":\"l\"}],\"enum\":[\"s\",\"m\",\"l\"]},\"item\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"hoodie\"},{\"type\":\"string\",\"const\":\"shirt\"},{\"type\":\"string\",\"const\":\"hat\"}],\"enum\":[\"hoodie\",\"shirt\",\"hat\"]}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Radio_MixedType",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input type=text name=foo>\n      <input type=radio name=size value=s>\n      <input type=radio name=size value=m>\n      <input type=radio name=size value=l>\n      <input type=text name=size> <!-- Oops! -->\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"foo\":{\"type\":\"string\"}},\"required\":[]}"
+    },
+    {
+      "name": "ParameterSchema_Radio_Required",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input type=radio name=size value=s>\n      <input type=radio name=size value=m required>\n      <input type=radio name=size value=l>\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"s\"},{\"type\":\"string\",\"const\":\"m\"},{\"type\":\"string\",\"const\":\"l\"}],\"enum\":[\"s\",\"m\",\"l\"]}},\"required\":[\"size\"]}"
+    },
+    {
+      "name": "ParameterSchema_Radio_IgnoreToolParamDescription",
+      "html": "\n    <form id=\"form\" toolname=\"mytool\" tooldescription=\"perform task\">\n      <input type=radio name=size value=s toolparamdescription=\"ERR1\">\n      <input type=radio name=size value=m toolparamdescription=\"ERR2\">\n      <input type=radio name=size value=l toolparamdescription=\"ERR3\">\n    </form>\n  ",
+      "expected_json": "{\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"anyOf\":[{\"type\":\"string\",\"const\":\"s\"},{\"type\":\"string\",\"const\":\"m\"},{\"type\":\"string\",\"const\":\"l\"}],\"enum\":[\"s\",\"m\",\"l\"]}},\"required\":[]}"
+    }
+  ]
+}

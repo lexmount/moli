@@ -8,6 +8,7 @@ impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
+            Self::WebMcp { .. } => OwnerOnly,
             Self::Native(command) => {
                 if command.operation.can_dispatch_on_nested_main() {
                     PageAgent

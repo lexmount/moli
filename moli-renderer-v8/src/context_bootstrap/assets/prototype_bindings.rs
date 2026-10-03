@@ -457,6 +457,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
         template,
         spec.interface.name(),
     );
+    super::super::web_mcp::install_template_bindings(scope, template, spec.interface.name());
     crate::native_bridge::install_collection_template_bindings(
         scope,
         template,

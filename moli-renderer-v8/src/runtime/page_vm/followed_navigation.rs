@@ -525,6 +525,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     stage: PageVmInitStage,
 }
 
@@ -715,6 +716,7 @@ impl PageVm {
             .reserved_service_worker_client
             .map(|reserved| reserved.release());
         let service_worker_client_navigate = pending.service_worker_client_navigate;
+        let web_mcp_invocation = pending.web_mcp_invocation;
         tracing::debug!(stage = ?stage, %url, "following pending location navigation asynchronously");
 
         if navigation_kind == crate::native_bridge::PendingLocationNavigationKind::JavascriptUrl {
@@ -783,6 +785,9 @@ impl PageVm {
         {
             Ok(loaded) => loaded,
             Err(error) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.reject_failed_followed_location_navigation(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -794,6 +799,9 @@ impl PageVm {
         };
         let loaded = match loaded {
             LoadedFollowedLocationNavigation::NoDocument => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.abort_followed_navigation_without_document(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -804,6 +812,9 @@ impl PageVm {
                 )));
             }
             LoadedFollowedLocationNavigation::Download(download) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.abort_followed_navigation_without_document(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -825,6 +836,7 @@ impl PageVm {
                 navigation_bootstrap_entry: pending.entry_seed,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
+                web_mcp_invocation,
                 stage,
             },
         )))
@@ -842,6 +854,7 @@ impl PageVm {
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+            web_mcp_invocation,
             stage,
             ..
         } = prepared;
@@ -850,6 +863,7 @@ impl PageVm {
                 loaded,
                 navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
+                web_mcp_invocation,
                 stage,
                 FollowedLocationNavigationBootstrapBoundary::ContinuePhaseOne,
             )
@@ -952,10 +966,12 @@ impl PageVm {
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+            web_mcp_invocation,
             stage,
         } = prepared;
         let env = self.followed_location_navigation_env();
-        let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        runtime_hooks.web_mcp_navigation = web_mcp_invocation.clone();
         #[cfg(test)]
         let runtime_hooks = {
             let mut runtime_hooks = runtime_hooks;
@@ -987,6 +1003,9 @@ impl PageVm {
         let window_proxy_commit = match commit_result {
             Ok(commit) => commit,
             Err(error) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.reject_failed_followed_location_navigation(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -1257,6 +1276,7 @@ impl PageVm {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
         stage: PageVmInitStage,
         boundary: FollowedLocationNavigationBootstrapBoundary,
     ) -> Result<PageVmFollowedNavigationBuildOutcome> {
@@ -1270,7 +1290,8 @@ impl PageVm {
                 | LoadedFollowedLocationNavigation::ExternalDocument { .. }
         ));
         let env = self.followed_location_navigation_env();
-        let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        runtime_hooks.web_mcp_navigation = web_mcp_invocation;
         if runtime_hooks.has_renderer_page_script_environment() {
             self.prepare_main_window_proxy_navigation(self.page_id)?
                 .detach();

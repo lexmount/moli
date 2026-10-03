@@ -89,6 +89,7 @@ moli-webcrypto = { path = "../moli-webcrypto" }
 moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
+moli-webmcp = { path = "../moli-webmcp" }
 moli-window-features = { path = "../moli-window-features" }
 moli-websocket = { path = "../moli-websocket" }
 moli-xpath = { path = "../moli-xpath" }

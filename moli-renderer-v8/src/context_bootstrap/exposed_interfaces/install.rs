@@ -151,6 +151,7 @@ pub(crate) fn filter_window_exposed_interfaces(
                 })?;
         }
     }
+    crate::context_bootstrap::web_mcp::filter_exposure(scope, secure_context)?;
     Ok(())
 }
 

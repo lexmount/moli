@@ -14,6 +14,7 @@ use crate::domains::{
 /// was not named by the producer.
 #[derive(Debug)]
 pub(in crate::domains) enum ProtocolOutputPayload {
+    WebMcp(crate::domains::web_mcp::WebMcpPreparedOutputSlot),
     Dom(DomPreparedOutputSlot),
     DomStorage(DomStoragePreparedOutputSlot),
     Input(InputPreparedOutputSlot),
@@ -32,6 +33,7 @@ pub(in crate::domains) enum ProtocolOutputPayload {
 /// renderer or synthesize another output family.
 #[derive(Debug, Default)]
 pub(in crate::domains) struct ProtocolOutputPayloads {
+    web_mcp: Option<crate::domains::web_mcp::WebMcpPreparedOutputSlot>,
     dom: Option<DomPreparedOutputSlot>,
     dom_storage: Option<DomStoragePreparedOutputSlot>,
     input: Option<InputPreparedOutputSlot>,
@@ -65,6 +67,7 @@ impl ProtocolOutputPayloads {
             }};
         }
         match payload {
+            ProtocolOutputPayload::WebMcp(value) => merge!(web_mcp, value),
             ProtocolOutputPayload::Dom(value) => merge!(dom, value),
             ProtocolOutputPayload::DomStorage(value) => merge!(dom_storage, value),
             ProtocolOutputPayload::Input(value) => merge!(input, value),
@@ -81,6 +84,12 @@ impl ProtocolOutputPayloads {
 
     pub(in crate::domains) fn dom_mut(&mut self) -> Option<&mut DomPreparedOutputSlot> {
         self.dom.as_mut()
+    }
+
+    pub(in crate::domains) fn web_mcp_mut(
+        &mut self,
+    ) -> Option<&mut crate::domains::web_mcp::WebMcpPreparedOutputSlot> {
+        self.web_mcp.as_mut()
     }
 
     pub(in crate::domains) fn dom_storage_mut(
@@ -128,6 +137,7 @@ impl ProtocolOutputPayloads {
     #[cfg(test)]
     fn slot_count(&self) -> usize {
         [
+            self.web_mcp.is_some(),
             self.dom.is_some(),
             self.dom_storage.is_some(),
             self.input.is_some(),
@@ -155,6 +165,7 @@ macro_rules! impl_payload_from {
 }
 
 impl_payload_from!(DomPreparedOutputSlot, Dom);
+impl_payload_from!(crate::domains::web_mcp::WebMcpPreparedOutputSlot, WebMcp);
 impl_payload_from!(DomStoragePreparedOutputSlot, DomStorage);
 impl_payload_from!(InputPreparedOutputSlot, Input);
 impl_payload_from!(MainDocumentCommitPreparedOutput, MainDocumentCommit);

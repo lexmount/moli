@@ -11,6 +11,10 @@ impl ScriptVm {
         &mut self,
         policy: crate::document_runtime::DocumentPolicyContainer,
     ) {
+        let was_opaque = self
+            .document_runtime
+            .document_sandbox_policy()
+            .forces_opaque_origin;
         self.document_runtime
             .set_main_navigation_policy_container(policy);
         // The main context exists before its navigation response policy is applied.
@@ -22,6 +26,20 @@ impl ScriptVm {
                 tracing::warn!(
                     "failed to refresh main Window security token; using unique context token"
                 );
+            }
+            let host = unsafe { &*host_ptr };
+            let is_opaque = host.document_sandbox_policy().forces_opaque_origin;
+            if was_opaque != is_opaque {
+                let origin = if is_opaque {
+                    "null".into()
+                } else {
+                    moli_url::origin_ascii_serialization(host.document_url())
+                };
+                crate::context_bootstrap::set_window_origin_runtime_state(
+                    scope,
+                    context.global(scope),
+                    &origin,
+                )?;
             }
             Ok(())
         });
@@ -77,6 +95,11 @@ impl ScriptVm {
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
         let detached = self.page_inspector.detach_session(inspector_session_id);
+        self._context_host
+            .borrow_mut()
+            .native_bridge_mut()
+            .web_mcp
+            .disable_session(&devtools_session);
         let retired_worlds = self.retire_isolated_worlds_for_devtools_session(&devtools_session);
         detached || retired_worlds != 0
     }

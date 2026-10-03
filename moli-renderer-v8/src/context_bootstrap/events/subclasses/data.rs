@@ -1424,6 +1424,7 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
 ) -> bool {
+    let agent_invoked = init_bool_property(scope, init, "agentInvoked", false);
     let Some(submitter) = submit_event_submitter(scope, init) else {
         return false;
     };
@@ -1432,6 +1433,12 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<
         event,
         SUBMIT_EVENT_SUBMITTER_SLOT,
         submitter,
+    );
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        SUBMIT_EVENT_AGENT_INVOKED_SLOT,
+        v8::Boolean::new(scope, agent_invoked).into(),
     );
     true
 }
