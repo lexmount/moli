@@ -373,6 +373,31 @@ struct WheelEventTemplateConstantsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::PointerEvent, enumerable)]
 struct PointerEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "pointerId", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pointerId"))]
+    pointer_id: (),
+    #[webapi(accessor_property = "width", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "width"))]
+    width: (),
+    #[webapi(accessor_property = "height", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "height"))]
+    height: (),
+    #[webapi(accessor_property = "pressure", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pressure"))]
+    pressure: (),
+    #[webapi(accessor_property = "tangentialPressure", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tangentialPressure"))]
+    tangential_pressure: (),
+    #[webapi(accessor_property = "tiltX", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tiltX"))]
+    tilt_x: (),
+    #[webapi(accessor_property = "tiltY", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "tiltY"))]
+    tilt_y: (),
+    #[webapi(accessor_property = "twist", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "twist"))]
+    twist: (),
+    #[webapi(accessor_property = "altitudeAngle", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "altitudeAngle"))]
+    altitude_angle: (),
+    #[webapi(accessor_property = "azimuthAngle", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "azimuthAngle"))]
+    azimuth_angle: (),
+    #[webapi(accessor_property = "pointerType", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "pointerType"))]
+    pointer_type: (),
+    #[webapi(accessor_property = "isPrimary", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "isPrimary"))]
+    is_primary: (),
+
     #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "persistentDeviceId"))]
     persistent_device_id: (),
 

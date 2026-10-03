@@ -290,3 +290,22 @@ fn pointer_raw_update_handler_properties_follow_secure_context_exposure() {
         assert_eq!(vm.eval(&script).unwrap(), "true", "{url}");
     }
 }
+
+#[test]
+fn native_pointer_event_field_accessors() {
+    let mut vm = new_storage_test_vm("https://event-accessors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = Object.getOwnPropertyDescriptor(PointerEvent.prototype, 'pointerId').get;
+  const event = new PointerEvent('pointermove', {pointerId: 7});
+  let rejected = false;
+  try { get.call({}); } catch (error) { rejected = error instanceof TypeError; }
+  return String(get.call(event) === 7 && rejected);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
