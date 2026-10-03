@@ -498,11 +498,11 @@ css/css-grid/abspos/orthogonal-positioned-grid-descendants-014.html
 css/css-grid/abspos/orthogonal-positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
-css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
+css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
@@ -3114,7 +3114,6 @@ html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3214,9 +3213,8 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
@@ -3288,14 +3286,10 @@ magnetometer/Magnetometer-supported-by-permissions-policy.html
 mediacapture-insertable-streams/legacy/MediaStreamTrackGenerator-in-service-worker.https.html
 navigation-api/navigate-event/dangling-navigate-event-after-bfcache-restore.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
-navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
-navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
-navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
 navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
-navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/sandboxing-back-parent.html
@@ -3314,7 +3308,6 @@ navigation-timing/dom-interactive-media-document.html
 navigation-timing/nav2-test-attributes-values.html
 navigation-timing/nav2-test-navigation-type-reload.html
 navigation-timing/navigation-type-post-backforward.html
-navigation-timing/nested-unload-timing.html
 navigation-timing/test-document-onload.html
 navigation-timing/test-timing-attributes-order.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
@@ -3686,8 +3679,8 @@ webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
 workers/SharedWorker-extendedLifetime-blob.html
+workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-extendedLifetime-named-module.html
-workers/SharedWorker-extendedLifetime.html
 workers/WorkerNavigator_platform.htm
 workers/interfaces/SharedWorkerGlobalScope/onconnect.html
 workers/semantics/structured-clone/dedicated.html
@@ -3725,6 +3718,7 @@ xhr/send-no-response-event-order.htm
 xhr/send-receive-utf16.htm
 xhr/send-redirect-no-location.htm
 xhr/send-response-event-order.htm
+xhr/setrequestheader-content-type.htm
 xhr/status-async.htm
 xhr/status-basic.htm
 xml/xml-prolog-accepted-versions.html

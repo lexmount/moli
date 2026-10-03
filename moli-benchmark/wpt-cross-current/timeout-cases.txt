@@ -30,7 +30,6 @@ cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
 css/css-easing/linear-timing-functions-duplicate-points-crash.html
 css/css-flexbox/inline-flex-column-image-load.html
-css/css-syntax/urange-parsing.html
 css/css-values/dynamic-viewport-units-rule-cache.html
 css/css-variables/variable-animation-from-to.html
 css/css-variables/variable-animation-over-transition.html
@@ -67,6 +66,7 @@ fetch/api/policies/referrer-origin-when-cross-origin-service-worker.https.html
 fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/nested-focus-within-iframe-focus-event.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
+html/browsers/browsing-the-web/history-traversal/api-availability.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
@@ -119,7 +119,7 @@ html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
@@ -153,8 +153,6 @@ html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.h
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 html/webappapis/scripting/events/compile-event-handler-settings-objects.html
 html/webappapis/scripting/events/onerroreventhandler.html
-html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html
-html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.serviceworker.https.html
 import-maps/data-driven/resolving.html?data-url-prefix.json
 import-maps/data-driven/resolving.html?empty-import-map.json
@@ -180,10 +178,13 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
-navigation-api/navigate-event/intercept-cross-origin.html
+navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
+navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
+navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
+navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html
 navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange
@@ -249,13 +250,10 @@ streams/transferable/deserialize-error.window.js?moli-wpt-script=window
 svg/linking/scripted/href-mpath-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-reporting-for-Window-ServiceWorkerContainer-register.https.html
-wasm/jsapi/functions/entry-different-function-realm.html
-wasm/jsapi/functions/entry.html
 web-based-payment-handler/can-make-payment-event-constructor.https.serviceworker.html
 web-based-payment-handler/payment-request-event-constructor.https.serviceworker.html
 webmessaging/broadcastchannel/cross-origin.html
 webusb/usb.serviceworker.https.html
-workers/modules/dedicated-worker-import-csp.html
 xhr/open-during-abort-processing.htm
 xhr/open-send-during-abort.htm
 xhr/open-url-multi-window-4.htm

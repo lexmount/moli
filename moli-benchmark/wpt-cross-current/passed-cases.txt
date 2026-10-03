@@ -320,7 +320,6 @@ contenteditable/select-text-change-crash.html
 cookies/cookie-enabled-noncookie-frame.html
 cookies/meta-blocked.html
 cookies/navigated-away.html
-cors/response-headers.htm
 credential-management/require_securecontext.html
 css/compositing/inheritance.html
 css/compositing/parsing/background-blend-mode-computed-multiple.html
@@ -1654,12 +1653,12 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-014.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-015.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
+css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
@@ -2806,6 +2805,7 @@ css/css-syntax/serialize-escape-identifiers.html
 css/css-syntax/trailing-braces.html
 css/css-syntax/unclosed-url-at-eof.html
 css/css-syntax/unicode-range-selector.html
+css/css-syntax/urange-parsing.html
 css/css-syntax/url-whitespace-consumption.html
 css/css-syntax/var-with-blocks.html
 css/css-syntax/whitespace.html
@@ -5582,7 +5582,6 @@ hr-time/timing-attack.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-client-postmessage.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-unregister.https.html
 html/browsers/browsing-the-web/history-traversal/001.html
-html/browsers/browsing-the-web/history-traversal/api-availability.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash-twice.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-pushState.html
@@ -6064,7 +6063,7 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6610,6 +6609,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/permission-element/geolocation-element/iframe-use-after-free-crash.html
 html/semantics/popovers/chrome-392042073-crash.html
@@ -7348,7 +7348,8 @@ html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-03.ht
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-encoding.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-CEReactions.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe.html
@@ -7408,6 +7409,8 @@ html/webappapis/scripting/processing-model-2/compile-error-in-setTimeout.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin-with-hash.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin.html
 html/webappapis/scripting/processing-model-2/compile-error.html
+html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html
+html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setInterval.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setTimeout.html
 html/webappapis/scripting/processing-model-2/runtime-error-data-url.html
@@ -8277,7 +8280,6 @@ shadow-dom/declarative/declarative-shadow-dom-slot-assignment.html
 shadow-dom/declarative/declarative-shadow-dom-write-to-iframe.html
 shadow-dom/declarative/declarative-with-disabled-shadow.html
 shadow-dom/declarative/gethtml-ordering.html
-shadow-dom/declarative/gethtml.html
 shadow-dom/declarative/innerhtml-before-closing-tag.html
 shadow-dom/declarative/innerhtml-on-ordinary-template.html
 shadow-dom/declarative/move-template-before-closing-tag.html
@@ -9077,6 +9079,8 @@ wasm/core/utf8-custom-section-id.wast.js.html
 wasm/core/utf8-import-field.wast.js.html
 wasm/core/utf8-import-module.wast.js.html
 wasm/core/utf8-invalid-encoding.wast.js.html
+wasm/jsapi/functions/entry-different-function-realm.html
+wasm/jsapi/functions/entry.html
 wasm/jsapi/functions/incumbent.html
 wasm/serialization/module/broadcastchannel-success-and-failure.html
 wasm/serialization/module/broadcastchannel-success.html
@@ -9220,7 +9224,7 @@ workers/SharedWorker-constructor.html
 workers/SharedWorker-detach-frame-in-error-event.html
 workers/SharedWorker-exception-propagation.html
 workers/SharedWorker-exception.html
-workers/SharedWorker-extendedLifetime-data.html
+workers/SharedWorker-extendedLifetime.html
 workers/SharedWorker-script-error.html
 workers/SharedWorker-simple.html
 workers/SharedWorkerPerformanceNow.html
@@ -9364,6 +9368,7 @@ workers/interfaces/WorkerUtils/navigator/005.html
 workers/interfaces/WorkerUtils/navigator/006.html
 workers/interfaces/WorkerUtils/navigator/007.html
 workers/interfaces/WorkerUtils/navigator/language.html
+workers/modules/dedicated-worker-import-csp.html
 workers/modules/dedicated-worker-import-data-url-cross-origin.html
 workers/modules/dedicated-worker-import-failure.html
 workers/modules/dedicated-worker-import-meta.html
