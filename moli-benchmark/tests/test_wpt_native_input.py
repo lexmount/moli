@@ -131,6 +131,24 @@ class NativeInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1]["button"], "none")
         self.assertEqual(events[1]["buttons"], 1)
 
+    async def test_mouse_drag_keeps_held_buttons_until_their_release(self):
+        pointer = Pointer(kind="mouse", x=10, y=20)
+        await self.driver.mouse(pointer, "mouseMoved")
+        await self.driver.mouse(pointer, "mousePressed", 0)
+        await self.driver.mouse(pointer, "mouseMoved")
+        await self.driver.mouse(pointer, "mousePressed", 2)
+        await self.driver.mouse(pointer, "mouseMoved")
+        await self.driver.mouse(pointer, "mouseReleased", 2)
+        await self.driver.mouse(pointer, "mouseMoved")
+        await self.driver.mouse(pointer, "mouseReleased", 0)
+        await self.driver.mouse(pointer, "mouseMoved")
+        self.assertEqual(
+            [(event["button"], event["buttons"]) for event in self.input_events()],
+            [("none", 0), ("left", 1), ("left", 1), ("right", 3),
+             ("right", 3), ("right", 1), ("left", 1), ("left", 0), ("none", 0)],
+        )
+        self.assertEqual(pointer.buttons, [])
+
     async def test_binding_replies_stay_in_their_originating_realm(self):
         def binding(sequence, context, token):
             return SimpleNamespace(sequence=sequence, payload={"params": {
