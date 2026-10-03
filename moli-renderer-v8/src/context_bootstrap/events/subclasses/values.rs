@@ -30,7 +30,7 @@ pub(super) struct CloseInit {
 pub(super) struct CommandInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
-    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1, snapshot_slot = COMMAND_EVENT_COMMAND_SLOT)]
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1)]
     command: webidl::DomString16,
     #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 0, snapshot_slot = COMMAND_EVENT_SOURCE_SLOT)]
     source: Option<v8::Local<'s, v8::Object>>,
@@ -42,10 +42,8 @@ pub(super) struct ToggleInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1)]
-    #[webidl(snapshot_attributes = v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE | v8::PropertyAttribute::DONT_ENUM)]
     new_state: webidl::DomString16,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 0)]
-    #[webidl(snapshot_attributes = v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE | v8::PropertyAttribute::DONT_ENUM)]
     old_state: webidl::DomString16,
     #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 2, snapshot_slot = TOGGLE_EVENT_SOURCE_SLOT)]
     source: Option<v8::Local<'s, v8::Object>>,
