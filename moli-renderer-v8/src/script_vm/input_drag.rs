@@ -6,7 +6,7 @@ use super::input_dispatch::{
 };
 use super::{ActiveDragSession, ScriptVm, input_dispatch_outcome};
 use crate::context_bootstrap::{
-    allowed_drag_drop_effect, prepare_drag_drop_effect, set_drag_drop_effect,
+    DragDataStore, allowed_drag_drop_effect, prepare_drag_drop_effect, set_drag_drop_effect,
 };
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
@@ -77,27 +77,67 @@ fn dispatch_drag(
     position: LayoutPoint,
     buttons: i32,
     modifiers: u8,
-    transfer: &v8::Global<v8::Object>,
+    store: &DragDataStore,
     related: Option<DomHandle>,
 ) -> bool {
-    let transfer = v8::Local::new(scope, transfer);
+    let point = target.root_to_frame.map_point(position);
+    fire_drag_event(
+        scope,
+        runtime,
+        target.handle,
+        event_name,
+        point,
+        buttons,
+        modifiers,
+        store,
+        related,
+    )
+}
+
+/// A native drag event owns one temporary view of the session's data store.
+/// Construct it in the target Document's realm, then retire it after dispatch.
+pub(super) fn fire_drag_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: *mut JsContextHost,
+    target: DomHandle,
+    event_name: &str,
+    position: LayoutPoint,
+    buttons: i32,
+    modifiers: u8,
+    store: &DragDataStore,
+    related: Option<DomHandle>,
+) -> bool {
+    let host = unsafe { &mut *runtime };
+    let Some(context) = host
+        .owner_dispatch_scope_for_node(target)
+        .and_then(|target| {
+            let owner = host.current_window_execution_context_owner(target)?;
+            host.window_execution_context(scope, owner, target)
+                .map(|(_, context)| context)
+        })
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(view) = store.open_event(scope, event_name) else {
+        return false;
+    };
     let related = related
         .and_then(|handle| node_wrapper_from_handle(scope, handle))
         .map(Into::into);
-    let point = target.root_to_frame.map_point(position);
-    construct_drag_event_with_related_target(
+    let allows_default = construct_drag_event_with_related_target(
         scope,
         event_name,
-        f64::from(point.x),
-        f64::from(point.y),
+        f64::from(position.x),
+        f64::from(position.y),
         buttons,
-        transfer.into(),
+        view.object().into(),
         modifiers,
         related,
     )
-    .is_some_and(|event| {
-        dispatch_public_event(scope, runtime, target.handle, event).allows_default()
-    })
+    .is_some_and(|event| dispatch_public_event(scope, runtime, target, event).allows_default());
+    view.finish(scope);
+    allows_default
 }
 
 fn end_native_drag(
@@ -112,7 +152,7 @@ fn end_native_drag(
     let Some(source) = session.native else {
         return;
     };
-    let transfer = v8::Local::new(scope, &session.data_transfer);
+    let transfer = session.data_store.backing_transfer(scope);
     let mut effect = if allow_drop && session.drop_allowed {
         allowed_drag_drop_effect(scope, transfer)
     } else {
@@ -129,7 +169,7 @@ fn end_native_drag(
             position,
             buttons,
             modifiers,
-            &session.data_transfer,
+            &session.data_store,
             None,
         );
         if allows_default && !perform_drop_default_action(scope, runtime, target.handle, transfer) {
@@ -147,7 +187,7 @@ fn end_native_drag(
             position,
             buttons,
             modifiers,
-            &session.data_transfer,
+            &session.data_store,
             None,
         );
     }
@@ -163,7 +203,7 @@ fn end_native_drag(
         position,
         0,
         modifiers,
-        &session.data_transfer,
+        &session.data_store,
         None,
     );
 }
@@ -224,7 +264,7 @@ impl ScriptVm {
                 );
                 finished = true;
             } else if event_name == "mousemove" {
-                let transfer = v8::Local::new(scope, &session.data_transfer);
+                let transfer = session.data_store.backing_transfer(scope);
                 set_drag_drop_effect(scope, transfer, "none");
                 if !dispatch_drag(
                     scope,
@@ -237,7 +277,7 @@ impl ScriptVm {
                     position,
                     buttons,
                     modifiers,
-                    &session.data_transfer,
+                    &session.data_store,
                     None,
                 ) {
                     end_native_drag(scope, runtime, &session, position, 0, modifiers, false);
@@ -257,7 +297,7 @@ impl ScriptVm {
                             position,
                             buttons,
                             modifiers,
-                            &session.data_transfer,
+                            &session.data_store,
                             previous.map(|h| h.handle),
                         );
                     }
@@ -271,7 +311,7 @@ impl ScriptVm {
                             position,
                             buttons,
                             modifiers,
-                            &session.data_transfer,
+                            &session.data_store,
                             hit.map(|h| h.handle),
                         );
                     }
@@ -287,7 +327,7 @@ impl ScriptVm {
                         position,
                         buttons,
                         modifiers,
-                        &session.data_transfer,
+                        &session.data_store,
                         None,
                     ) && allowed_drag_drop_effect(scope, transfer) != "none"
                 } else {
