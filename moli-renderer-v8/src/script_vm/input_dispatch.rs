@@ -12,7 +12,7 @@ use drag_source::dispatch_drag_source_event;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    MouseFrameCapture, MouseHoverBoundary, MouseHoverTarget,
+    HoverBoundary, HoverTarget, MouseFrameCapture,
     mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
@@ -599,10 +599,10 @@ fn dispatch_native_pointer_event<'s>(
     dispatch_public_event(scope, runtime_ptr, target, event)
 }
 
-fn dispatch_pointer_hover_boundary_event(
+pub(super) fn dispatch_pointer_hover_boundary_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    boundary: &MouseHoverBoundary,
+    boundary: &HoverBoundary,
     root_point: moli_layout::LayoutPoint,
     button: i32,
     buttons: i32,
@@ -639,7 +639,7 @@ fn dispatch_pointer_hover_boundary_event(
 fn dispatch_mouse_hover_boundary_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    boundary: &MouseHoverBoundary,
+    boundary: &HoverBoundary,
     root_point: moli_layout::LayoutPoint,
     button: i32,
     buttons: i32,
@@ -1502,9 +1502,6 @@ impl ScriptVm {
             }
             return Ok(input_dispatch_outcome(false));
         };
-        let restarting_pointer_stream = pointer_event_name.is_some()
-            && self.hovered_mouse.is_some()
-            && self._context_host.borrow().mouse_event_target().is_none();
         if pointer_event_name.is_some() {
             self._context_host
                 .borrow_mut()
@@ -1515,22 +1512,20 @@ impl ScriptVm {
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
         let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
-        let hover_boundaries = if tracks_mouse_hover_for_event(event_name) {
-            let current =
-                MouseHoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
-            let boundaries = MouseHoverTarget::boundaries(self.hovered_mouse.as_ref(), &current);
-            self.hovered_mouse = Some(current);
-            boundaries
-        } else {
-            Vec::new()
-        };
-        // A resumed native pointer enters from outside while compatibility mouse
-        // boundaries retain their previous hover ancestry.
-        let restarted_pointer_boundaries = if restarting_pointer_stream {
-            self.hovered_mouse.as_ref()
-                .map(|current| MouseHoverTarget::boundaries(None, current))
-                .unwrap_or_default()
-        } else { Vec::new() };
+        let (pointer_hover_boundaries, mouse_hover_boundaries) =
+            if tracks_mouse_hover_for_event(event_name) {
+                let current =
+                    HoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
+                let pointer_boundaries =
+                    HoverTarget::boundaries(self.hovered_pointers.get(&pointer_id), Some(&current));
+                let mouse_boundaries =
+                    HoverTarget::boundaries(self.hovered_mouse.as_ref(), Some(&current));
+                self.hovered_pointers.insert(pointer_id, current.clone());
+                self.hovered_mouse = Some(current);
+                (pointer_boundaries, mouse_boundaries)
+            } else {
+                (Vec::new(), Vec::new())
+            };
         if event_name == "mousemove" && buttons != 1 {
             self.pending_drag_gesture = None;
         }
@@ -1583,6 +1578,7 @@ impl ScriptVm {
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
         let intercepted_drag = Cell::new(None);
         let mouse_down_allows_drag = Cell::new(true);
+        let native_drag_started = Cell::new(false);
 
         let mut suppress_compat_mouse_events = self.suppress_compat_mouse_events;
         if event_name == "mousemove" && buttons == 0 {
@@ -1608,7 +1604,7 @@ impl ScriptVm {
                     .map(|(source, data)| (source, data, start_coordinates))
             });
             let mut pointer_dispatch_handle = handle;
-            for boundary in if restarting_pointer_stream { &restarted_pointer_boundaries } else { &hover_boundaries } {
+            for boundary in &pointer_hover_boundaries {
                 dispatch_pointer_hover_boundary_event(
                     scope,
                     runtime_ptr,
@@ -1661,7 +1657,7 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
                 }
             }
-            for boundary in &hover_boundaries {
+            for boundary in &mouse_hover_boundaries {
                 dispatch_mouse_hover_boundary_event(
                     scope,
                     runtime_ptr,
@@ -1885,6 +1881,7 @@ impl ScriptVm {
                     // Preserve ScriptVm's legacy mouse hover cache while
                     // marking this suppressed pointer stream as outside.
                     unsafe { &mut *runtime_ptr }.clear_mouse_input_state();
+                    native_drag_started.set(true);
                     if intercept_drags {
                         intercepted_drag.set(Some(RendererInterceptedDrag {
                             items,
@@ -2045,6 +2042,10 @@ impl ScriptVm {
             }
             Ok(input_dispatch_outcome(true))
         });
+        if native_drag_started.get() {
+            self.hovered_pointers.remove(&pointer_id);
+            self.mouse_frame_captures.remove(&pointer_id);
+        }
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         if !mouse_down_allows_drag.get() {
             self.pending_drag_gesture = None;

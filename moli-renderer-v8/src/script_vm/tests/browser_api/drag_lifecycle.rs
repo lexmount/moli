@@ -98,6 +98,109 @@ fn native_drag_lifecycle_suppresses_input_and_releases_capture() {
 }
 
 #[test]
+fn native_drag_keeps_legacy_mouse_hover_separate_from_pointer_suppression() {
+    for context in [
+        "root",
+        "child",
+        "nested",
+        "shadow-open",
+        "shadow-closed",
+        "slotted",
+    ] {
+        for (pointer_type, pointer_id) in [("mouse", 17), ("pen", 5)] {
+            for capture in [false, true] {
+                for mode in ["cancel", "drop", "escape"] {
+                    for poison in ["ordinary", "getter"] {
+                        let mut vm = new_rendered_test_vm(
+                            "https://drag-hover.test/",
+                            "<html><body></body></html>",
+                        );
+                        vm.eval(&format!("{};globalThis.__dragHover=__installDragHoverProbe('{context}','{pointer_type}',{capture},'{mode}','{poison}',15);'ready'", include_str!("drag_hover_state.js"))).unwrap();
+                        vm.publish_layout_for_test().unwrap();
+                        for (phase, event, x, button, buttons) in [
+                            ("hover", "mousemove", 80.0, -1, 0),
+                            ("down", "mousedown", 80.0, 0, 1),
+                            ("start", "mousemove", 100.0, 0, 1),
+                            ("drag", "mousemove", 520.0, 0, 1),
+                        ] {
+                            vm.eval(&format!("__dragHover.prepare('{phase}');'ready'"))
+                                .unwrap();
+                            dispatch_drag_lifecycle_input(
+                                &mut vm,
+                                pointer_type,
+                                pointer_id,
+                                (phase, event, x, button, buttons, 15),
+                            );
+                        }
+                        if mode == "escape" {
+                            vm.dispatch_key_event(
+                                "keydown", "Escape", "Escape", "", 0, false, false,
+                            )
+                            .unwrap();
+                        }
+                        for (phase, event, x, button) in [
+                            ("up", "mouseup", 520.0, 0),
+                            ("after", "mousemove", 540.0, -1),
+                        ] {
+                            vm.eval(&format!("__dragHover.prepare('{phase}');'ready'"))
+                                .unwrap();
+                            dispatch_drag_lifecycle_input(
+                                &mut vm,
+                                pointer_type,
+                                pointer_id,
+                                (phase, event, x, button, 0, 15),
+                            );
+                        }
+                        assert_eq!(vm.eval("globalThis.__hoverFinished=__dragHover.finish();__hoverFinished.complete").unwrap(), "true",
+                            "{context}/{pointer_type}/{capture}/{mode}/{poison}: {}", vm.eval("JSON.stringify(__hoverFinished)").unwrap());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_hover_keeps_mouse_and_pen_pointer_targets_independent() {
+    let mut vm = new_rendered_test_vm("https://hover-pointers.test/", "<html><body></body></html>");
+    vm.eval("document.body.innerHTML='<div id=a style=\"position:fixed;left:40px;top:40px;width:140px;height:140px\"></div><div id=b style=\"position:fixed;left:300px;top:40px;width:140px;height:140px\"></div>'; globalThis.pointerRows=[]; globalThis.mouseRows=[]; for(const node of document.querySelectorAll('div')) { for(const type of ['pointerover','pointerenter','pointerout','pointerleave','mouseover','mouseenter','mouseout','mouseleave']) { node.addEventListener(type,e=>{ e.stopPropagation(); const row=[e.type,e.target.id,e.relatedTarget?.id||null]; if(e.type.startsWith('pointer')) pointerRows.push([e.pointerType,...row]); else mouseRows.push(row); }); }} 'ready'").unwrap();
+    vm.publish_layout_for_test().unwrap();
+    for (pointer_type, pointer_id, x) in [
+        ("mouse", 17, 80.0),
+        ("pen", 5, 320.0),
+        ("mouse", 17, 80.0),
+        ("pen", 5, 320.0),
+    ] {
+        dispatch_drag_lifecycle_input(
+            &mut vm,
+            pointer_type,
+            pointer_id,
+            ("hover", "mousemove", x, -1, 0, 0),
+        );
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(pointerRows)").unwrap(),
+        "[[\"mouse\",\"pointerover\",\"a\",null],[\"mouse\",\"pointerenter\",\"a\",null],[\"pen\",\"pointerover\",\"b\",null],[\"pen\",\"pointerenter\",\"b\",null]]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(mouseRows.slice(-4))").unwrap(),
+        "[[\"mouseout\",\"a\",\"b\"],[\"mouseleave\",\"a\",\"b\"],[\"mouseover\",\"b\",\"a\"],[\"mouseenter\",\"b\",\"a\"]]"
+    );
+    vm.eval("pointerRows=[];mouseRows=[];'ready'").unwrap();
+    dispatch_drag_lifecycle_input(
+        &mut vm,
+        "mouse",
+        17,
+        ("hover", "mousemove", 320.0, -1, 0, 0),
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(pointerRows)").unwrap(),
+        "[[\"mouse\",\"pointerout\",\"a\",\"b\"],[\"mouse\",\"pointerleave\",\"a\",\"b\"],[\"mouse\",\"pointerover\",\"b\",\"a\"],[\"mouse\",\"pointerenter\",\"b\",\"a\"]]"
+    );
+    assert_eq!(vm.eval("JSON.stringify(mouseRows)").unwrap(), "[]");
+}
+
+#[test]
 fn native_drop_uses_the_drop_handlers_effect_and_suppresses_text_input() {
     let mut vm = new_rendered_test_vm("https://drag-effect.test/", "<html><body></body></html>");
     vm.eval(&format!(
