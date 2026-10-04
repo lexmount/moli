@@ -79,94 +79,102 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .expect("loaded page should serialize HTML")
 }
 
-async fn load_same_context_loaded_background_runtime_owner_async(
-    ctx: &mut TestContext,
-    browser_context_id: &str,
-    active_target_id: &str,
-    active_html: &str,
-    background_url: &str,
+fn load_same_context_loaded_background_runtime_owner_async<'a>(
+    ctx: &'a mut TestContext,
+    browser_context_id: &'a str,
+    active_target_id: &'a str,
+    active_html: &'a str,
+    background_url: &'a str,
     command_id_base: u64,
-) -> LoadedBackgroundRuntimeOwner {
-    load_bc_with_titled_page_async(ctx, browser_context_id, active_target_id, active_html).await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+) -> impl std::future::Future<Output = LoadedBackgroundRuntimeOwner> + 'a {
+    // Keep the full navigation setup state on the heap instead of embedding it
+    // in every caller's future and its debug-build stack temporaries.
+    Box::pin(async move {
+        load_bc_with_titled_page_async(ctx, browser_context_id, active_target_id, active_html)
+            .await;
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active");
 
-    ctx.process_async(json!({
-        "id": command_id_base,
-        "method": "Target.setAutoAttach",
-        "params": { "autoAttach": true, "waitForDebuggerOnStart": false }
-    }))
-    .await;
-    ctx.expect_result(command_id_base, json!({}), None);
+        ctx.process_async(json!({
+            "id": command_id_base,
+            "method": "Target.setAutoAttach",
+            "params": { "autoAttach": true, "waitForDebuggerOnStart": false }
+        }))
+        .await;
+        ctx.expect_result(command_id_base, json!({}), None);
 
-    ctx.process_async(json!({
-        "id": command_id_base + 1,
-        "method": "Target.createTarget",
-        "params": {
-            "background": true, "browserContextId": browser_context_id, "url": "about:blank#second"}
-    }))
-    .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    let attached = ctx.take_one();
-    assert_eq!(attached["method"], "Target.attachedToTarget");
-    let second_session_id = attached["params"]["sessionId"]
-        .as_str()
-        .expect("second target session id")
-        .to_owned();
-    ctx.expect_result(
-        command_id_base + 1,
-        json!({ "targetId": second_target_id }),
-        None,
-    );
+        ctx.process_async(json!({
+            "id": command_id_base + 1,
+            "method": "Target.createTarget",
+            "params": {
+                "background": true,
+                "browserContextId": browser_context_id,
+                "url": "about:blank#second"
+            }
+        }))
+        .await;
+        let created = ctx.take_one();
+        assert_eq!(created["method"], "Target.targetCreated");
+        let second_target_id = created["params"]["targetInfo"]["targetId"]
+            .as_str()
+            .expect("second target id")
+            .to_owned();
+        let attached = ctx.take_one();
+        assert_eq!(attached["method"], "Target.attachedToTarget");
+        let second_session_id = attached["params"]["sessionId"]
+            .as_str()
+            .expect("second target session id")
+            .to_owned();
+        ctx.expect_result(
+            command_id_base + 1,
+            json!({ "targetId": second_target_id }),
+            None,
+        );
 
-    ctx.process_async(json!({
-        "id": command_id_base + 2,
-        "method": "Target.activateTarget",
-        "params": { "targetId": second_target_id }
-    }))
-    .await;
-    ctx.expect_result(command_id_base + 2, json!({}), None);
+        ctx.process_async(json!({
+            "id": command_id_base + 2,
+            "method": "Target.activateTarget",
+            "params": { "targetId": second_target_id }
+        }))
+        .await;
+        ctx.expect_result(command_id_base + 2, json!({}), None);
 
-    ctx.process_async(json!({
-        "id": command_id_base + 3,
-        "method": "Page.navigate",
-        "sessionId": second_session_id,
-        "params": { "url": background_url }
-    }))
-    .await;
-    let _ = take_response_by_id(ctx, command_id_base + 3);
-    ctx.take_all();
+        ctx.process_async(json!({
+            "id": command_id_base + 3,
+            "method": "Page.navigate",
+            "sessionId": second_session_id,
+            "params": { "url": background_url }
+        }))
+        .await;
+        let _ = take_response_by_id(ctx, command_id_base + 3);
+        ctx.take_all();
 
-    ctx.process_async(json!({
-        "id": command_id_base + 4,
-        "method": "Target.activateTarget",
-        "params": { "targetId": active_target_id }
-    }))
-    .await;
-    ctx.expect_result(command_id_base + 4, json!({}), None);
-    ctx.take_all();
+        ctx.process_async(json!({
+            "id": command_id_base + 4,
+            "method": "Target.activateTarget",
+            "params": { "targetId": active_target_id }
+        }))
+        .await;
+        ctx.expect_result(command_id_base + 4, json!({}), None);
+        ctx.take_all();
 
-    ctx.process_async(json!({
-        "id": command_id_base + 5,
-        "method": "Runtime.enable",
-        "sessionId": second_session_id
-    }))
-    .await;
-    let _ = take_response_by_id(ctx, command_id_base + 5);
-    ctx.take_all();
+        ctx.process_async(json!({
+            "id": command_id_base + 5,
+            "method": "Runtime.enable",
+            "sessionId": second_session_id
+        }))
+        .await;
+        let _ = take_response_by_id(ctx, command_id_base + 5);
+        ctx.take_all();
 
-    LoadedBackgroundRuntimeOwner {
-        target_id: second_target_id,
-        session_id: second_session_id,
-    }
+        LoadedBackgroundRuntimeOwner {
+            target_id: second_target_id,
+            session_id: second_session_id,
+        }
+    })
 }
 
 #[path = "tests_background_staging/background_state.rs"]
