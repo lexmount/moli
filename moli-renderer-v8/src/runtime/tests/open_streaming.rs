@@ -52,6 +52,9 @@ async fn location_replace_commits_while_source_phase_one_stream_remains_open() {
     tokio::time::timeout(Duration::from_secs(5), source.body_tx.closed())
         .await
         .expect("committing the replacement must release the source body receiver");
+    tokio::time::timeout(Duration::from_secs(5), source.completion_tx.closed())
+        .await
+        .expect("committing the replacement must release the source completion receiver");
     assert!(
         source.completion_tx.send(Ok(())).is_err(),
         "the discarded phase-one bridge must release its completion receiver"
@@ -109,7 +112,7 @@ async fn assert_post_commit_panic_retires_open_source_stream(injection_header: &
         Duration::ZERO,
     )
     .await;
-    let source = OpenStreamingPage::create(&base_url, SELF_REPLACE_WHILE_PARSING_HTML).await;
+    let mut source = OpenStreamingPage::create(&base_url, SELF_REPLACE_WHILE_PARSING_HTML).await;
     tokio::time::timeout(Duration::from_secs(5), server)
         .await
         .expect("replacement response should reach the commit boundary")
@@ -120,6 +123,11 @@ async fn assert_post_commit_panic_retires_open_source_stream(injection_header: &
     tokio::time::timeout(Duration::from_secs(5), source.body_tx.closed())
         .await
         .expect("post-detach panic must retire the source body receiver");
+    // Body and completion receivers are dropped separately on another thread.
+    // The body close notification does not synchronize completion retirement.
+    tokio::time::timeout(Duration::from_secs(5), source.completion_tx.closed())
+        .await
+        .expect("post-detach panic must retire the source completion receiver");
     assert!(
         source.completion_tx.send(Ok(())).is_err(),
         "post-detach retirement must release the source completion receiver"
