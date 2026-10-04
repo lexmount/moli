@@ -10,6 +10,7 @@ use crate::{native_bridge::throw_dom_exception, util::v8str, web_api_interfaces}
 
 mod base64url;
 mod json_options;
+mod signals;
 mod value;
 
 #[derive(WebApiFunctionTemplate)]
@@ -46,6 +47,12 @@ struct PublicKeyCredentialDeclaration {
     parse_creation_options_from_json: (),
     #[webapi(static_method = "parseRequestOptionsFromJSON", length = 1, callback = json_options::parse_request)]
     parse_request_options_from_json: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::unknown_credential)]
+    signal_unknown_credential: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::all_accepted_credentials)]
+    signal_all_accepted_credentials: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::current_user_details)]
+    signal_current_user_details: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

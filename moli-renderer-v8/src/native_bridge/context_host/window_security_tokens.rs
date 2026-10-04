@@ -153,6 +153,10 @@ impl WindowSecurityOrigin {
         self.current_origin().serialized_origin()
     }
 
+    pub(crate) fn effective_domain(&self) -> Option<String> {
+        self.current_origin().effective_domain()
+    }
+
     pub(crate) fn for_context(context: v8::Local<'_, v8::Context>) -> Option<Self> {
         context
             .get_slot::<WindowContextSecurityOrigin>()
@@ -850,6 +854,23 @@ pub(crate) enum WindowAccessOrigin {
 }
 
 impl WindowAccessOrigin {
+    fn effective_domain(&self) -> Option<String> {
+        let Self::Tuple {
+            serialized_origin,
+            document_domain,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        document_domain.clone().or_else(|| {
+            url::Url::parse(serialized_origin)
+                .ok()?
+                .host_str()
+                .map(str::to_owned)
+        })
+    }
+
     pub(in crate::native_bridge::context_host) fn opaque(
         identity: WindowExecutionContextOwner,
     ) -> Self {
@@ -1094,6 +1115,34 @@ mod tests {
         assert!(original.has_same_origin(&original_with_domain));
         assert!(!original_with_domain.has_same_origin(&relaxed_peer));
         assert!(original_with_domain.can_access(&relaxed_peer));
+    }
+
+    #[test]
+    fn effective_domain_uses_the_origins_domain_without_changing_its_serialization() {
+        let original = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            None,
+        )
+        .expect("tuple origin");
+        assert_eq!(
+            original.effective_domain().as_deref(),
+            Some("www.example.test")
+        );
+        let relaxed = WindowAccessOrigin::from_serialized_origin(
+            original.serialized_origin(),
+            Some("example.test".to_owned()),
+        )
+        .expect("relaxed tuple origin");
+        assert_eq!(relaxed.effective_domain().as_deref(), Some("example.test"));
+        assert_eq!(relaxed.serialized_origin(), original.serialized_origin());
+        assert_eq!(
+            WindowAccessOrigin::opaque_without_identity().effective_domain(),
+            None
+        );
+        let ipv6 =
+            WindowAccessOrigin::from_serialized_origin("https://[::1]:8443".to_owned(), None)
+                .expect("IP origin");
+        assert_eq!(ipv6.effective_domain().as_deref(), Some("[::1]"));
     }
 
     #[test]

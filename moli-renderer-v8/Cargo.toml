@@ -117,6 +117,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
+idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }
 widestring = "1.2.1"
 style_traits = { package = "stylo_traits", version = "0.20" }

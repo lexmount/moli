@@ -3080,6 +3080,7 @@ dependencies = [
  "http",
  "httpdate",
  "icu_segmenter",
+ "idna",
  "indexmap",
  "kurbo",
  "markup5ever",
