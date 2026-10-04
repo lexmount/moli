@@ -21,6 +21,11 @@ pub(crate) fn note_mutation(
     dom: &DomHost,
     effects: &DomMutationEffects,
 ) {
+    let mut candidates = HashMap::new();
+    let mut affected = HashMap::new();
+    let mut mark = |target, kind| {
+        collect_affected_forms(dom, &mut candidates, &mut affected, target, kind);
+    };
     let removed_roots = effects
         .style()
         .child_list_mutations()
@@ -44,7 +49,7 @@ pub(crate) fn note_mutation(
         } else {
             FormMutationScope::Target
         };
-        mark_affected_forms(host, dom, target, scope);
+        mark(target, scope);
     }
     for mutation in effects.style().child_list_mutations() {
         let scope = if dom.is_html_element_named(mutation.target(), "fieldset")
@@ -58,27 +63,22 @@ pub(crate) fn note_mutation(
         } else {
             FormMutationScope::Target
         };
-        mark_affected_forms(host, dom, mutation.target(), scope);
+        mark(mutation.target(), scope);
         for node in mutation.added_nodes() {
-            mark_affected_forms(host, dom, *node, FormMutationScope::Subtree);
+            mark(*node, FormMutationScope::Subtree);
         }
         for node in mutation.removed_nodes() {
             // Adoption has already changed the removed subtree's owner. Its
             // former container still identifies the document whose external
             // control associations must be refreshed.
             if dom.owner_document_handle(*node) != dom.owner_document_handle(mutation.target()) {
-                mark_affected_forms(
-                    host,
-                    dom,
-                    mutation.target(),
-                    FormMutationScope::Associations,
-                );
+                mark(mutation.target(), FormMutationScope::Associations);
             }
-            mark_affected_forms(host, dom, *node, FormMutationScope::RemovedSubtree);
+            mark(*node, FormMutationScope::RemovedSubtree);
         }
     }
     for target in effects.style().character_data_mutations() {
-        mark_affected_forms(host, dom, *target, FormMutationScope::Target);
+        mark(*target, FormMutationScope::Target);
     }
     let invalid = host
         .native_bridge()
@@ -101,14 +101,22 @@ pub(crate) fn note_mutation(
         .iter()
         .map(|(_, _, handle)| *handle)
         .collect::<std::collections::HashSet<_>>();
-    for (document, name, handle) in invalid {
-        let (frame_id, tree, origin) = {
-            let store = &mut host.native_bridge_mut().web_mcp;
-            store
+    for (document, _, handle) in &invalid {
+        affected.entry(*document).or_default().insert(*handle);
+    }
+    for (document, forms) in affected {
+        if !forms.is_empty() {
+            host.native_bridge_mut()
+                .web_mcp
                 .dirty_forms
                 .entry(document)
                 .or_default()
-                .insert(handle);
+                .extend(forms);
+        }
+    }
+    for (document, name, _) in invalid {
+        let (frame_id, tree, origin) = {
+            let store = &mut host.native_bridge_mut().web_mcp;
             let entry = store.documents.get_mut(&document).expect("form document");
             entry.tools.remove(&name);
             (
@@ -160,18 +168,6 @@ fn form_registration_is_valid(dom: &DomHost, handle: DomHandle) -> bool {
             })
 }
 
-fn contains_tool_form(dom: &DomHost, root: DomHandle) -> bool {
-    dom.html_elements_by_local_name_in_shadow_including_subtree(root, "form")
-        .into_iter()
-        .any(|handle| {
-            dom.node(handle)
-                .and_then(Node::as_element)
-                .is_some_and(|element| {
-                    element.has_attribute("toolname") && element.has_attribute("tooldescription")
-                })
-        })
-}
-
 enum FormMutationScope {
     Target,
     Subtree,
@@ -179,9 +175,10 @@ enum FormMutationScope {
     Associations,
 }
 
-fn mark_affected_forms(
-    host: &mut JsContextHost,
+fn collect_affected_forms(
     dom: &DomHost,
+    candidates: &mut HashMap<DomHandle, Vec<DomHandle>>,
+    affected: &mut HashMap<DomHandle, HashSet<DomHandle>>,
     target: DomHandle,
     scope: FormMutationScope,
 ) {
@@ -193,10 +190,16 @@ fn mark_affected_forms(
     };
     // Discovery is independent of successful registration: name-conflicting
     // candidates still need to retry when their controls change.
-    if !contains_tool_form(dom, document) {
+    let candidates = candidates.entry(document).or_insert_with(|| {
+        form_handles(dom, document)
+            .into_iter()
+            .filter(|form| form_registration_is_valid(dom, *form))
+            .collect()
+    });
+    if candidates.is_empty() {
         return;
     }
-    let mut affected = HashSet::new();
+    let affected = affected.entry(document).or_default();
     let mut all = matches!(scope, FormMutationScope::Associations);
     let mut mark_owner = |handle| {
         if dom.is_html_element_named(handle, "form") && form_registration_is_valid(dom, handle) {
@@ -250,19 +253,7 @@ fn mark_affected_forms(
         }
     }
     if all {
-        affected.extend(
-            dom.html_elements_by_local_name_in_shadow_including_subtree(document, "form")
-                .into_iter()
-                .filter(|form| form_registration_is_valid(dom, *form)),
-        );
-    }
-    if !affected.is_empty() {
-        host.native_bridge_mut()
-            .web_mcp
-            .dirty_forms
-            .entry(document)
-            .or_default()
-            .extend(affected);
+        affected.extend(candidates.iter().copied());
     }
 }
 
