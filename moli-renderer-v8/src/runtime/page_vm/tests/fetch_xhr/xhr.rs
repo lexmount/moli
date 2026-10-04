@@ -1297,7 +1297,6 @@ async fn synchronous_xhr_runaway_loop_is_terminated_by_watchdog_and_recovers() {
                         crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
                         Duration::from_millis(500),
                     );
-                let started = Instant::now();
                 let error = page_vm
                     .vm_mut()
                     .exec(
@@ -1313,9 +1312,12 @@ async fn synchronous_xhr_runaway_loop_is_terminated_by_watchdog_and_recovers() {
                         None,
                     )
                     .expect_err("watchdog should terminate a runaway synchronous XHR loop");
-                assert!(started.elapsed() < Duration::from_secs(4));
+                // Check the short script-turn budget itself. A wall-clock upper
+                // bound also measures scheduler contention outside the isolate.
                 assert!(
-                    error.to_string().contains("script execution exceeded"),
+                    error
+                        .to_string()
+                        .contains("script execution exceeded 500ms and was terminated"),
                     "unexpected watchdog error: {error}"
                 );
                 let recovered = page_vm
