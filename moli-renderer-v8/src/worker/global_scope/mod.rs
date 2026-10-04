@@ -56,6 +56,7 @@ use crate::context_bootstrap::{
     simple_object_event_set_ordered_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
+use crate::network_host::xhr_has_upload_listeners;
 use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,

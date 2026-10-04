@@ -213,7 +213,9 @@ fn spawn_blocking_redirect_loop_http_server(
 ) -> (String, std::thread::JoinHandle<()>) {
     use std::io::Write;
 
-    const REDIRECT_LOOP_REQUESTS: usize = 11;
+    // Upload listeners keep synchronous XHR on the CORS redirect path, which
+    // follows at most 20 redirects before rejecting the next redirect response.
+    const REDIRECT_LOOP_REQUESTS: usize = 21;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind blocking redirect-loop HTTP server");
     let addr = listener
@@ -222,10 +224,27 @@ fn spawn_blocking_redirect_loop_http_server(
     let server = std::thread::Builder::new()
         .name("sync-xhr-redirect-loop-server".to_owned())
         .spawn(move || {
-            for _ in 0..REDIRECT_LOOP_REQUESTS {
-                let (mut stream, _) = listener
-                    .accept()
-                    .expect("accept blocking redirect-loop request");
+            listener
+                .set_nonblocking(true)
+                .expect("bound redirect-loop fixture acceptance");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            for received in 0..REDIRECT_LOOP_REQUESTS {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "redirect loop stopped after {received} of {REDIRECT_LOOP_REQUESTS} requests"
+                            );
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("accept blocking redirect-loop request: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("bound redirect-loop request headers");
                 let request = read_blocking_http_request_head(&mut stream);
                 assert!(request.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
                 let response = format!(
@@ -258,7 +277,24 @@ fn spawn_blocking_xhr_response_server(
             let (mut stream, _) = listener
                 .accept()
                 .expect("accept blocking XHR response request");
-            let request = read_blocking_http_request_head(&mut stream);
+            let mut request = read_blocking_http_request_head(&mut stream);
+            if request.starts_with(&format!("OPTIONS {path} HTTP/1.1\r\n")) {
+                // The failure probes observe upload events too. Authorize their
+                // preflight so each test still checks the actual GET response.
+                let lower = request.to_ascii_lowercase();
+                assert!(lower.contains("origin: http://source.test\r\n"));
+                assert!(lower.contains("access-control-request-method: get\r\n"));
+                assert!(!lower.contains("access-control-request-headers:"));
+                stream.write_all(concat!(
+                    "HTTP/1.1 204 No Content\r\n",
+                    "Access-Control-Allow-Origin: http://source.test\r\n",
+                    "Access-Control-Allow-Credentials: true\r\n",
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n",
+                ).as_bytes()).expect("authorize blocking XHR preflight");
+                drop(stream);
+                (stream, _) = listener.accept().expect("accept preflighted GET request");
+                request = read_blocking_http_request_head(&mut stream);
+            }
             assert!(request.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
             let response_headers = response_headers
                 .into_iter()

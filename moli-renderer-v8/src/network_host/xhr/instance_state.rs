@@ -389,6 +389,19 @@ pub(crate) fn set_xhr_state_value(
     set_private_value(scope, state, key, value);
 }
 
+pub(crate) fn xhr_has_upload_listeners(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> bool {
+    xhr_upload_object(scope, xhr).is_some_and(|upload| {
+        crate::context_bootstrap::simple_object_has_event_listeners(
+            scope,
+            upload,
+            super::XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+        )
+    })
+}
+
 pub(crate) fn xhr_upload_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     xhr: v8::Local<'_, v8::Object>,

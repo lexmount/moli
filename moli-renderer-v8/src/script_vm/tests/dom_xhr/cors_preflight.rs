@@ -7,6 +7,7 @@ struct PreflightCase {
     headers: &'static [(&'static str, &'static str)],
     permissions: &'static [(&'static str, &'static str)],
     credentials: bool,
+    upload_listener: bool,
     allowed: bool,
 }
 
@@ -17,6 +18,7 @@ fn permission_cases() -> Vec<PreflightCase> {
         headers: &[("X-Test", "1")],
         permissions: &[],
         credentials: false,
+        upload_listener: false,
         allowed: true,
     };
     vec![
@@ -176,12 +178,52 @@ fn permission_cases() -> Vec<PreflightCase> {
             allowed: false,
             ..DEFAULT
         },
+        PreflightCase {
+            label: "upload-flag-with-missing-method-list",
+            headers: &[],
+            upload_listener: true,
+            ..DEFAULT
+        },
+        PreflightCase {
+            label: "upload-flag-with-empty-method-list",
+            headers: &[],
+            permissions: &[("Access-Control-Allow-Methods", "")],
+            upload_listener: true,
+            allowed: false,
+            ..DEFAULT
+        },
+        PreflightCase {
+            label: "credentialed-upload-with-missing-method-list",
+            headers: &[],
+            upload_listener: true,
+            credentials: true,
+            ..DEFAULT
+        },
+        PreflightCase {
+            label: "upload-flag-still-requires-header-permission",
+            upload_listener: true,
+            allowed: false,
+            ..DEFAULT
+        },
+        PreflightCase {
+            label: "upload-flag-with-different-method-list",
+            headers: &[],
+            permissions: &[("Access-Control-Allow-Methods", "GET")],
+            upload_listener: true,
+            allowed: false,
+            ..DEFAULT
+        },
     ]
 }
 
 async fn check_preflight_permissions(worker: bool, apis: &[&str]) {
-    for api in apis {
-        let cases = std::sync::Arc::new(permission_cases());
+    for &api in apis {
+        let cases = std::sync::Arc::new(
+            permission_cases()
+                .into_iter()
+                .filter(|case| api != "fetch" || !case.upload_listener)
+                .collect::<Vec<_>>(),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/", listener.local_addr().unwrap());
         let server_cases = cases.clone();
@@ -248,7 +290,7 @@ async fn check_preflight_permissions(worker: bool, apis: &[&str]) {
             .map(|case| {
                 serde_json::json!({
                     "label": case.label, "method": case.method, "headers": case.headers,
-                    "credentials": case.credentials,
+                    "credentials": case.credentials, "upload": case.upload_listener,
                 })
             })
             .collect::<Vec<_>>();
@@ -271,6 +313,7 @@ async fn check_preflight_permissions(worker: bool, apis: &[&str]) {
                         xhr.open(item.method, url, api !== 'sync-xhr');
                         xhr.withCredentials = item.credentials;
                         for (const [name, value] of item.headers) xhr.setRequestHeader(name, value);
+                        if (item.upload) xhr.upload.onprogress = () => {{}};
                         try {{
                             xhr.send('payload');
                             if (api !== 'sync-xhr') await done;

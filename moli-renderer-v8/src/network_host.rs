@@ -181,6 +181,7 @@ pub(in crate::network_host) use self::url_helpers::merge_subresource_request_hea
 pub(crate) use self::url_helpers::{ResolveContextUrlError, resolve_context_url};
 #[cfg(test)]
 pub(crate) use self::xhr::prepare_xhr_send_body;
+pub(crate) use self::xhr::xhr_has_upload_listeners;
 pub(crate) use self::xhr::{
     PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT,

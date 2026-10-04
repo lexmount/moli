@@ -325,6 +325,7 @@ fn send_synchronous_network_xhr(
     .with_initiator_url(&prepared.document_url)
     .with_request_origin(prepared.request_origin.clone())
     .with_credentials_mode(prepared.credentials_mode)
+    .with_use_cors_preflight(prepared.use_cors_preflight)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
