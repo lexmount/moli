@@ -210,6 +210,18 @@ impl NativeDom {
         self.document_node_id
     }
 
+    /// Admit a new active Document without reusing any retained node handles.
+    pub(crate) fn replace_main_document(&mut self, document: &Document) -> NativeNodeId {
+        let handle = self.create_node(
+            NodeData::Document(Box::new(document.clone())),
+            None,
+            true,
+            true,
+        );
+        self.document_node_id = handle;
+        handle
+    }
+
     pub fn final_url(&self) -> Option<&url::Url> {
         self.document().map(Document::url)
     }

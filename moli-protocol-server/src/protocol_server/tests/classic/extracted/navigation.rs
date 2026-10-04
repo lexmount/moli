@@ -409,13 +409,17 @@ async fn webdriver_classic_chromium_xml_encoding_scenarios() {
     let session_id = session["value"]["sessionId"].as_str().unwrap();
     for (name, mime, _, encoding, expected, namespace) in cases {
         for prefix in ["", "parent/"] {
-            let navigated = classic_request_json_with_body(
-                app.clone(),
-                Method::POST,
-                &format!("/session/{session_id}/url"),
-                json!({"url":format!("http://{addr}/{prefix}{name}")}),
+            let navigated = tokio::time::timeout(
+                Duration::from_secs(10),
+                classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/url"),
+                    json!({"url":format!("http://{addr}/{prefix}{name}")}),
+                ),
             )
-            .await;
+            .await
+            .unwrap_or_else(|_| panic!("XML navigation timed out: {prefix}{name}"));
             assert_eq!(navigated, json!({"value":null}), "{prefix}{name}");
             let observed = classic_request_json_with_body(
                 app.clone(),

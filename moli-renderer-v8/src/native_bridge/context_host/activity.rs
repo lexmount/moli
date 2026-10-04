@@ -46,6 +46,36 @@ impl JsContextHost {
     ) {
         if self.ordinary_page_turn_navigation_handoff_active {
             self.top_level_navigation_handoff_tx.send(handoff);
+        } else {
+            self.enqueue_related_page_turn_completion();
+        }
+    }
+
+    fn enqueue_related_page_turn_completion(&self) {
+        if self.command_turn_output.is_none()
+            && !self.ordinary_page_turn_navigation_handoff_active
+            && let Some(environment) = self.page_script_environment()
+        {
+            environment.enqueue_related_page_turn_completion();
+        }
+    }
+
+    pub(crate) fn finish_related_page_turn_completion(&self) {
+        if self.command_turn_output.is_some()
+            || self.ordinary_page_turn_navigation_handoff_active
+            || self.page_script_environment().is_none()
+            || !self
+                .output_journal
+                .as_ref()
+                .is_some_and(|journal| journal.transport_is_bound())
+        {
+            // Initial auxiliary Documents retain their records and pending
+            // navigation until target adoption binds the output transport.
+            return;
+        }
+        self.publish_live_turn_output_prefix();
+        if let Some(handoff) = self.pending_location_navigation_handoff() {
+            self.top_level_navigation_handoff_tx.send(handoff);
         }
     }
 
@@ -120,6 +150,7 @@ impl JsContextHost {
             causal_command,
             observation,
         ));
+        self.enqueue_related_page_turn_completion();
         true
     }
 
@@ -147,6 +178,7 @@ impl JsContextHost {
             return false;
         };
         output_journal.append_records(records);
+        self.enqueue_related_page_turn_completion();
         true
     }
 
@@ -173,6 +205,7 @@ impl JsContextHost {
             causal_command,
             action,
         ));
+        self.enqueue_related_page_turn_completion();
         true
     }
 

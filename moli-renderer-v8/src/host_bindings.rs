@@ -302,8 +302,19 @@ fn host_lightweight_popup_id_for_object_callback(
         rv.set_null();
         return;
     };
-    let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, object)
-    else {
+    let popup_id =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, object).or_else(|| {
+            let context = object.get_creation_context(scope)?;
+            context.get_slot::<crate::util::MainDefaultWindowContext>()?;
+            if object != context.global(scope) {
+                return None;
+            }
+            let host = crate::util::context_host_ptr_from_context_slot(context)?;
+            unsafe { &*host }
+                .auxiliary_window()
+                .map(|window| window.id())
+        });
+    let Some(popup_id) = popup_id else {
         rv.set_null();
         return;
     };

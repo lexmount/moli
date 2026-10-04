@@ -1156,17 +1156,12 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
             Arc<tokio::sync::Semaphore>,
         )>,
     ) -> impl IntoResponse {
-        // The opener's lightweight WindowProxy facade starts its mirrored
-        // load before the concrete popup action can reach protocol. Let that
-        // renderer-local request finish; gate the second request, which is the
-        // real attached target navigation whose lifetime this test covers.
+        // The attached target owns the response shared with the opener's
+        // WindowProxy. Gate that one request while attaching the session.
         let request_index = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if request_index == 0 {
-            return opener().await;
-        }
         assert_eq!(
-            request_index, 1,
-            "popup URL must have exactly two load owners"
+            request_index, 0,
+            "popup URL must have exactly one load owner"
         );
         request_started.add_permits(1);
         let permit = response_release
@@ -1858,6 +1853,44 @@ async fn call_function_on_window_open_self_navigates_current_target_without_popu
         browser_context.active_target_id(),
         Some("TID-call-opener-self")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_initial_navigation_replaces_internal_blank_history_entry() {
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new().run_until(async {
+        load_bc_with_titled_page_async(&mut ctx, "BID-popup-history", "TID-opener", "opener").await;
+        ctx.process_async(json!({
+            "id": 1, "method": "Runtime.evaluate",
+            "params": {"expression": "window.open('data:text/html,<title>Popup history</title>', 'history-window') !== null"}
+        })).await;
+        let messages = ctx.take_all();
+        let target_id = popup_target_id_for_url(&messages, "data:text/html,<title>Popup history</title>");
+        ctx.wait_until_scheduler_state("popup document committed", |conn| {
+            conn.browser_context_by_id("BID-popup-history")
+                .and_then(|context| loaded_page_for_target(context, &target_id))
+                .is_some_and(|page| page.final_url().as_str() == "data:text/html,<title>Popup history</title>")
+        }).await;
+        ctx.process_async(json!({
+            "id": 2, "method": "Target.attachToTarget", "params": {"targetId": target_id, "flatten": true}
+        })).await;
+        let session_id = take_response_by_id(&mut ctx, 2)["result"]["sessionId"].as_str().unwrap().to_owned();
+        ctx.process_async(json!({
+            "id": 3, "method": "Page.getNavigationHistory", "sessionId": session_id
+        })).await;
+        let history = take_response_by_id(&mut ctx, 3);
+        assert_eq!(history["result"]["currentIndex"], 0);
+        let entries = history["result"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "the internal about:blank must not be traversable");
+        assert_eq!(entries[0]["url"], "data:text/html,<title>Popup history</title>");
+        assert_eq!(entries[0]["transitionType"], "link");
+        ctx.process_async(json!({
+            "id": 4, "method": "Runtime.evaluate", "sessionId": session_id,
+            "params": {"expression": "history.length", "returnByValue": true}
+        })).await;
+        assert_eq!(take_response_by_id(&mut ctx, 4)["result"]["result"]["value"], 1);
+    }).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3560,7 +3593,7 @@ async fn create_target_with_wait_for_debugger_auto_attach_marks_attached_event()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_target_waiting_for_debugger_does_not_replay_replaced_initial_document_load() {
+async fn create_target_waiting_metadata_does_not_hold_the_initial_blank_document() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({
         "id": 9012,
@@ -3622,8 +3655,18 @@ async fn create_target_waiting_for_debugger_does_not_replay_replaced_initial_doc
         ctx.sent
     );
     assert!(
-        ctx.conn
+        !ctx.conn
             .runtime_session_owner_initial_empty_document_has_replacement_url(Some(&session_id))
+    );
+    ctx.process_async(json!({
+        "id":9016,"sessionId":session_id,"method":"Runtime.evaluate",
+        "params":{"expression":"[location.href,document.title]","returnByValue":true}
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 9016);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!([target_url, "replacement-ready"])
     );
 }
 

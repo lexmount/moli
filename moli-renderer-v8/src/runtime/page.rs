@@ -51,6 +51,7 @@ pub(crate) struct PageVmStateCapture {
     pub(crate) navigation_response: Option<PageVmNavigationResponse>,
     pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub(crate) service_worker_client_id: u64,
+    pub(crate) document_isolate_identity: usize,
     pub(crate) dedicated_worker_running_worker_isolate_count: usize,
     pub(crate) performance_metric_snapshot: RendererPerformanceMetricSnapshot,
 }
@@ -86,10 +87,43 @@ struct JsRuntimeInner {
     _render_runtime: RenderRuntimeOwner,
 }
 
+/// A renderer-owner lifetime capability. Keeping its recursive actor/channel
+/// graph behind this interface also bounds Send/Sync proofs in protocol crates.
+pub(in crate::runtime) trait RendererRuntimeLease:
+    Send + Sync + std::fmt::Debug
+{
+    fn into_runtime(self: Arc<Self>) -> JsRuntime;
+    fn cancel_page_producers(&self);
+    fn cancel_pending_auxiliary_page(&self, reservation: RendererPageReservationToken);
+    fn release_captured_document_environment(&self, id: u64);
+}
+
+impl RendererRuntimeLease for JsRuntimeInner {
+    fn release_captured_document_environment(&self, id: u64) {
+        let _ = self.renderer_owner.enqueue_command_with_reply(
+            RendererOwnerCommand::ReleaseCapturedDocumentEnvironment { id },
+        );
+    }
+
+    fn into_runtime(self: Arc<Self>) -> JsRuntime {
+        JsRuntime { inner: self }
+    }
+
+    fn cancel_page_producers(&self) {
+        cancel_js_runtime_page_producers(self);
+    }
+
+    fn cancel_pending_auxiliary_page(&self, reservation: RendererPageReservationToken) {
+        let _ = self.renderer_owner.enqueue_command_with_reply(
+            RendererOwnerCommand::CancelPendingAuxiliaryPage { reservation },
+        );
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RendererProducerShutdownHandle {
     renderer_owner_id: u64,
-    runtime: Weak<JsRuntimeInner>,
+    runtime: Weak<dyn RendererRuntimeLease>,
 }
 
 impl std::fmt::Debug for RendererProducerShutdownHandle {
@@ -101,13 +135,17 @@ impl std::fmt::Debug for RendererProducerShutdownHandle {
 }
 
 impl RendererProducerShutdownHandle {
+    pub(in crate::runtime) fn upgrade_runtime(&self) -> Option<Arc<dyn RendererRuntimeLease>> {
+        self.runtime.upgrade()
+    }
+
     pub(crate) fn renderer_owner_id(&self) -> u64 {
         self.renderer_owner_id
     }
 
     pub(crate) fn cancel_page_producers(&self) {
         if let Some(runtime) = self.runtime.upgrade() {
-            cancel_js_runtime_page_producers(&runtime);
+            runtime.cancel_page_producers();
         }
     }
 
@@ -173,13 +211,23 @@ impl JsRuntime {
             browser_context_runtime.clone(),
         );
 
-        Self {
+        let runtime = Self {
             inner: Arc::new(JsRuntimeInner {
                 renderer_owner,
                 browser_context_runtime,
                 _render_runtime: render_runtime,
             }),
-        }
+        };
+        assert!(
+            runtime
+                .inner
+                .renderer_owner
+                .state
+                .runtime_handle
+                .set(runtime.producer_shutdown_handle())
+                .is_ok()
+        );
+        runtime
     }
 
     pub fn browser_context_runtime(&self) -> RendererBrowserContextRuntime {
@@ -196,9 +244,10 @@ impl JsRuntime {
     }
 
     pub(crate) fn producer_shutdown_handle(&self) -> RendererProducerShutdownHandle {
+        let runtime: Arc<dyn RendererRuntimeLease> = self.inner.clone();
         RendererProducerShutdownHandle {
             renderer_owner_id: self.renderer_owner_id_for_diagnostics(),
-            runtime: Arc::downgrade(&self.inner),
+            runtime: Arc::downgrade(&runtime),
         }
     }
 
@@ -297,7 +346,7 @@ impl JsRuntime {
     }
 
     pub fn document_isolate_model_for_diagnostics(&self) -> &'static str {
-        "page-vm"
+        "related-pages"
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -469,7 +518,6 @@ impl JsRuntime {
         let prepared = self
             .prepare_streaming_raw_document_from_external_body(
                 self.reserve_page_for_creation(),
-                None,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -500,8 +548,7 @@ impl JsRuntime {
     #[allow(clippy::too_many_arguments)]
     pub async fn prepare_streaming_raw_document_from_external_body(
         &self,
-        page_reservation: RendererPageReservationToken,
-        replacement: Option<super::RendererDocumentReplacement>,
+        page_target: impl Into<super::RendererDocumentPreparationTarget>,
         requested_url: Url,
         final_url: Url,
         navigation_initiator_url: Option<Url>,
@@ -549,14 +596,10 @@ impl JsRuntime {
         // This is the provisional-load boundary. Wake the old document before
         // dispatching owner work: queuing the wake itself would deadlock behind
         // a paused script. Downloads and intercepted responses never get here.
-        let replacement = replacement
-            .map(super::RendererDocumentReplacement::begin)
-            .transpose()
-            .inspect_err(|_| {
-                self.inner
-                    .renderer_owner
-                    .release_page_output_reservation(page_reservation);
-            })?;
+        let (page_reservation, replacement) = page_target
+            .into()
+            .begin_and_reserve(&self.inner.renderer_owner)
+            .await?;
         request.document_replacement = replacement.clone();
         // Own cancellation before awaiting the prepare reply, so abandoning
         // the future also retires a queued or already stored preparation.
@@ -704,6 +747,43 @@ impl PreparedRendererDocument {
             .inner
             .renderer_owner
             .materialize_page_created_reply_parts(reply)
+    }
+
+    /// Commits a response into the Page that issued this replacement reservation.
+    /// The reply must be adopted by that Page's existing handle.
+    pub async fn commit_page_replacement(
+        mut self,
+        permit: RendererDocumentCommitPermit,
+    ) -> std::result::Result<
+        super::RendererPageReplacementCommit,
+        super::RendererPageReplacementError,
+    > {
+        use super::RendererPageReplacementError;
+        if permit.prepared_document() != self.token() {
+            return Err(RendererPageReplacementError::document_preserved(anyhow!(
+                "renderer document commit permit does not belong to this prepared document"
+            )));
+        }
+        if self.token().replacement.is_none() {
+            return Err(RendererPageReplacementError::document_preserved(anyhow!(
+                "a fresh Page reservation cannot replace an existing Page"
+            )));
+        }
+        let reply = self
+            .preparation
+            .runtime
+            .inner
+            .renderer_owner
+            .dispatch_command(RendererOwnerCommand::CommitPreparedPageReplacement { permit })
+            .await
+            .map_err(RendererPageReplacementError::from_dispatch_error)?;
+        self.preparation.cancel_on_drop = false;
+        match reply {
+            RendererOwnerReply::PageReplacementCommitted(replacement) => Ok(*replacement),
+            _ => Err(RendererPageReplacementError::document_unavailable(anyhow!(
+                "renderer owner returned a non-replacement commit reply"
+            ))),
+        }
     }
 
     pub async fn cancel(mut self) -> Result<()> {

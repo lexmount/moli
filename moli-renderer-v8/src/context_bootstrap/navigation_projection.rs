@@ -1,7 +1,7 @@
 use super::history_runtime::native;
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
-    runtime_window_owner, runtime_window_uses_top_level_history_model,
+    child_browsing_context_handle_for_runtime_owner, runtime_window_dispatch_scope,
+    runtime_window_is_global, runtime_window_owner, runtime_window_uses_top_level_history_model,
 };
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array};
@@ -66,14 +66,25 @@ fn visible_navigation_entries<'s>(
     }
     let owner = runtime_window_owner(scope, current_wrapper);
     let top_level = runtime_window_uses_top_level_history_model(scope, owner);
-    let current_url = entry_origin_url(scope, owner, &current_entry.borrow().url);
+    let current = current_entry.borrow();
+    let inherited_origin = current.inherited_origin.clone().or_else(|| {
+        url::Url::parse(&current.url)
+            .ok()
+            .filter(navigation_entry_url_inherits_origin)
+            .and_then(|_| current_document_origin(scope, owner))
+    });
+    let current_url = entry_origin_url(scope, owner, &current.url, inherited_origin.as_deref());
+    drop(current);
     let hidden = |entry: &HistoryEntryRef| {
         top_level
             && !Rc::ptr_eq(entry, &current_entry)
+            && entry.borrow().inherited_origin.is_none()
             && entry.borrow().url.split('#').next() == Some("about:blank")
     };
     let same_origin = |scope: &mut v8::PinScope<'s, '_>, entry: &HistoryEntryRef| {
-        let candidate_url = entry_origin_url(scope, owner, &entry.borrow().url);
+        let entry = entry.borrow();
+        let candidate_url =
+            entry_origin_url(scope, owner, &entry.url, entry.inherited_origin.as_deref());
         match (&current_url, candidate_url) {
             (Some(current), Some(candidate)) => moli_url::same_origin(current, &candidate),
             _ => false,
@@ -137,7 +148,13 @@ fn entry_origin_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     raw_url: &str,
+    inherited_origin: Option<&str>,
 ) -> Option<url::Url> {
+    if let Some(origin) = inherited_origin {
+        // An opaque inherited origin must not fall back to another Document's
+        // URL. Only a recorded tuple origin can expose this history entry.
+        return url::Url::parse(origin).ok();
+    }
     let url = url::Url::parse(raw_url).ok()?;
     if url.scheme() == "blob"
         && let Some(inner) = raw_url.strip_prefix("blob:")
@@ -145,7 +162,7 @@ fn entry_origin_url<'s>(
     {
         return Some(inner_url);
     }
-    if child_navigation_entry_url_inherits_origin(&url)
+    if navigation_entry_url_inherits_origin(&url)
         && !runtime_window_is_global(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
         && child_browsing_context_handle_for_runtime_owner(scope, owner).is_some()
@@ -155,6 +172,29 @@ fn entry_origin_url<'s>(
     Some(url)
 }
 
-fn child_navigation_entry_url_inherits_origin(url: &url::Url) -> bool {
-    url.scheme() == "about" && matches!(url.as_str(), "about:blank" | "about:srcdoc")
+pub(super) fn navigation_entry_url_inherits_origin(url: &url::Url) -> bool {
+    moli_url::is_about_blank(url) || (url.scheme() == "about" && url.path() == "srcdoc")
+}
+
+pub(super) fn current_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let host_ptr = owner
+        .get_creation_context(scope)
+        .and_then(crate::util::context_host_ptr_from_context_slot)
+        .or_else(|| context_host_ptr_from_global_bridge(scope))?;
+    let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;
+    let host = unsafe { &*host_ptr };
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => host
+            .current_main_document_resource_loader()
+            .map(|loader| loader.fetch_context().origin().to_owned()),
+        crate::native_bridge::OwnerDispatchScope::Child(_) => host
+            .document_resource_loader_for_dispatch_scope(dispatch_scope)
+            .map(|loader| loader.fetch_context().origin().to_owned()),
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(id) => {
+            host.lightweight_popup_origin(id)
+        }
+    }
 }

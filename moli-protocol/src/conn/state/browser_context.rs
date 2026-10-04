@@ -43,6 +43,7 @@ pub struct BrowserContext {
     pub(crate) page_targets: PageTargetRegistry,
     /// Browser focus is independent of which context is selected for routing.
     pub(crate) window_is_focused: bool,
+    pub(crate) named_auxiliary_targets: std::collections::HashSet<String>,
     /// Policy retained while the context has no page target yet. The first
     /// target inherits it; once targets exist, each target owns its surface.
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
@@ -56,7 +57,6 @@ pub struct BrowserContext {
     /// an implicit-noopener `_blank` target still has an `openerId`, but is
     /// intentionally absent from this set.
     pub(crate) target_can_access_opener: HashSet<String>,
-    pub target_window_names: HashMap<String, String>,
     pub target_popup_ids: HashMap<String, u64>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
@@ -504,11 +504,11 @@ impl BrowserContext {
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             window_is_focused: true,
+            named_auxiliary_targets: Default::default(),
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
             target_can_access_opener: HashSet::new(),
-            target_window_names: HashMap::new(),
             target_popup_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),
@@ -541,16 +541,26 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn new_page_navigation_engine(
+    pub(crate) fn new_page_navigation_engine_for_auxiliary(
         &self,
         config: NavigationRuntimeConfig,
+        pending: Option<&moli_core::page::RendererPendingAuxiliaryPage>,
     ) -> NavigationEngine {
-        let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-            config,
-            self.renderer_runtime_owner_access(),
-        )
+        let engine = match pending {
+            Some(page) => NavigationEngine::new_for_pending_auxiliary_page(
+                config,
+                self.renderer_runtime_owner_access(),
+                page,
+            ),
+            None => NavigationEngine::new_with_runtime_config_and_browser_context_access(
+                config,
+                self.renderer_runtime_owner_access(),
+            ),
+        }
         .expect("live BrowserContext owner must accept a page engine");
         if let Some(sender) = self.renderer_output_transport_sender.clone() {
+            self.renderer_runtime()
+                .delegate_auxiliary_document_responses_to_browser();
             engine.set_renderer_output_transport_sender(sender);
         }
         engine
@@ -563,6 +573,10 @@ impl BrowserContext {
     ) {
         self.page_navigation_runtime_config = Some(config.clone());
         self.renderer_output_transport_sender = renderer_output_transport_sender;
+        if self.renderer_output_transport_sender.is_some() {
+            self.renderer_runtime()
+                .delegate_auxiliary_document_responses_to_browser();
+        }
 
         let renderer_runtime = self.renderer_runtime_owner_access();
         let sender = self.renderer_output_transport_sender.clone();
@@ -570,10 +584,17 @@ impl BrowserContext {
             if host.navigation_engine().is_some() {
                 continue;
             }
-            let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                config.clone(),
-                renderer_runtime.clone(),
-            )
+            let engine = match host.runtime_slot.pending_auxiliary_page() {
+                Some(page) => NavigationEngine::new_for_pending_auxiliary_page(
+                    config.clone(),
+                    renderer_runtime.clone(),
+                    page,
+                ),
+                None => NavigationEngine::new_with_runtime_config_and_browser_context_access(
+                    config.clone(),
+                    renderer_runtime.clone(),
+                ),
+            }
             .expect("live BrowserContext owner must accept a page engine");
             if let Some(sender) = sender.clone() {
                 engine.set_renderer_output_transport_sender(sender);
@@ -586,6 +607,8 @@ impl BrowserContext {
         &mut self,
         sender: moli_core::RendererOutputTransportSender,
     ) {
+        self.renderer_runtime()
+            .delegate_auxiliary_document_responses_to_browser();
         self.renderer_output_transport_sender = Some(sender.clone());
         for host in self.page_targets.iter() {
             if let Some(engine) = host.navigation_engine() {
@@ -815,7 +838,8 @@ impl BrowserContext {
             .loaded_document_renderer_owner_ids_for_diagnostics()
             .len();
         let estimated_document_isolate_count =
-            loaded_document_page_count + pending_document_page_build_count;
+            self.loaded_document_isolate_ids_for_diagnostics().len()
+                + pending_document_page_build_count;
         let page_target_pending_inspector_await_count =
             self.page_target_pending_inspector_await_count_for_diagnostics();
         let shared_worker_target_pending_inspector_await_count =
@@ -915,7 +939,7 @@ impl BrowserContext {
             "targetOpenerCount": self.target_opener_ids.len(),
             "targetOpenerFrameCount": self.target_opener_frame_ids.len(),
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
-            "targetWindowNameCount": self.target_window_names.len(),
+            "targetWindowNameCount": self.named_auxiliary_targets.len(),
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
                 .map_or(0, |target| target.dom_remote_object_node_cache.len()),
@@ -934,7 +958,7 @@ impl BrowserContext {
             "serviceWorkerTargetWithPendingInspectorAwaitCount": self
                 .service_worker_target_with_pending_inspector_await_count_for_diagnostics(),
             "isolateScope": {
-                "documentPageAccountingModel": "browser-context-page-count",
+                "documentPageAccountingModel": "distinct-loaded-isolates-plus-pending-pages",
                 "loadedDocumentPageCount": loaded_document_page_count,
                 "loadedDocumentRendererOwnerCount": loaded_document_renderer_owner_count,
                 "pendingDocumentPageBuildCount": pending_document_page_build_count,
@@ -1033,6 +1057,12 @@ impl BrowserContext {
         };
         target.target_url() != initial_url
             && !owner_state.initial_empty_document_pending_cross_document_navigation()
+    }
+
+    pub(crate) fn loaded_document_isolate_ids_for_diagnostics(&self) -> HashSet<usize> {
+        self.loaded_pages_for_diagnostics()
+            .map(moli_core::page::Page::document_isolate_identity_for_diagnostics)
+            .collect()
     }
 
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {

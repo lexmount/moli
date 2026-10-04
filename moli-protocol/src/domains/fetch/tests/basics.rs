@@ -1061,6 +1061,9 @@ async fn disable_clears_fetch_state() {
             document_navigation_token: None,
             navigation: crate::conn::NavigationDispatchState {
                 web_mcp_invocation: None,
+                navigation_initiator: None,
+                initial_document_environment: None,
+                auxiliary_document_response: None,
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
                 navigate_id: Some(1),
@@ -1104,6 +1107,9 @@ async fn disable_clears_fetch_state() {
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     web_mcp_invocation: None,
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1333,6 +1339,9 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     web_mcp_invocation: None,
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1411,6 +1420,9 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     web_mcp_invocation: None,
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
                     navigate_id: Some(1),
@@ -1586,6 +1598,9 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
         document_navigation_token: None,
         navigation: crate::conn::NavigationDispatchState {
             web_mcp_invocation: None,
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),

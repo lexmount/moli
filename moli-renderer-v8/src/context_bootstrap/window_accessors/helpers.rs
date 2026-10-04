@@ -97,7 +97,12 @@ pub(crate) fn window_host_ptr(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
 ) -> Option<*mut JsContextHost> {
-    context_host_ptr_from_window_object(scope, receiver)
+    // A borrowed or cross-origin accessor executes in another realm. Resolve
+    // its receiver's native owner before consulting legacy or ambient bridges.
+    receiver
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+        .or_else(|| context_host_ptr_from_window_object(scope, receiver))
         .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
@@ -154,4 +159,23 @@ pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<
     // checking its identity also keeps reattachment from reviving an old realm.
     window_current_dispatch_scope(scope, receiver, host)
         .is_none_or(|owner| owner != OwnerDispatchScope::Child(handle))
+}
+
+pub(super) fn window_is_closed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+        .or_else(|| crate::native_bridge::cross_origin_lightweight_popup_id(scope, receiver))
+    {
+        return window_host_ptr(scope, receiver)
+            .is_none_or(|host| !unsafe { &*host }.lightweight_popup_is_open(popup_id));
+    }
+    if window_child_context_handle(scope, receiver).is_some() {
+        return window_has_discarded_child_browsing_context(scope, receiver);
+    }
+    receiver
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+        .is_none_or(|host| unsafe { &*host }.browsing_context_is_closed())
 }

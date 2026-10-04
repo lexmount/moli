@@ -22,7 +22,9 @@ pub(in crate::context_bootstrap) fn resolve_location_navigation_target(
             // EnteredDOMWindow(isolate)->document(), not the target Location's
             // current Document. This matters when an opener navigates a popup
             // more than once with the same relative string.
-            if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            let entry_context = scope.get_entered_or_microtask_context();
+            if let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(entry_context)
+                .or_else(|| context_host_ptr_from_global_bridge(scope))
                 && let Ok(resolved) =
                     super::super::window_runtime::entered_window_api_base_url(scope, unsafe {
                         &*host_ptr

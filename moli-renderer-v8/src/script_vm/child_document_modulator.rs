@@ -68,6 +68,8 @@ impl ScriptVm {
             | FrameLocalWindowOwnerTransition::Preserved { .. } => None,
         };
         if let Some(retired_owner) = transition.retired_owner() {
+            let prepared_context_transition =
+                self.prepare_document_context_transition(transition.context_transition());
             let execution_context_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
                 retired_owner.local_window_id,
             );
@@ -211,22 +213,7 @@ impl ScriptVm {
                 0
             };
             let (retired_isolated_world_count, rebound_isolated_world_count) =
-                if execution_context_retired {
-                    (
-                        self.retire_isolated_worlds_for_document_owner(retired_owner),
-                        0,
-                    )
-                } else if let Some(current_owner) = transition.current_owner() {
-                    (
-                        0,
-                        self.rebind_isolated_worlds_for_document_owner_transition(
-                            retired_owner,
-                            current_owner,
-                        ),
-                    )
-                } else {
-                    (0, 0)
-                };
+                self.finish_document_context_transition(prepared_context_transition);
             let retired_modulator_count = if execution_context_retired {
                 self.child_document_modulator_store
                     .remove_execution_context(retired_owner.local_window_id)

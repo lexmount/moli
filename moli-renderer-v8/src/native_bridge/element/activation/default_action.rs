@@ -2048,10 +2048,10 @@ fn hyperlink_navigation_policy(
         InputNavigationPolicy::NewBackgroundSurface => {
             HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Background)
         }
-        InputNavigationPolicy::NewWindow | InputNavigationPolicy::NewForegroundSurface => {
-            // The renderer target model has no separate window chrome. Preserve
-            // Chromium's selected-surface behavior by folding a new window into a
-            // foreground popup Page target.
+        InputNavigationPolicy::NewWindow => {
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::NewWindow)
+        }
+        InputNavigationPolicy::NewForegroundSurface => {
             HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
         }
     }
@@ -2453,7 +2453,7 @@ mod hyperlink_popup_disposition_tests {
                 SHIFT,
                 Some(CurrentInputEvent::mouse("mouseup", 0, SHIFT)),
             ),
-            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::NewWindow)
         );
         assert_eq!(
             hyperlink_navigation_policy(

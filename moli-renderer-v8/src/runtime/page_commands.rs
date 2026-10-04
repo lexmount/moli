@@ -73,9 +73,9 @@ impl PageVm {
                 .vm_mut()
                 .navigate_child_browsing_context_frame_to_url(&frame_id, &url)
                 .map(RendererPageReply::Bool),
-            RendererPageCommand::NavigateTopLevelSameDocument { url } => self
+            RendererPageCommand::NavigateTopLevelSameDocument { url, replace_current } => self
                 .vm_mut()
-                .navigate_top_level_same_document_from_browser(&url)
+                .navigate_top_level_same_document_from_browser(&url, replace_current)
                 .map(RendererPageReply::Bool),
             RendererPageCommand::DispatchPreparedElementClick(click) => {
                 let mut outcome = self.vm_mut().dispatch_prepared_element_click(click);

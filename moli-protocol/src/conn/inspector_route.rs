@@ -165,6 +165,34 @@ impl CdpConnection {
         Ok(transaction)
     }
 
+    pub(crate) fn commit_renderer_agent_candidate_for_existing_page(
+        &mut self,
+        owner: &CommandOwnerScope,
+        candidate: PreparedRendererAgentAttachment,
+        expected: &crate::conn::StablePageNavigationCommitTarget,
+    ) -> Result<CommittedRendererAgentAttachment, String> {
+        if self
+            .target_page_residence_identity_for_owner(owner)
+            .as_ref()
+            != Some(&expected.target_page)
+            || !self.target_page_residence_identity_is_current(&expected.target_page)
+        {
+            return Err("NavigationTargetPageChanged".into());
+        }
+        if !self
+            .runtime_session_owner_slot_mut_for_owner(owner)?
+            .page_slot_mut()
+            .bind_existing_page_document_navigation(
+                candidate.navigation(),
+                expected.renderer_page,
+                expected.target_page.page_attachment_id(),
+            )
+        {
+            return Err("NavigationTargetPageChanged".into());
+        }
+        self.commit_renderer_agent_candidate_for_owner(owner, candidate, expected.renderer_page)
+    }
+
     pub(crate) fn rollback_committed_renderer_agent_candidate_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

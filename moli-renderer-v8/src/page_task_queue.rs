@@ -52,6 +52,8 @@ mod text_track_default_mode;
 mod text_track_load;
 mod user_interaction;
 mod v8_foreground_task;
+#[cfg(test)]
+pub(crate) use v8_foreground_task::RendererPageV8ForegroundTaskSource;
 mod view_transition_update;
 mod webcrypto_task;
 mod websocket_event;

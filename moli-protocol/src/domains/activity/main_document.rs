@@ -934,6 +934,9 @@ mod tests {
     fn navigation_state() -> NavigationDispatchState {
         NavigationDispatchState {
             web_mcp_invocation: None,
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(77),

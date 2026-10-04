@@ -48,6 +48,24 @@ pub(crate) enum LocationNavigationKind {
     Reload,
 }
 
+pub(crate) fn resolve_cross_window_location_target(
+    scope: &mut v8::PinScope<'_, '_>,
+    raw: &str,
+) -> Option<String> {
+    let entry = scope.get_entered_or_microtask_context();
+    let host = crate::util::context_host_ptr_from_context_slot(entry)
+        .or_else(|| {
+            scope
+                .get_incumbent_context()
+                .and_then(crate::util::context_host_ptr_from_context_slot)
+        })
+        .or_else(|| context_host_ptr_from_global_bridge(scope))?;
+    super::window_runtime::entered_window_api_base_url(scope, unsafe { &*host })
+        .join(raw)
+        .ok()
+        .map(|url| url.to_string())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, strum::EnumString, webidl::WebIdlEnum)]
 #[webidl(name = "NavigationHistoryBehavior")]
 #[strum(serialize_all = "lowercase")]
@@ -79,7 +97,13 @@ pub(crate) fn navigate_location_object<'s>(
 pub(crate) fn navigate_top_level_same_document_from_browser(
     scope: &mut v8::PinScope<'_, '_>,
     target: String,
+    replace_current: bool,
 ) -> bool {
+    let kind = if replace_current {
+        LocationNavigationKind::Replace
+    } else {
+        LocationNavigationKind::Assign
+    };
     let owner = scope.get_current_context().global(scope);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return false;
@@ -87,12 +111,9 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     let Some(current_href) = location_href_slot(scope, location) else {
         return false;
     };
-    let Some(resolved) = resolve_location_navigation_target(
-        scope,
-        &current_href,
-        LocationNavigationKind::Assign,
-        Some(target.clone()),
-    ) else {
+    let Some(resolved) =
+        resolve_location_navigation_target(scope, &current_href, kind, Some(target.clone()))
+    else {
         return false;
     };
     let current = url::Url::parse(&current_href).ok();
@@ -107,7 +128,7 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     navigate_location_object_with_source_element_and_child_navigate_event(
         scope,
         location,
-        LocationNavigationKind::Assign,
+        kind,
         Some(target),
         None,
         false,
@@ -236,6 +257,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             return;
         }
     };
+    // Entering the destination realm must not turn it into the initiator.
+    // Freeze the incumbent Document before navigation events can run script.
+    let navigation_source = capture_location_navigation_source(scope, owner, &resolved);
     let exact_same_href = current_href == resolved.as_str();
     if !matches!(kind, LocationNavigationKind::Reload)
         && exact_same_href
@@ -303,11 +327,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             child_browsing_context_handle_for_runtime_owner(scope, owner)
         };
-        let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
-            context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
-                unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
-            })
-        });
+        let replaces_initial_about_blank =
+            super::navigation_window::navigation_document_is_initial_empty(scope, owner)
+                || child_handle.is_some_and(|handle| {
+                    context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
+                        unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
+                    })
+                });
         let effective_kind = match kind {
             LocationNavigationKind::Assign if replaces_initial_about_blank => {
                 LocationNavigationKind::Replace
@@ -632,6 +658,73 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             moli_fetch::BrowserNavigationRequestKind::Navigate
         },
     );
+    if let Some((initiator, environment)) = navigation_source {
+        unsafe { &mut *host_ptr }.set_pending_location_navigation_source(initiator, environment);
+    }
+}
+
+fn capture_location_navigation_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    url: &url::Url,
+) -> Option<(
+    crate::runtime::RendererNavigationInitiator,
+    Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+)> {
+    let source_context = scope.get_incumbent_context()?;
+    let source_host = crate::util::context_host_ptr_from_context_slot(source_context)?;
+    let target_host = crate::util::context_host_ptr_from_window_object(scope, target)?;
+    // The ordinary same-realm path already carries its Document environment.
+    if source_host == target_host {
+        return None;
+    }
+    let source = source_context.global(scope);
+    // Only the browsing context's fixed restrictions survive navigation.
+    // Sandbox CSP from its old response belongs to the retiring Document.
+    let target_sandbox = unsafe { &*target_host }
+        .auxiliary_window()
+        .map(|window| window.frame_sandbox());
+    let scope = &mut v8::ContextScope::new(scope, source_context);
+    let host = unsafe { &mut *source_host };
+    let dispatch = host.entered_owner_dispatch_scope(scope);
+    let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
+    let initiator_url = host
+        .document_referrer_source_url_for_dispatch_scope(dispatch)
+        .unwrap_or_else(|| host.document_url().clone());
+    let mut policy = match dispatch {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_policy_container_snapshot(handle)?
+        }
+        _ => host.document_policy_container().clone(),
+    };
+    policy.referrer_policy =
+        current_document_referrer_policy(scope, source).or(policy.referrer_policy);
+    let initiator = crate::runtime::RendererNavigationInitiator::new(
+        initiator_url,
+        loader.fetch_context().request_origin(),
+        policy.referrer_policy.clone(),
+    );
+    policy.document_referrer = initiator.outgoing_referrer();
+    let base_url = super::window_runtime::entered_window_api_base_url(scope, host);
+    let child = match dispatch {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
+        _ => None,
+    };
+    match host.capture_blank_navigation_environment(
+        scope,
+        source,
+        child,
+        url.as_str(),
+        base_url,
+        policy,
+        target_sandbox,
+    ) {
+        Ok(environment) => Some((initiator, environment)),
+        Err(error) => {
+            tracing::debug!(%error, "Location initiator environment capture failed");
+            None
+        }
+    }
 }
 
 fn sandbox_blocks_ancestor_or_top_location_navigation<'s>(

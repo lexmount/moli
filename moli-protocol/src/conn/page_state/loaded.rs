@@ -133,6 +133,7 @@ impl PageTargetHost {
         mut page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
+        browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
@@ -180,25 +181,12 @@ impl PageTargetHost {
                 .install_pending_renderer_call_replacements(replacements);
         }
 
-        self.owner_state.mark_initial_empty_document_exited();
-        if let Some(previous_title) = previous_title {
-            self.owner_state
-                .refresh_current_navigation_history_title(previous_title);
-        }
-        let committed_document_title = page.document_title();
-        self.owner_state.record_loaded_page_navigation_history((
-            history_url.to_string(),
-            committed_document_title.clone(),
-        ));
-        self.owner_state.clear_committed_document_navigation_state();
-        self.owner_state
-            .commit_document_title(committed_document_title);
-        for session in self.devtools_sessions.states_mut() {
-            session.clear_runtime_remote_object_tracking();
-            session
-                .page_session_state
-                .clear_loaded_document_context_state();
-        }
+        self.commit_loaded_document_protocol_state(
+            previous_title,
+            page.document_title(),
+            history_url,
+            browsing_context_group,
+        );
 
         let previous = self.replace_loaded_page(Some(page));
         self.runtime_slot.reset_subresource_cursor();
@@ -209,6 +197,93 @@ impl PageTargetHost {
         }
         Ok(LoadedNavigationPageCommit {
             replaced_page_owner,
+            committed_document_post_response_continuation,
+        })
+    }
+
+    fn commit_loaded_document_protocol_state(
+        &mut self,
+        previous_title: Option<String>,
+        committed_document_title: String,
+        history_url: &Url,
+        browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
+    ) {
+        self.owner_state.mark_initial_empty_document_exited();
+        if let Some(previous_title) = previous_title {
+            self.owner_state
+                .refresh_current_navigation_history_title(previous_title);
+        }
+        self.owner_state
+            .record_loaded_page_navigation_history_with_group(
+                (history_url.to_string(), committed_document_title.clone()),
+                Some(browsing_context_group),
+            );
+        self.owner_state.clear_committed_document_navigation_state();
+        self.owner_state
+            .commit_document_title(committed_document_title);
+        for session in self.devtools_sessions.states_mut() {
+            session.clear_runtime_remote_object_tracking();
+            session
+                .page_session_state
+                .clear_loaded_document_context_state();
+        }
+    }
+
+    pub(crate) fn commit_existing_page_navigation(
+        &mut self,
+        expected: &crate::conn::StablePageNavigationCommitTarget,
+        transaction: CommittedRendererAgentAttachment,
+        history_url: &Url,
+        browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
+    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+        anyhow::ensure!(
+            self.runtime_slot.page_attachment_id()
+                == Some(expected.target_page.page_attachment_id())
+                && self
+                    .loaded_page()
+                    .map(crate::conn::RendererPageResidenceIdentity::from_page)
+                    == Some(expected.renderer_page),
+            "committed Document no longer belongs to its target Page residence"
+        );
+        self.runtime_slot
+            .bind_existing_page_to_committed_renderer_agent_candidate(&transaction)?;
+        let previous_title = self
+            .owner_state
+            .committed_document_title()
+            .map(str::to_owned);
+        let new_attachment_id = transaction.current().id();
+        if let Some(previous) = transaction.previous()
+            && previous.id() != new_attachment_id
+        {
+            let primary_session_id = self.session_id().map(str::to_owned);
+            let replacements = self.devtools_sessions.prepare_renderer_call_replacements(
+                primary_session_id.as_deref(),
+                previous.id(),
+                new_attachment_id,
+            )?;
+            self.runtime_slot
+                .install_pending_renderer_call_replacements(replacements);
+        }
+        let page = self
+            .loaded_page_mut()
+            .expect("validated Page must remain resident");
+        let title = page.document_title();
+        let committed_document_post_response_continuation =
+            page.take_committed_document_post_response_continuation();
+        self.commit_loaded_document_protocol_state(
+            previous_title,
+            title,
+            history_url,
+            browsing_context_group,
+        );
+        self.runtime_slot.finish_existing_page_document_commit();
+        self.runtime_slot.reset_subresource_cursor();
+        self.runtime_slot.clear_websocket_artifacts();
+        Ok(LoadedNavigationPageCommit {
+            // Old Document producers were retired by the renderer commit.
+            // Retiring all workers by this stable Page identity would also
+            // destroy workers created by the replacement Document.
+            replaced_page_owner: None,
             committed_document_post_response_continuation,
         })
     }

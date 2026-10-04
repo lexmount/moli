@@ -4,7 +4,9 @@ mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
 mod external;
-pub(crate) use runtime_state::install_lightweight_popup_legacy_objects;
+pub(crate) use runtime_state::{
+    install_lightweight_popup_legacy_objects, window_realm_secure_context_available,
+};
 mod broadcast_channel;
 mod canvas;
 mod chrome_runtime;
@@ -70,6 +72,7 @@ mod navigation_restore;
 mod navigation_result;
 mod navigation_seed;
 mod navigation_serialize;
+pub(crate) use navigation_serialize::current_document_referrer_policy;
 mod navigation_surface;
 mod navigation_transition_worlds;
 mod navigation_traversal;
@@ -122,7 +125,7 @@ mod storage_buckets;
 pub(crate) use self::storage_access::request_storage_access_with_types;
 pub(crate) use self::window_runtime::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
-    LegacyStorageQuotaCallbackTaskEffect,
+    LegacyStorageQuotaCallbackTaskEffect, window_close_callback, window_noop_callback,
 };
 
 pub use moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES;
@@ -146,7 +149,7 @@ pub(crate) use location_navigation::{
     dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
     navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
-    navigate_top_level_same_document_from_browser,
+    navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
@@ -191,6 +194,10 @@ mod webassembly_runtime;
 mod webrtc;
 mod websocket;
 mod window_accessors;
+pub(crate) use window_accessors::{
+    cached_cross_origin_window_surface, window_closed_getter, window_length_getter,
+    window_opener_getter, window_parent_getter, window_top_getter,
+};
 mod window_events;
 mod window_lazy_surface;
 mod window_receiver;
@@ -343,8 +350,9 @@ pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navig
 pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_event_for_window;
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
-    commit_navigation_history_for_document, install_navigation_bootstrap_entry,
-    install_navigation_bootstrap_entry_for_holder, install_navigation_entry_view_for_holder,
+    capture_inherited_history_for_browser_commit, commit_navigation_history_for_document,
+    install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
+    install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;

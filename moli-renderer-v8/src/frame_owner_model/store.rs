@@ -298,12 +298,86 @@ impl FrameOwnerStore {
         url: Url,
         base_url: Url,
     ) -> Option<MainDocumentOwnerTransition> {
+        let transition = self.prepare_main_document_owner_transition(
+            DocumentInspectorBindingTransition::Preserved,
+        )?;
+        self.commit_main_document_owner_transition(
+            transition,
+            document_handle,
+            url,
+            base_url,
+            DocumentCreationKind::DocumentOpen,
+        )?;
+        self.pending_main_document_owner_transitions
+            .push_back(transition);
+        Some(transition)
+    }
+
+    pub(crate) fn prepare_initial_main_document_owner_transition(
+        &mut self,
+    ) -> Option<MainDocumentOwnerTransition> {
+        self.prepare_main_document_owner_transition(DocumentInspectorBindingTransition::Replaced)
+    }
+
+    fn prepare_main_document_owner_transition(
+        &mut self,
+        inspector_binding: DocumentInspectorBindingTransition,
+    ) -> Option<MainDocumentOwnerTransition> {
+        let snapshot = self.current_main_owner_snapshot()?;
+        Some(MainDocumentOwnerTransition::new(
+            FrameDocumentTaskOwner::new(
+                snapshot.scheduler_lane_id,
+                snapshot.local_window_id,
+                snapshot.document_id,
+            ),
+            FrameDocumentTaskOwner::new(
+                snapshot.scheduler_lane_id,
+                snapshot.local_window_id,
+                self.ids.document(),
+            ),
+            inspector_binding,
+        ))
+    }
+
+    pub(crate) fn replace_initial_main_document(
+        &mut self,
+        transition: MainDocumentOwnerTransition,
+        document_handle: DomHandle,
+        url: Url,
+        base_url: Url,
+    ) -> Option<MainDocumentOwnerTransition> {
+        assert_eq!(
+            transition.context_transition().inspector_binding(),
+            DocumentInspectorBindingTransition::Replaced,
+        );
+        // Navigation transitions are executed synchronously by ScriptVm, not
+        // replayed after runtime replacement by the document.open() journal.
+        self.commit_main_document_owner_transition(
+            transition,
+            document_handle,
+            url,
+            base_url,
+            DocumentCreationKind::Navigation,
+        )
+    }
+
+    fn commit_main_document_owner_transition(
+        &mut self,
+        transition: MainDocumentOwnerTransition,
+        document_handle: DomHandle,
+        url: Url,
+        base_url: Url,
+        creation_kind: DocumentCreationKind,
+    ) -> Option<MainDocumentOwnerTransition> {
         let snapshot = self.current_main_owner_snapshot()?;
         let retired_owner = FrameDocumentTaskOwner::new(
             snapshot.scheduler_lane_id,
             snapshot.local_window_id,
             snapshot.document_id,
         );
+        if retired_owner != transition.retired_owner() {
+            return None;
+        }
 
         let retired_document = self
             .documents
@@ -316,11 +390,15 @@ impl FrameOwnerStore {
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
 
-        let document_id = self.ids.document();
-        let lifecycle_progress = self.new_loading_document_lifecycle_for_document_open(
-            DocumentLoadDeliveryKind::Main,
-            load_continuation,
-        );
+        let document_id = transition.current_owner().document_id;
+        let lifecycle_progress = if creation_kind == DocumentCreationKind::DocumentOpen {
+            self.new_loading_document_lifecycle_for_document_open(
+                DocumentLoadDeliveryKind::Main,
+                load_continuation,
+            )
+        } else {
+            self.new_loading_document_lifecycle(DocumentLoadDeliveryKind::Main)
+        };
         self.documents.insert(
             document_id,
             DocumentRecord {
@@ -329,7 +407,7 @@ impl FrameOwnerStore {
                 document_handle,
                 url,
                 base_url: base_url.clone(),
-                creation_kind: DocumentCreationKind::DocumentOpen,
+                creation_kind,
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
@@ -356,21 +434,11 @@ impl FrameOwnerStore {
                 .document_id = document_id;
         }
 
-        let transition = MainDocumentOwnerTransition::new(
-            retired_owner,
-            FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                document_id,
-            ),
-        );
         tracing::debug!(
             ?retired_owner,
             current_owner = ?transition.current_owner(),
-            "committed and journaled main document owner replacement"
+            "committed main document owner replacement"
         );
-        self.pending_main_document_owner_transitions
-            .push_back(transition);
         Some(transition)
     }
 
@@ -708,15 +776,12 @@ impl FrameOwnerStore {
             return FrameDocumentLocalWindowTransition::ReplaceLocalWindow;
         };
         let old_policy = &snapshot.settings.document_policy_container;
-        if document.creation_kind.is_initial_empty()
-            && old_policy.credentialless == new_document_policy.credentialless
-            && old_policy.sandbox.forces_opaque_origin
-                == new_document_policy.sandbox.forces_opaque_origin
-        {
-            FrameDocumentLocalWindowTransition::ReuseInitialEmptyLocalWindow
-        } else {
-            FrameDocumentLocalWindowTransition::ReplaceLocalWindow
-        }
+        FrameDocumentLocalWindowTransition::for_document_commit(
+            document.creation_kind.is_initial_empty(),
+            security_origin_allows_reuse,
+            old_policy,
+            new_document_policy,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

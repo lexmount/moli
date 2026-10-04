@@ -284,6 +284,104 @@ fn main_frame_identity_uses_reserved_owner_records() {
 }
 
 #[test]
+fn initial_main_document_commit_prepares_owners_before_replacement_without_turn_exit_replay() {
+    let mut store = FrameOwnerStore::default();
+    store.ensure_main_frame(
+        handle(1),
+        url("about:blank"),
+        url("https://example.test/"),
+        "https://example.test".to_owned(),
+        policy_container(),
+        policy_context(),
+        None,
+    );
+    let original = store.current_main_owner_snapshot().unwrap();
+    let transition = store
+        .prepare_initial_main_document_owner_transition()
+        .unwrap();
+    assert!(store.document_task_owner_is_current(transition.retired_owner()));
+    assert!(!store.document_task_owner_is_current(transition.current_owner()));
+    let prepared_snapshot = store.current_main_owner_snapshot().unwrap();
+    assert_eq!(prepared_snapshot.document_id, original.document_id);
+    assert_eq!(prepared_snapshot.document_handle, original.document_handle);
+    assert_eq!(prepared_snapshot.realm_id, original.realm_id);
+    assert!(
+        store
+            .take_pending_main_document_owner_transitions()
+            .is_empty()
+    );
+    assert_eq!(
+        transition.context_transition().inspector_binding(),
+        DocumentInspectorBindingTransition::Replaced,
+    );
+    assert_eq!(
+        transition
+            .context_transition()
+            .local_window_owner_transition(),
+        FrameLocalWindowOwnerTransition::Preserved {
+            current: original.local_window_id
+        },
+    );
+
+    assert_eq!(
+        store.replace_initial_main_document(
+            transition,
+            handle(2),
+            url("https://example.test/child"),
+            url("https://example.test/child"),
+        ),
+        Some(transition),
+    );
+    let current = store.current_main_owner_snapshot().unwrap();
+    assert_eq!(current.document_id, transition.current_owner().document_id);
+    assert_eq!(current.local_window_id, original.local_window_id);
+    assert_eq!(current.realm_id, original.realm_id);
+    assert_eq!(current.document_handle, handle(2));
+    assert!(!store.document_task_owner_is_current(transition.retired_owner()));
+    assert!(
+        store
+            .take_pending_main_document_owner_transitions()
+            .is_empty()
+    );
+
+    let stale = store
+        .prepare_initial_main_document_owner_transition()
+        .unwrap();
+    let opened = store
+        .replace_main_document(
+            handle(2),
+            url("https://example.test/child"),
+            url("https://example.test/child"),
+        )
+        .unwrap();
+    assert_eq!(
+        opened.context_transition().inspector_binding(),
+        DocumentInspectorBindingTransition::Preserved,
+    );
+    let opened_snapshot = store.current_main_owner_snapshot().unwrap();
+    assert_eq!(
+        store.replace_initial_main_document(
+            stale,
+            handle(3),
+            url("https://example.test/stale"),
+            url("https://example.test/stale"),
+        ),
+        None
+    );
+    let rejected_snapshot = store.current_main_owner_snapshot().unwrap();
+    assert_eq!(rejected_snapshot.document_id, opened_snapshot.document_id);
+    assert_eq!(
+        rejected_snapshot.document_handle,
+        opened_snapshot.document_handle
+    );
+    assert_eq!(rejected_snapshot.document_url, opened_snapshot.document_url);
+    assert_eq!(
+        store.take_pending_main_document_owner_transitions(),
+        vec![opened]
+    );
+}
+
+#[test]
 fn main_document_replacement_rotates_document_owner_without_replacing_window_or_realm() {
     let mut store = FrameOwnerStore::default();
     store.ensure_main_frame(

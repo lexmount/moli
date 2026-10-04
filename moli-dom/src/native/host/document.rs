@@ -1691,6 +1691,16 @@ impl DomHost {
         self.dom.create_document(url)
     }
 
+    /// Keep the retired Document and its nodes addressable while admitting a
+    /// fresh main Document into the same LocalWindow's DOM arena.
+    pub fn replace_main_document(&mut self, document: &Document) -> DomHandle {
+        self.active_element.set(None);
+        self.hovered_elements.borrow_mut().clear();
+        let handle = self.dom.replace_main_document(document);
+        self.record_mutation(MutationScope::QueryState);
+        handle
+    }
+
     pub fn create_document_fragment(&mut self) -> DomHandle {
         self.dom.create_document_fragment()
     }

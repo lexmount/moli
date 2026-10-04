@@ -26,6 +26,9 @@ use url::Url;
 fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchState {
     NavigationDispatchState {
         web_mcp_invocation: None,
+        navigation_initiator: None,
+        initial_document_environment: None,
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),
@@ -1055,6 +1058,7 @@ fn navigation_history_seed_entry_preserves_pending_update() {
         title: "seed".to_owned(),
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
+        browsing_context_group: None,
     });
 
     let reloaded_id = history.allocate_entry_id();
@@ -1065,6 +1069,7 @@ fn navigation_history_seed_entry_preserves_pending_update() {
         title: "reloaded".to_owned(),
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
+        browsing_context_group: None,
     });
 
     let (current_index, entries) = history.snapshot();
@@ -1130,6 +1135,7 @@ fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
         title: "initial".to_owned(),
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
+        browsing_context_group: None,
     });
     assert!(history.record_session_history_update(
         "https://example.test/pushed".to_owned(),
@@ -1168,6 +1174,7 @@ fn navigation_history_traversal_reuses_same_document_entries() {
         title: "page".to_owned(),
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
+        browsing_context_group: None,
     });
     assert!(history.record_session_history_update(
         "https://example.test/page?state=pushed".to_owned(),

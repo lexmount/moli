@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use super::PageId;
 use tracing::trace;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct RendererFrameToken {
     pub page_id: PageId,
 }
@@ -18,13 +18,13 @@ impl RendererFrameToken {
 ///
 /// `document.open()` keeps this token and advances [`RendererLifecycleEpoch`];
 /// a cross-document commit allocates a new opaque lifecycle Document id.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct RendererDocumentToken {
     pub page_id: PageId,
     lifecycle_document_id: RendererLifecycleDocumentId,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 struct RendererLifecycleDocumentId(u64);
 
 impl RendererLifecycleDocumentId {
@@ -64,7 +64,7 @@ impl RendererDocumentToken {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct RendererLifecycleEpoch(pub u64);
 
 impl RendererLifecycleEpoch {
@@ -232,7 +232,7 @@ impl RendererDocumentLifecycleWaiter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RendererDocumentLifecycleIdentity {
     pub frame: RendererFrameToken,
     pub document: RendererDocumentToken,

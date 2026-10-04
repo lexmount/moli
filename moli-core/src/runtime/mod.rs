@@ -40,15 +40,16 @@ pub use fetch_deadline::{FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase
 pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
-    RendererDocumentReplacement, RendererLifecycleDecider, RendererLifecycleDecision,
-    RendererLifecycleSnapshot, RendererPageReservationToken, RendererReservedServiceWorkerClient,
-    RendererServiceWorkerMainResourceFetch, RendererSharedWorkerRuntimeDiagnostics,
+    RendererDocumentPreparationTarget, RendererLifecycleDecider, RendererLifecycleDecision,
+    RendererLifecycleSnapshot, RendererPageReplacementTarget, RendererPageReservationToken,
+    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
+    RendererSharedWorkerRuntimeDiagnostics,
 };
 pub use navigation_engine::{
-    BuiltDocumentPage, CommittedDocumentResourceSource, NavigationEngine,
-    NavigationPageStorageHandles, NavigationResourceStorageHandles, NavigationRuntimeConfig,
-    PendingBuiltDocumentPage, PreparedDocumentPage, PreparedDocumentPageCommitConfiguration,
-    PreparedDocumentPageCommitPermit,
+    BuiltDocumentPage, CommittedDocumentPageReplacement, CommittedDocumentResourceSource,
+    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    NavigationRuntimeConfig, PendingBuiltDocumentPage, PreparedDocumentPage,
+    PreparedDocumentPageCommitConfiguration, PreparedDocumentPageCommitPermit,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);

@@ -1,5 +1,86 @@
 use super::*;
 
+pub(crate) struct ScriptVmCapturedDocumentEnvironment {
+    environment: Option<ScriptVmInitialDocumentEnvironment>,
+    isolate: RendererDocumentIsolateHandle,
+}
+
+impl ScriptVmInitialDocumentEnvironment {
+    pub(crate) fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl ScriptVmCapturedDocumentEnvironment {
+    pub(crate) fn origin(&self) -> &str {
+        &self
+            .environment
+            .as_ref()
+            .expect("captured environment has not been consumed")
+            .origin
+    }
+
+    pub(super) fn new(
+        environment: ScriptVmInitialDocumentEnvironment,
+        isolate: RendererDocumentIsolateHandle,
+    ) -> Self {
+        Self {
+            environment: Some(environment),
+            isolate,
+        }
+    }
+
+    pub(crate) fn take(
+        mut self,
+        isolate_identity: usize,
+    ) -> Result<ScriptVmInitialDocumentEnvironment> {
+        anyhow::ensure!(
+            self.isolate.identity_key() == isolate_identity,
+            "inherited V8 security token belongs to another isolate"
+        );
+        Ok(self
+            .environment
+            .take()
+            .expect("captured environment is consumed once"))
+    }
+}
+
+impl Drop for ScriptVmCapturedDocumentEnvironment {
+    fn drop(&mut self) {
+        if let Some(environment) = self.environment.take() {
+            // Reuse the existing entered-isolate release queue, including when
+            // a navigation is cancelled while this isolate is in a pause loop.
+            self.isolate
+                .deferred_context_host_release_queue()
+                .defer_v8_handle_state(vec![Box::new(environment)]);
+        }
+    }
+}
+
+impl ScriptVmInitialDocumentEnvironment {
+    pub(crate) fn inherited_in_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        opener: v8::Local<'_, v8::Object>,
+        origin: String,
+        storage_key: moli_storage_key::MoliStorageKey,
+        base_url: url::Url,
+        policy_container: crate::document_runtime::DocumentPolicyContainer,
+    ) -> Result<Self> {
+        let context = opener
+            .get_creation_context(scope)
+            .ok_or_else(|| anyhow!("navigation initiator has no live creation context"))?;
+        let security_token = (!policy_container.sandbox.forces_opaque_origin)
+            .then(|| v8::Global::new(scope, context.get_security_token(scope)));
+        Ok(Self {
+            security_token,
+            origin,
+            policy_container,
+            fallback_base_url: Some(base_url),
+            storage_key: Some(storage_key),
+        })
+    }
+}
+
 impl ScriptVm {
     pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
         self._context_host
@@ -310,5 +391,55 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .set_fetch_subresource_interception(enabled, resource_type);
+    }
+}
+
+impl ScriptVm {
+    pub(crate) fn capture_about_blank_reload_environment(
+        &mut self,
+        preserve_navigation_referrer: bool,
+    ) -> Result<ScriptVmInitialDocumentEnvironment> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            let origin = host
+                .current_main_document_resource_loader()
+                .expect("a live Document has a resource authority")
+                .fetch_context()
+                .origin()
+                .to_owned();
+            let fallback_base_url = if preserve_navigation_referrer {
+                host.dom_host()
+                    .node(host.document_handle())
+                    .and_then(|node| node.as_document())
+                    .map(|document| document.fallback_base_url().clone())
+            } else {
+                Some(host.document_base_url_for_handle(host.document_handle()))
+            };
+            let mut policy_container = host.document_policy_container().clone();
+            let source = if preserve_navigation_referrer {
+                url::Url::parse(&policy_container.document_referrer).ok()
+            } else {
+                Some(host.document_url().clone())
+            };
+            policy_container.document_referrer = source
+                .as_ref()
+                .and_then(|source| {
+                    moli_fetch::referrer_value(
+                        source,
+                        host.document_url(),
+                        None,
+                        policy_container.referrer_policy.as_deref(),
+                    )
+                })
+                .unwrap_or_default();
+            let token = scope.get_current_context().get_security_token(scope);
+            Ok(ScriptVmInitialDocumentEnvironment {
+                security_token: Some(v8::Global::new(scope, token)),
+                origin,
+                policy_container,
+                fallback_base_url,
+                storage_key: Some(host.top_web_storage_scope().storage_key().clone()),
+            })
+        })
     }
 }

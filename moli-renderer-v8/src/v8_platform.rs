@@ -11,6 +11,8 @@
 
 use crate::page_task_queue::RendererPageV8ForegroundTaskSender;
 pub(crate) use moli_v8_platform::V8PlatformIsolateRegistration;
+mod page_routes;
+pub(crate) use page_routes::{RendererIsolateForegroundTaskRouter, RendererIsolatePageMembership};
 
 /// Isolate-scoped dispatch target installed in the V8 platform registration.
 ///
@@ -31,15 +33,22 @@ pub(crate) struct V8ForegroundTaskWake {
 
 #[derive(Clone, Debug)]
 enum V8ForegroundTaskWakeKind {
-    Page(RendererPageV8ForegroundTaskSender),
+    Page(RendererIsolateForegroundTaskRouter),
     Worker(tokio::sync::mpsc::UnboundedSender<()>),
 }
 
 impl V8ForegroundTaskWake {
-    pub(crate) fn page(sender: RendererPageV8ForegroundTaskSender) -> Self {
-        Self {
-            kind: V8ForegroundTaskWakeKind::Page(sender),
+    pub(crate) fn page_router(&self) -> Option<RendererIsolateForegroundTaskRouter> {
+        match &self.kind {
+            V8ForegroundTaskWakeKind::Page(router) => Some(router.clone()),
+            V8ForegroundTaskWakeKind::Worker(_) => None,
         }
+    }
+
+    pub(crate) fn page(sender: RendererPageV8ForegroundTaskSender) -> anyhow::Result<Self> {
+        Ok(Self {
+            kind: V8ForegroundTaskWakeKind::Page(RendererIsolateForegroundTaskRouter::new(sender)?),
+        })
     }
 
     pub(crate) fn worker(tx: tokio::sync::mpsc::UnboundedSender<()>) -> Self {
@@ -50,9 +59,9 @@ impl V8ForegroundTaskWake {
 
     pub(crate) fn into_platform_wake(self) -> moli_v8_platform::V8ForegroundTaskWake {
         match self.kind {
-            V8ForegroundTaskWakeKind::Page(sender) => {
+            V8ForegroundTaskWakeKind::Page(router) => {
                 moli_v8_platform::V8ForegroundTaskWake::queued(move |task| {
-                    let _ = sender.send(task);
+                    router.dispatch(task);
                 })
             }
             V8ForegroundTaskWakeKind::Worker(tx) => {

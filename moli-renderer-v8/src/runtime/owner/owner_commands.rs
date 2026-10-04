@@ -83,6 +83,7 @@ impl RendererOwnerHandle {
             next_page_id,
             page_wake_tx,
             render_runtime_admission: std::sync::OnceLock::new(),
+            runtime_handle: std::sync::OnceLock::new(),
             inspector_io_wake_tx,
             browser_context_runtime,
             devtools_target_shutdown_registry: Default::default(),
@@ -480,6 +481,37 @@ impl RendererOwnerHandle {
         owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         match command {
+            RendererOwnerCommand::ReserveLivePageReplacement(request) => {
+                let RendererPageReplacementReservationRequest {
+                    token,
+                    reservation_nonce,
+                    replacement_scope: _replacement_scope,
+                } = request;
+                if token.local_host_id != self.state.owner_local_host_id {
+                    return Err(anyhow!(
+                        "replacement reservation belongs to another renderer owner"
+                    ))
+                    .into();
+                }
+                owner_local_store
+                    .reserve_live_page_replacement(token, reservation_nonce)
+                    .map(RendererOwnerReply::LivePageReplacementReserved)
+                    .into()
+            }
+            RendererOwnerCommand::CancelLivePageReplacementReservation {
+                token,
+                reservation_nonce,
+            } => {
+                if token.local_host_id != self.state.owner_local_host_id {
+                    return Err(anyhow!(
+                        "reservation cancellation belongs to another renderer owner"
+                    ))
+                    .into();
+                }
+                owner_local_store
+                    .cancel_live_page_replacement_reservation(token, reservation_nonce);
+                Ok(RendererOwnerReply::PreparedRendererDocumentCanceled).into()
+            }
             RendererOwnerCommand::CreateHtmlPage(request) => {
                 let reservation = request.page_reservation;
                 let outcome = self
@@ -490,6 +522,20 @@ impl RendererOwnerHandle {
                     .await;
                 self.release_page_output_reservation(reservation);
                 outcome
+            }
+            RendererOwnerCommand::CancelPendingAuxiliaryPage { reservation } => {
+                if reservation.local_host_id() != self.state.owner_local_host_id {
+                    return Err(anyhow!(
+                        "auxiliary cancellation belongs to another renderer owner"
+                    ))
+                    .into();
+                }
+                owner_local_store.cancel_staged_auxiliary_page(reservation);
+                Ok(RendererOwnerReply::PendingAuxiliaryPageCanceled).into()
+            }
+            RendererOwnerCommand::ReleaseCapturedDocumentEnvironment { id } => {
+                owner_local_store.release_captured_document_environment(id);
+                Ok(RendererOwnerReply::CapturedDocumentEnvironmentReleased).into()
             }
             RendererOwnerCommand::PrepareStreamingRawDocument { token, request } => {
                 let outcome = self
@@ -525,6 +571,13 @@ impl RendererOwnerHandle {
             }
             RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
                 let token = permit.prepared_document();
+                if token.replacement.is_some() {
+                    owner_local_store.cancel_prepared_document(token);
+                    return Err(anyhow!(
+                        "a prepared Page replacement requires the stable Page commit entry point"
+                    ))
+                    .into();
+                }
                 if token.local_host_id() != self.state.owner_local_host_id {
                     return Err(anyhow!(
                         "prepared document commit permit belongs to renderer owner {}, not {}",
@@ -543,6 +596,39 @@ impl RendererOwnerHandle {
                         .await
                     }
                     Err(error) => Err(error).into(),
+                }
+            }
+            RendererOwnerCommand::CommitPreparedPageReplacement { permit } => {
+                let reservation = permit.prepared_document();
+                if reservation.local_host_id() != self.state.owner_local_host_id
+                    || reservation.replacement.is_none()
+                {
+                    return Err(anyhow!(
+                        "Page replacement permit does not belong to this renderer owner"
+                    ))
+                    .into();
+                }
+                match owner_local_store.take_prepared_document(reservation) {
+                    Ok(residence) => {
+                        Box::pin(self.commit_prepared_page_replacement(reservation, residence))
+                            .await
+                    }
+                    Err(error) => {
+                        let document_preserved = reservation.replacement.is_some_and(|admission| {
+                            self.state
+                                .page_table
+                                .active_vm_creation_id(reservation.page_id())
+                                == Some(admission.expected_vm_creation_id)
+                        });
+                        let error = if document_preserved {
+                            crate::runtime::RendererPageReplacementError::document_preserved(error)
+                        } else {
+                            crate::runtime::RendererPageReplacementError::document_unavailable(
+                                error,
+                            )
+                        };
+                        Err(error.into()).into()
+                    }
                 }
             }
             RendererOwnerCommand::CancelPreparedRendererDocument { token } => {

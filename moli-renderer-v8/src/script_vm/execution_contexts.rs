@@ -840,7 +840,7 @@ impl ScriptVm {
         );
     }
 
-    pub(crate) fn retire_isolated_worlds_for_document_owner(
+    pub(super) fn retire_isolated_worlds_for_document_owner(
         &mut self,
         owner: FrameDocumentTaskOwner,
     ) -> usize {
@@ -870,7 +870,7 @@ impl ScriptVm {
         retired_count
     }
 
-    pub(crate) fn rebind_isolated_worlds_for_document_owner_transition(
+    pub(super) fn rebind_isolated_worlds_for_document_owner_transition(
         &mut self,
         retired_owner: FrameDocumentTaskOwner,
         current_owner: FrameDocumentTaskOwner,

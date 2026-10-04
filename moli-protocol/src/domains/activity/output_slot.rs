@@ -38,6 +38,8 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     JavascriptDialog,
     WindowOpen,
     Popup,
+    CloseAuxiliaryWindow,
+    NavigateAuxiliaryWindow,
     SharedWorkerTargetLifecycle,
     ServiceWorkerTargetLifecycle,
     DedicatedWorkerTargetLifecycle,
@@ -69,6 +71,8 @@ impl ProtocolOutputSlot {
             | Self::Download
             | Self::JavascriptDialog
             | Self::Popup
+            | Self::CloseAuxiliaryWindow
+            | Self::NavigateAuxiliaryWindow
             | Self::SharedWorkerTargetLifecycle
             | Self::ServiceWorkerTargetLifecycle
             | Self::DedicatedWorkerTargetLifecycle
@@ -101,7 +105,9 @@ impl ProtocolOutputSlot {
         self,
     ) -> ProtocolOutputResponseOrder {
         match self {
-            Self::TopLevelLocationNavigation
+            Self::CloseAuxiliaryWindow
+            | Self::NavigateAuxiliaryWindow
+            | Self::TopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal
             | Self::Download
             | Self::SharedWorkerTargetLifecycle
@@ -232,6 +238,8 @@ impl ProtocolOutputSlot {
                 | Self::JavascriptDialog
                 | Self::WindowOpen
                 | Self::Popup
+                | Self::CloseAuxiliaryWindow
+                | Self::NavigateAuxiliaryWindow
                 | Self::DocumentTitleChanged
                 | Self::DocumentLifecycle
                 | Self::ChildFrameActivity

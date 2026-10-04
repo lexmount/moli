@@ -13,6 +13,61 @@ use super::navigation_window::{window_history_for_holder, window_navigation_for_
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 
+/// Preserve committed inherited-origin entries when a browser navigation
+/// replaces their Document. The browser's position determines the history
+/// operation; unsupported joint-history positions keep the existing path.
+pub(crate) fn capture_inherited_history_for_browser_commit(
+    scope: &mut v8::PinScope<'_, '_>,
+    url: &url::Url,
+    position: moli_session_history::SessionHistoryPosition,
+) -> Option<NavigationHistoryEntrySeed> {
+    let owner = scope.get_current_context().global(scope);
+    let history = window_history_for_holder(scope, owner)?;
+    let entries = super::navigation_serialize::serialize_history_entries(scope, history);
+    if !entries.iter().any(|entry| {
+        entry
+            .inherited_origin
+            .as_deref()
+            .is_some_and(|origin| origin != "null")
+    }) {
+        return None;
+    }
+    let current = super::navigation_entry::history_index(scope, history);
+    let target = u32::try_from(position.index()).ok()?;
+    let mut seed = if position.length() == entries.len()
+        && entries
+            .iter()
+            .any(|entry| entry.history_index == target && entry.url == url.as_str())
+    {
+        if current == target {
+            moli_page_types::reload_navigation_seed(entries, current)?
+        } else {
+            moli_page_types::traversal_navigation_seed_candidate(entries, current, target)?.seed
+        }
+    } else {
+        let mutation = if target == current && position.length() == entries.len() {
+            moli_page_types::NavigationHistoryMutation::Replace
+        } else if target == current.checked_add(1)?
+            && position.length() == position.index().checked_add(1)?
+        {
+            moli_page_types::NavigationHistoryMutation::Push
+        } else {
+            return None;
+        };
+        let navigation_index =
+            super::navigation_entry::navigation_current_entry_index(scope, owner).unwrap_or(0);
+        moli_page_types::cross_document_navigation_seed(
+            entries,
+            current,
+            navigation_index,
+            url,
+            mutation,
+        )
+    };
+    super::session_history::capture_for_navigation(scope, owner, &mut seed);
+    Some(seed)
+}
+
 pub(crate) fn install_navigation_bootstrap_entry(
     scope: &mut v8::PinScope<'_, '_>,
     entry_seed: &NavigationHistoryEntrySeed,

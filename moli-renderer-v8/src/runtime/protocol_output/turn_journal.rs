@@ -172,6 +172,17 @@ impl RendererTurnOutputJournal {
         Self::settle_locked(&mut state)
     }
 
+    pub(crate) fn take_unpublished_records_for_initial_context_adoption(
+        &self,
+    ) -> anyhow::Result<Vec<PendingRendererOutputRecord>> {
+        let mut state = self.state.lock();
+        anyhow::ensure!(
+            !state.closed && state.last_published_sequence.is_none(),
+            "initial Context adoption cannot reorder an already published stream"
+        );
+        Ok(std::mem::take(&mut state.records))
+    }
+
     pub(crate) fn take_pending_for_resolution(&self) -> Option<PendingRendererOutputPublication> {
         let mut state = self.state.lock();
         Self::take_pending_locked(&mut state)

@@ -1,3 +1,5 @@
+use crate::runtime::page_vm::PageVmSourceDocumentCommit;
+
 use super::navigation_follow::CommittedNavigationBootstrapCompletion;
 use super::*;
 
@@ -110,19 +112,27 @@ impl CommittedNavigationEntry {
     /// Called only after the local-task guard owns this committed residence.
     /// A panic during detachment, lifecycle termination or source retirement
     /// must return this type to the owner instead of restoring a live Page.
-    pub(super) fn commit_source(
-        &mut self,
-        commit: crate::script_vm::MainWindowProxyNavigationCommit,
-    ) {
-        commit.detach();
+    pub(super) fn commit_source(&mut self, commit: PageVmSourceDocumentCommit) {
+        let reused_initial_window = match commit {
+            PageVmSourceDocumentCommit::ReplaceWindow(commit) => {
+                commit.detach();
+                None
+            }
+            PageVmSourceDocumentCommit::ReuseInitialWindow(window) => Some(window),
+        };
         #[cfg(test)]
         self.navigation
             .inject_commit_panic_for_test("x-moli-test-panic-after-source-detach");
         self.entry.page_vm_mut().record_main_navigation_commit();
-        self.retire_source();
+        self.retire_source(reused_initial_window);
     }
 
-    fn retire_source(&mut self) {
+    fn retire_source(
+        &mut self,
+        reused_initial_window: Option<
+            std::rc::Rc<std::cell::RefCell<Option<crate::script_vm::ScriptVm>>>,
+        >,
+    ) {
         self.entry.retire_document_lifecycle_turn();
         let mut page_vm = if let Some(pending) = self.entry.pending_phase_one_navigation.take() {
             let (residence, mut metadata) = pending.into_parts();
@@ -138,7 +148,18 @@ impl CommittedNavigationEntry {
         #[cfg(test)]
         self.navigation
             .inject_commit_panic_for_test("x-moli-test-panic-during-source-retirement");
-        page_vm.retire_committed_main_script_vm();
+        if let Some(window) = reused_initial_window {
+            let vm = page_vm
+                .vm
+                .take()
+                .expect("initial Window reuse requires the committed source ScriptVm");
+            assert!(
+                window.replace(Some(vm)).is_none(),
+                "an initial Window may only be transferred once"
+            );
+        } else {
+            page_vm.retire_committed_main_script_vm();
+        }
         self.entry.vm = None;
     }
 
@@ -385,6 +406,35 @@ impl LivePageEntry {
         self.renderer_navigation_follow.settle(current, succeeded);
     }
 
+    pub(super) fn validate_prepared_document_response(
+        &mut self,
+        expected_vm_creation_id: u64,
+        residence: RendererPreparedDocumentResidence,
+    ) -> Result<PageVmValidatedFollowedNavigationCommit> {
+        let stable = self.slot.entry();
+        ensure!(
+            stable.is_active()
+                && stable.vm_creation_id() == expected_vm_creation_id
+                && self.page_vm().creation_id == expected_vm_creation_id
+                && self.page_vm().has_live_script_vm(),
+            "prepared replacement no longer belongs to the active Document"
+        );
+        let RendererPreparedDocumentResidence {
+            request,
+            isolate_bootstrap,
+            isolate_reservation,
+            ..
+        } = residence;
+        let dispatch = request.top_level_navigation_dispatch;
+        let navigation = self.page_vm_mut().validate_prepared_document_response(
+            request,
+            isolate_bootstrap,
+            isolate_reservation,
+        )?;
+        self.top_level_navigation_dispatch = dispatch;
+        Ok(navigation)
+    }
+
     /// A replacement PageVm becomes the active owner-local runtime before its
     /// view is committed to the stable cross-thread Page slot.
     pub(in crate::runtime) fn has_uncommitted_page_vm(&self) -> bool {
@@ -403,6 +453,15 @@ impl LivePageEntry {
 
     pub(super) fn publish_replacement_document_commit(
         &mut self,
+    ) -> Result<PublishedReplacementDocument> {
+        self.publish_replacement_document_commit_with_initiator(
+            NavigationInitiatorMetadata::Preserve,
+        )
+    }
+
+    pub(super) fn publish_replacement_document_commit_with_initiator(
+        &mut self,
+        initiator: NavigationInitiatorMetadata,
     ) -> Result<PublishedReplacementDocument> {
         let stable_before = self.slot.entry();
         ensure!(
@@ -434,7 +493,14 @@ impl LivePageEntry {
 
         self.page_vm_mut()
             .settle_replacement_document_commit(navigation_handoff)?;
-        RendererOwnerLocalStore::commit_active_vm_page_state_on_entry(self)?;
+        match initiator {
+            NavigationInitiatorMetadata::Preserve => {
+                RendererOwnerLocalStore::commit_active_vm_page_state_on_entry(self)?;
+            }
+            NavigationInitiatorMetadata::Replace(url) => {
+                RendererOwnerLocalStore::commit_replacement_vm_page_state_on_entry(self, url)?;
+            }
+        }
         let stable_after = self.slot.entry();
         ensure!(
             stable_after.vm_creation_id() == vm_creation_id,

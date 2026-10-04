@@ -750,6 +750,33 @@ impl DocumentParserSession {
         )
     }
 
+    /// Rebind an unstarted response parser to the fresh Document admitted in
+    /// an existing Window. Preserve buffered bytes and the EOF request.
+    pub(crate) fn rebind_main_document_before_parsing(
+        &mut self,
+        document_url: Url,
+        document_handle: NativeNodeId,
+        owner: &mut impl LiveDocumentParserOwner,
+        scripting_enabled: bool,
+        content_type: &str,
+    ) {
+        let input = self.snapshot_pending_input();
+        let finish_requested =
+            self.control.finish_request_state() != DocumentParserFinishRequestState::NotRequested;
+        let xml = matches!(self.backend(), ExecutableDocumentParserBackend::Xml(_));
+        *self = if xml {
+            Self::start_finite_live_xml_document(document_url, document_handle)
+        } else if content_type != "text/html" {
+            Self::start_finite_live_text_document(document_url, document_handle, owner)
+        } else {
+            Self::start_finite_live_document(document_url, document_handle, scripting_enabled)
+        };
+        self.queue_arrived_chunk(input);
+        if finish_requested {
+            self.request_finish();
+        }
+    }
+
     pub(crate) fn start_main_xml_document(document_url: Url) -> Self {
         Self::new_xml(
             XmlDocumentStream::new_top_level_document(document_url),

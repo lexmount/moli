@@ -6,7 +6,7 @@ mod tests;
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use moli_core::RendererOutputFence;
 use moli_core::page::{
-    NavigationRedirect, Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
+    NavigationRedirect, RendererMainDocumentCommit, RendererPageCreationArtifacts,
     RendererPendingDownloadActivation, RendererRuntimeRealmInfo, SubresourceRequestInitiatorType,
 };
 use moli_fetch::{
@@ -19,9 +19,9 @@ use url::Url;
 use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
-    CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, NavigationRequestBlocked, NoContentNavigation, ResponseCommitReady,
-    TargetRuntimeSlot,
+    CommittedNavigationPage, CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation,
+    NavigationDispatchState, NavigationLoadOutcome, NavigationRequestBlocked, NoContentNavigation,
+    ResponseCommitReady, TargetRuntimeSlot,
 };
 
 #[cfg(test)]
@@ -34,7 +34,7 @@ use gate::{
 };
 
 pub(crate) struct MaterializedLoadedDocumentProgress {
-    pub(crate) page: Page,
+    pub(crate) page: CommittedNavigationPage,
     pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
     pub(crate) page_creation_artifacts: RendererPageCreationArtifacts,
     pub(crate) final_url: Url,
@@ -319,7 +319,7 @@ fn materialize_failed_navigation_progress(
 pub(crate) fn materialize_loaded_navigation_progress(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
-    navigation: LoadedNavigation,
+    navigation: LoadedNavigation<impl Into<CommittedNavigationPage>>,
 ) -> MaterializedLoadedDocumentProgress {
     let LoadedNavigation {
         page,
@@ -341,7 +341,7 @@ pub(crate) fn materialize_loaded_navigation_progress(
         None => document_progress_transfer.into_progress_gate(conn, state, &final_url),
     };
     MaterializedLoadedDocumentProgress {
-        page,
+        page: page.into(),
         pending_download,
         page_creation_artifacts,
         final_url,

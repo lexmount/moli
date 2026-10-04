@@ -129,6 +129,7 @@ pub(super) fn create_navigation_entry<'s>(
     let public_key = navigation_entry_public_token(key);
     let entry = HistoryEntry {
         url: url.to_owned(),
+        inherited_origin: None,
         referrer_policy: referrer_policy.map(str::to_owned),
         history_state: None,
         navigation_state: None,

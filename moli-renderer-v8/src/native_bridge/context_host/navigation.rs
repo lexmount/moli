@@ -63,6 +63,9 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) request_body: Option<Vec<u8>>,
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
+    pub(crate) navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
+    pub(crate) initial_document_environment:
+        Option<crate::runtime::RendererCapturedDocumentEnvironment>,
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
@@ -183,6 +186,8 @@ impl JsContextHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
+                navigation_initiator: None,
+                initial_document_environment: None,
                 entry_seed,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
@@ -214,6 +219,8 @@ impl JsContextHost {
                 request_body: None,
                 request_headers: Vec::new(),
                 browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+                navigation_initiator: None,
+                initial_document_environment: None,
                 entry_seed: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
@@ -221,6 +228,19 @@ impl JsContextHost {
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
+    }
+
+    pub(crate) fn set_pending_location_navigation_source(
+        &mut self,
+        initiator: crate::runtime::RendererNavigationInitiator,
+        environment: Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+    ) {
+        if let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        {
+            pending.navigation_initiator = Some(initiator);
+            pending.initial_document_environment = environment;
+        }
     }
 
     pub(crate) fn has_pending_location_navigation(&self) -> bool {

@@ -758,7 +758,6 @@ mod tests {
                 &mut conn,
                 &crate::conn::CommandOwnerScope::for_session(SESSION_ID),
                 source_residence,
-                agent_token,
                 &observation,
             );
         let mut command_context = CommandDispatchContext::default();

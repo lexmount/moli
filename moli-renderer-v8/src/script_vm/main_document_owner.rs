@@ -1,6 +1,7 @@
 use super::{ScriptVm, input_helpers::clear_input_dispatch_state};
 use crate::frame_owner_model::{
-    FrameDocumentTaskOwner, MainDocumentInteractiveLifecycleAction, MainDocumentLoadCompletionState,
+    DocumentInspectorBindingTransition, FrameDocumentTaskOwner,
+    MainDocumentInteractiveLifecycleAction, MainDocumentLoadCompletionState,
 };
 
 impl ScriptVm {
@@ -108,11 +109,14 @@ impl ScriptVm {
                 current_owner = ?transition.current_owner(),
                 "applying main document owner replacement at runtime turn boundary"
             );
-            rebound_isolated_world_count += self
-                .rebind_isolated_worlds_for_document_owner_transition(
-                    transition.retired_owner(),
-                    transition.current_owner(),
-                );
+            assert_eq!(
+                transition.context_transition().inspector_binding(),
+                DocumentInspectorBindingTransition::Preserved,
+                "Inspector replacement must execute synchronously before runtime replacement"
+            );
+            let prepared =
+                self.prepare_document_context_transition(transition.context_transition());
+            rebound_isolated_world_count += self.finish_document_context_transition(prepared).1;
             previous_current = Some(transition.current_owner());
         }
 
@@ -134,6 +138,10 @@ impl ScriptVm {
             );
         }
 
+        self.reset_main_document_local_state();
+    }
+
+    pub(super) fn reset_main_document_local_state(&mut self) {
         // DocumentRuntime clears script/module owners synchronously inside the
         // replacement transaction. Layout services and downloadable fonts live
         // on the context host, while input dispatch lives on ScriptVm, so retire them here from the exact

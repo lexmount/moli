@@ -190,6 +190,7 @@ mod tests {
             let scope = &mut v8::ContextScope::new(scope, context);
             let entry = HistoryEntry {
                 url: "https://example.test/".to_owned(),
+                inherited_origin: None,
                 id: "entry".to_owned(),
                 key: NavigationHistoryEntryKey::allocate(),
                 document: NavigationHistoryDocumentId::allocate(),

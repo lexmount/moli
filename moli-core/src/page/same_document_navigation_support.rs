@@ -8,7 +8,18 @@ impl Page {
         &self,
         url: String,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::NavigateTopLevelSameDocument { url })
+        self.start_top_level_same_document_navigation_with_history_replacement(url, false)
+    }
+
+    pub fn start_top_level_same_document_navigation_with_history_replacement(
+        &self,
+        url: String,
+        replace_current: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::NavigateTopLevelSameDocument {
+            url,
+            replace_current,
+        })
     }
 
     pub fn finish_top_level_same_document_navigation_command_turn(

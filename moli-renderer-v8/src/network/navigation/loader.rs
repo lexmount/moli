@@ -275,6 +275,10 @@ impl NavigationResourceLoader {
     }
 
     pub fn note_service_worker_response_ready(&self) -> Result<()> {
+        self.note_external_response_ready()
+    }
+
+    pub(crate) fn note_external_response_ready(&self) -> Result<()> {
         self.begin_fetch()?;
         self.finish_response_ready()
     }

@@ -153,8 +153,7 @@ fn preparation_wakes_the_pause_loop_and_covers_repeated_pauses() {
 
 async fn prepare(
     runtime: &crate::JsRuntime,
-    reservation: crate::RendererPageReservationToken,
-    replacement: Option<RendererDocumentReplacement>,
+    reservation: impl Into<crate::RendererDocumentPreparationTarget>,
 ) -> anyhow::Result<crate::PreparedRendererDocument> {
     let loader = crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())?;
     let url = url::Url::parse("https://replacement.test/").unwrap();
@@ -162,7 +161,6 @@ async fn prepare(
         std::time::Duration::from_secs(30),
         runtime.prepare_streaming_raw_document_from_external_body(
             reservation,
-            replacement,
             url.clone(),
             url,
             None,
@@ -198,93 +196,59 @@ async fn owner_barrier(runtime: &crate::JsRuntime) {
         .unwrap();
 }
 
+fn replacement_target(
+    page: &crate::RendererPageHandle,
+    pause: &RendererInspectorPauseBridge,
+) -> RendererPageReplacementTarget {
+    let mut target = page.document_replacement_target(moli_fetch::FetchCancelHandle::new());
+    target.replacement = replacement(pause);
+    target
+}
+
 #[tokio::test]
 async fn renderer_prepare_keeps_scope_until_cancel_or_commit() {
     let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
     let pause = RendererInspectorPauseBridge::default();
     for commit in [false, true] {
-        let input = replacement(&pause);
-        let prepared = prepare(
-            &runtime,
-            runtime.reserve_page_for_creation(),
-            Some(input.clone()),
-        )
-        .await
-        .unwrap();
+        let target = replacement_target(&page, &pause);
+        let prepared = prepare(&runtime, target.clone()).await.unwrap();
         assert_replacement_exit(&pause);
         if commit {
             let permit = prepared.issue_commit_permit();
-            let (mut page, _, _, _, _) = prepared.commit(permit).await.unwrap();
-            page.close_async().await.unwrap();
+            let replacement = prepared.commit_page_replacement(permit).await.unwrap();
+            page.adopt_document_replacement(replacement).unwrap();
         } else {
             prepared.cancel().await.unwrap();
         }
         assert_debugging_enabled(&pause);
-        drop(input);
+        drop(target);
     }
-}
-
-#[tokio::test]
-async fn canceled_replacement_is_rejected_before_renderer_admission() {
-    let runtime = crate::JsRuntime::initialize();
-    let (output_tx, mut output_rx) = crate::runtime::renderer_output_transport_channel();
-    runtime.set_renderer_output_transport_sender(output_tx);
-    let reservation = runtime.reserve_page_for_creation();
-    let pause = RendererInspectorPauseBridge::default();
-    let input = replacement(&pause);
-    input.cancellation.cancel();
-    let result = prepare(&runtime, reservation, Some(input)).await;
-    assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
-    assert_debugging_enabled(&pause);
-    assert!(matches!(
-        output_rx.try_recv(),
-        Ok(crate::runtime::RendererOutputTransportMessage::PageReservationReleased {
-            owner_local_host_id, page_id,
-        }) if owner_local_host_id == reservation.local_host_id() && page_id == reservation.page_id()
-    ));
-    assert!(matches!(
-        output_rx.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    ));
-    assert_eq!(
-        runtime
-            .document_isolate_accounting_for_diagnostics()
-            .created,
-        0
-    );
+    page.close_async().await.unwrap();
 }
 
 #[tokio::test]
 async fn failed_renderer_prepare_releases_scope() {
     let runtime = crate::JsRuntime::initialize();
     let other_runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&other_runtime).await;
     let pause = RendererInspectorPauseBridge::default();
-    let result = prepare(
-        &runtime,
-        other_runtime.reserve_page_for_creation(),
-        Some(replacement(&pause)),
-    )
-    .await;
-    assert!(
-        result.is_err(),
-        "another owner's reservation must be rejected"
-    );
+    let result = prepare(&runtime, replacement_target(&page, &pause)).await;
+    assert!(result.is_err(), "another owner's Page must be rejected");
     assert_debugging_enabled(&pause);
+    page.close_async().await.unwrap();
 }
 
 #[tokio::test]
 async fn rejected_renderer_command_releases_scope() {
     let runtime = crate::JsRuntime::initialize();
+    let page = live_page_for_replacement_target_test(&runtime).await;
     let pause = RendererInspectorPauseBridge::default();
     runtime.close_owner_command_admission_for_testing();
     assert!(
-        prepare(
-            &runtime,
-            runtime.reserve_page_for_creation(),
-            Some(replacement(&pause))
-        )
-        .await
-        .is_err()
+        prepare(&runtime, replacement_target(&page, &pause))
+            .await
+            .is_err()
     );
     assert_debugging_enabled(&pause);
 }
@@ -292,14 +256,11 @@ async fn rejected_renderer_command_releases_scope() {
 #[tokio::test]
 async fn dropping_prepared_handle_retires_owner_scope() {
     let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
     let pause = RendererInspectorPauseBridge::default();
-    let prepared = prepare(
-        &runtime,
-        runtime.reserve_page_for_creation(),
-        Some(replacement(&pause)),
-    )
-    .await
-    .unwrap();
+    let prepared = prepare(&runtime, replacement_target(&page, &pause))
+        .await
+        .unwrap();
     assert_replacement_exit(&pause);
     drop(prepared);
     owner_barrier(&runtime).await;
@@ -310,18 +271,20 @@ async fn dropping_prepared_handle_retires_owner_scope() {
             .reserved,
         0
     );
+    page.close_async().await.unwrap();
 }
 
 #[tokio::test]
 async fn dropping_inflight_prepare_retires_queued_document_and_scope() {
     let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
     let pause = RendererInspectorPauseBridge::default();
+    let mut pending = Box::pin(prepare(&runtime, replacement_target(&page, &pause)));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    // Finish reservation first, then hold the actual prepare command. The
+    // reservation-cancellation test below covers cancellation before this point.
+    owner_barrier(&runtime).await;
     let (entered, release) = runtime.install_owner_command_dispatch_gate_for_testing();
-    let mut pending = Box::pin(prepare(
-        &runtime,
-        runtime.reserve_page_for_creation(),
-        Some(replacement(&pause)),
-    ));
     assert!(futures_util::poll!(&mut pending).is_pending());
     let reached_gate = entered.recv_timeout(std::time::Duration::from_secs(30));
     assert_replacement_exit(&pause);
@@ -339,4 +302,114 @@ async fn dropping_inflight_prepare_retires_queued_document_and_scope() {
             .reserved,
         0
     );
+    page.close_async().await.unwrap();
+}
+
+async fn live_page_for_replacement_target_test(
+    runtime: &crate::JsRuntime,
+) -> crate::RendererPageHandle {
+    let loader =
+        crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let url = url::Url::parse("https://replacement.test/initial").unwrap();
+    let (page, _, _, _, _) = runtime
+        .create_streaming_raw_page_from_external_body(
+            url.clone(),
+            url,
+            None,
+            false,
+            0,
+            Vec::new(),
+            200,
+            vec![("content-type".into(), b"text/html".to_vec())],
+            &loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            crate::ExternalRawDocumentBodyStream::from_bytes(
+                b"<!doctype html><p>original</p>".to_vec(),
+            ),
+            false,
+            crate::PageVmInitStage::Load,
+            crate::RendererReplyBoundary::Stage,
+            crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
+            crate::RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+        .unwrap();
+    page
+}
+
+#[tokio::test]
+async fn existing_page_target_is_inert_until_response_preparation() {
+    let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
+    let pause = RendererInspectorPauseBridge::default();
+    let mut target = page.document_replacement_target(moli_fetch::FetchCancelHandle::new());
+    target.replacement = replacement(&pause);
+    assert_debugging_enabled(&pause);
+    drop(target.clone());
+    assert_debugging_enabled(&pause);
+    let prepared = prepare(&runtime, target).await.unwrap();
+    assert_replacement_exit(&pause);
+    assert_eq!(prepared.token().page_id(), page.renderer_page_id());
+    prepared.cancel().await.unwrap();
+    assert_debugging_enabled(&pause);
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn canceled_existing_page_target_never_reserves_or_wakes_the_document() {
+    let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
+    let pause = RendererInspectorPauseBridge::default();
+    let cancellation = moli_fetch::FetchCancelHandle::new();
+    let mut target = page.document_replacement_target(cancellation.clone());
+    target.replacement = RendererDocumentReplacement::new(pause.clone(), cancellation.clone());
+    cancellation.cancel();
+    let result = prepare(&runtime, target).await;
+    assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
+    assert_debugging_enabled(&pause);
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        0
+    );
+    assert_eq!(runtime.renderer_owner_handle().len(), 1);
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn abandoned_existing_page_reservation_releases_its_exact_pause_scope() {
+    let runtime = crate::JsRuntime::initialize();
+    let mut page = live_page_for_replacement_target_test(&runtime).await;
+    let pause = RendererInspectorPauseBridge::default();
+    let mut target = page.document_replacement_target(moli_fetch::FetchCancelHandle::new());
+    target.replacement = replacement(&pause);
+    let (entered, release) = runtime.install_owner_command_dispatch_gate_for_testing();
+    let mut pending = Box::pin(prepare(&runtime, target));
+    assert!(futures_util::poll!(&mut pending).is_pending());
+    let reached = entered.recv_timeout(std::time::Duration::from_secs(30));
+    assert_replacement_exit(&pause);
+    drop(pending);
+    assert_replacement_exit(&pause);
+    release.send(()).unwrap();
+    reached.unwrap();
+    owner_barrier(&runtime).await;
+    assert_debugging_enabled(&pause);
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        0
+    );
+    let replacement = prepare(
+        &runtime,
+        page.document_replacement_target(moli_fetch::FetchCancelHandle::new()),
+    )
+    .await
+    .unwrap();
+    replacement.cancel().await.unwrap();
+    page.close_async().await.unwrap();
 }

@@ -1,5 +1,74 @@
 use super::*;
 
+#[test]
+fn window_open_empty_url_reuses_lightweight_document_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const popup = open("about:blank#report", "report");
+              popup.marker = 73;
+              popup.document.body.textContent = "keep this document";
+              const document = popup.document;
+              const historyLength = popup.history.length;
+              const reused = open("", "report");
+              return reused === popup && reused.document === document &&
+                reused.marker === 73 && reused.document.body.textContent === "keep this document" &&
+                reused.location.href === "about:blank#report" && reused.history.length === historyLength;
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+    let actions = vm.take_pending_popup_activations();
+    assert_eq!(actions.len(), 2);
+    assert!(actions[0].navigation_requested());
+    assert!(!actions[1].navigation_requested());
+    assert_eq!(actions[0].popup_id(), actions[1].popup_id());
+}
+
+#[test]
+fn window_open_empty_url_preserves_special_target_document() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    assert_eq!(
+        vm.eval(
+            r#"["_self", "_parent", "_top"].every(target => {
+              const before = document;
+              return open("", target) === window && document === before && location.href === "https://example.com/";
+            })"#,
+        )
+        .unwrap(),
+        "true"
+    );
+    assert!(vm.take_pending_popup_activations().is_empty());
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[tokio::test]
+async fn window_open_lightweight_named_reuse_updates_dom_opener_synchronously() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"window.child=open('about:blank','child');
+           const html='<script>opener.__siblingImmediate=open("", "child").opener===window;<\/script>';
+           window.sibling=open(URL.createObjectURL(new Blob([html], {type:'text/html'})), 'sibling');"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(window.__siblingImmediate)",
+        "true",
+        "sibling script should observe its updated DOM opener immediately",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("child.opener === sibling && child.opener !== window")
+            .unwrap(),
+        "true"
+    );
+}
+
 #[tokio::test]
 async fn retained_popup_storage_managers_use_bound_popup_owner() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

@@ -41,7 +41,10 @@ pub(crate) enum RendererPageStateCapturePolicy {
 }
 
 mod access;
+mod auxiliary_page;
 mod browser_context_runtime;
+mod captured_document_environment;
+pub use captured_document_environment::RendererCapturedDocumentEnvironment;
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod document_replacement;
@@ -52,10 +55,20 @@ mod navigation;
 mod nested_main;
 mod owner;
 mod owner_deadline_index;
+pub use auxiliary_page::RendererPendingAuxiliaryPage;
+pub(crate) use auxiliary_page::{
+    RendererAuxiliaryPageAllocator, RendererRelatedInitialEmptyPageInit,
+};
+
 mod owner_local;
 mod owner_local_store;
 mod owner_maintenance;
-pub use document_replacement::RendererDocumentReplacement;
+pub(crate) use document_replacement::RendererDocumentReplacement;
+pub use document_replacement::{
+    RendererDocumentPreparationTarget, RendererPageReplacementError,
+    RendererPageReplacementFailureDisposition, RendererPageReplacementReservationRequest,
+    RendererPageReplacementTarget,
+};
 mod page;
 mod page_commands;
 mod page_context_cancel;
@@ -261,9 +274,11 @@ pub(crate) use self::browser_context_runtime::{
     RendererWorkerContextRuntime,
 };
 pub use self::browser_context_runtime::{
-    DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
-    RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
-    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
+    DetachedParserScriptFetchContinuation, RendererAuxiliaryNavigationKind,
+    RendererAuxiliaryWindow, RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
+    RendererBrowserContextRuntimeOwnerAccess, RendererBrowsingContextGroup,
+    RendererBrowsingContextName, RendererReservedServiceWorkerClient,
+    RendererServiceWorkerMainResourceFetch,
 };
 pub(crate) use self::document_lifecycle::{
     RendererDocumentLifecycleDriveAdmission, RendererDocumentLifecycleJournalHandle,
@@ -291,6 +306,7 @@ pub use self::owner::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply,
     RendererPreparedDocumentCommitConfiguration,
 };
+pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
     RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
@@ -314,23 +330,23 @@ pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::RendererPageState;
 use self::page_surface::RendererPageTable;
-pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
     PendingWorkerRuntimeInspectorSessionResponse, RendererAccessibilityPayloadsForObjectId,
     RendererActivityDiagnostics, RendererAgentAttachmentId, RendererAutofillAddressField,
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
-    RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
-    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
-    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerTargetEvent,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
-    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererAuxiliaryDocumentResponse, RendererCaptureScreencastFrameReply,
+    RendererCaptureScreenshotReply, RendererCapturedScreencastFrame, RendererCapturedScreenshot,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererCountEntry,
+    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
+    RendererDevToolsAgentToken, RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
+    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
+    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,
@@ -349,10 +365,11 @@ pub use self::page_surface::{
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
     RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
-    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
-    RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
-    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
-    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
+    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
+    RendererNavigationInitiator, RendererPageCommand, RendererPageCommandPostResponseContinuation,
+    RendererPageCookieFacadeSnapshotReply, RendererPageCreationDiagnostics,
+    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
+    RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
@@ -382,6 +399,9 @@ pub(crate) use self::page_surface::{
     RendererInspectorPageCommand, RendererRuntimeCommandOutputRecorder,
     RendererRuntimeCommandOutputSettlement, RendererRuntimeInspectorResponsePublication,
     RendererRuntimeInspectorSessionResponseSettlement, RendererRuntimeObservableSourceQueue,
+};
+pub use self::page_surface::{
+    RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;
@@ -525,7 +545,7 @@ thread_local! {
         RefCell::new(PageVmDropTracker::default());
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct PageId(u64);
 
 impl PageId {
@@ -552,6 +572,13 @@ impl PageId {
 pub struct RendererPageReservationToken {
     local_host_id: RendererOwnerLocalHostId,
     page_id: PageId,
+    replacement: Option<RendererPageReplacementAdmission>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct RendererPageReplacementAdmission {
+    expected_vm_creation_id: u64,
+    reservation_nonce: u64,
 }
 
 impl RendererPageReservationToken {
@@ -559,6 +586,22 @@ impl RendererPageReservationToken {
         Self {
             local_host_id,
             page_id,
+            replacement: None,
+        }
+    }
+
+    fn for_replacement(
+        token: RendererPageToken,
+        expected_vm_creation_id: u64,
+        reservation_nonce: u64,
+    ) -> Self {
+        Self {
+            local_host_id: token.local_host_id,
+            page_id: token.page_id,
+            replacement: Some(RendererPageReplacementAdmission {
+                expected_vm_creation_id,
+                reservation_nonce,
+            }),
         }
     }
 
@@ -807,3 +850,5 @@ pub(super) enum PageVmRuntimeExpressionAwaitAdvance {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use page_surface::AuxiliaryDocumentResponseReceiver;

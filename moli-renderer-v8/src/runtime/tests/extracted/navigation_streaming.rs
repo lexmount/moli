@@ -1986,3 +1986,754 @@ globalThis.__lm_replacement_document_write_events.push('inline-after');
         .await
         .expect("replacement document.write page should close");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn canceling_prepared_live_page_replacement_preserves_page_and_output_stream() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let initial_url = url::Url::parse("https://example.test/replacement/initial").unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        initial_url.clone(),
+        "<!doctype html><p>original</p><script>window.retained = {value: 17}</script>",
+    )
+    .await;
+    let testing = RendererPageTestingHandle::new_for_testing(&page);
+    let before = testing.renderer_page_view_async().await.unwrap();
+    let baseline_isolates = runtime.document_isolate_accounting_for_diagnostics();
+    let mut live_stream = None;
+    while let Ok(message) = output_rx.0.try_recv() {
+        if let RendererOutputTransportMessage::StreamControl(
+            super::RendererOutputStreamControl::Opened { stream },
+        ) = message
+        {
+            live_stream = Some(stream);
+        }
+    }
+    let live_stream = live_stream.expect("initial Page stream opened");
+    let reservation = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    assert_eq!(reservation.page_id(), page.renderer_page_id());
+    assert_eq!(
+        reservation.replacement.unwrap().expected_vm_creation_id,
+        before.vm_creation_id
+    );
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    drop(body_tx);
+    completion_tx.send(Ok(())).unwrap();
+    let next_url = initial_url.join("next").unwrap();
+    let prepared = runtime
+        .prepare_streaming_raw_document_from_external_body(
+            reservation,
+            next_url.clone(),
+            next_url,
+            None,
+            false,
+            0,
+            Vec::new(),
+            200,
+            vec![("content-type".into(), b"text/html".to_vec())],
+            &loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            body,
+            false,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::Stage,
+            RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
+            RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+        .unwrap();
+    let during = runtime.document_isolate_accounting_for_diagnostics();
+    assert_eq!(during.created, baseline_isolates.created);
+    assert_eq!(during.reserved, baseline_isolates.reserved + 1);
+    prepared.cancel().await.unwrap();
+    assert_eq!(
+        runtime.document_isolate_accounting_for_diagnostics(),
+        baseline_isolates
+    );
+    let after = testing.renderer_page_view_async().await.unwrap();
+    assert_eq!(after.vm_creation_id, before.vm_creation_id);
+    while let Ok(message) = output_rx.0.try_recv() {
+        assert!(
+            !matches!(message,
+                RendererOutputTransportMessage::StreamControl(
+                    super::RendererOutputStreamControl::Closed {stream, ..}
+                ) if stream == live_stream
+            ),
+            "canceling a borrowed Document reservation must keep the Page stream open"
+        );
+        assert!(
+            !matches!(
+                message,
+                RendererOutputTransportMessage::StreamControl(
+                    super::RendererOutputStreamControl::Opened { .. }
+                )
+            ),
+            "a replacement must not open another Page stream"
+        );
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression:
+                "JSON.stringify([retained.value, document.querySelector('p').textContent, closed])"
+                    .into(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[17,\"original\",false]"))
+    );
+    page.close_async().await.unwrap();
+}
+
+async fn prepare_live_replacement_for_test(
+    runtime: &JsRuntime,
+    loader: &ResourceRequestClient,
+    reservation: crate::runtime::RendererPageReservationToken,
+    lifecycle_decider: Option<crate::RendererLifecycleDecider>,
+) -> anyhow::Result<PreparedRendererDocument> {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    drop(body_tx);
+    completion_tx.send(Ok(())).unwrap();
+    let url = url::Url::parse("https://example.test/replacement/new").unwrap();
+    runtime
+        .prepare_streaming_raw_document_from_external_body(
+            reservation,
+            url.clone(),
+            url,
+            None,
+            false,
+            0,
+            Vec::new(),
+            200,
+            vec![("content-type".into(), b"text/html".to_vec())],
+            loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            raw_body,
+            false,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::Stage,
+            RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
+            RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            lifecycle_decider,
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_supersedes_only_the_previous_preparation() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/original").unwrap(),
+        "<!doctype html><p>original</p>",
+    )
+    .await;
+    let baseline = runtime.document_isolate_accounting_for_diagnostics();
+    let first = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    let second = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    assert_ne!(first, second);
+    assert_eq!(first.page_id(), second.page_id());
+    let error = prepare_live_replacement_for_test(&runtime, &loader, first, None)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("superseded or canceled"));
+    let second_prepared = prepare_live_replacement_for_test(&runtime, &loader, second, None)
+        .await
+        .unwrap();
+    let third = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.document_isolate_accounting_for_diagnostics(),
+        baseline
+    );
+    let third_prepared = prepare_live_replacement_for_test(&runtime, &loader, third, None)
+        .await
+        .unwrap();
+    second_prepared.cancel().await.unwrap();
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        baseline.reserved + 1
+    );
+    let permit = third_prepared.issue_commit_permit();
+    let error = third_prepared.commit(permit).await.err().unwrap();
+    assert!(error.to_string().contains("stable Page commit entry point"));
+    assert_eq!(
+        runtime.document_isolate_accounting_for_diagnostics(),
+        baseline
+    );
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "document.querySelector('p').textContent".into(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("original"))
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_live_page_releases_its_prepared_replacement() {
+    let runtime = JsRuntime::initialize();
+    let baseline = runtime.document_isolate_accounting_for_diagnostics();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/closing").unwrap(),
+        "<!doctype html><p>original</p>",
+    )
+    .await;
+    let reservation = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    let prepared = prepare_live_replacement_for_test(&runtime, &loader, reservation, None)
+        .await
+        .unwrap();
+    page.close_async().await.unwrap();
+    let closed = runtime.document_isolate_accounting_for_diagnostics();
+    assert_eq!(closed.live, baseline.live);
+    assert_eq!(closed.reserved, baseline.reserved);
+    prepared.cancel().await.unwrap();
+    assert_eq!(
+        runtime.document_isolate_accounting_for_diagnostics(),
+        closed
+    );
+}
+
+async fn prepare_live_response_for_test(
+    runtime: &JsRuntime,
+    page: &RendererPageHandle,
+    loader: &ResourceRequestClient,
+    url: url::Url,
+    content_type: &str,
+    raw_body: ExternalRawDocumentBodyStream,
+) -> PreparedRendererDocument {
+    prepare_live_response_with_boundary_for_test(
+        runtime,
+        page,
+        loader,
+        url,
+        content_type,
+        raw_body,
+        RendererReplyBoundary::DocumentCommit,
+    )
+    .await
+}
+
+async fn prepare_live_response_with_boundary_for_test(
+    runtime: &JsRuntime,
+    page: &RendererPageHandle,
+    loader: &ResourceRequestClient,
+    url: url::Url,
+    content_type: &str,
+    raw_body: ExternalRawDocumentBodyStream,
+    reply_boundary: RendererReplyBoundary,
+) -> PreparedRendererDocument {
+    let reservation = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    runtime
+        .prepare_streaming_raw_document_from_external_body(
+            reservation,
+            url.clone(),
+            url,
+            Some(url::Url::parse("https://example.test/initiator").unwrap()),
+            false,
+            0,
+            Vec::new(),
+            203,
+            vec![("content-type".into(), content_type.as_bytes().to_vec())],
+            loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            raw_body,
+            false,
+            PageVmInitStage::Load,
+            reply_boundary,
+            RendererTopLevelNavigationDispatch::DelegateToBrowser,
+            RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+            None,
+            None,
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn completed_raw_body_for_replacement_test(source: &[u8]) -> ExternalRawDocumentBodyStream {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    body_tx.send(source.to_vec()).await.unwrap();
+    drop(body_tx);
+    completion_tx.send(Ok(())).unwrap();
+    body
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/initial").unwrap(),
+        "<!doctype html><p>original</p>",
+    )
+    .await;
+    let testing = RendererPageTestingHandle::new_for_testing(&page);
+    let mut before = testing.renderer_page_view_async().await.unwrap();
+    let original_heap = runtime_heap_usage_for_test(&page).await;
+    let original_proxy = original_heap["moli"]["runtime"]["mainWindowProxyIdentityHash"].clone();
+    let baseline = runtime.document_isolate_accounting_for_diagnostics();
+    while output_rx.0.try_recv().is_ok() {}
+    for (content_type, source, expected) in [
+        (
+            "text/html",
+            "<!doctype html><p>replacement</p><script>window.answer = 42</script>",
+            "replacement",
+        ),
+        (
+            "application/atom+xml; charset=utf-8",
+            "<feed xmlns='http://www.w3.org/2005/Atom'><title>café</title></feed>",
+            "café",
+        ),
+    ] {
+        let body = completed_raw_body_for_replacement_test(source.as_bytes()).await;
+        let url = url::Url::parse("https://example.test/replacement/current").unwrap();
+        let prepared = prepare_live_response_for_test(
+            &runtime,
+            &page,
+            &loader,
+            url.clone(),
+            content_type,
+            body,
+        )
+        .await;
+        let expected_agent = prepared.renderer_devtools_agent_token();
+        let permit = prepared.issue_commit_permit();
+        let replacement = tokio::time::timeout(
+            Duration::from_secs(5),
+            prepared.commit_page_replacement(permit),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (snapshot, _, artifacts) = page.adopt_document_replacement(replacement).unwrap();
+        assert_eq!(snapshot.final_url(), &url);
+        assert_eq!(snapshot.status, 203);
+        assert_eq!(
+            snapshot.navigation_initiator_url.as_ref().unwrap().as_str(),
+            "https://example.test/initiator"
+        );
+        assert_eq!(page.devtools_agent_token(), expected_agent);
+        assert_eq!(page.renderer_page_id(), before.page_id);
+        if let Some(continuation) = page.take_committed_document_post_response_continuation() {
+            continuation.release();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let publication = output_rx.recv().await.unwrap();
+                if publication_document_lifecycle_events(&publication).any(|event| {
+                    event.document == artifacts.active_document
+                        && event.kind
+                            == RendererDocumentLifecycleEventKind::Milestone(
+                                RendererDocumentLifecycleMilestone::Load,
+                            )
+                }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("replacement should load on the stable Page");
+        let html = serialize_html_for_renderer_page(&page).await;
+        assert!(html.contains(expected), "{html}");
+        let after = testing.renderer_page_view_async().await.unwrap();
+        assert_ne!(after.vm_creation_id, before.vm_creation_id);
+        assert!(after.view_generation > before.view_generation);
+        let heap = runtime_heap_usage_for_test(&page).await;
+        assert_eq!(
+            heap["moli"]["runtime"]["mainWindowProxyIdentityHash"],
+            original_proxy
+        );
+        assert_eq!(
+            runtime
+                .document_isolate_accounting_for_diagnostics()
+                .created,
+            baseline.created
+        );
+        assert_eq!(
+            runtime
+                .document_isolate_accounting_for_diagnostics()
+                .reserved,
+            baseline.reserved
+        );
+        assert_eq!(runtime.renderer_owner_handle().len(), 1);
+        before = after;
+    }
+    page.close_async().await.unwrap();
+    assert!(runtime.renderer_owner_handle().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_discards_old_parser_releases_and_transport_failures() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/initial").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let (first_done, first_completion) = oneshot::channel();
+    let (first_body_tx, first_body) = ExternalRawDocumentBodyStream::channel(first_completion);
+    first_body_tx
+        .send(b"<!doctype html><p>first pending</p>".to_vec())
+        .await
+        .unwrap();
+    let first = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/first").unwrap(),
+        "text/html",
+        first_body,
+    )
+    .await;
+    let permit = first.issue_commit_permit();
+    let first = first.commit_page_replacement(permit).await.unwrap();
+    page.adopt_document_replacement(first).unwrap();
+    let old_release = page
+        .take_committed_document_post_response_continuation()
+        .unwrap();
+    let (base_url, mut request_seen, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type("/script-effect", "ok", "text/plain").await;
+    let body = completed_raw_body_for_replacement_test(
+        b"<!doctype html><p>second</p><script>fetch('/script-effect'); window.answer = 42</script>",
+    )
+    .await;
+    let second = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse(&format!("{base_url}/second")).unwrap(),
+        "text/html",
+        body,
+    )
+    .await;
+    let permit = second.issue_commit_permit();
+    let second = second.commit_page_replacement(permit).await.unwrap();
+    page.adopt_document_replacement(second).unwrap();
+    let new_release = page
+        .take_committed_document_post_response_continuation()
+        .unwrap();
+    old_release.release();
+    drop(first_body_tx);
+    let _ = first_done.send(Err(anyhow::anyhow!("late old body failure")));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut request_seen)
+            .await
+            .is_err(),
+        "the old commit response must not release the new parser"
+    );
+    new_release.release();
+    tokio::time::timeout(Duration::from_secs(5), &mut request_seen)
+        .await
+        .unwrap()
+        .unwrap();
+    release_response.send(()).unwrap();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([document.querySelector('p').textContent, answer, closed])"
+                .into(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[\"second\",42,false]"))
+    );
+    page.close_async().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_bootstrap_failure_retires_the_committed_page() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/initial").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    let prepared = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/failed.xml").unwrap(),
+        "application/xml",
+        body,
+    )
+    .await;
+    drop(body_tx);
+    completion_tx
+        .send(Err(anyhow::anyhow!("replacement XML body failed")))
+        .unwrap();
+    let permit = prepared.issue_commit_permit();
+    let error = prepared
+        .commit_page_replacement(permit)
+        .await
+        .err()
+        .unwrap();
+    assert!(format!("{error:#}").contains("replacement XML body failed"));
+    assert_eq!(
+        error.disposition(),
+        crate::RendererPageReplacementFailureDisposition::DocumentUnavailable
+    );
+    assert!(
+        runtime.renderer_owner_handle().is_empty(),
+        "a source realm that has committed away cannot be restored after bootstrap failure"
+    );
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        0
+    );
+    page.close_async().await.unwrap();
+    let mut peer = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/peer").unwrap(),
+        "<p>peer</p>",
+    )
+    .await;
+    assert!(
+        serialize_html_for_renderer_page(&peer)
+            .await
+            .contains("peer")
+    );
+    peer.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_rejects_unsupported_policy_before_detaching_the_document() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/initial").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let testing = RendererPageTestingHandle::new_for_testing(&page);
+    let before = testing.renderer_page_view_async().await.unwrap();
+    let reservation = page
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    let prepared = prepare_live_replacement_for_test(
+        &runtime,
+        &loader,
+        reservation,
+        Some(crate::RendererLifecycleDecider::new(|_| {
+            Ok(crate::RendererLifecycleDecision::Finish)
+        })),
+    )
+    .await
+    .unwrap();
+    let permit = prepared.issue_commit_permit();
+    let error = prepared
+        .commit_page_replacement(permit)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("Page-creation lifecycle decider")
+    );
+    assert_eq!(
+        error.disposition(),
+        crate::RendererPageReplacementFailureDisposition::DocumentPreserved
+    );
+    assert_eq!(
+        testing
+            .renderer_page_view_async()
+            .await
+            .unwrap()
+            .vm_creation_id,
+        before.vm_creation_id
+    );
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        0
+    );
+    assert!(
+        serialize_html_for_renderer_page(&page)
+            .await
+            .contains("original")
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_cannot_adopt_a_superseded_commit_reply() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/initial").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let first_body = completed_raw_body_for_replacement_test(b"<p>first</p>").await;
+    let prepared = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/first").unwrap(),
+        "text/html",
+        first_body,
+    )
+    .await;
+    let permit = prepared.issue_commit_permit();
+    let first = prepared.commit_page_replacement(permit).await.unwrap();
+    let second_body = completed_raw_body_for_replacement_test(b"<p>second</p>").await;
+    let prepared = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/second").unwrap(),
+        "text/html",
+        second_body,
+    )
+    .await;
+    let permit = prepared.issue_commit_permit();
+    let second = prepared.commit_page_replacement(permit).await.unwrap();
+    let error = page.adopt_document_replacement(first).err().unwrap();
+    assert!(error.to_string().contains("superseded"));
+    page.adopt_document_replacement(second).unwrap();
+    page.take_committed_document_post_response_continuation()
+        .unwrap()
+        .release();
+    assert!(
+        serialize_html_for_renderer_page(&page)
+            .await
+            .contains("second")
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_page_replacement_stage_reply_drains_large_body_and_finishes_scripts() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/before-stage").unwrap(),
+        "<p>old</p>",
+    )
+    .await;
+    let original_page_id = page.page_id();
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    let prepared = prepare_live_response_with_boundary_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/large-stage").unwrap(),
+        "text/html",
+        body,
+        RendererReplyBoundary::Stage,
+    )
+    .await;
+    let producer = tokio::spawn(async move {
+        body_tx
+            .send(b"<!doctype html><title>large replacement</title><pre>".to_vec())
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            body_tx.send(vec![b'x'; 64 * 1024]).await.unwrap();
+        }
+        body_tx
+            .send(b"</pre><script>window.lastScriptRan = true</script>".to_vec())
+            .await
+            .unwrap();
+        drop(body_tx);
+        completion_tx.send(Ok(())).unwrap();
+    });
+    let permit = prepared.issue_commit_permit();
+    let replacement = tokio::time::timeout(
+        Duration::from_secs(10),
+        prepared.commit_page_replacement(permit),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (state, _, artifacts) = page.adopt_document_replacement(replacement).unwrap();
+    assert_eq!(page.page_id(), original_page_id);
+    assert_eq!(state.document_title(), "large replacement");
+    assert!(artifacts.lifecycle_snapshot.load.is_some());
+    assert!(
+        page.take_committed_document_post_response_continuation()
+            .is_none()
+    );
+    let (reply, _) = page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "JSON.stringify([lastScriptRan, document.querySelector('pre').textContent.length, document.readyState])".into(),
+        await_promise: false,
+    }).await.unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[true,1310720,\"complete\"]"))
+    );
+    producer.await.unwrap();
+    page.close_async().await.unwrap();
+}

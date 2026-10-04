@@ -1,5 +1,5 @@
 use super::{
-    InspectorOutbound,
+    InspectorOutbound, RendererInspectorIsolateBackendHandle,
     context_registry::DocumentInspectorContextGroupId,
     v8_backend::{RendererInspectorIsolateBackend, RendererInspectorSessionExecutorRegistration},
 };
@@ -55,6 +55,7 @@ impl RendererDevToolsSessionDispatch {
 
 #[derive(Clone)]
 pub(super) struct RendererDevToolsSessionConnection {
+    isolate_backend: RendererInspectorIsolateBackendHandle,
     context_group_id: DocumentInspectorContextGroupId,
     agent_token: RendererDevToolsAgentToken,
     output_journal: Option<RendererTurnOutputJournal>,
@@ -62,26 +63,24 @@ pub(super) struct RendererDevToolsSessionConnection {
 
 impl RendererDevToolsSessionConnection {
     pub(super) fn new(
+        isolate_backend: RendererInspectorIsolateBackendHandle,
         context_group_id: DocumentInspectorContextGroupId,
         agent_token: RendererDevToolsAgentToken,
         output_journal: Option<RendererTurnOutputJournal>,
     ) -> Self {
         Self {
+            isolate_backend,
             context_group_id,
             agent_token,
             output_journal,
         }
     }
 
-    fn outbound(
-        &self,
-        backend: &RendererInspectorIsolateBackend,
-        session_key: DevToolsSessionKey,
-    ) -> InspectorOutbound {
+    fn outbound(&self, session_key: DevToolsSessionKey) -> InspectorOutbound {
         InspectorOutbound::for_frontend(
             self.agent_token,
             session_key.clone(),
-            backend
+            self.isolate_backend
                 .devtools_target()
                 .outbound_route(self.agent_token, session_key),
             self.output_journal.clone(),
@@ -125,13 +124,17 @@ impl RendererDevToolsAgentSessions {
             .cloned()
             .unwrap_or_default();
         let session = self.frontend.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(backend, session_key.clone());
+            let outbound = connection.outbound(session_key.clone());
             RendererDevToolsSession::connect(
                 backend,
                 connection.context_group_id,
                 outbound,
                 None,
-                Some((connection.agent_token, session_key.clone())),
+                Some((
+                    connection.isolate_backend.clone(),
+                    connection.agent_token,
+                    session_key.clone(),
+                )),
             )
         });
         session
@@ -191,17 +194,18 @@ impl RendererDevToolsAgentSessions {
                 drop(_executor_registration);
                 (outbound, replayed_runtime_bindings)
             }
-            None => (
-                connection.outbound(backend, session_key.clone()),
-                Vec::new(),
-            ),
+            None => (connection.outbound(session_key.clone()), Vec::new()),
         };
         let mut session = RendererDevToolsSession::connect(
             backend,
             connection.context_group_id,
             outbound,
             Some(v8_state),
-            Some((connection.agent_token, session_key.clone())),
+            Some((
+                connection.isolate_backend.clone(),
+                connection.agent_token,
+                session_key.clone(),
+            )),
         );
         session.replayed_runtime_bindings = replayed_runtime_bindings;
         self.frontend.insert(session_key, session);
@@ -214,13 +218,17 @@ impl RendererDevToolsAgentSessions {
         session_key: DevToolsSessionKey,
     ) {
         self.frontend.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(backend, session_key.clone());
+            let outbound = connection.outbound(session_key.clone());
             RendererDevToolsSession::connect(
                 backend,
                 connection.context_group_id,
                 outbound,
                 None,
-                Some((connection.agent_token, session_key.clone())),
+                Some((
+                    connection.isolate_backend.clone(),
+                    connection.agent_token,
+                    session_key.clone(),
+                )),
             )
         });
     }
@@ -350,7 +358,11 @@ impl RendererDevToolsSession {
         context_group_id: DocumentInspectorContextGroupId,
         outbound: InspectorOutbound,
         state: Option<&V8InspectorSessionState>,
-        frontend_session_route: Option<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
+        frontend_session_route: Option<(
+            RendererInspectorIsolateBackendHandle,
+            RendererDevToolsAgentToken,
+            DevToolsSessionKey,
+        )>,
     ) -> Self {
         let first_attach_state = b"{}";
         let state = state.map_or(
@@ -365,15 +377,16 @@ impl RendererDevToolsSession {
             state,
         );
         let session = Rc::new(session);
-        let executor_registration = frontend_session_route.map(|(agent_token, session_key)| {
-            backend.register_session_executor_route(
-                context_group_id,
-                agent_token,
-                session_key,
-                &session,
-                outbound.clone(),
-            )
-        });
+        let executor_registration =
+            frontend_session_route.map(|(page_backend, agent_token, session_key)| {
+                page_backend.register_session_executor_route(
+                    context_group_id,
+                    agent_token,
+                    session_key,
+                    &session,
+                    outbound.clone(),
+                )
+            });
         Self {
             session,
             outbound,
@@ -447,8 +460,12 @@ mod tests {
         let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
         let context_group_id = DocumentInspectorContextGroupId::next();
         let agent_token = RendererDevToolsAgentToken::allocate();
-        let connection =
-            RendererDevToolsSessionConnection::new(context_group_id, agent_token, None);
+        let connection = RendererDevToolsSessionConnection::new(
+            backend.handle(),
+            context_group_id,
+            agent_token,
+            None,
+        );
         let session_key = DevToolsSessionKey::Attached("SID-agent-sessions".to_owned());
         let binding = RuntimeBindingRegistration {
             devtools_session: None,

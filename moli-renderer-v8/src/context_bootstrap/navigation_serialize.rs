@@ -99,6 +99,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
     let Some(record) = super::history_runtime::native::entry(scope, entry) else {
         return NavigationHistorySerializedEntry {
             url: "about:blank".to_owned(),
+            inherited_origin: None,
             history_state: None,
             navigation_state: None,
             scroll_restoration: Default::default(),
@@ -126,6 +127,7 @@ fn snapshot_native_entry(
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: entry.url.clone(),
+        inherited_origin: entry.inherited_origin.clone(),
         history_state: entry.history_state.clone(),
         navigation_state: entry.navigation_state.clone(),
         scroll_restoration: entry.scroll_restoration,
@@ -171,12 +173,29 @@ pub(super) fn serialize_history_entries<'s>(
     let Some(record) = super::history_runtime::native::history(scope, history) else {
         return Vec::new();
     };
+    let record = record.borrow();
+    let inherited_document = record.current_entry().and_then(|current| {
+        let current = current.borrow();
+        url::Url::parse(&current.url)
+            .ok()
+            .filter(super::navigation_projection::navigation_entry_url_inherits_origin)
+            .map(|_| current.document.clone())
+    });
+    let origin = inherited_document.as_ref().and_then(|_| {
+        let owner = runtime_window_owner(scope, history);
+        super::navigation_projection::current_document_origin(scope, owner)
+    });
     record
-        .borrow()
         .entries()
         .iter()
         .enumerate()
-        .map(|(index, entry)| snapshot_native_entry(&entry.borrow(), index as u32))
+        .map(|(index, entry)| {
+            let mut snapshot = snapshot_native_entry(&entry.borrow(), index as u32);
+            if inherited_document.as_ref() == Some(&snapshot.document_id) && origin.is_some() {
+                snapshot.inherited_origin = origin.clone();
+            }
+            snapshot
+        })
         .collect()
 }
 
@@ -221,7 +240,7 @@ pub(super) fn apply_current_document_referrer_policy_to_entry_snapshots<'s>(
     }
 }
 
-pub(super) fn current_document_referrer_policy<'s>(
+pub(crate) fn current_document_referrer_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<String> {

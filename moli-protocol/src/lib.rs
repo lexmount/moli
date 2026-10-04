@@ -29,8 +29,9 @@ pub use conn::{
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentLifecycleWaitKey,
     DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState,
-    DevToolsPageResidenceIdentity, ParsedCdpCommand, PendingCdpCommandDispatch,
-    PendingDeferredMainDocumentLoadCompletion, PendingRuntimeProtocolMessageDispatch,
+    DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, ParsedCdpCommand,
+    PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
+    PendingRuntimeProtocolMessageDispatch,
 };
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,

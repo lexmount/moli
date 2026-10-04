@@ -734,6 +734,10 @@ pub(super) fn dispatch_navigation_currententrychange<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return;
+    }
     let Ok(event_ctor) = super::exposed_interfaces::ensure_intrinsic_interface_constructor(
         scope,
         "NavigationCurrentEntryChangeEvent",
@@ -795,6 +799,10 @@ pub(super) fn dispatch_navigation_success<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return;
+    }
     let Some(event) = construct_original_event(scope, "navigatesuccess") else {
         return;
     };
@@ -903,6 +911,10 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let owner = runtime_window_owner(scope, navigation);
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return NavigationDispatchOutcome::proceed();
+    }
     let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
         .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());
     let Ok(event_ctor) =

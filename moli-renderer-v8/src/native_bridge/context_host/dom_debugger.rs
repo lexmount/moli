@@ -44,6 +44,10 @@ pub(super) struct DomDebuggerState {
 }
 
 impl DomDebuggerState {
+    pub(super) fn rebind_pause_scheduler(&mut self, scheduler: RendererDomDebuggerPauseScheduler) {
+        self.pause_scheduler = scheduler;
+    }
+
     pub(super) fn new(pause_scheduler: RendererDomDebuggerPauseScheduler) -> Self {
         Self {
             event_listener_breakpoints: BTreeMap::new(),

@@ -727,6 +727,7 @@ mod document_content;
 mod document_isolate;
 mod dom_debugger;
 mod dom_inspector;
+mod related_page;
 pub(crate) use dom_inspector::{DomInspectorEdit, DomInspectorEditOutcome};
 mod drop_cleanup;
 mod element_click;
@@ -742,6 +743,8 @@ mod input_dispatch;
 mod input_helpers;
 mod inspector;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
+mod document_context_transition;
+mod initial_window_document;
 mod isolated_worlds;
 mod main_document_lifecycle;
 mod main_document_lifecycle_body;
@@ -894,7 +897,7 @@ pub(crate) use document_isolate::{
     RendererDeferredContextHostReleaseQueue, RendererDocumentIsolateBootstrap,
     RendererDocumentIsolateHandle, RendererDocumentIsolateReservationAccounting,
     RendererPageScriptEnvironment, ScriptVmDefaultWorldBootstrap,
-    renderer_document_isolate_accounting_diagnostics,
+    WeakRendererPageScriptEnvironment, renderer_document_isolate_accounting_diagnostics,
 };
 pub(crate) use eval_exec::execute_source_text_on_current_stack;
 pub(crate) use input_helpers::*;
@@ -1126,6 +1129,10 @@ pub(super) struct ScriptVmRendererDocumentIsolateOps<'a> {
 }
 
 impl ScriptVm {
+    pub(crate) fn document_isolate_identity_for_diagnostics(&self) -> usize {
+        self.renderer_document_isolate.identity_key()
+    }
+
     pub(crate) fn devtools_target(&self) -> crate::devtools::target::RendererDevToolsTargetHandle {
         self.page_inspector.devtools_target()
     }
@@ -1938,9 +1945,19 @@ impl ScriptVm {
     }
 }
 
+pub(crate) struct ScriptVmInitialDocumentEnvironment {
+    security_token: Option<v8::Global<v8::Value>>,
+    origin: String,
+    pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
+    fallback_base_url: Option<url::Url>,
+    storage_key: Option<moli_storage_key::MoliStorageKey>,
+}
+
+pub(crate) use document_environment::ScriptVmCapturedDocumentEnvironment;
+
 impl ScriptVmPageRealmBootstrap {
     fn new_from_dom_host(
-        dom_host: DomHost,
+        mut dom_host: DomHost,
         bypass_content_security_policy: bool,
         page_task_tx: RuntimePageTaskSender,
         page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
@@ -1948,7 +1965,7 @@ impl ScriptVmPageRealmBootstrap {
         initial_document_loader_bootstrap: crate::network::context::DocumentResourceLoaderBootstrap,
         browser_context_runtime: RendererBrowserContextRuntime,
         javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
-        renderer_document_isolate_bootstrap: RendererDocumentIsolateBootstrap,
+        mut renderer_document_isolate_bootstrap: RendererDocumentIsolateBootstrap,
         runtime_inspector_session_restore_snapshots:
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
@@ -1958,8 +1975,24 @@ impl ScriptVmPageRealmBootstrap {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        initial_environment: Option<ScriptVmInitialDocumentEnvironment>,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
+        let initial_environment = initial_environment.or_else(|| {
+            renderer_document_isolate_bootstrap
+                .initial_document_environment
+                .take()
+        });
         let document_handle = dom_host.document_handle();
+        if let Some(base) = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.fallback_base_url.clone())
+        {
+            dom_host.set_document_fallback_base_url_for_handle(document_handle, Some(base));
+        }
+        let top_level_storage_key = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.storage_key.clone())
+            .or(top_level_storage_key);
         let document_url = dom_host
             .dom()
             .final_url()
@@ -1968,13 +2001,21 @@ impl ScriptVmPageRealmBootstrap {
         let document_base_url = dom_host
             .document_base_url_for_handle(document_handle)
             .unwrap_or_else(|| document_url.clone());
+        let initial_origin = initial_environment
+            .as_ref()
+            .map(|environment| environment.origin.clone())
+            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&document_url));
+        let initial_policy = initial_environment
+            .as_ref()
+            .map(|environment| environment.policy_container.clone())
+            .unwrap_or_default();
         let mut frame_owner_store = FrameOwnerStore::default();
         frame_owner_store.ensure_main_frame(
             document_handle,
             document_url.clone(),
             document_base_url,
-            moli_url::origin_ascii_serialization(&document_url),
-            crate::document_runtime::DocumentPolicyContainer::default(),
+            initial_origin.clone(),
+            initial_policy.clone(),
             crate::types::SubresourcePolicyContext::default(),
             None,
         );
@@ -1997,12 +2038,18 @@ impl ScriptVmPageRealmBootstrap {
             stylesheet_task_sender,
             main_parser_continuation_sender,
         ));
+        if initial_environment.is_some() {
+            document_runtime.set_initial_document_policy_container(initial_policy);
+        }
         document_runtime.set_author_styles_disabled(author_styles_disabled);
         document_runtime.set_bypass_content_security_policy(bypass_content_security_policy);
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();
 
+        let inherited_security_token =
+            initial_environment.and_then(|environment| environment.security_token);
         let RendererDocumentIsolateBootstrap {
+            initial_document_environment: _,
             renderer_document_isolate,
             bridge_bindings,
             renderer_document_isolate_teardown,
@@ -2010,10 +2057,17 @@ impl ScriptVmPageRealmBootstrap {
             renderer_page_script_environment,
             reuse_main_window_proxy,
         } = renderer_document_isolate_bootstrap;
-        renderer_document_isolate.with_renderer_document_isolate_and_inspector_mut(|_, backend| {
-            page_inspector
-                .reattach_v8_sessions(backend, runtime_inspector_session_restore_snapshots);
-        });
+        if !runtime_inspector_session_restore_snapshots.is_empty() {
+            renderer_document_isolate.with_renderer_document_isolate_and_inspector_mut(
+                |_, backend| {
+                    page_inspector
+                        .reattach_v8_sessions(backend, runtime_inspector_session_restore_snapshots);
+                },
+            );
+        }
+        let browsing_context_group = main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.browsing_context_group.clone());
         if let (Some(environment), Some(commit)) = (
             renderer_page_script_environment.as_ref(),
             main_document_commit,
@@ -2051,6 +2105,26 @@ impl ScriptVmPageRealmBootstrap {
             .bind_deferred_context_host_release_queue(
                 renderer_document_isolate.deferred_context_host_release_queue(),
             );
+        if let Some(root_frame_id) = root_frame_id.as_deref() {
+            let name = context_host
+                .borrow()
+                .browser_context_runtime()
+                .browsing_context_name(root_frame_id);
+            if let Some(group) = browsing_context_group {
+                name.set_group(group);
+            }
+            context_host.borrow_mut().bind_browsing_context_name(name);
+            let window = context_host
+                .borrow()
+                .browser_context_runtime()
+                .auxiliary_window(root_frame_id);
+            context_host.borrow_mut().bind_auxiliary_window(window);
+        }
+        if root_frame_id.is_none()
+            && let Some(environment) = renderer_page_script_environment.as_ref()
+        {
+            environment.inherit_window_identity(&mut context_host.borrow_mut());
+        }
         let main_document_owner = context_host
             .borrow()
             .current_main_document_task_owner()
@@ -2063,7 +2137,7 @@ impl ScriptVmPageRealmBootstrap {
                 crate::native_bridge::WindowDocumentOwner::Frame(main_document_owner),
                 document_url.clone(),
                 context_host.document_base_url_for_handle(document_handle),
-                moli_url::origin_ascii_serialization(&document_url),
+                initial_origin,
             )
         };
         let initial_document_loader =
@@ -2096,6 +2170,7 @@ impl ScriptVmPageRealmBootstrap {
             );
 
         Ok(Self {
+            inherited_security_token,
             resource_owner_id,
             promise_reject_dispatch,
             page_inspector,
@@ -2118,6 +2193,7 @@ impl ScriptVmPageRealmBootstrap {
         self,
     ) -> std::result::Result<ScriptVmDefaultWorldBootstrap, ScriptVmBootstrapError> {
         let ScriptVmPageRealmBootstrap {
+            inherited_security_token,
             resource_owner_id,
             promise_reject_dispatch,
             mut page_inspector,
@@ -2171,7 +2247,19 @@ impl ScriptVmPageRealmBootstrap {
                 context_host
                     .borrow_mut()
                     .install_page_default_context(scope, local_context);
+                if let Some(token) = inherited_security_token.as_ref() {
+                    local_context.set_security_token(v8::Local::new(scope, token));
+                }
                 let scope = &mut v8::ContextScope::new(scope, local_context);
+                let origin = context_host
+                    .borrow()
+                    .current_main_document_resource_loader()
+                    .expect("bootstrap has a Document resource authority")
+                    .fetch_context()
+                    .origin()
+                    .to_owned();
+                let global = local_context.global(scope);
+                super::context_bootstrap::set_window_origin_runtime_state(scope, global, &origin)?;
                 super::context_bootstrap::initialize_main_session_history(scope);
                 // Initial frames must be discovered independently of Window
                 // property enumeration during bootstrap.
@@ -2331,6 +2419,7 @@ impl ScriptVmDefaultWorldBootstrap {
             main_document_commit,
             top_level_storage_key,
             reserved_service_worker_client_id,
+            None,
         )?
         .bootstrap_default_world()
     }
@@ -2360,6 +2449,12 @@ impl ScriptVmDefaultWorldBootstrap {
             root_frame_id,
         );
 
+        Self::capture_baseline_globals_in_scope(scope)
+    }
+
+    fn capture_baseline_globals_in_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Result<ScriptGlobalsBaseline> {
         #[cfg(not(any(test, feature = "test-support")))]
         {
             let _ = scope;
@@ -2388,7 +2483,7 @@ impl ScriptVmDefaultWorldBootstrap {
         }
     }
 
-    pub fn finish(self) -> std::result::Result<ScriptVm, ScriptVmBootstrapError> {
+    fn finish_ownership(self) -> ScriptVm {
         let Self {
             renderer_document_isolate,
             renderer_document_isolate_teardown,
@@ -2463,35 +2558,58 @@ impl ScriptVmDefaultWorldBootstrap {
             .borrow_mut()
             .set_storage_bucket_store(vm.storage_bucket_store.clone());
         if let Some(environment) = &vm.renderer_page_script_environment {
+            environment.bind_document_host(&vm._context_host);
             vm._context_host
                 .borrow_mut()
                 .bind_output_journal(environment.output_journal());
+            vm._context_host
+                .borrow_mut()
+                .bind_page_script_environment(environment);
         }
         vm._context_host.borrow_mut().publish_document_host();
+        vm
+    }
+
+    pub fn finish(self) -> std::result::Result<ScriptVm, ScriptVmBootstrapError> {
+        let vm = self.finish_ownership();
         vm.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                crate::util::retain_context_host_for_document_realm(
-                    v8::Local::new(scope, &vm.page_default_context),
-                    vm._context_host.clone(),
-                    vm.renderer_document_isolate
-                        .deferred_context_host_release_queue(),
-                );
-                for child in vm.prebootstrapped_child_default_contexts.borrow().values() {
-                    crate::util::retain_context_host_for_document_realm(
-                        v8::Local::new(scope, &child.context),
-                        vm._context_host.clone(),
-                        vm.renderer_document_isolate
-                            .deferred_context_host_release_queue(),
-                    );
-                }
+                vm.retain_native_hosts_in_scope(scope);
             });
         Ok(vm)
+    }
+
+    fn finish_in_scope(self, scope: &mut v8::PinScope<'_, '_>) -> ScriptVm {
+        let vm = self.finish_ownership();
+        vm.retain_native_hosts_in_scope(scope);
+        vm
     }
 }
 
 impl ScriptVm {
+    fn retain_native_hosts_in_scope(&self, scope: &mut v8::PinScope<'_, '_, ()>) {
+        crate::util::retain_context_host_for_document_realm(
+            v8::Local::new(scope, &self.page_default_context),
+            self._context_host.clone(),
+            self.renderer_document_isolate
+                .deferred_context_host_release_queue(),
+        );
+        for child in self
+            .prebootstrapped_child_default_contexts
+            .borrow()
+            .values()
+        {
+            crate::util::retain_context_host_for_document_realm(
+                v8::Local::new(scope, &child.context),
+                self._context_host.clone(),
+                self.renderer_document_isolate
+                    .deferred_context_host_release_queue(),
+            );
+        }
+    }
+
     pub(crate) fn current_main_document_resource_loader(&self) -> Option<DocumentResourceLoader> {
         self._context_host
             .borrow()

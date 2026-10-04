@@ -1,5 +1,109 @@
 use super::*;
 
+fn capture_initial_environment_for_gc_test(
+    vm: &StandaloneScriptVmHarness,
+) -> crate::script_vm::ScriptVmCapturedDocumentEnvironment {
+    let isolate = vm.renderer_document_isolate.clone();
+    let url = vm.document_runtime.document_url().clone();
+    let environment = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &vm.page_default_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let opener = context.global(scope);
+        crate::script_vm::ScriptVmInitialDocumentEnvironment::inherited_in_scope(
+            scope,
+            opener,
+            moli_url::origin_ascii_serialization(&url),
+            moli_storage_key::MoliStorageKey::first_party_from_url(
+                &url,
+                moli_storage_key::url_needs_opaque_nonce(&url)
+                    .then(|| moli_storage_key::OpaqueOriginNonce::new(1)),
+            ),
+            url.clone(),
+            Default::default(),
+        )
+        .expect("initiator environment captures its actual V8 security token")
+    });
+    crate::script_vm::ScriptVmCapturedDocumentEnvironment::new(environment, isolate)
+}
+
+#[test]
+fn captured_tuple_environment_releases_source_document_before_consumption() {
+    let vm = new_parsed_test_vm(
+        "https://captured-tuple.test/source",
+        "<body>source document</body>",
+    );
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let captured = capture_initial_environment_for_gc_test(&vm);
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "a tuple-origin token must not keep the source DOM alive"
+    );
+    let identity = isolate.identity_key();
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        let environment = captured
+            .take(identity)
+            .expect("same-isolate token consumption");
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let token = v8::Local::new(scope, environment.security_token.as_ref().unwrap());
+        let token =
+            v8::Local::<v8::String>::try_from(token).expect("tuple-origin token is a string");
+        assert_eq!(
+            token.to_rust_string_lossy(scope),
+            "moli-window-origin-v1:https://captured-tuple.test",
+            "the accepted token remains usable after the source Document is collected"
+        );
+    });
+}
+
+fn assert_captured_context_token_releases_realm_on_cancellation(url: &str, relax_domain: bool) {
+    let mut vm = new_parsed_test_vm(url, "<body>source document</body>");
+    if relax_domain {
+        vm.eval("document.domain=location.hostname").unwrap();
+    }
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let captured = capture_initial_environment_for_gc_test(&vm);
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_some(),
+        "a context token retains its creation realm and native backing"
+    );
+    // Cancellation may run outside an entered isolate. The established release
+    // queue must drop the token on entry before the next GC can retire its realm.
+    drop(captured);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "cancelled navigation releases the last token and the source DOM"
+    );
+}
+
+#[test]
+fn captured_opaque_environment_keeps_realm_until_cancellation() {
+    assert_captured_context_token_releases_realm_on_cancellation("about:blank", false);
+}
+
+#[test]
+fn captured_document_domain_environment_keeps_realm_until_cancellation() {
+    assert_captured_context_token_releases_realm_on_cancellation(
+        "https://captured-domain.test/source",
+        true,
+    );
+}
+
 #[test]
 fn retained_document_realm_keeps_native_values_until_the_last_v8_reference() {
     let mut vm = new_parsed_test_vm(
@@ -260,6 +364,11 @@ async fn initial_empty_child_isolated_world_rebinds_committed_document() {
     let isolated_context_id = vm
         .create_isolated_world_for_frame(&frame_id, "initial-empty-utility", false)
         .expect("initial-empty child isolated world should be created");
+    let registration_id = vm
+        .page_isolated_world_contexts
+        .context(isolated_context_id)
+        .unwrap()
+        .inspector_context_registration_id;
     assert_eq!(
         vm.eval_in_isolated_context(
             isolated_context_id,
@@ -291,6 +400,48 @@ document.getElementById("initial-empty-isolated-frame").srcdoc =
         .expect("rebound child isolated world should project the committed document"),
         "preserved|committed child document",
         "secure initial-empty reuse must preserve the isolated context while rotating its Document owner"
+    );
+    let committed_world = vm
+        .page_isolated_world_contexts
+        .context(isolated_context_id)
+        .unwrap();
+    assert_eq!(
+        committed_world.inspector_context_registration_id,
+        registration_id
+    );
+    assert_eq!(
+        Some(committed_world.document_owner),
+        vm._context_host
+            .borrow()
+            .current_child_document_task_owner(child_handle)
+    );
+    assert_eq!(
+        vm.create_isolated_world_for_frame(&frame_id, "initial-empty-utility", false)
+            .unwrap(),
+        isolated_context_id,
+        "Window reuse must keep the cached world identity"
+    );
+
+    // A subsequent navigation replaces the Window and must retire this world.
+    vm.eval("document.getElementById('initial-empty-isolated-frame').srcdoc = '<main>replacement</main>'")
+        .expect("second child navigation should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "replaced child Window").await;
+    assert!(
+        vm.page_isolated_world_contexts
+            .context(isolated_context_id)
+            .is_none()
+    );
+    let replacement_context_id = vm
+        .create_isolated_world_for_frame(&frame_id, "initial-empty-utility", false)
+        .unwrap();
+    assert_ne!(replacement_context_id, isolated_context_id);
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            replacement_context_id,
+            "typeof __initialEmptyUtilityExpando + '|' + document.querySelector('main').textContent"
+        )
+        .unwrap(),
+        "undefined|replacement"
     );
 }
 #[test]
@@ -1749,6 +1900,280 @@ for (const tag of ['iframe', 'embed', 'object']) {
         )
         .expect("native SVG document metadata should determine the result"),
         "true"
+    );
+}
+
+async fn commit_opaque_child_for_test(vm: &mut StandaloneScriptVmHarness, element_id: &str) -> i64 {
+    let created = vm
+        .eval(&format!(
+            r#"
+(() => {{
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = {element_id:?};
+  frame.sandbox = "allow-scripts";
+  frame.srcdoc = "<p id='opaque-marker'>opaque child</p>";
+  body.appendChild(frame);
+  void frame.contentWindow;
+  return "created";
+}})()
+"#
+        ))
+        .expect("opaque child setup should evaluate");
+    assert_eq!(created, "created");
+    run_child_navigation_commit_and_host_load_for_test(vm, element_id).await;
+    vm.live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .unwrap_or_else(|| panic!("{element_id}: opaque child realm should exist"))
+}
+
+fn child_context_weak_for_test(
+    vm: &mut StandaloneScriptVmHarness,
+    context_id: i64,
+) -> v8::Weak<v8::Context> {
+    vm.with_child_frame_realm_context_scope(context_id, |scope, _| {
+        let context = scope.get_current_context();
+        Ok(v8::Weak::new(scope, context))
+    })
+    .expect("child context should still be reachable")
+}
+
+fn collect_isolate_garbage_for_test(vm: &StandaloneScriptVmHarness) {
+    let isolate = vm.renderer_document_isolate.clone();
+    for _ in 0..5 {
+        isolate.with_renderer_document_isolate_mut(|isolate| {
+            isolate.low_memory_notification();
+        });
+    }
+}
+
+fn context_weak_was_collected_for_test(
+    vm: &mut StandaloneScriptVmHarness,
+    weak: &v8::Weak<v8::Context>,
+) -> bool {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        Ok(weak.to_local(scope).is_none())
+    })
+    .expect("parent context should remain usable")
+}
+
+fn expose_real_top_window_for_test(vm: &mut StandaloneScriptVmHarness, context_id: i64) {
+    // `parent` on an opaque child is a caller-local projection. The cache and
+    // borrowed-receiver bugs live on the real top Window.
+    vm.with_child_frame_realm_context_scope(context_id, |scope, host_ptr| {
+        let parent_context = unsafe { &*host_ptr }
+            .page_default_context(scope)
+            .expect("parent context");
+        let parent_window = parent_context.global(scope);
+        let key = v8::String::new(scope, "__realTopWindow").expect("property name");
+        let installed = scope
+            .get_current_context()
+            .global(scope)
+            .set(scope, key.into(), parent_window.into())
+            .unwrap_or(false);
+        assert!(installed, "opaque child should retain the real top Window");
+        Ok(())
+    })
+    .expect("real top Window should be reachable from the opaque child");
+}
+
+#[tokio::test]
+async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
+    let mut vm = new_storage_test_vm("https://cross-origin-window-receiver.test/");
+    let child_context_id = commit_opaque_child_for_test(&mut vm, "receiver-frame").await;
+    expose_real_top_window_for_test(&mut vm, child_context_id);
+    let parent_hash_before = vm
+        .eval("location.hash")
+        .expect("parent hash should be readable");
+
+    let result = vm
+        .eval_in_child_default_context(
+            child_context_id,
+            r##"
+(() => {
+  const w = __realTopWindow;
+  const getParent = Object.getOwnPropertyDescriptor(w, "parent").get;
+  const setLocation = Object.getOwnPropertyDescriptor(w, "location").set;
+  let plain = "no-throw";
+  try {
+    getParent.call({});
+  } catch (error) {
+    plain = error instanceof TypeError ? "type-error" : String(error && error.name);
+  }
+  setLocation.call(window, "#pr957-receiver");
+  return JSON.stringify({
+    plain,
+    normalParentIsSelf: w.parent === w,
+    borrowedParent: getParent.call(window) === parent,
+    borrowedState: ['closed', 'length', 'opener', 'parent', 'top', 'location'].every(
+      name => Object.getOwnPropertyDescriptor(w, name).get.call(window) === window[name]),
+    childHash: location.hash,
+    postMessagePrototype: Object.getPrototypeOf(w.postMessage) === Function.prototype
+  });
+})()
+"##,
+        )
+        .expect("borrowed cross-origin accessors should evaluate");
+    assert_eq!(
+        result,
+        r##"{"plain":"type-error","normalParentIsSelf":true,"borrowedParent":true,"borrowedState":true,"childHash":"#pr957-receiver","postMessagePrototype":true}"##
+    );
+    assert_eq!(
+        vm.eval("location.hash")
+            .expect("parent hash should stay readable"),
+        parent_hash_before,
+        "borrowing the cross-origin location setter must not navigate the captured window"
+    );
+}
+
+#[tokio::test]
+async fn cross_origin_surface_cache_releases_removed_accessor_realm() {
+    let mut vm = new_storage_test_vm("https://cross-origin-surface-cache.test/");
+
+    let control_id = commit_opaque_child_for_test(&mut vm, "control-frame").await;
+    let control_weak = child_context_weak_for_test(&mut vm, control_id);
+    assert_eq!(
+        vm.eval(
+            r#"
+document.getElementById("control-frame").remove();
+"removed"
+"#
+        )
+        .expect("control frame removal should evaluate"),
+        "removed"
+    );
+    assert!(
+        vm.live_child_default_runtime_realm_inventory().is_empty(),
+        "removing the control frame should drop its realm record"
+    );
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        context_weak_was_collected_for_test(&mut vm, &control_weak),
+        "an accessor that never read a cross-origin property must be collectable"
+    );
+
+    let accessor_id = commit_opaque_child_for_test(&mut vm, "accessor-frame").await;
+    expose_real_top_window_for_test(&mut vm, accessor_id);
+    assert_eq!(
+        vm.eval_in_child_default_context(accessor_id, "String(__realTopWindow.closed)")
+            .expect("cross-origin closed read should evaluate"),
+        "false"
+    );
+    let accessor_weak = child_context_weak_for_test(&mut vm, accessor_id);
+    assert_eq!(
+        vm.eval(
+            r#"
+document.getElementById("accessor-frame").remove();
+"removed"
+"#
+        )
+        .expect("accessor frame removal should evaluate"),
+        "removed"
+    );
+    assert!(
+        vm.live_child_default_runtime_realm_inventory().is_empty(),
+        "removing the accessor frame should drop its realm record"
+    );
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        context_weak_was_collected_for_test(&mut vm, &accessor_weak),
+        "the surviving target must not retain an accessor realm after that page is gone"
+    );
+}
+
+#[tokio::test]
+async fn cross_origin_window_cache_ignores_author_weak_map_overrides() {
+    let mut vm = new_storage_test_vm("https://cross-origin-cache-intrinsics.test/");
+    let child_id = commit_opaque_child_for_test(&mut vm, "observer").await;
+    expose_real_top_window_for_test(&mut vm, child_id);
+    vm.eval(
+        r#"
+window.cacheHooks = 0;
+const OriginalWeakMap = WeakMap;
+for (const name of ['get', 'set']) {
+  const original = OriginalWeakMap.prototype[name];
+  OriginalWeakMap.prototype[name] = function(...args) {
+    cacheHooks++;
+    return Reflect.apply(original, this, args);
+  };
+}
+window.WeakMap = function(...args) {
+  cacheHooks++;
+  return new OriginalWeakMap(...args);
+};
+"#,
+    )
+    .expect("author may replace its WeakMap constructor and methods");
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            child_id,
+            r#"
+window.savedPostMessage = __realTopWindow.postMessage;
+window.savedParentGetter = Object.getOwnPropertyDescriptor(__realTopWindow, 'parent').get;
+window.savedLocation = __realTopWindow.location;
+String(__realTopWindow.closed)
+"#,
+        )
+        .expect("cross-origin access should not invoke author cache hooks"),
+        "false"
+    );
+    collect_isolate_garbage_for_test(&vm);
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            child_id,
+            r#"
+savedPostMessage === __realTopWindow.postMessage &&
+savedParentGetter === Object.getOwnPropertyDescriptor(__realTopWindow, 'parent').get &&
+savedLocation === __realTopWindow.location &&
+Object.getPrototypeOf(savedPostMessage) === Function.prototype
+"#,
+        )
+        .expect("live observer descriptor identity should survive collection"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("cacheHooks")
+            .expect("cache hooks should be readable"),
+        "0",
+        "native cross-origin caching must not execute author code"
+    );
+}
+
+#[tokio::test]
+async fn cross_origin_window_keys_follow_frame_removal() {
+    let mut vm = new_storage_test_vm("https://cross-origin-window-keys.test/");
+    let child_id = commit_opaque_child_for_test(&mut vm, "observer").await;
+    expose_real_top_window_for_test(&mut vm, child_id);
+    vm.eval(
+        r#"
+const sibling = document.createElement('iframe');
+sibling.id = 'sibling';
+document.body.appendChild(sibling);
+void sibling.contentWindow;
+"#,
+    )
+    .expect("second frame should be created");
+    let probe = r#"
+(() => {
+  const w = __realTopWindow;
+  const indices = Reflect.ownKeys(w).filter(key => typeof key === 'string' && /^\d+$/.test(key));
+  return JSON.stringify([w.length, indices, Object.keys(w), indices.every(key => w[key] !== undefined)]);
+})()
+"#;
+    assert_eq!(
+        vm.eval_in_child_default_context(child_id, probe)
+            .expect("cross-origin Window keys should be enumerable"),
+        r#"[2,["0","1"],["0","1"],true]"#
+    );
+    vm.eval("document.getElementById('sibling').remove()")
+        .expect("sibling should be removable");
+    assert_eq!(
+        vm.eval_in_child_default_context(child_id, probe)
+            .expect("cross-origin Window keys should reflect removed frames"),
+        r#"[1,["0"],["0"],true]"#
     );
 }
 

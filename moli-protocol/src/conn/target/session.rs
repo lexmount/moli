@@ -366,18 +366,26 @@ impl TargetSessionRegistry {
             })
     }
 
-    /// Releases the debugger-on-start barrier contributed by one attached
-    /// session.
-    ///
-    /// V8 keeps one barrier per inspector session and resumes the target only
-    /// after every waiting session has run `Runtime.runIfWaitingForDebugger`
-    /// (or detached). Keep that per-session transition in the attachment
-    /// registry instead of treating `waitingForDebugger` as immutable event
-    /// metadata.
+    /// A Page's renderer startup pause is shared by its Inspector sessions:
+    /// any Runtime.runIfWaitingForDebugger resumes that Page. Browser-side tab
+    /// throttles remain session-owned; detaching one session also leaves other
+    /// waiting sessions in place until the renderer is explicitly resumed.
     pub(crate) fn release_waiting_for_debugger_session(&mut self, session_id: &str) -> bool {
         let Some(session) = self.attached_sessions.get_mut(session_id) else {
             return false;
         };
+        if matches!(session.route, CdpSessionRoute::PageTarget { .. }) {
+            let route = session.route.clone();
+            let mut released = false;
+            for session in self
+                .attached_sessions
+                .values_mut()
+                .filter(|session| route.addresses_same_target_as(&session.route))
+            {
+                released |= std::mem::take(&mut session.waiting_for_debugger);
+            }
+            return released;
+        }
         std::mem::take(&mut session.waiting_for_debugger)
     }
 
@@ -806,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_registry_releases_each_debugger_barrier_exactly_once() {
+    fn target_session_registry_resumes_the_page_for_all_attached_inspector_sessions() {
         let mut registry = TargetSessionRegistry::default();
         for session_id in ["SID-first", "SID-second"] {
             registry.commit_attached_session(PreparedAttachSession::new(
@@ -821,9 +829,9 @@ mod tests {
 
         assert!(registry.target_has_waiting_for_debugger_session("TID-page"));
         assert!(registry.release_waiting_for_debugger_session("SID-first"));
-        assert!(registry.target_has_waiting_for_debugger_session("TID-page"));
+        assert!(!registry.target_has_waiting_for_debugger_session("TID-page"));
         assert!(!registry.release_waiting_for_debugger_session("SID-first"));
-        assert!(registry.release_waiting_for_debugger_session("SID-second"));
+        assert!(!registry.release_waiting_for_debugger_session("SID-second"));
         assert!(!registry.target_has_waiting_for_debugger_session("TID-page"));
         assert!(!registry.release_waiting_for_debugger_session("SID-missing"));
     }

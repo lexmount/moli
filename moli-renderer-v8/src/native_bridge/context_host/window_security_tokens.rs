@@ -7,11 +7,17 @@ const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
 impl JsContextHost {
+    pub(in crate::native_bridge::context_host) fn main_document_security_origin(&self) -> String {
+        self.current_main_document_resource_loader()
+            .map(|loader| loader.fetch_context().origin().to_owned())
+            .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
+    }
+
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;
         }
-        let origin = moli_url::origin_ascii_serialization(self.document_url());
+        let origin = self.main_document_security_origin();
         if self.document_domain_override.is_some() {
             return None;
         }
@@ -40,7 +46,7 @@ impl JsContextHost {
             return None;
         }
         window_isolated_world_security_token_key(
-            moli_url::origin_ascii_serialization(self.document_url()),
+            self.main_document_security_origin(),
             self.document_domain_override.is_some(),
         )
     }
@@ -246,7 +252,7 @@ impl JsContextHost {
     }
 
     fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
-        let serialized_origin = moli_url::origin_ascii_serialization(self.document_url());
+        let serialized_origin = self.main_document_security_origin();
         if self.document_sandbox_policy().forces_opaque_origin || serialized_origin == "null" {
             return Some(WindowAccessOrigin::opaque(
                 self.current_window_execution_context_owner(OwnerDispatchScope::Top)?,

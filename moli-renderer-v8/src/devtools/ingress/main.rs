@@ -787,6 +787,7 @@ mod tests {
             script_execution: Arc::new(ScriptExecutionReport::default()),
             idle_override: None,
             service_worker_client_id: 0,
+            document_isolate_identity: 0,
             dedicated_worker_running_worker_isolate_count: 0,
             performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
         })

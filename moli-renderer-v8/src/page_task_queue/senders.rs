@@ -316,6 +316,12 @@ impl PageRuntimeTaskSource {
         Rc::as_ptr(&self.page_task_producer_routes) as usize
     }
 
+    pub(crate) fn next_top_level_navigation_handoff(
+        &self,
+    ) -> super::RendererTopLevelNavigationHandoff {
+        self.wake.next_top_level_navigation_handoff()
+    }
+
     pub(crate) fn v8_foreground_task_sender(&self) -> Option<RendererPageV8ForegroundTaskSender> {
         self.page_task_producer_routes
             .borrow()

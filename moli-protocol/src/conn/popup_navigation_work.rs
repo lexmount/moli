@@ -10,22 +10,25 @@ use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 /// commit. Moli's navigation helper can itself become asynchronous, so
 /// protocol projection must hand that work to the owner scheduler instead of
 /// awaiting it while the opener's output cursor is being projected. Keeping
-/// the frozen URL and exact target route in this move-only action makes that
+/// the frozen URL and exact target identity in this move-only action makes that
 /// boundary explicit.
 #[derive(Debug)]
 pub(crate) struct PopupTargetNavigationOwnerAction {
-    owner_scope: CommandOwnerScope,
     browser_context_id: String,
     target_id: String,
     url: String,
     kind: PopupTargetNavigationKind,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PopupTargetNavigationKind {
     InitialDocument,
     InitialDocumentAfterDebuggerResume,
-    NamedTargetReuse,
+    NamedTargetReuse { replace_current: bool },
+    WindowReference(moli_core::page::RendererAuxiliaryNavigationKind),
 }
 
 impl PopupTargetNavigationOwnerAction {
@@ -38,23 +41,42 @@ impl PopupTargetNavigationOwnerAction {
     ) -> Option<Self> {
         let route = conn.target_session_route_for_target_id(target_id)?;
         (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
-            // Activation has an independent owner action. Unlike a frozen
-            // Stable PageTarget route keeps this exact target addressable if
-            // the independent activation action changes its residence first.
-            owner_scope: CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
-                browser_context_id: browser_context_id.to_owned(),
-                target_id: target_id.to_owned(),
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-            }),
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),
             url,
             kind,
+            document_response: None,
+            initial_document_environment: None,
+            navigation_initiator: None,
         })
+    }
+
+    pub(crate) fn with_document_response(
+        mut self,
+        response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    ) -> Self {
+        self.document_response = response;
+        self
+    }
+
+    pub(crate) fn with_initial_document_environment(
+        mut self,
+        environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    ) -> Self {
+        self.initial_document_environment = environment;
+        self
     }
 
     pub(crate) fn browser_context_id(&self) -> &str {
         &self.browser_context_id
+    }
+
+    pub(crate) fn with_navigation_initiator(
+        mut self,
+        initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    ) -> Self {
+        self.navigation_initiator = initiator;
+        self
     }
 
     pub(crate) fn target_id(&self) -> &str {
@@ -69,6 +91,14 @@ impl PopupTargetNavigationOwnerAction {
         self.kind
     }
 
+    pub(crate) fn replaces_pending_load(&self) -> bool {
+        matches!(
+            self.kind,
+            PopupTargetNavigationKind::NamedTargetReuse { .. }
+                | PopupTargetNavigationKind::WindowReference(_)
+        )
+    }
+
     pub(crate) fn is_command_followup(&self) -> bool {
         self.kind != PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
     }
@@ -81,13 +111,23 @@ impl PopupTargetNavigationOwnerAction {
         String,
         String,
         PopupTargetNavigationKind,
+        Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+        Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+        Option<moli_core::page::RendererNavigationInitiator>,
     ) {
         (
-            self.owner_scope,
+            CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                browser_context_id: self.browser_context_id.clone(),
+                target_id: self.target_id.clone(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            }),
             self.browser_context_id,
             self.target_id,
             self.url,
             self.kind,
+            self.document_response,
+            self.initial_document_environment,
+            self.navigation_initiator,
         )
     }
 }

@@ -12,7 +12,7 @@ impl JsContextHost {
             return self
                 .document_domain_override
                 .clone()
-                .unwrap_or_else(|| url_host_domain(self.document_url()).unwrap_or_default());
+                .unwrap_or_else(|| self.main_document_domain_host().unwrap_or_default());
         }
         if let Some(child_handle) =
             self.child_browsing_context_handle_for_stored_document(document_handle)
@@ -39,7 +39,7 @@ impl JsContextHost {
             if self.document_sandbox_policy().sandboxes_document_domain {
                 return false;
             }
-            let Some(current_host) = url_host_domain(self.document_url()) else {
+            let Some(current_host) = self.main_document_domain_host() else {
                 return false;
             };
             let Some(domain) = normalize_document_domain_value(value) else {
@@ -88,8 +88,9 @@ impl JsContextHost {
         if let Some(domain) = self.lightweight_popup_document_domain_override(popup_id) {
             return domain;
         }
-        self.lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
+        self.lightweight_popup_origin(popup_id)
+            .and_then(|origin| Url::parse(&origin).ok())
+            .and_then(|origin| url_host_domain(&origin))
             .unwrap_or_default()
     }
 
@@ -135,9 +136,13 @@ impl JsContextHost {
             return false;
         }
         let Some(current_host) = self
-            .lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
-            .or_else(|| {
+            .lightweight_popup_origin(popup_id)
+            .map(|origin| {
+                Url::parse(&origin)
+                    .ok()
+                    .and_then(|origin| url_host_domain(&origin))
+            })
+            .unwrap_or_else(|| {
                 self.dom_host()
                     .dom()
                     .node(document_handle)
@@ -156,8 +161,10 @@ impl JsContextHost {
         self.set_lightweight_popup_document_domain_override(popup_id, domain)
     }
 
-    fn lightweight_popup_document_url_for_domain(&self, popup_id: u64) -> Option<Url> {
-        self.lightweight_popup_document_url(popup_id)
+    fn main_document_domain_host(&self) -> Option<String> {
+        Url::parse(&self.main_document_security_origin())
+            .ok()
+            .and_then(|origin| url_host_domain(&origin))
     }
 
     fn child_browsing_context_document_domain_host(&self, handle: DomHandle) -> Option<String> {

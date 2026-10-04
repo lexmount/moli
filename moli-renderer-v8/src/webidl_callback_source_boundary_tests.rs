@@ -164,6 +164,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     // Captured native intrinsics, DOM/native forwarding, and compiled jobs.
+    // These two calls invoke WeakMap.get/set captured before author code runs.
+    // No page-supplied callback or mutable prototype method reaches this cache.
+    allowed(
+        "context_bootstrap/window_accessors/cross_origin_cache.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
     allowed(
         "context_bootstrap/constructors/document_nodes.rs",
         1,

@@ -16,6 +16,7 @@ use moli_core::network::SharedWebStorageStore;
 impl BrowserContext {
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {
         let target = self.page_targets.remove(target_id)?;
+        self.renderer_runtime().close_auxiliary_window(target_id);
         self.forget_target_opener_references_for_target(target_id);
         self.forget_target_window_names_for_target(target_id);
         self.forget_target_popup_id_for_target(target_id);
@@ -60,6 +61,7 @@ impl BrowserContext {
             creator,
             None,
             session_storage_namespace,
+            None,
             window_id,
         );
     }
@@ -73,8 +75,9 @@ impl BrowserContext {
         creator: Option<TargetInitialEmptyDocumentCreator>,
         session_storage_store: Option<SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
+        pending_auxiliary_page: Option<moli_core::page::RendererPendingAuxiliaryPage>,
+        window_id: u32,
     ) {
-        let window_id = self.page_targets.default_window_id();
         let session_storage_namespace = session_storage_store
             .map(TargetSessionStorageNamespace::from_store)
             .or_else(|| self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref()));
@@ -86,6 +89,7 @@ impl BrowserContext {
             creator,
             initial_empty_document_storage_key,
             session_storage_namespace,
+            pending_auxiliary_page,
             window_id,
         );
     }
@@ -109,6 +113,7 @@ impl BrowserContext {
         creator: Option<TargetInitialEmptyDocumentCreator>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
         session_storage_namespace: Option<TargetSessionStorageNamespace>,
+        pending_auxiliary_page: Option<moli_core::page::RendererPendingAuxiliaryPage>,
         window_id: u32,
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
@@ -122,6 +127,9 @@ impl BrowserContext {
         );
         if let Some(namespace) = session_storage_namespace {
             target.replace_session_storage_namespace(namespace);
+        }
+        if let Some(page) = pending_auxiliary_page {
+            target.runtime_slot.stage_auxiliary_page(page);
         }
         let inserted = self.insert_page_target_host_in_window(target, window_id);
         debug_assert!(inserted, "staged page target id must be unique");
@@ -154,7 +162,30 @@ impl BrowserContext {
 
     pub(crate) fn target_id_for_window_name(&self, target_name: &str) -> Option<&str> {
         let name = Self::reusable_window_open_target_name(target_name)?;
-        self.target_window_names.get(&name).map(String::as_str)
+        let runtime = self.renderer_runtime();
+        self.page_targets
+            .iter()
+            // An unrelated CDP-created root is not made a named auxiliary
+            // context merely by assigning its window.name.
+            .filter(|target| self.named_auxiliary_targets.contains(target.target_id()))
+            .find(|target| {
+                runtime
+                    .auxiliary_window(target.target_id())
+                    .is_none_or(|window| !window.is_closed())
+                    && runtime.browsing_context_name(target.target_id()).get() == name
+            })
+            .map(PageTargetHost::target_id)
+    }
+
+    pub(crate) fn target_id_for_browsing_context_name(
+        &self,
+        name: &moli_core::page::RendererBrowsingContextName,
+    ) -> Option<&str> {
+        let runtime = self.renderer_runtime();
+        self.page_targets
+            .iter()
+            .find(|target| runtime.browsing_context_name(target.target_id()) == *name)
+            .map(PageTargetHost::target_id)
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
@@ -163,13 +194,33 @@ impl BrowserContext {
             .any(|target| target.owner_state.has_attached_child_frame_id(frame_id))
     }
 
+    pub(crate) fn bind_target_browsing_context_name(
+        &mut self,
+        target_id: &str,
+        name: moli_core::page::RendererBrowsingContextName,
+    ) {
+        self.named_auxiliary_targets.insert(target_id.to_owned());
+        self.renderer_runtime()
+            .bind_browsing_context_name(target_id, name);
+    }
+
     pub(crate) fn remember_target_window_name(&mut self, target_name: &str, target_id: &str) {
+        self.named_auxiliary_targets.insert(target_id.to_owned());
         if let Some(name) = Self::reusable_window_open_target_name(target_name) {
-            self.target_window_names.insert(name, target_id.to_owned());
+            self.renderer_runtime()
+                .browsing_context_name(target_id)
+                .set(name);
         }
     }
 
     pub(crate) fn remember_target_popup_id(&mut self, popup_id: Option<u64>, target_id: &str) {
+        if let Some(popup_id) = popup_id {
+            assert!(
+                self.target_id_for_popup_id(popup_id)
+                    .is_none_or(|existing| existing == target_id),
+                "an auxiliary window must not belong to two live targets"
+            );
+        }
         if let Some(popup_id) = popup_id
             && let Some(replaced_popup_id) =
                 self.target_popup_ids.insert(target_id.to_owned(), popup_id)
@@ -180,8 +231,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn forget_target_window_names_for_target(&mut self, target_id: &str) {
-        self.target_window_names
-            .retain(|_, mapped_target_id| mapped_target_id != target_id);
+        self.named_auxiliary_targets.remove(target_id);
+        self.renderer_runtime()
+            .forget_browsing_context_name(target_id);
     }
 
     pub(crate) fn forget_target_popup_id_for_target(&mut self, target_id: &str) {
@@ -714,12 +766,15 @@ impl BrowserContext {
             return Some(DevToolsTargetInfo {
                 target_id: Some(DevToolsTargetId::from(target_id)),
                 kind: DevToolsTargetKind::Page,
-                title: target
-                    .owner_state
-                    .committed_document_title()
-                    .map(str::to_owned)
-                    .or_else(|| target.loaded_page().map(|page| page.document_title()))
-                    .unwrap_or_default(),
+                title: target.owner_state.document_display_title(
+                    target
+                        .owner_state
+                        .committed_document_title()
+                        .map(str::to_owned)
+                        .or_else(|| target.loaded_page().map(|page| page.document_title()))
+                        .unwrap_or_default(),
+                    target.target_url(),
+                ),
                 url: target.target_url().to_owned(),
                 attached,
                 opener_id: self
@@ -1358,6 +1413,15 @@ mod tests {
         );
 
         let mut context = BrowserContext::new("BC-window-name".to_owned());
+        for id in ["TID-spaced", "TID-exact"] {
+            context.stage_background_target(
+                id.to_owned(),
+                None,
+                "about:blank".to_owned(),
+                None,
+                None,
+            );
+        }
         context.remember_target_window_name(" ReportWindow ", "TID-spaced");
         context.remember_target_window_name("ReportWindow", "TID-exact");
         assert_eq!(

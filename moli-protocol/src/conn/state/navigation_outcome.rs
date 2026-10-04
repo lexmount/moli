@@ -80,6 +80,8 @@ pub(crate) struct RendererMainDocumentCommitSeed {
     timestamp: f64,
     inherited_security_origin: String,
     inherited_secure_context_type: String,
+    browsing_context_group: Option<super::navigation::NavigationBrowsingContextGroup>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 }
 
 impl RendererMainDocumentCommitSeed {
@@ -88,11 +90,23 @@ impl RendererMainDocumentCommitSeed {
             frame_id: navigation.frame_id.clone(),
             loader_id: navigation.loader_id.clone(),
             timestamp: navigation.timestamp,
-            inherited_security_origin: navigation.source_document_security.security_origin.clone(),
+            browsing_context_group: None,
+            navigation_initiator: navigation.navigation_initiator.clone(),
+            inherited_security_origin: navigation
+                .initial_document_environment
+                .as_ref()
+                .map(|environment| environment.origin().to_owned())
+                .unwrap_or_else(|| navigation.source_document_security.security_origin.clone()),
             inherited_secure_context_type: navigation
-                .source_document_security
-                .secure_context_type
-                .clone(),
+                .initial_document_environment
+                .as_ref()
+                .map(|environment| environment.secure_context_type().to_owned())
+                .unwrap_or_else(|| {
+                    navigation
+                        .source_document_security
+                        .secure_context_type
+                        .clone()
+                }),
         }
     }
 
@@ -112,7 +126,17 @@ impl RendererMainDocumentCommitSeed {
             timestamp,
             inherited_security_origin: source_document_security.security_origin,
             inherited_secure_context_type: source_document_security.secure_context_type,
+            browsing_context_group: None,
+            navigation_initiator: None,
         }
+    }
+
+    pub(crate) fn with_browsing_context_group(
+        mut self,
+        group: Option<super::navigation::NavigationBrowsingContextGroup>,
+    ) -> Self {
+        self.browsing_context_group = group;
+        self
     }
 
     pub(crate) fn resolve(
@@ -145,8 +169,16 @@ impl RendererMainDocumentCommitSeed {
                 .map(|error_page| error_page.unreachable_url().as_str().to_owned()),
             security_origin,
             secure_context_type,
+            document_referrer: self
+                .navigation_initiator
+                .as_ref()
+                .map(|initiator| initiator.document_referrer(final_url)),
             timestamp: self.timestamp,
             session_history_position: None,
+            browsing_context_group: self
+                .browsing_context_group
+                .as_ref()
+                .map(|group| group.resolve(final_url)),
         }
     }
 }
@@ -180,8 +212,8 @@ impl CompletedDownloadBodyArtifact {
 }
 
 #[derive(Debug)]
-pub struct LoadedNavigation {
-    pub page: Page,
+pub struct LoadedNavigation<PageValue = Page> {
+    pub page: PageValue,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub requested_url: Url,
@@ -305,6 +337,11 @@ impl NavigationResultProjection {
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
     pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
+    pub(crate) navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    pub(crate) initial_document_environment:
+        Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    pub(crate) auxiliary_document_response:
+        Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,
@@ -347,6 +384,7 @@ pub enum NavigationRequestLoadPolicy {
     DocumentInitiated,
     BrowserInitiated,
     Reload,
+    DocumentInitiatedReload,
 }
 
 #[derive(Debug, Serialize)]

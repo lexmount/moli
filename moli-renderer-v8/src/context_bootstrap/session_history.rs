@@ -197,6 +197,9 @@ pub(super) fn length<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> usize {
+    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
+        return 0;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return 1;
     };
