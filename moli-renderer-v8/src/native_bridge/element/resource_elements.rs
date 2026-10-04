@@ -1282,7 +1282,7 @@ fn iframe_srcdoc_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn frame_owner_content_document_getter_function<'s>(
+pub(super) fn frame_owner_content_document_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -1358,7 +1358,7 @@ fn frame_owner_content_document<'s>(
     Some(document)
 }
 
-fn frame_owner_content_window_getter_function<'s>(
+pub(super) fn frame_owner_content_window_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -1417,44 +1417,6 @@ fn frame_owner_content_window_getter_function<'s>(
         }
         None => rv.set_null(),
     }
-}
-
-pub(super) fn object_content_document_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if html_element_getter_receiver(
-        scope,
-        args.this(),
-        "HTMLObjectElement",
-        "contentDocument",
-        "object",
-    )
-    .is_none()
-    {
-        return;
-    }
-    frame_owner_content_document_getter_function(scope, args, rv);
-}
-
-pub(super) fn object_content_window_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if html_element_getter_receiver(
-        scope,
-        args.this(),
-        "HTMLObjectElement",
-        "contentWindow",
-        "object",
-    )
-    .is_none()
-    {
-        return;
-    }
-    frame_owner_content_window_getter_function(scope, args, rv);
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1999,6 +1961,18 @@ pub(super) struct HtmlFrameElementLegacyPrototypeDeclaration {
         setter_data = NullToEmptyDomStringReflection::FrameMarginWidth
     )]
     margin_width: (),
+    #[webapi(
+        accessor_property,
+        getter = frame_owner_content_document_getter_function,
+        receiver = web_api_interfaces::HTMLFrameElement::is_instance
+    )]
+    content_document: (),
+    #[webapi(
+        accessor_property,
+        getter = frame_owner_content_window_getter_function,
+        receiver = web_api_interfaces::HTMLFrameElement::is_instance
+    )]
+    content_window: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
