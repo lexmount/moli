@@ -614,6 +614,95 @@ fn native_dom_exception_uses_registered_prototype_after_public_override() {
 }
 
 #[test]
+fn native_dom_exception_materializes_without_reading_the_public_constructor() {
+    let mut vm = new_storage_test_vm("https://native-dom-exception-lazy.test/");
+    vm.eval(
+        r#"
+        globalThis.exceptionConstructorReads = 0;
+        delete globalThis.DOMException;
+        Object.defineProperty(globalThis, 'DOMException', {
+          configurable: true,
+          get() {
+            ++exceptionConstructorReads;
+            throw new Error('the public constructor must not be read');
+          }
+        });
+        "#,
+    )
+    .expect("public constructor override should evaluate");
+    assert_eq!(
+        constructor_materialization_count(&mut vm, "DOMException"),
+        0
+    );
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let exception = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "native security failure",
+            "SecurityError",
+        );
+        let exception = v8::Local::<v8::Object>::try_from(exception).unwrap();
+        let intrinsic =
+            crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "DOMException")?;
+        assert!(
+            exception
+                .get_prototype(scope)
+                .unwrap()
+                .strict_equals(intrinsic.into())
+        );
+        Ok(())
+    })
+    .expect("native exception should materialize through its realm registry");
+    assert_eq!(vm.eval("exceptionConstructorReads").unwrap(), "0");
+    assert_eq!(
+        constructor_materialization_count(&mut vm, "DOMException"),
+        1
+    );
+}
+
+#[test]
+fn native_dom_exception_materializes_in_a_detached_realm() {
+    let mut vm = new_storage_test_vm("https://native-dom-exception-detached.test/");
+    assert_eq!(
+        constructor_materialization_count(&mut vm, "DOMException"),
+        0
+    );
+    let isolate = vm.renderer_document_isolate.clone();
+    let context = vm.page_default_context.clone();
+    drop(vm);
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &context);
+        context.detach_global();
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let exception = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "native security failure",
+            "SecurityError",
+        );
+        let exception = v8::Local::<v8::Object>::try_from(exception).unwrap();
+        let intrinsic =
+            crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "DOMException")
+                .expect("detached realm must retain its intrinsic registry");
+        assert!(
+            exception
+                .get_prototype(scope)
+                .unwrap()
+                .strict_equals(intrinsic.into())
+        );
+        assert_eq!(exception.get_creation_context(scope), Some(context));
+        assert_eq!(
+            exception
+                .get(scope, crate::util::v8str(scope, "name").into())
+                .unwrap()
+                .to_rust_string_lossy(scope),
+            "SecurityError"
+        );
+    });
+}
+
+#[test]
 fn illegal_storage_receivers_do_not_materialize_wrappers_or_opfs_state() {
     let mut vm = new_storage_test_vm("https://lazy-illegal-storage-receivers.test/");
     vm.exec(

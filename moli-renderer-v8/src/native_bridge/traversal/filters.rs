@@ -1,3 +1,4 @@
+use crate::v8_traced_webidl_callback::V8TracedWebIdlCallbackInterface;
 use crate::webidl::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use crate::{
     callback_invocation::{
@@ -28,37 +29,44 @@ pub(super) enum TraversalFilterResult {
 
 /// The callback-interface value owned by one TreeWalker or NodeIterator.
 ///
-/// Traversal owns registration lifetime and reentrancy. The callback kernel
-/// owns the rooted callback plus its relevant/incumbent contexts. The renderer
+/// The wrapper owns a V8-traced callback carrier; the native registry only
+/// observes it weakly. The callback kernel roots invocation snapshots. The renderer
 /// identity is deliberately kept beside those engine-neutral facts so a
 /// detached or replaced Window cannot re-enter through a still-reachable
 /// traversal wrapper.
 pub(in crate::native_bridge) struct TraversalFilter {
-    callback: WebIdlCallbackInterface,
+    callback: v8::Weak<v8::Object>,
     execution_context: Option<WindowExecutionContextIdentity>,
 }
 
 impl TraversalFilter {
-    pub(super) fn new(
-        scope: &mut v8::PinScope<'_, '_>,
+    pub(super) fn new<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
         runtime_ptr: *mut JsContextHost,
+        wrapper: v8::Local<'s, v8::Object>,
         callback: WebIdlCallbackInterface,
     ) -> Self {
         let prepared = callback.prepare(scope);
         let relevant_context = prepared.relevant_context(scope);
         let execution_context = unsafe { &*runtime_ptr }
             .window_execution_context_identity_for_v8_context(scope, relevant_context);
+        let carrier = V8TracedWebIdlCallbackInterface::new(scope, callback).into_object();
+        crate::util::set_private_value(scope, wrapper, "__lmTraversalFilter", carrier.into());
         Self {
-            callback,
+            callback: v8::Weak::new(scope, carrier),
             execution_context,
         }
     }
 
-    pub(super) fn prepare(&self, scope: &mut v8::PinScope<'_, '_>) -> PreparedTraversalFilter {
-        PreparedTraversalFilter {
-            callback: self.callback.prepare(scope),
+    pub(super) fn prepare(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<PreparedTraversalFilter> {
+        let carrier = self.callback.to_local(scope)?;
+        Some(PreparedTraversalFilter {
+            callback: V8TracedWebIdlCallbackInterface::from_object(carrier).prepare(scope),
             execution_context: self.execution_context,
-        }
+        })
     }
 }
 

@@ -81,7 +81,11 @@ impl JsContextHost {
         // The actual JsContextHost pointer for runtime_ptr_from_object compatibility.
         let bridge = unsafe { &mut (*host_ptr).bridge };
         bridge.install_global(scope, global, host_ptr, bridge_ref.as_external_ptr())?;
-        crate::util::install_context_host_pointer_slot(scope.get_current_context(), host_ptr);
+        crate::util::install_context_host_pointer_slot(
+            scope.get_current_context(),
+            host_ptr,
+            unsafe { &*host_ptr }.context_host_lifecycle_handle(),
+        );
         Ok(bridge_ref)
     }
 }

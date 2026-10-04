@@ -891,9 +891,10 @@ pub(crate) use standalone_test_harness::StandaloneScriptVmHarness;
 use crate::document_runtime::{DeferredPageTaskLane, FollowupPageTaskDisposition};
 use document_isolate::*;
 pub(crate) use document_isolate::{
-    RendererDocumentIsolateBootstrap, RendererDocumentIsolateHandle,
-    RendererDocumentIsolateReservationAccounting, RendererPageScriptEnvironment,
-    ScriptVmDefaultWorldBootstrap, renderer_document_isolate_accounting_diagnostics,
+    RendererDeferredContextHostReleaseQueue, RendererDocumentIsolateBootstrap,
+    RendererDocumentIsolateHandle, RendererDocumentIsolateReservationAccounting,
+    RendererPageScriptEnvironment, ScriptVmDefaultWorldBootstrap,
+    renderer_document_isolate_accounting_diagnostics,
 };
 pub(crate) use eval_exec::execute_source_text_on_current_stack;
 pub(crate) use input_helpers::*;
@@ -907,6 +908,7 @@ pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
 pub(crate) use runtime_bindings::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use runtime_bindings::*;
 pub(crate) use runtime_work::*;
+use std::ops::{Deref, DerefMut};
 
 #[cfg(any(test, feature = "test-support"))]
 type ScriptGlobalsBaseline = Vec<String>;
@@ -950,15 +952,46 @@ fn register_main_window_execution_context_for_bootstrap(
         .context("failed to register main LocalWindow execution context")
 }
 
+pub(super) struct ScriptVmDocumentRuntimeOwner {
+    document_runtime: Option<Box<DocumentRuntime>>,
+}
+
+impl ScriptVmDocumentRuntimeOwner {
+    fn new(document_runtime: Box<DocumentRuntime>) -> Self {
+        Self {
+            document_runtime: Some(document_runtime),
+        }
+    }
+
+    fn take_for_retained_document_host(&mut self) -> Option<Box<DocumentRuntime>> {
+        self.document_runtime.take()
+    }
+}
+
+impl Deref for ScriptVmDocumentRuntimeOwner {
+    type Target = DocumentRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        self.document_runtime
+            .as_deref()
+            .expect("ScriptVm DocumentRuntime must remain owned until ScriptVm drop")
+    }
+}
+
+impl DerefMut for ScriptVmDocumentRuntimeOwner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.document_runtime
+            .as_deref_mut()
+            .expect("ScriptVm DocumentRuntime must remain owned until ScriptVm drop")
+    }
+}
+
 pub(super) struct ScriptVm {
     resource_owner_id: crate::resource_owner::ResourceOwnerId,
     /// Page/target-facing inspector state. This must drop before the renderer
     /// document isolate handle because the V8 inspector session touches the
     /// isolate-level backend while being destroyed.
     page_inspector: DocumentInspectorBinding,
-    /// Handle to renderer-owner document isolate-level V8 state. Multiple page
-    /// facades can share the holder while keeping page/context state here.
-    renderer_document_isolate: RendererDocumentIsolateHandle,
     renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
     page_default_context: v8::Global<v8::Context>,
@@ -973,7 +1006,7 @@ pub(super) struct ScriptVm {
     // `JsContextHost` stores a non-owning pointer into `document_runtime`, so it
     // must be dropped before the runtime field during normal Rust field teardown.
     _context_host: Rc<RefCell<JsContextHost>>,
-    pub(super) document_runtime: Box<DocumentRuntime>,
+    pub(super) document_runtime: ScriptVmDocumentRuntimeOwner,
     post_domcontentloaded_page_task_tx: PageTaskSender,
     page_runtime_wake_tx: PageRuntimeWakeSender,
     queued_main_document_runtime_continuation_owner:
@@ -1014,6 +1047,9 @@ pub(super) struct ScriptVm {
     #[cfg(test)]
     _page_task_residence_for_executor_test:
         Option<crate::page_task_queue::RendererPageTaskTestResidence>,
+    // Native and V8 per-document state must drop before the final isolate
+    // handle; retained realms then release their host through its GC queue.
+    renderer_document_isolate: RendererDocumentIsolateHandle,
 }
 
 impl moli_layout::GeometryProvider for ScriptVm {
@@ -2010,6 +2046,11 @@ impl ScriptVmPageRealmBootstrap {
             top_level_storage_key,
             reserved_service_worker_client_id,
         )));
+        context_host
+            .borrow_mut()
+            .bind_deferred_context_host_release_queue(
+                renderer_document_isolate.deferred_context_host_release_queue(),
+            );
         let main_document_owner = context_host
             .borrow()
             .current_main_document_task_owner()
@@ -2383,7 +2424,7 @@ impl ScriptVmDefaultWorldBootstrap {
             page_default_runtime_observable_context_token: runtime_observable_context_token,
             root_frame_id,
             baseline_globals,
-            document_runtime,
+            document_runtime: ScriptVmDocumentRuntimeOwner::new(document_runtime),
             _context_host: context_host,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
@@ -2426,6 +2467,26 @@ impl ScriptVmDefaultWorldBootstrap {
                 .borrow_mut()
                 .bind_output_journal(environment.output_journal());
         }
+        vm._context_host.borrow_mut().publish_document_host();
+        vm.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                crate::util::retain_context_host_for_document_realm(
+                    v8::Local::new(scope, &vm.page_default_context),
+                    vm._context_host.clone(),
+                    vm.renderer_document_isolate
+                        .deferred_context_host_release_queue(),
+                );
+                for child in vm.prebootstrapped_child_default_contexts.borrow().values() {
+                    crate::util::retain_context_host_for_document_realm(
+                        v8::Local::new(scope, &child.context),
+                        vm._context_host.clone(),
+                        vm.renderer_document_isolate
+                            .deferred_context_host_release_queue(),
+                    );
+                }
+            });
         Ok(vm)
     }
 }

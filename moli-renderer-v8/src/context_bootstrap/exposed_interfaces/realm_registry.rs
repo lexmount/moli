@@ -20,9 +20,9 @@ pub(super) struct IntrinsicInterfaceRegistry {
 }
 
 pub(super) struct RealmInterfaceObjects {
-    constructor: v8::Global<v8::Object>,
-    prototype: v8::Global<v8::Object>,
-    public_interface: v8::Global<v8::Object>,
+    constructor: crate::util::RealmObjectHandle,
+    prototype: crate::util::RealmObjectHandle,
+    public_interface: crate::util::RealmObjectHandle,
 }
 
 impl IntrinsicInterfaceRegistry {
@@ -156,9 +156,9 @@ impl IntrinsicInterfaceRegistry {
             RealmInterfaceEntry::Uninitialized | RealmInterfaceEntry::Materializing => {}
         }
         *slot = RealmInterfaceEntry::Ready(RealmInterfaceObjects {
-            constructor: v8::Global::new(scope, constructor),
-            prototype: v8::Global::new(scope, prototype),
-            public_interface: v8::Global::new(scope, public_interface),
+            constructor: crate::util::RealmObjectHandle::new(scope, constructor),
+            prototype: crate::util::RealmObjectHandle::new(scope, prototype),
+            public_interface: crate::util::RealmObjectHandle::new(scope, public_interface),
         });
         Ok(())
     }
@@ -172,7 +172,7 @@ impl IntrinsicInterfaceRegistry {
         let RealmInterfaceEntry::Ready(objects) = entries.get(id.index())? else {
             return None;
         };
-        Some(v8::Local::new(scope, &objects.constructor))
+        objects.constructor.to_local(scope)
     }
 
     pub(super) fn prototype<'s>(
@@ -184,7 +184,7 @@ impl IntrinsicInterfaceRegistry {
         let RealmInterfaceEntry::Ready(objects) = entries.get(id.index())? else {
             return None;
         };
-        Some(v8::Local::new(scope, &objects.prototype))
+        objects.prototype.to_local(scope)
     }
 
     pub(super) fn public_interface<'s>(
@@ -196,8 +196,23 @@ impl IntrinsicInterfaceRegistry {
         let RealmInterfaceEntry::Ready(objects) = entries.get(id.index())? else {
             return None;
         };
-        Some(v8::Local::new(scope, &objects.public_interface))
+        objects.public_interface.to_local(scope)
     }
+}
+
+pub(crate) fn retain_intrinsic_interfaces_in_realm(scope: &mut v8::PinScope<'_, '_>) {
+    let context = scope.get_current_context();
+    let Some(registry) = context.get_slot::<IntrinsicInterfaceRegistry>() else {
+        return;
+    };
+    for entry in registry.entries.borrow_mut().iter_mut() {
+        if let RealmInterfaceEntry::Ready(objects) = entry {
+            objects.constructor.retain_in_realm(scope);
+            objects.prototype.retain_in_realm(scope);
+            objects.public_interface.retain_in_realm(scope);
+        }
+    }
+    crate::util::retain_context_v8_handle_state_for_safe_release(context, registry);
 }
 
 #[cfg(test)]

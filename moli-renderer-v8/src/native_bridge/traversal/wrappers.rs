@@ -115,12 +115,12 @@ pub(in crate::native_bridge) fn build_node_iterator_wrapper<'s>(
     what_to_show: u32,
     filter: Option<WebIdlCallbackInterface>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = filter.map(|filter| TraversalFilter::new(scope, runtime_ptr, filter));
-    let id = bridge.register_node_iterator(root, what_to_show, filter);
     let template = bridge.node_iterator_wrapper_template();
     let wrapper = template
         .new_instance(scope)
         .expect("failed to instantiate NodeIterator wrapper");
+    let filter = filter.map(|filter| TraversalFilter::new(scope, runtime_ptr, wrapper, filter));
+    let id = bridge.register_node_iterator(root, what_to_show, filter);
     let runtime_external = v8::External::new(scope, runtime_ptr as *mut c_void);
     assert!(
         wrapper.set_internal_field(0, runtime_external.into()),
@@ -142,12 +142,12 @@ pub(in crate::native_bridge) fn build_tree_walker_wrapper<'s>(
     what_to_show: u32,
     filter: Option<WebIdlCallbackInterface>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = filter.map(|filter| TraversalFilter::new(scope, runtime_ptr, filter));
-    let id = bridge.register_tree_walker(root, what_to_show, filter);
     let template = bridge.tree_walker_wrapper_template();
     let wrapper = template
         .new_instance(scope)
         .expect("failed to instantiate TreeWalker wrapper");
+    let filter = filter.map(|filter| TraversalFilter::new(scope, runtime_ptr, wrapper, filter));
+    let id = bridge.register_tree_walker(root, what_to_show, filter);
     let runtime_external = v8::External::new(scope, runtime_ptr as *mut c_void);
     assert!(
         wrapper.set_internal_field(0, runtime_external.into()),

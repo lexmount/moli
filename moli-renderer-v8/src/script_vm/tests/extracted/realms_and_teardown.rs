@@ -1,6 +1,78 @@
 use super::*;
 
 #[test]
+fn retained_document_realm_keeps_native_values_until_the_last_v8_reference() {
+    let mut vm = new_parsed_test_vm(
+        "https://retained-document.test/old",
+        "<!doctype html><p>old document</p>",
+    );
+    vm.eval(
+        r#"
+        globalThis.savedNode = document.querySelector('p');
+        globalThis.savedDecoder = new TextDecoder();
+        globalThis.savedBlob = new Blob(['retained blob']);
+        globalThis.savedController = new AbortController();
+        globalThis.savedSignal = savedController.signal;
+        globalThis.savedComposite = AbortSignal.any([savedSignal]);
+        globalThis.abortEventRan = false;
+        savedSignal.onabort = () => { abortEventRan = true; };
+        globalThis.savedReason = {kind: 'old realm'};
+        globalThis.savedFunction = () => [savedNode.textContent, document.URL];
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let context = vm.page_default_context.clone();
+    drop(vm);
+    assert!(
+        weak_host.upgrade().is_some(),
+        "retained realm owns its native DOM"
+    );
+
+    let value = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let source = crate::util::v8str(scope, r#"
+            savedNode.textContent = 'retained';
+            savedController.abort(savedReason);
+            JSON.stringify([
+                savedFunction(),
+                savedDecoder.decode(new Uint8Array([65])),
+                savedBlob.size,
+                savedSignal.aborted,
+                savedSignal.reason === savedReason,
+                savedComposite.aborted && savedComposite.reason === savedReason,
+                abortEventRan,
+                savedNode === document.querySelector('p'),
+                (() => { try { savedSignal.throwIfAborted(); } catch (e) { return e === savedReason; } })()
+            ])
+        "#);
+        let script = v8::Script::compile(scope, source, None).expect("retained realm compiles");
+        crate::script_execution::execute_compiled_script(scope, script)
+            .expect("retained native values remain usable")
+            .to_rust_string_lossy(scope)
+    });
+    assert_eq!(
+        value,
+        r#"[["retained","https://retained-document.test/old"],"A",13,true,true,true,false,true,true]"#
+    );
+
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        drop(context);
+        isolate.low_memory_notification();
+    });
+    isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    assert!(
+        weak_host.upgrade().is_none(),
+        "last V8 reference releases native DOM outside GC"
+    );
+}
+
+#[test]
 fn runtime_binding_calls_freeze_the_invoking_realm_generation() {
     let mut vm = new_storage_test_vm("https://runtime-binding-source-realm.test/");
     vm.install_runtime_binding("mainRealmBinding", None, None)
@@ -307,23 +379,33 @@ fn page_context_teardown_releases_opfs_handle_and_directory_iterator_registratio
 
     vm.close_page_context_resources_for_context_teardown();
 
+    let handles = vm._context_host.borrow().opfs_handle_registry().unwrap();
+    let iterators = vm
+        ._context_host
+        .borrow()
+        .opfs_directory_iterator_registry()
+        .unwrap();
     assert_eq!(
-        vm._context_host
-            .borrow()
-            .opfs_handle_registry()
-            .expect("OPFS handle registry remains owned until host teardown")
-            .len(),
-        0,
-        "page teardown must run handle finalizers before isolate teardown"
+        handles.len(),
+        1,
+        "retained handle remains backed while its realm is alive"
     );
     assert_eq!(
-        vm._context_host
-            .borrow()
-            .opfs_directory_iterator_registry()
-            .expect("OPFS iterator registry remains owned until host teardown")
-            .len(),
+        iterators.len(),
+        16,
+        "retained iterators remain backed while their realm is alive"
+    );
+    assert_eq!(vm.eval("__opfsRoot.kind").unwrap(), "directory");
+    drop(vm);
+    assert_eq!(
+        handles.len(),
         0,
-        "page teardown must run iterator finalizers before isolate teardown"
+        "final Context release retires native handle registrations"
+    );
+    assert_eq!(
+        iterators.len(),
+        0,
+        "final Context release retires native iterator registrations"
     );
 }
 #[test]
@@ -802,7 +884,7 @@ fn promise_reject_context_slot_does_not_retain_context_host_after_script_vm_drop
     );
 }
 #[test]
-fn context_wrapper_cache_is_cleared_on_script_vm_teardown() {
+fn context_wrapper_cache_releases_native_roots_on_script_vm_teardown() {
     let mut vm = new_parsed_test_vm(
         "https://wrapper-cache-retention.test/",
         "<!doctype html><main></main>",
@@ -846,7 +928,7 @@ fn context_wrapper_cache_is_cleared_on_script_vm_teardown() {
 
     drop(vm);
     assert_eq!(
-        retained_cache.wrapper_entry_count(),
+        retained_cache.strong_wrapper_entry_count(),
         0,
         "page context teardown must clear strong wrapper cache entries before contexts are dropped"
     );
@@ -890,7 +972,7 @@ fn script_vm_page_context_teardown_is_idempotent() {
     );
 }
 #[test]
-fn page_context_teardown_releases_all_context_owned_v8_finalizers() {
+fn page_context_teardown_preserves_finalizers_for_retained_native_objects() {
     let mut vm = new_parsed_test_vm(
         "https://v8-finalizer-teardown.test/",
         "<!doctype html><body></body>",
@@ -933,10 +1015,9 @@ fn page_context_teardown_releases_all_context_owned_v8_finalizers() {
     );
 
     vm.close_page_context_resources_for_context_teardown();
-    assert_eq!(
-        vm._context_host.borrow().v8_finalizers.len(),
-        0,
-        "page context teardown must reset every weak handle before isolate teardown"
+    assert!(
+        vm._context_host.borrow().v8_finalizers.len() >= 128,
+        "retiring active execution must preserve native objects retained by author code"
     );
     assert_eq!(
         vm._context_host
@@ -947,7 +1028,13 @@ fn page_context_teardown_releases_all_context_owned_v8_finalizers() {
     );
 
     vm.close_page_context_resources_for_context_teardown();
+    assert_eq!(vm.eval("__finalizerObjects[2].size").unwrap(), "9");
+    let weak_host = vm.context_host_weak_for_test();
     drop(vm);
+    assert!(
+        weak_host.upgrade().is_none(),
+        "final isolate release must drop the native host"
+    );
 }
 #[test]
 fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
@@ -1736,4 +1823,98 @@ fn frame_owner_content_accessors_live_on_exact_owner_prototypes() {
         result,
         r#"{"descriptors":[{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}}],"sameOriginValues":[true,true,true],"brandErrors":[["TypeError","TypeError"],["TypeError","TypeError"],["TypeError","TypeError"]],"absentFromBase":true}"#
     );
+}
+
+#[test]
+fn unreferenced_traversal_filters_release_retired_document() {
+    for method in ["createTreeWalker", "createNodeIterator"] {
+        let mut vm = new_parsed_test_vm("https://traversal.test/old", "<body>old document</body>");
+        vm.eval(&format!(
+            "document.{method}(document, NodeFilter.SHOW_ALL, () => NodeFilter.FILTER_ACCEPT); 1"
+        ))
+        .expect("unreferenced traversal setup");
+        let host = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..3 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            host.upgrade().is_none(),
+            "{method}: an unreferenced filter must not retain its retired Document host"
+        );
+    }
+}
+
+#[test]
+fn retained_traversal_filters_release_host_after_last_reference() {
+    for method in ["createTreeWalker", "createNodeIterator"] {
+        let mut vm = new_parsed_test_vm(
+            "https://retained-traversal.test/old",
+            "<body>old document</body>",
+        );
+        vm.eval(&format!(
+            r#"
+            window.retainedFilter = () => NodeFilter.FILTER_ACCEPT;
+            window.retainedTraversal = document.{method}(
+                document.body, NodeFilter.SHOW_ALL, retainedFilter
+            );
+            1
+            "#
+        ))
+        .expect("retained traversal setup");
+        let walker = vm
+            .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+                let context = scope.get_current_context();
+                let value = context
+                    .global(scope)
+                    .get(scope, crate::util::v8str(scope, "retainedTraversal").into())
+                    .unwrap();
+                let walker = v8::Local::<v8::Object>::try_from(value).unwrap();
+                Ok(v8::Global::new(scope, walker))
+            })
+            .unwrap();
+        let host = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..3 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            host.upgrade().is_some(),
+            "a retained walker keeps native backing alive"
+        );
+        let result = isolate.with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let caller = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, caller);
+            let walker = v8::Local::new(scope, &walker);
+            let context = walker.get_creation_context(scope).unwrap();
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let source = crate::util::v8str(
+                scope,
+                r#"JSON.stringify([
+                    retainedTraversal.filter === retainedFilter,
+                    retainedTraversal.root.textContent
+                ])"#,
+            );
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            crate::script_execution::execute_compiled_script(scope, script)
+                .unwrap()
+                .to_rust_string_lossy(scope)
+        });
+        assert_eq!(result, r#"[true,"old document"]"#);
+        isolate.with_renderer_document_isolate_mut(|isolate| {
+            drop(walker);
+            isolate.low_memory_notification();
+        });
+        for _ in 0..3 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            host.upgrade().is_none(),
+            "the last walker reference releases its retired host"
+        );
+    }
 }

@@ -2986,7 +2986,8 @@ async fn child_default_bridge_ref_is_released_on_child_context_teardown() {
         )
         .expect("child wrapper cache setup should evaluate");
     assert_eq!(child_wrappers, "child-wrappers");
-    let child_wrapper_count = retained_child_cache.wrapper_entry_count_for_realm(child_realm_token);
+    let child_wrapper_count =
+        retained_child_cache.strong_wrapper_entry_count_for_realm(child_realm_token);
     assert!(
         child_wrapper_count >= 1,
         "child context wrappers should populate its default-world cache partition: {child_wrapper_count}"
@@ -2999,7 +3000,8 @@ async fn child_default_bridge_ref_is_released_on_child_context_teardown() {
             )
         })
         .expect("top default context token should be readable");
-    let top_wrapper_count = retained_child_cache.wrapper_entry_count_for_realm(top_realm_token);
+    let top_wrapper_count =
+        retained_child_cache.strong_wrapper_entry_count_for_realm(top_realm_token);
     assert!(
         top_wrapper_count >= 1,
         "the shared default-world cache should contain live top-context wrappers"
@@ -3031,12 +3033,13 @@ async fn child_default_bridge_ref_is_released_on_child_context_teardown() {
         "removed iframe should not keep a live child default context"
     );
     assert_eq!(
-        retained_child_cache.wrapper_entry_count_for_realm(child_realm_token),
+        retained_child_cache.strong_wrapper_entry_count_for_realm(child_realm_token),
         0,
         "destroying a child default context must retire its strong wrapper entries"
     );
     assert!(
-        retained_child_cache.wrapper_entry_count_for_realm(top_realm_token) >= top_wrapper_count,
+        retained_child_cache.strong_wrapper_entry_count_for_realm(top_realm_token)
+            >= top_wrapper_count,
         "destroying a child context must preserve wrappers owned by the live top realm"
     );
     assert_eq!(

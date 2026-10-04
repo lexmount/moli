@@ -32,15 +32,13 @@ impl WebIdlCallbackInterface {
     /// Event dispatch can therefore release all registration-store borrows
     /// before entering user code and its synchronous reentrancy.
     pub fn prepare(&self, scope: &mut v8::PinScope<'_, '_>) -> PreparedWebIdlCallbackInterface {
-        PreparedWebIdlCallbackInterface {
-            callback: v8::Global::new(scope, v8::Local::new(scope, &self.callback)),
-            relevant_context: v8::Global::new(scope, v8::Local::new(scope, &self.relevant_context)),
-            incumbent_context: v8::Global::new(
-                scope,
-                v8::Local::new(scope, &self.incumbent_context),
-            ),
-            callable_at_conversion: self.callable_at_conversion,
-        }
+        PreparedWebIdlCallbackInterface::new(
+            scope,
+            v8::Local::new(scope, &self.callback),
+            v8::Local::new(scope, &self.relevant_context),
+            v8::Local::new(scope, &self.incumbent_context),
+            self.callable_at_conversion,
+        )
     }
 
     pub fn matches<'s>(
@@ -83,6 +81,22 @@ pub struct PreparedWebIdlCallbackInterface {
 }
 
 impl PreparedWebIdlCallbackInterface {
+    /// Root a snapshot of callback-interface facts held by a traced owner.
+    pub fn new(
+        scope: &mut v8::PinScope<'_, '_>,
+        callback: v8::Local<'_, v8::Object>,
+        relevant_context: v8::Local<'_, v8::Context>,
+        incumbent_context: v8::Local<'_, v8::Context>,
+        callable_at_conversion: bool,
+    ) -> Self {
+        Self {
+            callback: v8::Global::new(scope, callback),
+            relevant_context: v8::Global::new(scope, relevant_context),
+            incumbent_context: v8::Global::new(scope, incumbent_context),
+            callable_at_conversion,
+        }
+    }
+
     pub fn callback<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
         v8::Local::new(scope, &self.callback)
     }

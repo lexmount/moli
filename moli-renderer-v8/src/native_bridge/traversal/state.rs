@@ -219,7 +219,7 @@ fn prepare_filter(
     filter: Option<&TraversalFilter>,
 ) -> Option<Rc<PreparedTraversalFilter>> {
     let filter = filter?;
-    Some(Rc::new(filter.prepare(scope)))
+    Some(Rc::new(filter.prepare(scope)?))
 }
 
 #[cfg(test)]

@@ -91,20 +91,11 @@ pub(crate) fn abort_signal_any_callback<'s>(
     let signals = parsed.signals;
 
     for source_signal in &signals {
-        let Some(source_signal_id) = AbortStore::signal_id_from_object(scope, *source_signal)
-        else {
+        if !AbortStore::signal_aborted_from_object(scope, *source_signal) {
             continue;
-        };
-        let Some(reason) = host
-            .native_bridge_mut()
-            .abort
-            .signal_state(source_signal_id)
-            .filter(|state| state.aborted)
-            .and_then(|state| state.reason.as_ref())
-            .map(|reason| v8::Local::new(scope, reason))
-        else {
-            continue;
-        };
+        }
+        let reason = AbortStore::signal_reason_from_object(scope, *source_signal)
+            .unwrap_or_else(|| v8::undefined(scope).into());
         crate::native_bridge::abort::abort_signal(scope, signal, reason);
         rv.set(signal.into());
         return;
