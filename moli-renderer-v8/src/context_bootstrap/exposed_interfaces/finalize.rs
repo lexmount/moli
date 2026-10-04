@@ -12,6 +12,7 @@ use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
 enum RealmDependentFinalizer {
     NodeMixinUnscopables,
     CryptoSecureContextSurface,
+    NavigatorSecureContextSurface,
     BaseAudioContextSecureContextSurface,
     XmlHttpRequestEventTargetState,
     NotificationPermission,
@@ -45,6 +46,10 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     (
         "Crypto",
         RealmDependentFinalizer::CryptoSecureContextSurface,
+    ),
+    (
+        "Navigator",
+        RealmDependentFinalizer::NavigatorSecureContextSurface,
     ),
     (
         "XMLHttpRequestEventTarget",
@@ -92,6 +97,11 @@ pub(super) fn finalize_materialized_interface<'s>(
         }
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface => {
             finalize_base_audio_context_realm_bindings(scope, prototype)
+        }
+        RealmDependentFinalizer::NavigatorSecureContextSurface => {
+            crate::context_bootstrap::navigator_runtime::finalize_navigator_realm_bindings(
+                scope, prototype,
+            )
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             finalize_crypto_realm_bindings(scope, prototype)
@@ -148,6 +158,7 @@ mod tests {
                 "CharacterData",
                 "BaseAudioContext",
                 "Crypto",
+                "Navigator",
                 "XMLHttpRequestEventTarget",
                 "Notification",
                 "PointerEvent",
