@@ -48,7 +48,8 @@ fn window_current_events_use_private_state_in_each_listener_world() {
             set() { throw new Error('isolated author slot setter'); }
         });
         target.addEventListener('inner', event => {
-            facts.push(window.event === event);
+            facts.push(window.event === event, event instanceof Event,
+                event.currentTarget === target);
         });
         'ready'
         "#,
@@ -65,6 +66,6 @@ fn window_current_events_use_private_state_in_each_listener_world() {
             "JSON.stringify([facts, window.event === undefined])"
         )
         .unwrap(),
-        "[[true],true]"
+        "[[true,true,true],true]"
     );
 }
