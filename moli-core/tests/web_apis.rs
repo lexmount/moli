@@ -47,6 +47,8 @@ mod fetch_preaborted_upload;
 mod font_queries;
 #[path = "web_apis/indexed_db_transaction.rs"]
 mod indexed_db_transaction;
+#[path = "web_apis/locked_body.rs"]
+mod locked_body;
 #[path = "web_apis/pipe_disturbed.rs"]
 mod pipe_disturbed;
 #[path = "web_apis/request_init.rs"]
