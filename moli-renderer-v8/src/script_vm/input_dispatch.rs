@@ -1770,37 +1770,39 @@ impl ScriptVm {
             };
             let suppress_current_mouse_event =
                 suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
-            if !suppress_current_mouse_event
-                && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
-            {
-                let event = if event_name == "wheel" {
-                    construct_wheel_event_for_target(
+            if !suppress_current_mouse_event {
+                let event = match mouse_dispatch_handle {
+                    Some(mouse_dispatch_handle) if event_name == "wheel" => {
+                        construct_wheel_event_for_target(
+                            scope,
+                            runtime_ptr,
+                            mouse_dispatch_handle,
+                            event_name,
+                            coordinates,
+                            delta_x,
+                            delta_y,
+                            buttons,
+                            modifiers,
+                        )
+                    }
+                    Some(target) => construct_mouse_event_for_target(
                         scope,
                         runtime_ptr,
-                        mouse_dispatch_handle,
-                        event_name,
-                        coordinates,
-                        delta_x,
-                        delta_y,
-                        buttons,
-                        modifiers,
-                    )
-                } else {
-                    construct_mouse_event_for_target(
-                        scope,
-                        runtime_ptr,
-                        mouse_dispatch_handle,
+                        target,
                         event_name,
                         coordinates,
                         button,
                         buttons,
                         modifiers,
-                    )
+                    ),
+                    None => None,
                 };
-                if let Some(event) = event {
+                if let Some(event) = event
+                    && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
+                {
                     if event_name == "mousedown" {
                         unsafe { &mut *runtime_ptr }
-                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                            .notify_close_watcher_input_activation(mouse_dispatch_handle);
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
