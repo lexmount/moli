@@ -1,5 +1,6 @@
 use crate::webidl;
 
+pub(super) use super::super::schema::{Parameters, RelyingParty, Selection};
 use super::super::value::{Dictionary, Text};
 
 // The derive reads fields in declaration order. Keep each dictionary's fields
@@ -49,16 +50,6 @@ pub(super) struct RequestJson {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialRpEntity")]
-pub(super) struct RelyingParty {
-    // PublicKeyCredentialEntity.name precedes the derived dictionary's id.
-    #[webidl(required, converter = "raw")]
-    pub(super) name: Text,
-    #[webidl(converter = "raw")]
-    pub(super) id: Option<Text>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialUserEntityJSON")]
 pub(super) struct UserJson {
     #[webidl(required, converter = "raw")]
@@ -70,15 +61,6 @@ pub(super) struct UserJson {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialParameters")]
-pub(super) struct Parameters {
-    #[webidl(required)]
-    pub(super) alg: i32,
-    #[webidl(required, name = "type", converter = "raw")]
-    pub(super) credential_type: Text,
-}
-
-#[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialDescriptorJSON")]
 pub(super) struct DescriptorJson {
     #[webidl(required, converter = "raw")]
@@ -87,19 +69,6 @@ pub(super) struct DescriptorJson {
     pub(super) transports: Option<webidl::Sequence<Text>>,
     #[webidl(required, name = "type", converter = "raw")]
     pub(super) credential_type: Text,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AuthenticatorSelectionCriteria")]
-pub(super) struct Selection {
-    #[webidl(converter = "raw")]
-    pub(super) authenticator_attachment: Option<Text>,
-    #[webidl(default = false)]
-    pub(super) require_resident_key: bool,
-    #[webidl(converter = "raw")]
-    pub(super) resident_key: Option<Text>,
-    #[webidl(converter = "raw", default = Text::from("preferred"))]
-    pub(super) user_verification: Text,
 }
 
 #[derive(webidl::WebIdlDictionary)]

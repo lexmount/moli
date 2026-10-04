@@ -76,6 +76,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "geolocation",
     "mediaCapabilities",
     "wakeLock",
+    "credentials",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -203,6 +204,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     media_capabilities: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 33))]
     wake_lock: (),
+    #[webapi(accessor_property, receiver = web_api_interfaces::Navigator::is_instance, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34))]
+    credentials: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback)]
     cookie_enabled: (),
 }
@@ -597,6 +600,9 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
 
     #[webapi(data_property, enumerable)]
     wake_lock: v8::Local<'scope, v8::Value>,
+
+    #[webapi(data_property, enumerable)]
+    credentials: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -946,6 +952,7 @@ pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
         delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "mediaDevices")?;
         delete_object_property(scope, prototype, "wakeLock")?;
+        delete_object_property(scope, prototype, "credentials")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
@@ -1109,6 +1116,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
         NavigatorSubobject::WakeLock => super::wake_lock::build(scope)?.into(),
+        NavigatorSubobject::Credentials => super::credentials::build_container(scope)?.into(),
     };
     Ok(value)
 }
@@ -1283,6 +1291,7 @@ fn build_window_navigator_backing_for_owner<'s>(
         geolocation: v8::undefined(scope).into(),
         media_capabilities: v8::undefined(scope).into(),
         wake_lock: v8::undefined(scope).into(),
+        credentials: v8::undefined(scope).into(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
@@ -1729,6 +1738,7 @@ fn navigator_runtime_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigator: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let navigator = moli_webapi_declare::web_api_object_target(scope, navigator)?;
     get_private_value(scope, navigator, NAVIGATOR_RUNTIME_DATA_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }

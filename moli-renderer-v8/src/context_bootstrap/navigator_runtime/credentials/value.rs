@@ -35,6 +35,16 @@ impl<'s> WebApiValue<'s> for Text {
 
 pub(super) struct Dictionary<T>(pub(super) T);
 
+impl<T> Dictionary<T> {
+    pub(super) fn empty<'s>(scope: &mut v8::PinScope<'s, '_>) -> Result<Self, webidl::WebIdlError>
+    where
+        T: webidl::WebIdlDictionary<'s>,
+    {
+        let object = new_null_prototype_object(scope);
+        T::parse_dictionary(scope, object).map(Self)
+    }
+}
+
 impl<'s, T: webidl::WebIdlDictionary<'s>> webidl::WebIdlConverter<'s> for Dictionary<T> {
     type Options = ();
 
@@ -44,12 +54,11 @@ impl<'s, T: webidl::WebIdlDictionary<'s>> webidl::WebIdlConverter<'s> for Dictio
         context: webidl::Context,
         _options: &Self::Options,
     ) -> Result<Self, webidl::WebIdlError> {
-        let object = match webidl::dictionary_value(value, context)? {
-            Some(object) => object,
+        match webidl::dictionary_value(value, context)? {
+            Some(object) => T::parse_dictionary(scope, object).map(Self),
             // null/undefined mean an empty dictionary, not an Object whose
             // prototype could contribute author-installed dictionary members.
-            None => new_null_prototype_object(scope),
-        };
-        T::parse_dictionary(scope, object).map(Self)
+            None => Self::empty(scope),
+        }
     }
 }
