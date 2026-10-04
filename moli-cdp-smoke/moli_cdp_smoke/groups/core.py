@@ -430,10 +430,13 @@ async def run_core_group(state: SmokeState) -> None:
         )
     finally:
         first_popup_route_release.set()
+        # Removing interception can auto-continue the held request in the
+        # driver. Drain its callback before removing routes or closing Pages
+        # so its fulfill cannot race a second terminal action during cleanup.
+        await context.unroute_all(behavior="wait")
         for popup in (first_popup, second_popup):
             if popup is not None:
                 await popup.close()
-        await context.unroute("**/popup-concurrent-*")
     state.record("popup_context_route_concurrent_initial_documents")
 
     await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
