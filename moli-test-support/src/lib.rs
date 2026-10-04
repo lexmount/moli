@@ -27,6 +27,7 @@ use tokio::{
 struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,
     dynamic_stylesheet_script_executed: Arc<FixtureEvent>,
+    alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_inline_module_executed: Arc<FixtureEvent>,
     alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     preload_request_count: Arc<std::sync::atomic::AtomicUsize>,
