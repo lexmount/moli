@@ -437,33 +437,31 @@ fn materialize_no_content_navigation_progress(
     navigation: NoContentNavigation,
 ) -> MaterializedNavigationLoadOutcome {
     let error_text = moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
-    let progress_gate = match navigation.network_progress.into_completed_body_events() {
-        Some(events) => {
-            let context = CompletedMainDocumentProgressContext::for_navigation(
-                conn,
-                state,
-                completed_body_main_document_network_request_id(
-                    main_document_network_observed(conn, state.session_id.as_deref()),
-                    state.request_id.clone(),
-                ),
-            );
-            let batches = MainDocumentNavigationProgressEventBatches::new(
-                context.request_and_redirect_progress_events(&events),
-                context.response_received_progress_events(&events, &navigation.final_url, 0),
-                observed_navigation_failure_event(conn, state, error_text)
-                    .into_iter()
-                    .collect(),
-            );
-            let queue = MainDocumentProgressQueueHandle::from_source(
-                MainDocumentProgressSource::completed_body(batches),
-            );
-            // No Document commit will advance visibility for this response.
-            queue
-                .mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-            MainDocumentProgressGate::from_queue(queue)
-        }
-        None => failed_navigation_progress_gate(conn, state, error_text),
-    };
+    let context = CompletedMainDocumentProgressContext::for_navigation(
+        conn,
+        state,
+        completed_body_main_document_network_request_id(
+            main_document_network_observed(conn, state.session_id.as_deref()),
+            state.request_id.clone(),
+        ),
+    );
+    let batches = MainDocumentNavigationProgressEventBatches::new(
+        context.request_and_redirect_progress_events(&navigation.network_events),
+        context.response_received_progress_events(
+            &navigation.network_events,
+            &navigation.final_url,
+            0,
+        ),
+        observed_navigation_failure_event(conn, state, error_text)
+            .into_iter()
+            .collect(),
+    );
+    let queue = MainDocumentProgressQueueHandle::from_source(
+        MainDocumentProgressSource::completed_body(batches),
+    );
+    // No Document commit will advance visibility for this response.
+    queue.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+    let progress_gate = MainDocumentProgressGate::from_queue(queue);
     MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
         error_text: error_text.to_owned(),
         document_policy: FailedNavigationDocumentPolicy::PreserveCommittedDocument,
@@ -896,11 +894,18 @@ impl MainDocumentBodyProgressSource {
         {
             MainDocumentBodyNetworkProgress::StreamingBody
         } else {
-            let mut completed_events = completed_events;
-            completed_events.response_stage_metadata_already_emitted = self.response_visibility
-                == MainDocumentResponseVisibility::AfterResponseStageContinue;
-            MainDocumentBodyNetworkProgress::CompletedBody(Box::new(completed_events))
+            MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
+                self.completed_body_network_events(completed_events),
+            ))
         }
+    }
+    pub(crate) fn completed_body_network_events(
+        &self,
+        mut events: CompletedMainDocumentNetworkEvents,
+    ) -> CompletedMainDocumentNetworkEvents {
+        events.response_stage_metadata_already_emitted =
+            self.response_visibility == MainDocumentResponseVisibility::AfterResponseStageContinue;
+        events
     }
 }
 

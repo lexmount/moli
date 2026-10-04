@@ -1563,3 +1563,101 @@ fn aborted_navigation_progress_marks_loading_failed_canceled() {
     assert_eq!(out[0]["params"]["errorText"], json!("net::ERR_ABORTED"));
     assert_eq!(out[0]["params"]["canceled"], json!(true));
 }
+
+#[test]
+fn no_content_navigation_retains_response_metadata_with_live_progress() {
+    use crate::conn::{
+        BrowserContext, CommandOwnerScope, NavigationRequestLoadPolicy, NavigationResultProjection,
+    };
+
+    for status in [204, 205] {
+        let mut conn = CdpConnection::new();
+        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        browser_context.set_active_target_id("FRAME-1");
+        browser_context.attach_active_session("SID-1");
+        browser_context
+            .active_page_target_mut()
+            .devtools_sessions
+            .primary_mut()
+            .network_session_state
+            .network_enabled = true;
+        browser_context
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        conn.install_browser_context_fixture_for_test(browser_context);
+        assert!(main_document_network_observed(&conn, Some("SID-1")));
+        let state = NavigationDispatchState {
+            web_mcp_invocation: None,
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
+            navigate_id: Some(1),
+            owner: CommandOwnerScope::for_session("SID-1"),
+            result_projection: NavigationResultProjection::Cdp(json!({
+                "frameId": "FRAME-1", "loaderId": "LOADER-1",
+            })),
+            frame_id: "FRAME-1".to_owned(),
+            session_id: Some("SID-1".to_owned()),
+            request_id: Some("REQ-1".to_owned()),
+            loader_id: "LOADER-1".to_owned(),
+            request_announced: false,
+            requested_url: Url::parse("http://example.test/start").unwrap(),
+            request_method: "GET".to_owned(),
+            request_body: None,
+            request_body_bytes: None,
+            request_headers: Vec::new().into(),
+            request_load_policy: NavigationRequestLoadPolicy::BrowserInitiated,
+            timestamp: 12.5,
+            source_document_security: Default::default(),
+        };
+        let (live_source, _receiver) = live_progress_source();
+        let source = MainDocumentBodyProgressSource::from_live_source(
+            Some(live_source),
+            MainDocumentResponseVisibility::Immediate,
+        );
+        let mut events = completed_events();
+        events.response_status = status;
+        events.response_headers = vec![("X-Ignored-Response".to_owned(), b"retained".to_vec())];
+        let navigation = NoContentNavigation {
+            final_url: Url::parse("http://example.test/final").unwrap(),
+            network_events: source.completed_body_network_events(events),
+        };
+        let MaterializedNavigationLoadOutcome::Failed(mut failed) =
+            materialize_no_content_navigation_progress(&conn, &state, navigation)
+        else {
+            panic!("ignored responses must retain main's failed-navigation projection");
+        };
+        let out = drain_gate_until_body_finished_visible_into_protocol_messages(
+            &mut failed.progress_gate,
+        );
+        let response = out
+            .iter()
+            .find(|event| event["method"] == "Network.responseReceived")
+            .expect("live ignored navigation must still emit its response metadata");
+        assert_eq!(response["params"]["requestId"], json!("REQ-1"));
+        assert_eq!(response["params"]["response"]["status"], json!(status));
+        assert_eq!(
+            response["params"]["response"]["headers"]["X-Ignored-Response"],
+            json!("retained")
+        );
+        let failure = out
+            .iter()
+            .find(|event| event["method"] == "Network.loadingFailed")
+            .expect("ignored navigation must terminate without committing a Document");
+        assert_eq!(
+            failure["params"]["errorText"],
+            json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)
+        );
+        assert_eq!(
+            failed.document_policy,
+            FailedNavigationDocumentPolicy::PreserveCommittedDocument
+        );
+        assert!(
+            !out.iter()
+                .any(|event| event["method"] == "Network.loadingFinished")
+        );
+    }
+}
