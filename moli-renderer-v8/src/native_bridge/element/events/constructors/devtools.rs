@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::node_owner_document_relevant_context;
 use crate::runtime::RendererPointerEventProperties;
 use moli_webapi::events::subclasses::{
     construct_native_drag_event, construct_native_pointer_event, construct_native_wheel_event,
@@ -192,6 +194,33 @@ pub(crate) fn construct_pointer_event_with_related_target<'s>(
         pointer,
         related_target,
         0,
+    )
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn construct_pointer_event_with_related_target_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    button: i32,
+    buttons: i32,
+    pointer: &RendererPointerEventProperties,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_pointer_event_with_related_target_and_modifiers(
+        scope,
+        event_type,
+        coordinates,
+        button,
+        buttons,
+        pointer,
+        related_target,
+        modifiers,
     )
 }
 

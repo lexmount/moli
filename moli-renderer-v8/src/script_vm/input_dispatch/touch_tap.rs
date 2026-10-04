@@ -32,7 +32,11 @@ fn transition(
     current: Option<crate::native_bridge::element::InputHit>,
     x: f64,
     y: f64,
+    mouse_hover: &mut Option<MouseHoverTarget>,
 ) {
+    let captured = current.map(|hit| {
+        MouseHoverTarget::capture(unsafe { &*runtime_ptr }, hit.handle, hit.root_to_frame)
+    });
     unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(current.map(|hit| hit.handle));
     dispatch_mouse_boundary_events(
         scope,
@@ -49,6 +53,7 @@ fn transition(
         0,
         0,
     );
+    *mouse_hover = captured;
 }
 
 pub(super) fn dispatch_touch_tap_activation(
@@ -57,23 +62,19 @@ pub(super) fn dispatch_touch_tap_activation(
     tap: PendingTouchTap,
     x: f64,
     y: f64,
-    previous_hover: Option<DomHandle>,
+    mouse_hover: &mut Option<MouseHoverTarget>,
 ) -> Result<(RendererInputDispatchOutcome, Option<DomHandle>)> {
-    let mut hover = previous_hover
-        .filter(|node| unsafe { &*runtime_ptr }.dom_host().is_connected(*node))
-        .and_then(|handle| {
-            let host = unsafe { &*runtime_ptr };
-            let document = host.dom_host().owner_document_handle(handle)?;
-            Some(crate::native_bridge::element::InputHit {
-                handle,
-                root_to_frame: root_to_document_frame(host, document)?,
-            })
+    let mut hover = mouse_hover
+        .as_ref()
+        .map(|target| crate::native_bridge::element::InputHit {
+            handle: target.handle,
+            root_to_frame: target.root_to_frame,
         });
     if !touch_tap_is_live(unsafe { &*runtime_ptr }, tap) {
         return Ok((input_dispatch_outcome(true), hover.map(|hit| hit.handle)));
     }
     let initial = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-    transition(scope, runtime_ptr, hover, initial, x, y);
+    transition(scope, runtime_ptr, hover, initial, x, y, mouse_hover);
     hover = initial;
     let Some(mut hit) = initial else {
         return Ok((input_dispatch_outcome(true), None));
@@ -103,7 +104,7 @@ pub(super) fn dispatch_touch_tap_activation(
             return Ok((input_dispatch_outcome(true), None));
         }
         let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-        transition(scope, runtime_ptr, hover, next, x, y);
+        transition(scope, runtime_ptr, hover, next, x, y, mouse_hover);
         hover = next;
         let Some(next) = next else {
             return Ok((input_dispatch_outcome(true), None));
@@ -136,7 +137,7 @@ pub(super) fn dispatch_touch_tap_activation(
             return Ok((input_dispatch_outcome(true), None));
         }
         let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-        transition(scope, runtime_ptr, hover, next, x, y);
+        transition(scope, runtime_ptr, hover, next, x, y, mouse_hover);
         hover = next;
         let Some(next) = next else {
             return Ok((input_dispatch_outcome(true), None));
