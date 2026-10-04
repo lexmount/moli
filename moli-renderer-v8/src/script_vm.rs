@@ -76,7 +76,9 @@ impl MainWindowProxyNavigationCommit {
                     // Unload sees the attached WindowProxy, and its outgoing
                     // Document remains associated after execution retirement.
                     let host_ptr = (*self.context_host).as_ptr();
-                    JsContextHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
+                    JsContextHost::dispatch_main_document_unload_for_navigation_commit(
+                        scope, host_ptr,
+                    );
                     crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
                 }
                 context.detach_global();
