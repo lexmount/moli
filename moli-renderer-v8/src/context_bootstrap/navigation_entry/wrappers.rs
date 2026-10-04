@@ -51,7 +51,7 @@ pub(in crate::context_bootstrap) fn in_realm<'s>(
     source: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> v8::Local<'s, v8::Object> {
-    if source.get_creation_context(scope) == Some(context) {
+    if crate::context_bootstrap::world_wrappers::belongs_to_world(scope, source, context) {
         return source;
     }
     let Some(record) = native::entry(scope, source) else {

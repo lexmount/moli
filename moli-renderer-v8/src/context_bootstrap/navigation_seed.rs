@@ -1,5 +1,3 @@
-use super::history_runtime::native;
-use super::location_runtime::is_same_document_fragment_navigation;
 use super::navigation_entry::{history_index, navigation_entry_public_token};
 use super::navigation_serialize::{
     apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
