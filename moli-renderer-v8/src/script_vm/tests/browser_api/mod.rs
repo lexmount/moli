@@ -75,6 +75,7 @@ mod misc;
 mod mouse_event_init;
 mod move_button;
 mod native_event_construction;
+mod native_hover_paths;
 mod native_input_realms;
 mod navigation;
 mod navigation_event_init;

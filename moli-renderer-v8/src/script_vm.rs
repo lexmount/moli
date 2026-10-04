@@ -1101,11 +1101,8 @@ pub(super) struct ScriptVm {
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
     mouse_frame_captures: BTreeMap<i32, MouseFrameCapture>,
-    hovered_mouse_handle: Option<DomHandle>,
-    /// Root-frame to local-frame transform for `hovered_mouse_handle`. Blink
-    /// keeps this conversion on LocalFrameView; retaining the last affine map
-    /// lets exit events use the old frame after a new hit enters another one.
-    hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D,
+    /// Last hover target and ancestry, retaining its frame transform for exits.
+    hovered_mouse: Option<MouseHoverTarget>,
     active_touch_pointer_handle: Option<DomHandle>,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_event_handle: Option<DomHandle>,
@@ -2657,8 +2654,7 @@ impl ScriptVmDefaultWorldBootstrap {
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
             mouse_frame_captures: BTreeMap::new(),
-            hovered_mouse_handle: None,
-            hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
+            hovered_mouse: None,
             active_touch_pointer_handle: None,
             active_touch_pointer_handles: BTreeMap::new(),
             active_touch_event_handle: None,
