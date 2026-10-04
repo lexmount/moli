@@ -136,7 +136,7 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::NavigatorSecureContextSurface => {
             crate::context_bootstrap::navigator_runtime::finalize_navigator_realm_bindings(
                 scope, prototype,
-            )?;
+            )
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             finalize_crypto_realm_bindings(scope, prototype)
