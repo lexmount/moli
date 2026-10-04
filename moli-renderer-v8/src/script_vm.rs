@@ -1104,10 +1104,6 @@ pub(super) struct ScriptVm {
     /// Last hover target and ancestry, retaining its frame transform for exits.
     hovered_mouse: Option<HoverTarget>,
     hovered_pointers: HashMap<i32, HoverTarget>,
-    active_touch_pointer_handle: Option<DomHandle>,
-    active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
-    active_touch_event_handle: Option<DomHandle>,
-    active_touch_point: Option<crate::runtime::RendererTouchPoint>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     suppress_next_keypress_after_canceled_raw_keydown: bool,
     suppress_compat_mouse_events: bool,
@@ -1180,6 +1176,7 @@ pub(super) struct ActiveTouchPoint {
     pub x: f64,
     pub y: f64,
     pub target: DomHandle,
+    pub pointer_target: Option<DomHandle>,
 }
 
 pub(super) struct ActiveDragSession {
@@ -2626,10 +2623,6 @@ impl ScriptVmDefaultWorldBootstrap {
             mouse_frame_captures: BTreeMap::new(),
             hovered_mouse: None,
             hovered_pointers: HashMap::new(),
-            active_touch_pointer_handle: None,
-            active_touch_pointer_handles: BTreeMap::new(),
-            active_touch_event_handle: None,
-            active_touch_point: None,
             active_touch_points: BTreeMap::new(),
             suppress_next_keypress_after_canceled_raw_keydown: false,
             suppress_compat_mouse_events: false,

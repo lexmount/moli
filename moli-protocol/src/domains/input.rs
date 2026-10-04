@@ -1166,7 +1166,7 @@ fn start_devtools_dispatch_touch_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchTouchEvent,
-        |page| page.start_dispatch_touch_event_at_points_with_outcome(points, event_name, false),
+        |page| page.start_dispatch_touch_contact_updates_with_outcome(points, event_name),
     )
 }
 

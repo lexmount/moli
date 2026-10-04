@@ -20,7 +20,7 @@ pub(crate) use self::constructors::{
     construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_for_target, construct_simple_event,
     construct_simple_event_for_target, construct_submit_event, construct_toggle_event,
-    construct_touch_event, construct_touch_event_with_points, construct_wheel_event_for_target,
+    construct_touch_event_with_points, construct_wheel_event_for_target,
 };
 pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,
