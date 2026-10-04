@@ -42,7 +42,18 @@ fn event_subclass_constructor_callback<'s>(
             init_arg.to_object(scope)
         }
     };
-    let (bubbles, cancelable, composed) = read_event_init(scope, &args);
+    let storage_event_init = if kind == EventSubclassKind::StorageEvent {
+        let Some(init) = data::parse_storage_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let (bubbles, cancelable, composed) = storage_event_init
+        .as_ref()
+        .map(data::StorageEventInitMembers::event_flags)
+        .unwrap_or_else(|| read_event_init(scope, &args));
 
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
@@ -113,9 +124,11 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::MessageEvent => data::initialize_message_event(scope, event, init),
         EventSubclassKind::StorageEvent => {
-            if !data::initialize_storage_event(scope, event, init) {
-                return;
-            }
+            data::initialize_storage_event(
+                scope,
+                event,
+                storage_event_init.expect("StorageEvent init should be parsed"),
+            );
         }
         EventSubclassKind::ErrorEvent => data::initialize_error_event(scope, event, init),
         EventSubclassKind::PromiseRejectionEvent => {
